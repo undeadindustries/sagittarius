@@ -14,7 +14,9 @@ import (
 type quitApp struct{}
 
 func (quitApp) HandleInput(context.Context, string) (<-chan ui.StreamEvent, error) {
-	ch := make(chan ui.StreamEvent)
+	ch := make(chan ui.StreamEvent, 2)
+	ch <- ui.StreamEvent{Type: ui.StreamQuit}
+	ch <- ui.StreamEvent{Type: ui.StreamDone}
 	close(ch)
 	return ch, nil
 }
@@ -68,10 +70,19 @@ func TestModelQuitCommand(t *testing.T) {
 	m := newModel(ui.Options{}, quitApp{}, NewTerminal(ui.Options{}))
 	_, cmd := m.handleSubmit("/quit")
 	if cmd == nil {
-		t.Fatal("expected quit cmd")
+		t.Fatal("expected stream cmd for /quit")
 	}
-	// tea.Quit returns a Quit command; executing yields QuitMsg in program context.
-	_ = cmd
+	msg := cmd()
+	evMsg, ok := msg.(streamEventMsg)
+	if !ok {
+		t.Fatalf("msg type %T", msg)
+	}
+	updated, quitCmd := m.handleStream(evMsg.event)
+	if quitCmd == nil {
+		t.Fatal("expected quit cmd from StreamQuit")
+	}
+	_ = updated
+	_ = quitCmd
 }
 
 func TestModelStreamPump(t *testing.T) {
