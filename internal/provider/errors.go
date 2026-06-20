@@ -8,14 +8,14 @@ import (
 	"google.golang.org/genai"
 )
 
-// ErrInvalidAPIKey indicates the Gemini API rejected the configured key.
-var ErrInvalidAPIKey = errors.New("invalid gemini api key")
+// ErrInvalidAPIKey indicates the provider rejected the configured key.
+var ErrInvalidAPIKey = errors.New("invalid api key")
 
 // ErrQuotaExceeded indicates a rate or quota limit was hit.
-var ErrQuotaExceeded = errors.New("gemini quota exceeded")
+var ErrQuotaExceeded = errors.New("quota exceeded")
 
 // ErrModelNotFound indicates the requested model id is unavailable.
-var ErrModelNotFound = errors.New("gemini model not found")
+var ErrModelNotFound = errors.New("model not found")
 
 // MapAPIError converts genai transport errors into user-facing provider errors.
 func MapAPIError(err error) error {
@@ -85,4 +85,49 @@ func mapAPIError(apiErr genai.APIError) error {
 		return fmt.Errorf("gemini api error (%d %s): %s", apiErr.Code, status, msg)
 	}
 	return fmt.Errorf("gemini api error (%d): %w", apiErr.Code, apiErr)
+}
+
+func mapOpenAIHTTPError(status int, body string) error {
+	msg := strings.TrimSpace(body)
+	lower := strings.ToLower(msg)
+	switch status {
+	case 401, 403:
+		if msg == "" {
+			msg = "the API key was rejected"
+		}
+		return fmt.Errorf("%w: %s", ErrInvalidAPIKey, msg)
+	case 404:
+		if msg == "" {
+			msg = "the requested model was not found"
+		}
+		return fmt.Errorf("%w: %s", ErrModelNotFound, msg)
+	case 429:
+		if msg == "" {
+			msg = "quota or rate limit exceeded"
+		}
+		return fmt.Errorf("%w: %s", ErrQuotaExceeded, msg)
+	}
+	if strings.Contains(lower, "invalid api key") || strings.Contains(lower, "incorrect api key") {
+		return fmt.Errorf("%w: %s", ErrInvalidAPIKey, msg)
+	}
+	if msg != "" {
+		return fmt.Errorf("openai request failed (HTTP %d): %s", status, msg)
+	}
+	return fmt.Errorf("openai request failed: HTTP %d", status)
+}
+
+func mapOpenAITransportError(err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "connection refused"),
+		strings.Contains(msg, "no such host"),
+		strings.Contains(msg, "timeout"),
+		strings.Contains(msg, "deadline exceeded"):
+		return fmt.Errorf("cannot reach provider endpoint: %w", err)
+	default:
+		return fmt.Errorf("openai request failed: %w", err)
+	}
 }

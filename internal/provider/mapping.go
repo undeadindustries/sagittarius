@@ -1,7 +1,13 @@
 package provider
 
 import (
+	"encoding/json"
+	"strconv"
+	"strings"
+
 	"google.golang.org/genai"
+
+	"github.com/undeadindustries/sagittarius/internal/config"
 )
 
 // MessagesToGenaiContents converts provider messages to Gemini Content values.
@@ -151,4 +157,146 @@ func BuildGenerateContentConfig(req *GenerateRequest) *genai.GenerateContentConf
 		cfg.Tools = tools
 	}
 	return cfg
+}
+
+var emptyObjectSchema = map[string]any{
+	"type":       "object",
+	"properties": map[string]any{},
+}
+
+// ToolDeclarationsToOpenAI converts provider tool declarations to OpenAI tools.
+func ToolDeclarationsToOpenAI(tools []ToolDeclaration) []openAITool {
+	if len(tools) == 0 {
+		return nil
+	}
+	out := make([]openAITool, 0, len(tools))
+	for _, tool := range tools {
+		params := tool.Parameters
+		if params == nil {
+			params = emptyObjectSchema
+		}
+		out = append(out, openAITool{
+			Type: "function",
+			Function: openAIToolSchema{
+				Name:        tool.Name,
+				Description: tool.Description,
+				Parameters:  params,
+			},
+		})
+	}
+	return out
+}
+
+// MessagesToOpenAIMessages converts provider messages to OpenAI chat messages.
+func MessagesToOpenAIMessages(messages []Message, modelID string) []OpenAIMessage {
+	out := make([]OpenAIMessage, 0, len(messages))
+	isMistral := IsMistralFamilyModel(modelID)
+	toolCallCounter := 0
+
+	for _, msg := range messages {
+		mapped := messageToOpenAIMessages(msg, &toolCallCounter)
+		for _, m := range mapped {
+			if isMistral &&
+				m.Role == OpenAIRoleUser &&
+				len(out) > 0 &&
+				out[len(out)-1].Role == OpenAIRoleTool {
+				bridge := mistralToolUserBridgeContent
+				out = append(out, OpenAIMessage{Role: OpenAIRoleAssistant, Content: &bridge})
+			}
+			out = append(out, m)
+		}
+	}
+
+	afterOrphan := patchOrphanedToolCallsForMistral(out, modelID)
+	return patchToolUserTransitionForMistral(afterOrphan, modelID)
+}
+
+func messageToOpenAIMessages(msg Message, counter *int) []OpenAIMessage {
+	if len(msg.Parts) == 0 {
+		return nil
+	}
+
+	var textParts []string
+	var toolCalls []openAIToolCall
+	var out []OpenAIMessage
+
+	for _, part := range msg.Parts {
+		switch {
+		case part.FunctionResponse != nil:
+			rawID := "call_" + part.FunctionResponse.Name + "_" + strconv.Itoa(*counter)
+			*counter++
+			content, _ := json.Marshal(part.FunctionResponse.Response)
+			s := string(content)
+			out = append(out, OpenAIMessage{
+				Role:       OpenAIRoleTool,
+				ToolCallID: MistralSafeToolCallID(rawID),
+				Content:    &s,
+			})
+		case part.FunctionCall != nil:
+			rawID := "call_" + part.FunctionCall.Name + "_" + strconv.Itoa(*counter)
+			*counter++
+			args, _ := json.Marshal(part.FunctionCall.Args)
+			toolCalls = append(toolCalls, openAIToolCall{
+				ID:   MistralSafeToolCallID(rawID),
+				Type: "function",
+				Function: openAIFunctionCall{
+					Name:      part.FunctionCall.Name,
+					Arguments: string(args),
+				},
+			})
+		case part.Text != "":
+			textParts = append(textParts, part.Text)
+		}
+	}
+
+	if len(toolCalls) > 0 {
+		var content *string
+		if joined := strings.Join(textParts, ""); joined != "" {
+			content = &joined
+		}
+		out = append(out, OpenAIMessage{
+			Role:      OpenAIRoleAssistant,
+			Content:   content,
+			ToolCalls: toolCalls,
+		})
+		return out
+	}
+
+	if len(textParts) > 0 {
+		joined := strings.Join(textParts, "")
+		role := OpenAIRoleUser
+		if msg.Role == RoleModel {
+			role = OpenAIRoleAssistant
+		}
+		out = append(out, OpenAIMessage{Role: role, Content: &joined})
+	}
+	return out
+}
+
+// BuildOpenAIChatRequest assembles an OpenAI chat completions request body.
+func BuildOpenAIChatRequest(req *GenerateRequest, model string, parseMode config.ToolCallParsingMode) openAIChatRequest {
+	_ = parseMode
+	body := openAIChatRequest{
+		Model:         model,
+		Messages:      MessagesToOpenAIMessages(req.Messages, model),
+		Stream:        true,
+		StreamOptions: &streamOptions{IncludeUsage: true},
+	}
+	if req.SystemInstruction != "" {
+		sys := req.SystemInstruction
+		body.Messages = append([]OpenAIMessage{{Role: OpenAIRoleSystem, Content: &sys}}, body.Messages...)
+	}
+	if tools := ToolDeclarationsToOpenAI(req.Tools); len(tools) > 0 {
+		body.Tools = tools
+	}
+	if req.Temperature != nil {
+		body.Temperature = req.Temperature
+	}
+	if req.MaxOutputTokens != nil {
+		body.MaxTokens = req.MaxOutputTokens
+	}
+	if len(req.StopSequences) > 0 {
+		body.Stop = append([]string(nil), req.StopSequences...)
+	}
+	return body
 }

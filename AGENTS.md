@@ -43,8 +43,8 @@ tests, security docs, and commit messages accordingly.
 
 | Field | Value |
 |-------|-------|
-| **Overall** | Phase 05 complete — Gemini provider (API key) |
-| **Active phase** | Phase 06 — OpenAI-compat providers |
+| **Overall** | Phase 06 complete — OpenAI-compat providers |
+| **Active phase** | Phase 07 — Agent loop & headless `-p` |
 | **Go toolchain** | **1.26.4** at `/home/rob/local/go1.26.4`, symlinked system-wide via `/usr/local/bin/go`. apt Go 1.22 removed. |
 | **Binary name** | `sagittarius` |
 | **Module** | `github.com/undeadindustries/sagittarius` |
@@ -60,7 +60,7 @@ tests, security docs, and commit messages accordingly.
 | 03 | Secure credentials | Complete |
 | 04 | TUI shell (swappable) | Complete |
 | 05 | Gemini provider (API key) | Complete |
-| 06 | OpenAI-compat providers | Not started |
+| 06 | OpenAI-compat providers | Complete |
 | 07 | Agent loop & headless `-p` | Not started |
 | 08 | Core tools | Not started |
 | 09 | Slash commands | Not started |
@@ -137,6 +137,14 @@ Phase 05 uses `google.golang.org/genai` v1.61.0 with `BackendGeminiAPI` and
 domain types + `ContentGenerator`; TUI mapping to `ui.StreamEvent` deferred to
 Phase 07 agent loop.
 
+### AD-010 — Unified OpenAI-chat adapter (2026-06-20)
+
+Phase 06 implements `OpenAIChatGenerator` for all `wireFormat: openai-chat`
+endpoints (built-in `openai`, `providers.custom.*`, local vLLM). URL
+normalization via `ChatCompletionsURL` / `ExtractServerRoot`; optional Bearer
+for local auth; XML tool-call fallback (`ParseXMLToolCalls`); model discovery
+via `DiscoverModels`; `IsOpenAIChatMode` hook for Phase 11 context layers.
+
 ---
 
 ## Workspace Layout
@@ -186,9 +194,11 @@ internal/log/
 
 ---
 
-Phase 05 complete (2026-06-20): internal/provider ContentGenerator + GeminiGenerator (google.golang.org/genai v1.61.0), factory for gemini-apikey, message/tool mapping, user-facing errors, injectable streamer tests (TestGeminiStreamTextDelta, TestGeminiInvalidKey, TestFactorySelectsGeminiAPIKey, TestToolCallRoundTrip).
-Next: Phase 06 — OpenAI-compat providers
+Phase 06 complete (2026-06-20): OpenAIChatGenerator (SSE streaming, XML tool-call fallback, Mistral message patches), EndpointConfig + factory wireFormat branch, DiscoverModels, IsOpenAIChatMode hook, SetActiveProvider/SaveActiveProvider; httptest tests (TestOpenAIChatStream, TestXmlToolCallFallback, TestCustomProviderLoad, TestOpenRouterAsCustom, TestModelDiscoveryEmptyOnFailure, TestFactorySelectsOpenAI).
+Next: Phase 07 — Agent loop & headless `-p`
 Blockers: none
+
+Phase 05 complete (2026-06-20): internal/provider ContentGenerator + GeminiGenerator (google.golang.org/genai v1.61.0), factory for gemini-apikey, message/tool mapping, user-facing errors, injectable streamer tests (TestGeminiStreamTextDelta, TestGeminiInvalidKey, TestFactorySelectsGeminiAPIKey, TestToolCallRoundTrip).
 
 Phase 04 complete (2026-06-20): internal/ui UI interface + Bubble Tea backend, echo demo App, interactive TTY entry in main, --screen-reader stub, stream events, TestUIRunCancelClean + TestStreamEventRender.
 
