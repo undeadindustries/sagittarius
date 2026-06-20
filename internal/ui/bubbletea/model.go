@@ -260,8 +260,12 @@ func waitStream(events <-chan ui.StreamEvent) tea.Cmd {
 	}
 }
 
-func welcomeText(_ ui.Options) string {
-	return "Sagittarius — type a message and press Enter.\nUse /quit or Ctrl+C to exit.\n\n"
+func welcomeText(opts ui.Options) string {
+	text := "Sagittarius — type a message and press Enter.\nUse /quit or Ctrl+C to exit.\n\n"
+	if opts.Notice != "" {
+		text += opts.Notice + "\n\n"
+	}
+	return text
 }
 
 func renderHeader(opts ui.Options, width int) string {

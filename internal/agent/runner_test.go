@@ -391,3 +391,51 @@ type failingWriter struct{}
 func (failingWriter) Write([]byte) (int, error) {
 	return 0, io.ErrClosedPipe
 }
+
+func TestRunnerKeylessStartupRecovers(t *testing.T) {
+	t.Parallel()
+
+	missing := errors.New("api key missing: set OPENAI_API_KEY")
+	runner, err := NewRunner(RunnerConfig{
+		Model:       "test-model",
+		WorkDir:     t.TempDir(),
+		Interactive: true,
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	runner.SetGeneratorError(missing)
+
+	if got := runner.GeneratorError(); !errors.Is(got, missing) {
+		t.Fatalf("GeneratorError = %v, want %v", got, missing)
+	}
+
+	events, err := runner.RunTurn(testContext(t), "hello")
+	if err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+	got := collectEvents(t, events)
+	if len(got) == 0 || got[0].Type != ui.StreamError || !errors.Is(got[0].Err, missing) {
+		t.Fatalf("events = %#v, want leading StreamError with missing key", got)
+	}
+	if len(runner.history) != 0 {
+		t.Fatalf("history = %#v, want empty after keyless turn", runner.history)
+	}
+
+	gen := &fakeGenerator{
+		batches: [][]provider.StreamResponse{{{TextDelta: "recovered", Done: true}}},
+	}
+	runner.SetGenerator(gen)
+	if runner.GeneratorError() != nil {
+		t.Fatalf("GeneratorError after SetGenerator = %v, want nil", runner.GeneratorError())
+	}
+
+	events, err = runner.RunTurn(testContext(t), "again")
+	if err != nil {
+		t.Fatalf("RunTurn after recovery: %v", err)
+	}
+	got = collectEvents(t, events)
+	if got[0].Type != ui.StreamTextDelta || got[0].Text != "recovered" {
+		t.Fatalf("recovered events = %#v", got)
+	}
+}

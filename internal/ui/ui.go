@@ -20,6 +20,9 @@ type Options struct {
 	Version string
 	// InitialStatus seeds the footer before the first turn (Phase 07 agent loop).
 	InitialStatus StatusBar
+	// Notice is an optional startup message shown in the scrollback (e.g. a
+	// missing-API-key warning) so interactive sessions can open and recover.
+	Notice string
 }
 
 // UI is the library-agnostic terminal interface. Agent code must depend on this
