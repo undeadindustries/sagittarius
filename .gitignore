@@ -1,0 +1,35 @@
+# Local planning docs — never commit (agent context only)
+docs/plans/
+
+# Go build artifacts
+/bin/
+bin/
+/dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.out
+coverage.html
+
+# Module cache / vendor (if used)
+/vendor/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Sagittarius runtime (if we add local state later)
+.sagittarius/
