@@ -43,8 +43,8 @@ tests, security docs, and commit messages accordingly.
 
 | Field | Value |
 |-------|-------|
-| **Overall** | Phase 04 complete — swappable TUI shell |
-| **Active phase** | Phase 05 — Gemini provider (API key) |
+| **Overall** | Phase 05 complete — Gemini provider (API key) |
+| **Active phase** | Phase 06 — OpenAI-compat providers |
 | **Go toolchain** | **1.26.4** at `/home/rob/local/go1.26.4`, symlinked system-wide via `/usr/local/bin/go`. apt Go 1.22 removed. |
 | **Binary name** | `sagittarius` |
 | **Module** | `github.com/undeadindustries/sagittarius` |
@@ -59,7 +59,7 @@ tests, security docs, and commit messages accordingly.
 | 02 | Config & settings bridge | Complete |
 | 03 | Secure credentials | Complete |
 | 04 | TUI shell (swappable) | Complete |
-| 05 | Gemini provider (API key) | Not started |
+| 05 | Gemini provider (API key) | Complete |
 | 06 | OpenAI-compat providers | Not started |
 | 07 | Agent loop & headless `-p` | Not started |
 | 08 | Core tools | Not started |
@@ -130,6 +130,13 @@ File fallback stores AES-256-GCM encrypted credentials at
 `~/.gemini/gemini-credentials.json` (or `$GEMINI_CLI_HOME/.gemini/…`), matching
 fork FileKeychain layout and encryption for cross-tool compatibility.
 
+### AD-009 — Gemini SDK via google.golang.org/genai (2026-06-20)
+
+Phase 05 uses `google.golang.org/genai` v1.61.0 with `BackendGeminiAPI` and
+`GenerateContentStream` (Go 1.23+ `iter.Seq2`). Provider package exposes
+domain types + `ContentGenerator`; TUI mapping to `ui.StreamEvent` deferred to
+Phase 07 agent loop.
+
 ---
 
 ## Workspace Layout
@@ -179,9 +186,11 @@ internal/log/
 
 ---
 
-Phase 04 complete (2026-06-20): internal/ui UI interface + Bubble Tea backend, echo demo App, interactive TTY entry in main, --screen-reader stub, stream events, TestUIRunCancelClean + TestStreamEventRender.
-Next: Phase 05 — Gemini provider (API key)
+Phase 05 complete (2026-06-20): internal/provider ContentGenerator + GeminiGenerator (google.golang.org/genai v1.61.0), factory for gemini-apikey, message/tool mapping, user-facing errors, injectable streamer tests (TestGeminiStreamTextDelta, TestGeminiInvalidKey, TestFactorySelectsGeminiAPIKey, TestToolCallRoundTrip).
+Next: Phase 06 — OpenAI-compat providers
 Blockers: none
+
+Phase 04 complete (2026-06-20): internal/ui UI interface + Bubble Tea backend, echo demo App, interactive TTY entry in main, --screen-reader stub, stream events, TestUIRunCancelClean + TestStreamEventRender.
 
 Phase 03 complete (2026-06-20): internal/credentials resolves provider API keys (env → keychain → encrypted file fallback), fork-compatible service naming, 30s read-through cache, Set/Delete APIs, SECURITY.md threat model.
 

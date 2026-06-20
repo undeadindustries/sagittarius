@@ -32,6 +32,8 @@ func main() {
 		os.Exit(runInteractive(*screenReader))
 	}
 
+	fmt.Fprintln(os.Stderr, "sagittarius: interactive mode requires a terminal (stdin and stdout must be TTYs)")
+	fmt.Fprintln(os.Stderr, "  try: ./bin/sagittarius --version")
 	os.Exit(0)
 }
 
