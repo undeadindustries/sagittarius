@@ -18,6 +18,8 @@ type Options struct {
 	BannerTitle string
 	// Version is shown beside the banner (e.g. from internal/version).
 	Version string
+	// InitialStatus seeds the footer before the first turn (Phase 07 agent loop).
+	InitialStatus StatusBar
 }
 
 // UI is the library-agnostic terminal interface. Agent code must depend on this

@@ -43,8 +43,8 @@ tests, security docs, and commit messages accordingly.
 
 | Field | Value |
 |-------|-------|
-| **Overall** | Phase 06 complete — OpenAI-compat providers |
-| **Active phase** | Phase 07 — Agent loop & headless `-p` |
+| **Overall** | Phase 07 complete — agent loop & headless `-p` |
+| **Active phase** | Phase 08 — Core tools |
 | **Go toolchain** | **1.26.4** at `/home/rob/local/go1.26.4`, symlinked system-wide via `/usr/local/bin/go`. apt Go 1.22 removed. |
 | **Binary name** | `sagittarius` |
 | **Module** | `github.com/undeadindustries/sagittarius` |
@@ -61,7 +61,7 @@ tests, security docs, and commit messages accordingly.
 | 04 | TUI shell (swappable) | Complete |
 | 05 | Gemini provider (API key) | Complete |
 | 06 | OpenAI-compat providers | Complete |
-| 07 | Agent loop & headless `-p` | Not started |
+| 07 | Agent loop & headless `-p` | Complete |
 | 08 | Core tools | Not started |
 | 09 | Slash commands | Not started |
 | 10 | OpenAI Responses API | Not started |
@@ -145,6 +145,13 @@ normalization via `ChatCompletionsURL` / `ExtractServerRoot`; optional Bearer
 for local auth; XML tool-call fallback (`ParseXMLToolCalls`); model discovery
 via `DiscoverModels`; `IsOpenAIChatMode` hook for Phase 11 context layers.
 
+### AD-011 — Agent loop owns stream mapping (2026-06-20)
+
+Phase 07 `internal/agent` owns the turn loop, `provider.StreamResponse` →
+`ui.StreamEvent` mapping, GEMINI.md/AGENTS.md discovery, and headless `-p`.
+Tool calls emit `StreamToolStart` only (execution Phase 08). Approval mode stub
+is `default` only. Agent packages must not import Bubble Tea.
+
 ---
 
 ## Workspace Layout
@@ -194,9 +201,11 @@ internal/log/
 
 ---
 
-Phase 06 complete (2026-06-20): OpenAIChatGenerator (SSE streaming, XML tool-call fallback, Mistral message patches), EndpointConfig + factory wireFormat branch, DiscoverModels, IsOpenAIChatMode hook, SetActiveProvider/SaveActiveProvider; httptest tests (TestOpenAIChatStream, TestXmlToolCallFallback, TestCustomProviderLoad, TestOpenRouterAsCustom, TestModelDiscoveryEmptyOnFailure, TestFactorySelectsOpenAI).
-Next: Phase 07 — Agent loop & headless `-p`
+Phase 07 complete (2026-06-20): internal/agent Runner (idle→streaming→awaiting tools→done), ui.App adapter, DiscoverSystemInstruction (GEMINI.md/AGENTS.md + global), MapStreamResponse, headless -p/-m/-d flags, interactive TUI wired to provider stream; tests TestRunnerSingleTurnMock, TestHeadlessPromptFlag, TestCancelMidStream, TestGEMINIMDInjection.
+Next: Phase 08 — Core tools
 Blockers: none
+
+Phase 06 complete (2026-06-20): OpenAIChatGenerator (SSE streaming, XML tool-call fallback, Mistral message patches), EndpointConfig + factory wireFormat branch, DiscoverModels, IsOpenAIChatMode hook, SetActiveProvider/SaveActiveProvider; httptest tests (TestOpenAIChatStream, TestXmlToolCallFallback, TestCustomProviderLoad, TestOpenRouterAsCustom, TestModelDiscoveryEmptyOnFailure, TestFactorySelectsOpenAI).
 
 Phase 05 complete (2026-06-20): internal/provider ContentGenerator + GeminiGenerator (google.golang.org/genai v1.61.0), factory for gemini-apikey, message/tool mapping, user-facing errors, injectable streamer tests (TestGeminiStreamTextDelta, TestGeminiInvalidKey, TestFactorySelectsGeminiAPIKey, TestToolCallRoundTrip).
 

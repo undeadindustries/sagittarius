@@ -33,18 +33,19 @@ type model struct {
 	width  int
 	height int
 
-	viewport viewport.Model
-	input    textinput.Model
-	status   ui.StatusBar
-	output   strings.Builder
-	busy     bool
-	quitting bool
-	stream   <-chan ui.StreamEvent
+	viewport   viewport.Model
+	input      textinput.Model
+	status     ui.StatusBar
+	idleStatus ui.StatusBar
+	output     strings.Builder
+	busy       bool
+	quitting   bool
+	stream     <-chan ui.StreamEvent
 }
 
 func newModel(opts ui.Options, app ui.App, term *Terminal) *model {
 	ti := textinput.New()
-	ti.Placeholder = "Type a message (Phase 04 echo demo)"
+	ti.Placeholder = "Type a message"
 	ti.Focus()
 	ti.CharLimit = 8192
 	ti.Prompt = "> "
@@ -52,16 +53,25 @@ func newModel(opts ui.Options, app ui.App, term *Terminal) *model {
 	vp := viewport.New(80, 20)
 	vp.SetContent(welcomeText(opts))
 
-	m := &model{
-		opts:     opts,
-		app:      app,
-		term:     term,
-		input:    ti,
-		viewport: vp,
-		status: ui.StatusBar{
-			Left:  "demo",
+	idleStatus := opts.InitialStatus
+	if idleStatus.Left == "" && idleStatus.Right == "" {
+		idleStatus = ui.StatusBar{
+			Left:  "ready",
 			Right: "Ctrl+C or /quit to exit",
-		},
+		}
+	}
+	if idleStatus.Right == "" {
+		idleStatus.Right = "Ctrl+C or /quit to exit"
+	}
+
+	m := &model{
+		opts:       opts,
+		app:        app,
+		term:       term,
+		input:      ti,
+		viewport:   vp,
+		status:     idleStatus,
+		idleStatus: idleStatus,
 	}
 	return m
 }
@@ -167,7 +177,7 @@ func (m *model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 	events, err := m.app.HandleInput(ctx, line)
 	if err != nil {
 		m.busy = false
-		m.status.Left = "demo"
+		m.status = m.idleStatus
 		_ = m.term.ShowError(err)
 		return m, nil
 	}
@@ -189,7 +199,7 @@ func (m *model) handleStream(ev ui.StreamEvent) (tea.Model, tea.Cmd) {
 		}
 	case ui.StreamDone:
 		m.busy = false
-		m.status.Left = "demo"
+		m.status = m.idleStatus
 		m.stream = nil
 		return m, nil
 	}
@@ -225,7 +235,7 @@ func waitStream(events <-chan ui.StreamEvent) tea.Cmd {
 }
 
 func welcomeText(_ ui.Options) string {
-	return "Phase 04 echo demo — type a message and press Enter.\nUse /quit or Ctrl+C to exit.\n\n"
+	return "Sagittarius — type a message and press Enter.\nUse /quit or Ctrl+C to exit.\n\n"
 }
 
 func renderHeader(opts ui.Options, width int) string {
