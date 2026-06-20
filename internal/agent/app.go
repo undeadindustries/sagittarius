@@ -161,9 +161,13 @@ func (h *appHooks) SetProviderAPIKey(ctx context.Context, providerID, apiKey str
 	return credentials.SetProviderAPIKey(ctx, providerID, apiKey)
 }
 
-// SetGenerator replaces the content generator (used after provider changes).
+// SetGenerator replaces the content generator (used after provider changes)
+// and clears any recorded provider-unavailable error.
 func (r *Runner) SetGenerator(gen provider.ContentGenerator) {
+	r.genMu.Lock()
 	r.gen = gen
+	r.genErr = nil
+	r.genMu.Unlock()
 }
 
 // SetModel updates the model used for generate requests.

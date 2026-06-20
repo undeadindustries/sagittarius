@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -12,6 +13,11 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/tools"
 	"github.com/undeadindustries/sagittarius/internal/ui"
 )
+
+// errProviderUnavailable is surfaced when a turn runs without a usable provider
+// (e.g. interactive startup with a missing API key). The user can recover with
+// /auth or /provider use before the next request.
+var errProviderUnavailable = errors.New("no provider configured: run /auth to set an API key or /provider use <id> to switch")
 
 // State is the runner lifecycle phase for one user turn.
 type State int
@@ -35,7 +41,9 @@ type RunnerConfig struct {
 
 // Runner orchestrates conversation history and provider streaming for the agent loop.
 type Runner struct {
+	genMu         sync.RWMutex
 	gen           provider.ContentGenerator
+	genErr        error
 	model         string
 	system        string
 	approval      ApprovalMode
@@ -51,10 +59,12 @@ type Runner struct {
 }
 
 // NewRunner constructs a Runner and discovers project memory for the system prompt.
+//
+// A nil cfg.Generator is permitted for interactive sessions that start without a
+// usable provider (e.g. a missing API key). Such a runner returns a recoverable
+// error on each turn until SetGenerator installs a working provider. Pair a nil
+// generator with SetGeneratorError to explain the cause to the user.
 func NewRunner(cfg RunnerConfig) (*Runner, error) {
-	if cfg.Generator == nil {
-		return nil, fmt.Errorf("agent runner: generator is required")
-	}
 	if strings.TrimSpace(cfg.Model) == "" {
 		return nil, fmt.Errorf("agent runner: model is required")
 	}
@@ -129,11 +139,54 @@ func (r *Runner) Model() string {
 	return r.model
 }
 
+// GeneratorError returns the reason the runner has no usable provider, or nil
+// when a generator is installed. Used to surface startup notices in the TUI.
+func (r *Runner) GeneratorError() error {
+	r.genMu.RLock()
+	defer r.genMu.RUnlock()
+	if r.gen != nil {
+		return nil
+	}
+	if r.genErr != nil {
+		return r.genErr
+	}
+	return errProviderUnavailable
+}
+
+// SetGeneratorError records why no provider is available so the next turn can
+// explain the failure. Cleared by SetGenerator.
+func (r *Runner) SetGeneratorError(err error) {
+	r.genMu.Lock()
+	r.genErr = err
+	r.genMu.Unlock()
+}
+
+// generator returns the active provider or a recoverable error when absent.
+func (r *Runner) generator() (provider.ContentGenerator, error) {
+	r.genMu.RLock()
+	defer r.genMu.RUnlock()
+	if r.gen != nil {
+		return r.gen, nil
+	}
+	if r.genErr != nil {
+		return nil, r.genErr
+	}
+	return nil, errProviderUnavailable
+}
+
 // RunTurn handles one user message and streams assistant output events.
 func (r *Runner) RunTurn(ctx context.Context, userInput string) (<-chan ui.StreamEvent, error) {
 	userInput = strings.TrimSpace(userInput)
 	if userInput == "" {
 		ch := make(chan ui.StreamEvent, 1)
+		close(ch)
+		return ch, nil
+	}
+
+	if _, err := r.generator(); err != nil {
+		ch := make(chan ui.StreamEvent, 2)
+		ch <- ui.StreamEvent{Type: ui.StreamError, Err: err}
+		ch <- ui.StreamEvent{Type: ui.StreamDone}
 		close(ch)
 		return ch, nil
 	}
@@ -190,13 +243,20 @@ func (r *Runner) RunHeadless(ctx context.Context, prompt string, out io.Writer) 
 
 func (r *Runner) runAgentLoop(ctx context.Context, out chan<- ui.StreamEvent) {
 	defer close(out)
+
+	gen, err := r.generator()
+	if err != nil {
+		out <- ui.StreamEvent{Type: ui.StreamError, Err: err}
+		return
+	}
+
 	r.setState(StateStreaming)
 
 	for round := 0; round < tools.MaxToolRounds; round++ {
 		req := r.buildGenerateRequest()
 		r.storeLastRequest(req)
 
-		respCh, err := r.gen.GenerateContentStream(ctx, req)
+		respCh, err := gen.GenerateContentStream(ctx, req)
 		if err != nil {
 			out <- ui.StreamEvent{Type: ui.StreamError, Err: err}
 			return

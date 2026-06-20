@@ -131,11 +131,17 @@ func runInteractive(screenReader bool, modelOverride string) int {
 		Settings:      settings,
 	})
 
+	var notice string
+	if genErr := runner.GeneratorError(); genErr != nil {
+		notice = "⚠ " + genErr.Error()
+	}
+
 	termUI := bubbletea.NewTerminal(ui.Options{
 		ScreenReader:  screenReader,
 		BannerTitle:   "Sagittarius",
 		Version:       version.String(),
 		InitialStatus: app.Status(),
+		Notice:        notice,
 	})
 
 	if err := termUI.Run(ctx, app); err != nil {
@@ -154,11 +160,6 @@ func buildRunner(ctx context.Context, modelOverride string, interactive bool) (*
 		return nil, nil, nil, err
 	}
 
-	gen, err := provider.NewContentGenerator(ctx, settings)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
 	endpoint, err := provider.ResolveEndpointConfig(settings)
 	if err != nil {
 		return nil, nil, nil, err
@@ -169,6 +170,15 @@ func buildRunner(ctx context.Context, modelOverride string, interactive bool) (*
 		model = modelOverride
 	}
 
+	gen, genErr := provider.NewContentGenerator(ctx, settings)
+	if genErr != nil {
+		// Interactive sessions open even without a usable provider so the user
+		// can recover via /auth or /provider use. Headless mode still fails.
+		if !(interactive && errors.Is(genErr, credentials.ErrAPIKeyMissing)) {
+			return nil, nil, nil, genErr
+		}
+	}
+
 	runner, err := agent.NewRunner(agent.RunnerConfig{
 		Generator:   gen,
 		Model:       model,
@@ -176,6 +186,9 @@ func buildRunner(ctx context.Context, modelOverride string, interactive bool) (*
 	})
 	if err != nil {
 		return nil, nil, nil, err
+	}
+	if genErr != nil {
+		runner.SetGeneratorError(genErr)
 	}
 	return runner, loader, settings, nil
 }
