@@ -86,7 +86,7 @@ func runHeadless(prompt, modelOverride string) int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	runner, err := buildRunner(ctx, modelOverride, false)
+	runner, _, _, err := buildRunner(ctx, modelOverride, false)
 	if err != nil {
 		writeStartupError(err)
 		return 1
@@ -106,13 +106,13 @@ func runInteractive(screenReader bool, modelOverride string) int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	runner, err := buildRunner(ctx, modelOverride, true)
+	runner, loader, settings, err := buildRunner(ctx, modelOverride, true)
 	if err != nil {
 		writeStartupError(err)
 		return 1
 	}
 
-	endpoint, err := loadEndpoint()
+	endpoint, err := provider.ResolveEndpointConfig(settings)
 	if err != nil {
 		writeStartupError(err)
 		return 1
@@ -123,7 +123,13 @@ func runInteractive(screenReader bool, modelOverride string) int {
 		providerLabel = def.DisplayName
 	}
 
-	app := agent.NewApp(runner, providerLabel, runner.Model())
+	app := agent.NewApp(agent.AppConfig{
+		Runner:        runner,
+		ProviderLabel: providerLabel,
+		Model:         runner.Model(),
+		Loader:        loader,
+		Settings:      settings,
+	})
 
 	termUI := bubbletea.NewTerminal(ui.Options{
 		ScreenReader:  screenReader,
@@ -142,20 +148,20 @@ func runInteractive(screenReader bool, modelOverride string) int {
 	return 0
 }
 
-func buildRunner(ctx context.Context, modelOverride string, interactive bool) (*agent.Runner, error) {
-	settings, err := loadSettings()
+func buildRunner(ctx context.Context, modelOverride string, interactive bool) (*agent.Runner, *config.Loader, *config.Settings, error) {
+	settings, loader, err := loadSettings()
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 
 	gen, err := provider.NewContentGenerator(ctx, settings)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 
 	endpoint, err := provider.ResolveEndpointConfig(settings)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 
 	model := endpoint.Model
@@ -163,31 +169,27 @@ func buildRunner(ctx context.Context, modelOverride string, interactive bool) (*
 		model = modelOverride
 	}
 
-	return agent.NewRunner(agent.RunnerConfig{
+	runner, err := agent.NewRunner(agent.RunnerConfig{
 		Generator:   gen,
 		Model:       model,
 		Interactive: interactive,
 	})
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return runner, loader, settings, nil
 }
 
-func loadSettings() (*config.Settings, error) {
+func loadSettings() (*config.Settings, *config.Loader, error) {
 	loader, err := config.NewLoader()
 	if err != nil {
-		return nil, fmt.Errorf("load settings: %w", err)
+		return nil, nil, fmt.Errorf("load settings: %w", err)
 	}
 	settings, err := loader.Load()
 	if err != nil && !errors.Is(err, config.ErrSecretsInSettings) {
-		return nil, fmt.Errorf("load settings: %w", err)
+		return nil, nil, fmt.Errorf("load settings: %w", err)
 	}
-	return settings, nil
-}
-
-func loadEndpoint() (provider.EndpointConfig, error) {
-	settings, err := loadSettings()
-	if err != nil {
-		return provider.EndpointConfig{}, err
-	}
-	return provider.ResolveEndpointConfig(settings)
+	return settings, loader, nil
 }
 
 func writeStartupError(err error) {

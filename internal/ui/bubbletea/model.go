@@ -176,10 +176,6 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) handleSubmit(line string) (tea.Model, tea.Cmd) {
-	lower := strings.ToLower(strings.TrimSpace(line))
-	if lower == "/quit" || lower == "quit" || lower == "exit" {
-		return m, tea.Quit
-	}
 	if line == "" {
 		return m, nil
 	}
@@ -208,6 +204,11 @@ func (m *model) handleStream(ev ui.StreamEvent) (tea.Model, tea.Cmd) {
 	switch ev.Type {
 	case ui.StreamTextDelta:
 		m.appendOutput(ev.Text)
+	case ui.StreamInfo:
+		m.appendOutput(ev.Text)
+	case ui.StreamQuit:
+		m.busy = false
+		return m, tea.Quit
 	case ui.StreamToolStart:
 		m.appendOutput("[tool: " + ev.ToolName + "]\n")
 	case ui.StreamToolConfirm:

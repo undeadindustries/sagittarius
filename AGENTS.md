@@ -43,8 +43,8 @@ tests, security docs, and commit messages accordingly.
 
 | Field | Value |
 |-------|-------|
-| **Overall** | Phase 08 complete — core tools & confirmations |
-| **Active phase** | Phase 09 — Slash commands |
+| **Overall** | Phase 09 complete — slash commands |
+| **Active phase** | Phase 10 — OpenAI Responses API |
 | **Go toolchain** | **1.26.4** at `/home/rob/local/go1.26.4`, symlinked system-wide via `/usr/local/bin/go`. apt Go 1.22 removed. |
 | **Binary name** | `sagittarius` |
 | **Module** | `github.com/undeadindustries/sagittarius` |
@@ -63,7 +63,7 @@ tests, security docs, and commit messages accordingly.
 | 06 | OpenAI-compat providers | Complete |
 | 07 | Agent loop & headless `-p` | Complete |
 | 08 | Core tools | Complete |
-| 09 | Slash commands | Not started |
+| 09 | Slash commands | Complete |
 | 10 | OpenAI Responses API | Not started |
 | 11 | Context management | Not started |
 | 12 | MCP, skills, extensions | Not started |
@@ -162,6 +162,15 @@ generate request and loops up to `MaxToolRounds` (10) after function responses.
 Interactive TUI confirms destructive tools via `StreamToolConfirm`; headless
 auto-denies confirmations in `default`/`autoEdit` unless `yolo`.
 
+### AD-013 — Slash commands in internal/slash (2026-06-20)
+
+Phase 09 `internal/slash` owns command registry, parser, processor, and built-ins
+(`/help`, `/quit`, `/provider`, `/model`, `/auth`, `/memory reload`, `/skills reload`
+stub). `agent.App` intercepts `/` input before the runner; slash output uses
+`ui.StreamInfo`, quit uses `ui.StreamQuit`. Injectable `slash.Deps` + `Hooks` for
+tests. Fork rule: Gemini keys via `/auth`, not `/provider set … key`. Reference:
+`docs/reference/commands.md`.
+
 ---
 
 ## Workspace Layout
@@ -211,9 +220,11 @@ internal/log/
 
 ---
 
-Phase 08 complete (2026-06-20): internal/tools (Tool interface, Registry, read_file/write_file/list_directory/run_shell_command/grep_search, path validation, shell safety, Scheduler, policy default/autoEdit/yolo), Runner multi-round tool loop with declarations on GenerateRequest, ui StreamToolConfirm/StreamToolResult, bubbletea y/n confirmation; tests TestReadFileTool, TestWriteFileConfirmation, TestShellBlockedWhenDenied, TestToolSchemaOpenAICompat, TestRipgrepIntegration, TestRunnerToolRoundTrip.
-Next: Phase 09 — Slash commands
+Phase 09 complete (2026-06-20): internal/slash (Command, Registry, Parser, Processor, Deps/Hooks), built-ins /help /quit /provider /model /auth /memory reload /skills reload stub, agent.App slash interception, ui StreamInfo/StreamQuit, provider SetProviderModel/Field/AddCustom/RemoveCustom, docs/reference/commands.md; tests TestHelpListsProviderSubcommands, TestProviderUsePersists, TestQuitExits, TestAuthStoresKey, TestProviderSetRejectedForGemini.
+Next: Phase 10 — OpenAI Responses API
 Blockers: none
+
+Phase 08 complete (2026-06-20): internal/tools (Tool interface, Registry, read_file/write_file/list_directory/run_shell_command/grep_search, path validation, shell safety, Scheduler, policy default/autoEdit/yolo), Runner multi-round tool loop with declarations on GenerateRequest, ui StreamToolConfirm/StreamToolResult, bubbletea y/n confirmation; tests TestReadFileTool, TestWriteFileConfirmation, TestShellBlockedWhenDenied, TestToolSchemaOpenAICompat, TestRipgrepIntegration, TestRunnerToolRoundTrip.
 
 Phase 07 complete (2026-06-20): internal/agent Runner (idle→streaming→awaiting tools→done), ui.App adapter, DiscoverSystemInstruction (GEMINI.md/AGENTS.md + global), MapStreamResponse, headless -p/-m/-d flags, interactive TUI wired to provider stream; tests TestRunnerSingleTurnMock, TestHeadlessPromptFlag, TestCancelMidStream, TestGEMINIMDInjection.
 
@@ -252,6 +263,17 @@ From fork `AGENT.md` → OPEN TODOS:
 - [ ] `evals/` and `perf-tests/`
 - [ ] Extension marketplace / npm publishing
 - [ ] `tools/gemini-cli-bot`
+
+### Slash commands deferred (incremental post-Phase 09)
+
+Track against fork `docs/reference/commands.md`. Implemented subset documented in
+`docs/reference/commands.md`.
+
+- [ ] `/about`, `/bug`, `/chat`/`/resume`, `/clear`, `/compress`, `/copy`
+- [ ] `/commands`, `/directory`, `/extensions`, `/mcp`, `/agents`
+- [ ] Full `/skills` (list/enable/disable — Phase 12)
+- [ ] `/auth signin`/`signout` OAuth dialogs
+- [ ] ACP headless command registry
 
 ### Auth paths deferred
 

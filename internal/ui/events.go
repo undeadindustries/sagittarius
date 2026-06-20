@@ -14,6 +14,10 @@ const (
 	StreamToolResult
 	// StreamError carries a non-fatal stream error for display.
 	StreamError
+	// StreamInfo carries non-model system text (slash command output).
+	StreamInfo
+	// StreamQuit signals the TUI should exit the session.
+	StreamQuit
 	// StreamDone marks the end of a single assistant turn stream.
 	StreamDone
 )

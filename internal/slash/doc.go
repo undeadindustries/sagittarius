@@ -1,2 +1,2 @@
-// Package slash implements interactive slash commands (/help, /clear, etc.).
+// Package slash implements interactive slash commands (/help, /provider, /quit, …).
 package slash

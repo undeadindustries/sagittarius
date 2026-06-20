@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -50,4 +51,145 @@ func SaveActiveProvider(loader *config.Loader, settings *config.Settings, provid
 		return err
 	}
 	return loader.Save(settings)
+}
+
+// SetProviderModel updates the model override for providerID.
+func SetProviderModel(settings *config.Settings, providerID, model string) error {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return fmt.Errorf("set provider model: model is required")
+	}
+	if settings == nil {
+		return fmt.Errorf("set provider model: settings are required")
+	}
+	cfg, err := ensureProviderInstance(settings, providerID)
+	if err != nil {
+		return err
+	}
+	cfg.Model = model
+	return setProviderInstance(settings, providerID, cfg)
+}
+
+// SetProviderField updates a single provider instance field (model or baseUrl).
+func SetProviderField(settings *config.Settings, providerID, field, value string) error {
+	field = strings.TrimSpace(field)
+	value = strings.TrimSpace(value)
+	if field == "" {
+		return fmt.Errorf("set provider field: field is required")
+	}
+	if settings == nil {
+		return fmt.Errorf("set provider field: settings are required")
+	}
+	cfg, err := ensureProviderInstance(settings, providerID)
+	if err != nil {
+		return err
+	}
+	switch field {
+	case "model":
+		cfg.Model = value
+	case "baseUrl":
+		cfg.BaseURL = value
+	default:
+		return fmt.Errorf("set provider field: unsupported field %q", field)
+	}
+	return setProviderInstance(settings, providerID, cfg)
+}
+
+// AddCustomProvider registers a user-defined OpenAI-compatible provider.
+func AddCustomProvider(settings *config.Settings, id string, def config.CustomProviderDefinition) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("add custom provider: id is required")
+	}
+	if strings.TrimSpace(def.BaseURL) == "" {
+		return fmt.Errorf("add custom provider: baseUrl is required")
+	}
+	if settings == nil {
+		return fmt.Errorf("add custom provider: settings are required")
+	}
+	if settings.Providers == nil {
+		settings.Providers = &config.ProvidersSettings{}
+	}
+	if _, ok := config.LookupBuiltInProvider(id); ok {
+		return fmt.Errorf("add custom provider: id %q conflicts with built-in provider", id)
+	}
+	if settings.Providers.Custom == nil {
+		settings.Providers.Custom = make(map[string]config.CustomProviderDefinition)
+	}
+	if _, exists := settings.Providers.Custom[id]; exists {
+		return fmt.Errorf("add custom provider: %q already exists", id)
+	}
+	if def.DisplayName == "" {
+		def.DisplayName = id
+	}
+	if def.WireFormat == "" {
+		def.WireFormat = config.WireFormatOpenAIChat
+	}
+	settings.Providers.Custom[id] = def
+	return nil
+}
+
+// RemoveCustomProvider deletes a custom provider entry.
+func RemoveCustomProvider(settings *config.Settings, id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return fmt.Errorf("remove custom provider: id is required")
+	}
+	if settings == nil || settings.Providers == nil || settings.Providers.Custom == nil {
+		return fmt.Errorf("remove custom provider: %q not found", id)
+	}
+	if _, ok := settings.Providers.Custom[id]; !ok {
+		return fmt.Errorf("remove custom provider: %q not found", id)
+	}
+	delete(settings.Providers.Custom, id)
+	if settings.Providers.Active == id {
+		settings.Providers.Active = ""
+	}
+	return nil
+}
+
+func ensureProviderInstance(settings *config.Settings, providerID string) (*config.ProviderInstanceConfig, error) {
+	providerID = strings.TrimSpace(providerID)
+	if providerID == "" {
+		return nil, fmt.Errorf("provider instance: id is required")
+	}
+	if _, ok := config.LookupBuiltInProvider(providerID); !ok {
+		if settings.Providers == nil || settings.Providers.Custom == nil {
+			return nil, fmt.Errorf("provider instance: unknown provider %q", providerID)
+		}
+		if _, ok := settings.Providers.Custom[providerID]; !ok {
+			return nil, fmt.Errorf("provider instance: unknown provider %q", providerID)
+		}
+	}
+	if settings.Providers == nil {
+		settings.Providers = &config.ProvidersSettings{}
+	}
+	inst := providerInstance(settings, providerID)
+	if inst != nil {
+		copy := *inst
+		return &copy, nil
+	}
+	return &config.ProviderInstanceConfig{}, nil
+}
+
+func setProviderInstance(settings *config.Settings, providerID string, cfg *config.ProviderInstanceConfig) error {
+	if settings.Providers == nil {
+		settings.Providers = &config.ProvidersSettings{}
+	}
+	switch providerID {
+	case string(config.BuiltInOpenAI):
+		settings.Providers.OpenAI = cfg
+	case string(config.BuiltInGeminiAPIKey):
+		settings.Providers.GeminiAPIKey = cfg
+	default:
+		if settings.Providers.Extra == nil {
+			settings.Providers.Extra = make(map[string]json.RawMessage)
+		}
+		raw, err := json.Marshal(cfg)
+		if err != nil {
+			return fmt.Errorf("marshal provider instance: %w", err)
+		}
+		settings.Providers.Extra[providerID] = raw
+	}
+	return nil
 }
