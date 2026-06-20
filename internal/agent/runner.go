@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"github.com/undeadindustries/sagittarius/internal/provider"
+	"github.com/undeadindustries/sagittarius/internal/tools"
 	"github.com/undeadindustries/sagittarius/internal/ui"
 )
 
@@ -28,6 +29,8 @@ type RunnerConfig struct {
 	Model        string
 	WorkDir      string
 	ApprovalMode ApprovalMode
+	// Interactive enables TUI confirmation prompts; headless mode sets false.
+	Interactive bool
 }
 
 // Runner orchestrates conversation history and provider streaming for the agent loop.
@@ -36,6 +39,10 @@ type Runner struct {
 	model         string
 	system        string
 	approval      ApprovalMode
+	interactive   bool
+	workDir       string
+	registry      *tools.Registry
+	scheduler     *tools.Scheduler
 	history       []provider.Message
 	state         State
 	stateMu       sync.RWMutex
@@ -71,13 +78,36 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		mode = ApprovalDefault
 	}
 
+	ws, err := tools.NewWorkspace(workDir)
+	if err != nil {
+		return nil, fmt.Errorf("agent runner: workspace: %w", err)
+	}
+	registry := tools.NewBuiltinRegistry(ws)
+	policy := approvalToPolicy(mode)
+	scheduler := tools.NewScheduler(registry, policy, cfg.Interactive)
+
 	return &Runner{
-		gen:      cfg.Generator,
-		model:    cfg.Model,
-		system:   system,
-		approval: mode,
-		state:    StateIdle,
+		gen:         cfg.Generator,
+		model:       cfg.Model,
+		system:      system,
+		approval:    mode,
+		interactive: cfg.Interactive,
+		workDir:     ws.Root(),
+		registry:    registry,
+		scheduler:   scheduler,
+		state:       StateIdle,
 	}, nil
+}
+
+func approvalToPolicy(mode ApprovalMode) tools.Policy {
+	switch mode {
+	case ApprovalAutoEdit:
+		return tools.Policy{Mode: tools.ApprovalAutoEdit}
+	case ApprovalYolo:
+		return tools.Policy{Mode: tools.ApprovalYolo}
+	default:
+		return tools.Policy{Mode: tools.ApprovalDefault}
+	}
 }
 
 // State returns the current runner lifecycle phase.
@@ -114,25 +144,13 @@ func (r *Runner) RunTurn(ctx context.Context, userInput string) (<-chan ui.Strea
 		Parts: []provider.Part{{Text: userInput}},
 	})
 
-	req := &provider.GenerateRequest{
-		Model:             r.model,
-		SystemInstruction: r.system,
-		Messages:          append([]provider.Message(nil), r.history...),
-	}
-	r.storeLastRequest(req)
-
-	respCh, err := r.gen.GenerateContentStream(ctx, req)
-	if err != nil {
-		r.history = r.history[:len(r.history)-1]
-		return nil, err
-	}
-
 	out := make(chan ui.StreamEvent, 8)
-	go r.pumpStream(ctx, respCh, out)
+	go r.runAgentLoop(ctx, out)
 	return out, nil
 }
 
 // RunHeadless executes a single non-interactive turn, writing text deltas to out.
+// Destructive tools are auto-denied in default/auto_edit modes unless ApprovalYolo is set.
 func (r *Runner) RunHeadless(ctx context.Context, prompt string, out io.Writer) error {
 	if out == nil {
 		out = io.Discard
@@ -170,11 +188,69 @@ func (r *Runner) RunHeadless(ctx context.Context, prompt string, out io.Writer) 
 	return nil
 }
 
-func (r *Runner) pumpStream(ctx context.Context, respCh <-chan provider.StreamResponse, out chan<- ui.StreamEvent) {
+func (r *Runner) runAgentLoop(ctx context.Context, out chan<- ui.StreamEvent) {
 	defer close(out)
-
 	r.setState(StateStreaming)
 
+	for round := 0; round < tools.MaxToolRounds; round++ {
+		req := r.buildGenerateRequest()
+		r.storeLastRequest(req)
+
+		respCh, err := r.gen.GenerateContentStream(ctx, req)
+		if err != nil {
+			out <- ui.StreamEvent{Type: ui.StreamError, Err: err}
+			return
+		}
+
+		toolCalls, modelText, streamErr := r.consumeStream(ctx, respCh, out)
+		if streamErr != nil {
+			return
+		}
+
+		r.appendModelMessage(modelText, toolCalls)
+
+		if len(toolCalls) == 0 {
+			r.setState(StateDone)
+			out <- ui.StreamEvent{Type: ui.StreamDone}
+			return
+		}
+
+		r.setState(StateAwaitingTools)
+		emit := func(ev ui.StreamEvent) {
+			select {
+			case <-ctx.Done():
+			case out <- ev:
+			}
+		}
+
+		responses, err := r.scheduler.Execute(ctx, toolCalls, emit)
+		if err != nil {
+			out <- ui.StreamEvent{Type: ui.StreamError, Err: err}
+			return
+		}
+		r.appendFunctionResponses(responses)
+		r.setState(StateStreaming)
+	}
+
+	r.setState(StateDone)
+	out <- ui.StreamEvent{Type: ui.StreamError, Text: "max tool rounds exceeded"}
+	out <- ui.StreamEvent{Type: ui.StreamDone}
+}
+
+func (r *Runner) buildGenerateRequest() *provider.GenerateRequest {
+	return &provider.GenerateRequest{
+		Model:             r.model,
+		SystemInstruction: r.system,
+		Messages:          append([]provider.Message(nil), r.history...),
+		Tools:             r.registry.ListDeclarations(),
+	}
+}
+
+func (r *Runner) consumeStream(
+	ctx context.Context,
+	respCh <-chan provider.StreamResponse,
+	out chan<- ui.StreamEvent,
+) ([]provider.ToolCall, string, error) {
 	var modelText strings.Builder
 	var toolCalls []provider.ToolCall
 	streamDone := false
@@ -183,7 +259,7 @@ func (r *Runner) pumpStream(ctx context.Context, respCh <-chan provider.StreamRe
 		select {
 		case <-ctx.Done():
 			out <- ui.StreamEvent{Type: ui.StreamError, Err: ctx.Err()}
-			return
+			return nil, "", ctx.Err()
 		case resp, ok := <-respCh:
 			if !ok {
 				streamDone = true
@@ -191,7 +267,7 @@ func (r *Runner) pumpStream(ctx context.Context, respCh <-chan provider.StreamRe
 			}
 			if resp.Error != nil {
 				out <- ui.StreamEvent{Type: ui.StreamError, Err: resp.Error}
-				return
+				return nil, "", resp.Error
 			}
 			if resp.TextDelta != "" {
 				modelText.WriteString(resp.TextDelta)
@@ -206,21 +282,14 @@ func (r *Runner) pumpStream(ctx context.Context, respCh <-chan provider.StreamRe
 				select {
 				case <-ctx.Done():
 					out <- ui.StreamEvent{Type: ui.StreamError, Err: ctx.Err()}
-					return
+					return nil, "", ctx.Err()
 				case out <- ev:
 				}
 			}
 		}
 	}
 
-	if len(toolCalls) > 0 {
-		r.setState(StateAwaitingTools)
-		_ = r.approval // stub: default approval only; execution deferred to Phase 08
-	}
-
-	r.appendModelMessage(modelText.String(), toolCalls)
-	r.setState(StateDone)
-	out <- ui.StreamEvent{Type: ui.StreamDone}
+	return toolCalls, modelText.String(), nil
 }
 
 func (r *Runner) appendModelMessage(text string, toolCalls []provider.ToolCall) {
@@ -237,6 +306,21 @@ func (r *Runner) appendModelMessage(text string, toolCalls []provider.ToolCall) 
 	}
 	r.history = append(r.history, provider.Message{
 		Role:  provider.RoleModel,
+		Parts: parts,
+	})
+}
+
+func (r *Runner) appendFunctionResponses(responses []provider.FunctionResponse) {
+	if len(responses) == 0 {
+		return
+	}
+	parts := make([]provider.Part, 0, len(responses))
+	for _, resp := range responses {
+		respCopy := resp
+		parts = append(parts, provider.Part{FunctionResponse: &respCopy})
+	}
+	r.history = append(r.history, provider.Message{
+		Role:  provider.RoleUser,
 		Parts: parts,
 	})
 }

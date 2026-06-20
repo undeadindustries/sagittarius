@@ -110,12 +110,14 @@ func TestStreamEventTypesDistinct(t *testing.T) {
 	for _, typ := range []ui.StreamEventType{
 		ui.StreamTextDelta,
 		ui.StreamToolStart,
+		ui.StreamToolConfirm,
+		ui.StreamToolResult,
 		ui.StreamError,
 		ui.StreamDone,
 	} {
 		seen[typ] = struct{}{}
 	}
-	if len(seen) != 4 {
+	if len(seen) != 6 {
 		t.Fatal("stream event types should be distinct")
 	}
 }

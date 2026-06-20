@@ -43,8 +43,8 @@ tests, security docs, and commit messages accordingly.
 
 | Field | Value |
 |-------|-------|
-| **Overall** | Phase 07 complete — agent loop & headless `-p` |
-| **Active phase** | Phase 08 — Core tools |
+| **Overall** | Phase 08 complete — core tools & confirmations |
+| **Active phase** | Phase 09 — Slash commands |
 | **Go toolchain** | **1.26.4** at `/home/rob/local/go1.26.4`, symlinked system-wide via `/usr/local/bin/go`. apt Go 1.22 removed. |
 | **Binary name** | `sagittarius` |
 | **Module** | `github.com/undeadindustries/sagittarius` |
@@ -62,7 +62,7 @@ tests, security docs, and commit messages accordingly.
 | 05 | Gemini provider (API key) | Complete |
 | 06 | OpenAI-compat providers | Complete |
 | 07 | Agent loop & headless `-p` | Complete |
-| 08 | Core tools | Not started |
+| 08 | Core tools | Complete |
 | 09 | Slash commands | Not started |
 | 10 | OpenAI Responses API | Not started |
 | 11 | Context management | Not started |
@@ -152,6 +152,16 @@ Phase 07 `internal/agent` owns the turn loop, `provider.StreamResponse` →
 Tool calls emit `StreamToolStart` only (execution Phase 08). Approval mode stub
 is `default` only. Agent packages must not import Bubble Tea.
 
+### AD-012 — Core tools in internal/tools (2026-06-20)
+
+Phase 08 `internal/tools` owns built-in wire tools (`read_file`, `write_file`,
+`list_directory`, `run_shell_command`, `grep_search`), workspace path validation,
+shell safety subset, registry + scheduler, and approval policy subset
+(`default`, `autoEdit`, `yolo`). Runner registers tool declarations on every
+generate request and loops up to `MaxToolRounds` (10) after function responses.
+Interactive TUI confirms destructive tools via `StreamToolConfirm`; headless
+auto-denies confirmations in `default`/`autoEdit` unless `yolo`.
+
 ---
 
 ## Workspace Layout
@@ -201,9 +211,11 @@ internal/log/
 
 ---
 
-Phase 07 complete (2026-06-20): internal/agent Runner (idle→streaming→awaiting tools→done), ui.App adapter, DiscoverSystemInstruction (GEMINI.md/AGENTS.md + global), MapStreamResponse, headless -p/-m/-d flags, interactive TUI wired to provider stream; tests TestRunnerSingleTurnMock, TestHeadlessPromptFlag, TestCancelMidStream, TestGEMINIMDInjection.
-Next: Phase 08 — Core tools
+Phase 08 complete (2026-06-20): internal/tools (Tool interface, Registry, read_file/write_file/list_directory/run_shell_command/grep_search, path validation, shell safety, Scheduler, policy default/autoEdit/yolo), Runner multi-round tool loop with declarations on GenerateRequest, ui StreamToolConfirm/StreamToolResult, bubbletea y/n confirmation; tests TestReadFileTool, TestWriteFileConfirmation, TestShellBlockedWhenDenied, TestToolSchemaOpenAICompat, TestRipgrepIntegration, TestRunnerToolRoundTrip.
+Next: Phase 09 — Slash commands
 Blockers: none
+
+Phase 07 complete (2026-06-20): internal/agent Runner (idle→streaming→awaiting tools→done), ui.App adapter, DiscoverSystemInstruction (GEMINI.md/AGENTS.md + global), MapStreamResponse, headless -p/-m/-d flags, interactive TUI wired to provider stream; tests TestRunnerSingleTurnMock, TestHeadlessPromptFlag, TestCancelMidStream, TestGEMINIMDInjection.
 
 Phase 06 complete (2026-06-20): OpenAIChatGenerator (SSE streaming, XML tool-call fallback, Mistral message patches), EndpointConfig + factory wireFormat branch, DiscoverModels, IsOpenAIChatMode hook, SetActiveProvider/SaveActiveProvider; httptest tests (TestOpenAIChatStream, TestXmlToolCallFallback, TestCustomProviderLoad, TestOpenRouterAsCustom, TestModelDiscoveryEmptyOnFailure, TestFactorySelectsOpenAI).
 

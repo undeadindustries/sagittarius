@@ -33,14 +33,15 @@ type model struct {
 	width  int
 	height int
 
-	viewport   viewport.Model
-	input      textinput.Model
-	status     ui.StatusBar
-	idleStatus ui.StatusBar
-	output     strings.Builder
-	busy       bool
-	quitting   bool
-	stream     <-chan ui.StreamEvent
+	viewport     viewport.Model
+	input        textinput.Model
+	status       ui.StatusBar
+	idleStatus   ui.StatusBar
+	output       strings.Builder
+	busy         bool
+	quitting     bool
+	stream       <-chan ui.StreamEvent
+	confirmReply chan bool
 }
 
 func newModel(opts ui.Options, app ui.App, term *Terminal) *model {
@@ -134,6 +135,24 @@ func (m *model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.confirmReply != nil {
+		switch msg.String() {
+		case "y", "Y":
+			m.confirmReply <- true
+			m.confirmReply = nil
+			m.status.Left = "thinking…"
+			return m, nil
+		case "n", "N":
+			m.confirmReply <- false
+			m.confirmReply = nil
+			m.status.Left = "thinking…"
+			return m, nil
+		case "ctrl+c":
+			return m, tea.Quit
+		}
+		return m, nil
+	}
+
 	if m.busy {
 		switch msg.String() {
 		case "ctrl+c":
@@ -191,6 +210,12 @@ func (m *model) handleStream(ev ui.StreamEvent) (tea.Model, tea.Cmd) {
 		m.appendOutput(ev.Text)
 	case ui.StreamToolStart:
 		m.appendOutput("[tool: " + ev.ToolName + "]\n")
+	case ui.StreamToolConfirm:
+		m.appendOutput("[confirm " + ev.ToolName + ": " + ev.Text + "] (y/n)\n")
+		m.confirmReply = ev.ConfirmReply
+		m.status.Left = "confirm tool"
+	case ui.StreamToolResult:
+		m.appendOutput("[tool result: " + ev.ToolName + " " + ev.Text + "]\n")
 	case ui.StreamError:
 		if ev.Err != nil {
 			m.appendOutput("Error: " + ev.Err.Error() + "\n")

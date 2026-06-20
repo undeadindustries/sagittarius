@@ -13,20 +13,26 @@ import (
 	"time"
 
 	"github.com/undeadindustries/sagittarius/internal/provider"
+	"github.com/undeadindustries/sagittarius/internal/tools"
 	"github.com/undeadindustries/sagittarius/internal/ui"
 )
 
 type fakeGenerator struct {
-	mu        sync.Mutex
-	lastReq   *provider.GenerateRequest
-	responses []provider.StreamResponse
-	block     chan struct{}
+	mu      sync.Mutex
+	lastReq *provider.GenerateRequest
+	batches [][]provider.StreamResponse
+	call    int
+	block   chan struct{}
 }
 
 func (f *fakeGenerator) GenerateContentStream(ctx context.Context, req *provider.GenerateRequest) (<-chan provider.StreamResponse, error) {
 	f.mu.Lock()
 	f.lastReq = req
-	responses := append([]provider.StreamResponse(nil), f.responses...)
+	var responses []provider.StreamResponse
+	if f.call < len(f.batches) {
+		responses = append([]provider.StreamResponse(nil), f.batches[f.call]...)
+	}
+	f.call++
 	block := f.block
 	f.mu.Unlock()
 
@@ -79,17 +85,18 @@ func TestRunnerSingleTurnMock(t *testing.T) {
 	t.Parallel()
 
 	gen := &fakeGenerator{
-		responses: []provider.StreamResponse{
+		batches: [][]provider.StreamResponse{{
 			{TextDelta: "Hello"},
 			{TextDelta: ", world!"},
 			{Done: true},
-		},
+		}},
 	}
 
 	runner, err := NewRunner(RunnerConfig{
-		Generator: gen,
-		Model:     "test-model",
-		WorkDir:   t.TempDir(),
+		Generator:   gen,
+		Model:       "test-model",
+		WorkDir:     t.TempDir(),
+		Interactive: false,
 	})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
@@ -113,8 +120,12 @@ func TestRunnerSingleTurnMock(t *testing.T) {
 	if runner.State() != StateDone {
 		t.Fatalf("state = %v, want StateDone", runner.State())
 	}
-	if req := gen.lastRequest(); req == nil || len(req.Messages) != 1 {
+	req := gen.lastRequest()
+	if req == nil || len(req.Messages) != 1 {
 		t.Fatalf("request messages = %#v", req)
+	}
+	if len(req.Tools) == 0 {
+		t.Fatal("expected tool declarations on generate request")
 	}
 }
 
@@ -122,17 +133,18 @@ func TestHeadlessPromptFlag(t *testing.T) {
 	t.Parallel()
 
 	gen := &fakeGenerator{
-		responses: []provider.StreamResponse{
+		batches: [][]provider.StreamResponse{{
 			{TextDelta: "headless "},
 			{TextDelta: "output"},
 			{Done: true},
-		},
+		}},
 	}
 
 	runner, err := NewRunner(RunnerConfig{
-		Generator: gen,
-		Model:     "test-model",
-		WorkDir:   t.TempDir(),
+		Generator:   gen,
+		Model:       "test-model",
+		WorkDir:     t.TempDir(),
+		Interactive: false,
 	})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
@@ -153,16 +165,17 @@ func TestCancelMidStream(t *testing.T) {
 	block := make(chan struct{})
 	gen := &fakeGenerator{
 		block: block,
-		responses: []provider.StreamResponse{
+		batches: [][]provider.StreamResponse{{
 			{TextDelta: "partial"},
 			{Done: true},
-		},
+		}},
 	}
 
 	runner, err := NewRunner(RunnerConfig{
-		Generator: gen,
-		Model:     "test-model",
-		WorkDir:   t.TempDir(),
+		Generator:   gen,
+		Model:       "test-model",
+		WorkDir:     t.TempDir(),
+		Interactive: false,
 	})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
@@ -207,13 +220,14 @@ func TestGEMINIMDInjection(t *testing.T) {
 	t.Cleanup(func() { getWorkDir = prevGetWorkDir })
 
 	gen := &fakeGenerator{
-		responses: []provider.StreamResponse{{Done: true}},
+		batches: [][]provider.StreamResponse{{{Done: true}}},
 	}
 
 	runner, err := NewRunner(RunnerConfig{
-		Generator: gen,
-		Model:     "test-model",
-		WorkDir:   projectDir,
+		Generator:   gen,
+		Model:       "test-model",
+		WorkDir:     projectDir,
+		Interactive: false,
 	})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
@@ -241,16 +255,18 @@ func TestRunnerToolCallStub(t *testing.T) {
 	t.Parallel()
 
 	gen := &fakeGenerator{
-		responses: []provider.StreamResponse{
+		batches: [][]provider.StreamResponse{{
 			{ToolCalls: []provider.ToolCall{{Name: "grep", Args: map[string]any{"pattern": "foo"}}}},
 			{Done: true},
-		},
+		}},
 	}
 
 	runner, err := NewRunner(RunnerConfig{
-		Generator: gen,
-		Model:     "test-model",
-		WorkDir:   t.TempDir(),
+		Generator:    gen,
+		Model:        "test-model",
+		WorkDir:      t.TempDir(),
+		ApprovalMode: ApprovalYolo,
+		Interactive:  false,
 	})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
@@ -276,6 +292,72 @@ func TestRunnerToolCallStub(t *testing.T) {
 	}
 }
 
+func TestRunnerToolRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	dataPath := filepath.Join(root, "data.txt")
+	if err := os.WriteFile(dataPath, []byte("payload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	gen := &fakeGenerator{
+		batches: [][]provider.StreamResponse{
+			{
+				{ToolCalls: []provider.ToolCall{{
+					Name: tools.ReadFileToolName,
+					Args: map[string]any{tools.ParamFilePath: "data.txt"},
+				}}},
+				{Done: true},
+			},
+			{
+				{TextDelta: "read ok"},
+				{Done: true},
+			},
+		},
+	}
+
+	runner, err := NewRunner(RunnerConfig{
+		Generator:    gen,
+		Model:        "test-model",
+		WorkDir:      root,
+		ApprovalMode: ApprovalYolo,
+		Interactive:  false,
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	events, err := runner.RunTurn(testContext(t), "read file")
+	if err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+	got := collectEvents(t, events)
+
+	var sawToolStart, sawToolResult, sawText bool
+	for _, ev := range got {
+		switch ev.Type {
+		case ui.StreamToolStart:
+			sawToolStart = true
+		case ui.StreamToolResult:
+			sawToolResult = true
+		case ui.StreamTextDelta:
+			if ev.Text == "read ok" {
+				sawText = true
+			}
+		}
+	}
+	if !sawToolStart || !sawToolResult || !sawText {
+		t.Fatalf("events = %#v, want tool start, result, and text", got)
+	}
+	if gen.call != 2 {
+		t.Fatalf("generate calls = %d, want 2", gen.call)
+	}
+	if runner.State() != StateDone {
+		t.Fatalf("state = %v, want StateDone", runner.State())
+	}
+}
+
 func drainEvents(t *testing.T, events <-chan ui.StreamEvent) {
 	t.Helper()
 	for range events {
@@ -286,12 +368,13 @@ func TestRunHeadlessWriteError(t *testing.T) {
 	t.Parallel()
 
 	gen := &fakeGenerator{
-		responses: []provider.StreamResponse{{TextDelta: "x", Done: true}},
+		batches: [][]provider.StreamResponse{{{TextDelta: "x", Done: true}}},
 	}
 	runner, err := NewRunner(RunnerConfig{
-		Generator: gen,
-		Model:     "test-model",
-		WorkDir:   t.TempDir(),
+		Generator:   gen,
+		Model:       "test-model",
+		WorkDir:     t.TempDir(),
+		Interactive: false,
 	})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)

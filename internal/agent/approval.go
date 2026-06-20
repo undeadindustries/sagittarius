@@ -1,10 +1,13 @@
 package agent
 
 // ApprovalMode controls how tool invocations are approved before execution.
-// Phase 07 supports default only; yolo and plan arrive in Phase 09/15.
 type ApprovalMode string
 
 const (
-	// ApprovalDefault requires user confirmation for destructive tools (stub in Phase 07).
+	// ApprovalDefault requires user confirmation for destructive tools (write_file) and shell.
 	ApprovalDefault ApprovalMode = "default"
+	// ApprovalAutoEdit auto-approves file edits; still confirms shell commands.
+	ApprovalAutoEdit ApprovalMode = "autoEdit"
+	// ApprovalYolo runs all tools without confirmation (path validation still applies).
+	ApprovalYolo ApprovalMode = "yolo"
 )
