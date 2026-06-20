@@ -43,8 +43,8 @@ tests, security docs, and commit messages accordingly.
 
 | Field | Value |
 |-------|-------|
-| **Overall** | Phase 02 complete — config & settings bridge |
-| **Active phase** | Phase 03 — Secure credentials |
+| **Overall** | Phase 03 complete — secure credentials |
+| **Active phase** | Phase 04 — TUI shell (swappable) |
 | **Go toolchain** | **1.26.4** at `/home/rob/local/go1.26.4`, symlinked system-wide via `/usr/local/bin/go`. apt Go 1.22 removed. |
 | **Binary name** | `sagittarius` |
 | **Module** | `github.com/undeadindustries/sagittarius` |
@@ -57,7 +57,7 @@ tests, security docs, and commit messages accordingly.
 |-------|------|--------|
 | 01 | Foundation & public repo | Complete |
 | 02 | Config & settings bridge | Complete |
-| 03 | Secure credentials | Not started |
+| 03 | Secure credentials | Complete |
 | 04 | TUI shell (swappable) | Not started |
 | 05 | Gemini provider (API key) | Not started |
 | 06 | OpenAI-compat providers | Not started |
@@ -124,6 +124,12 @@ After Phase 14 parity: plan/ask/debug **interaction modes** with per-mode defaul
 models, plus subagent model overrides with defaults. Settings under
 `sagittarius.*` namespace. See `docs/plans/phase-15-interaction-modes.md`.
 
+### AD-008 — Encrypted credentials file path (2026-06-20)
+
+File fallback stores AES-256-GCM encrypted credentials at
+`~/.gemini/gemini-credentials.json` (or `$GEMINI_CLI_HOME/.gemini/…`), matching
+fork FileKeychain layout and encryption for cross-tool compatibility.
+
 ---
 
 ## Workspace Layout
@@ -171,9 +177,11 @@ internal/log/
 
 ---
 
-Phase 02 complete (2026-06-20): internal/config loads ~/.gemini/settings.json with typed providers subset, unknown-key passthrough, secret stripping, legacy local.* migration stub, reload notifier stub, built-in gemini-apikey/openai registry.
-Next: Phase 03 — Secure credentials
+Phase 03 complete (2026-06-20): internal/credentials resolves provider API keys (env → keychain → encrypted file fallback), fork-compatible service naming, 30s read-through cache, Set/Delete APIs, SECURITY.md threat model.
+Next: Phase 04 — TUI shell (swappable)
 Blockers: none
+
+Phase 02 complete (2026-06-20): internal/config loads ~/.gemini/settings.json with typed providers subset, unknown-key passthrough, secret stripping, legacy local.* migration stub, reload notifier stub, built-in gemini-apikey/openai registry.
 
 Phase 01 complete (2026-06-20): Go module, package skeleton, Makefile, CI, public docs, version embedding, TestMainVersion.
 
