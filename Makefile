@@ -16,6 +16,10 @@ BIN_DIR := bin
 BINARY := $(BIN_DIR)/sagittarius
 MODULE := github.com/undeadindustries/sagittarius
 
+# Rebuild when any Go source or module metadata changes (avoid stale bin/sagittarius).
+GO_PKG := ./...
+GO_SOURCES := $(shell $(GO) list -f '{{range .GoFiles}}{{$$.Dir}}/{{.}} {{end}}' $(GO_PKG) 2>/dev/null)
+
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -28,7 +32,7 @@ LDFLAGS := -ldflags "-X $(MODULE)/internal/version.Version=$(VERSION) \
 
 build: $(BINARY)
 
-$(BINARY):
+$(BINARY): go.mod go.sum $(GO_SOURCES)
 	@mkdir -p $(BIN_DIR)
 	$(GO) build $(LDFLAGS) -o $(BINARY) ./cmd/sagittarius
 

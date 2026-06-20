@@ -224,16 +224,8 @@ func waitStream(events <-chan ui.StreamEvent) tea.Cmd {
 	}
 }
 
-func welcomeText(opts ui.Options) string {
-	title := opts.BannerTitle
-	if title == "" {
-		title = "Sagittarius"
-	}
-	version := opts.Version
-	if version == "" {
-		version = "dev"
-	}
-	return title + " " + version + "\n\nPhase 04 echo demo — type a message and press Enter.\nUse /quit or Ctrl+C to exit.\n\n"
+func welcomeText(_ ui.Options) string {
+	return "Phase 04 echo demo — type a message and press Enter.\nUse /quit or Ctrl+C to exit.\n\n"
 }
 
 func renderHeader(opts ui.Options, width int) string {
