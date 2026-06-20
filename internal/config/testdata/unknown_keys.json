@@ -1,0 +1,17 @@
+{
+  "providers": {
+    "active": "openai",
+    "openai": {
+      "model": "gpt-4o"
+    }
+  },
+  "ui": {
+    "theme": "Default Light"
+  },
+  "futureNodeOnlySection": {
+    "nested": {
+      "flag": true,
+      "list": [1, 2, 3]
+    }
+  }
+}

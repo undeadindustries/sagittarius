@@ -43,8 +43,8 @@ tests, security docs, and commit messages accordingly.
 
 | Field | Value |
 |-------|-------|
-| **Overall** | Phase 01 complete — Go foundation in place |
-| **Active phase** | Phase 02 — Config & settings bridge |
+| **Overall** | Phase 02 complete — config & settings bridge |
+| **Active phase** | Phase 03 — Secure credentials |
 | **Go toolchain** | **1.26.4** at `/home/rob/local/go1.26.4`, symlinked system-wide via `/usr/local/bin/go`. apt Go 1.22 removed. |
 | **Binary name** | `sagittarius` |
 | **Module** | `github.com/undeadindustries/sagittarius` |
@@ -56,7 +56,7 @@ tests, security docs, and commit messages accordingly.
 | Phase | Name | Status |
 |-------|------|--------|
 | 01 | Foundation & public repo | Complete |
-| 02 | Config & settings bridge | Not started |
+| 02 | Config & settings bridge | Complete |
 | 03 | Secure credentials | Not started |
 | 04 | TUI shell (swappable) | Not started |
 | 05 | Gemini provider (API key) | Not started |
@@ -171,9 +171,11 @@ internal/log/
 
 ---
 
-Phase 01 complete (2026-06-20): Go module, package skeleton, Makefile, CI, public docs, version embedding, TestMainVersion.
-Next: Phase 02 — Config & settings bridge
+Phase 02 complete (2026-06-20): internal/config loads ~/.gemini/settings.json with typed providers subset, unknown-key passthrough, secret stripping, legacy local.* migration stub, reload notifier stub, built-in gemini-apikey/openai registry.
+Next: Phase 03 — Secure credentials
 Blockers: none
+
+Phase 01 complete (2026-06-20): Go module, package skeleton, Makefile, CI, public docs, version embedding, TestMainVersion.
 
 ---
 

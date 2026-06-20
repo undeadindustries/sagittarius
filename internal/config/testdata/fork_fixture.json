@@ -1,0 +1,39 @@
+{
+  "providers": {
+    "active": "openai",
+    "openai": {
+      "model": "gpt-4o-mini",
+      "timeout": 120000,
+      "enableTools": true,
+      "promptMode": "lite"
+    },
+    "gemini-apikey": {},
+    "custom": {
+      "local-vllm": {
+        "displayName": "Local vLLM",
+        "baseUrl": "http://127.0.0.1:8000/v1/chat/completions",
+        "defaultModel": "example-model",
+        "wireFormat": "openai-chat",
+        "apiKeyEnvVar": ""
+      }
+    }
+  },
+  "ui": {
+    "theme": "Default Dark",
+    "accessibility": {
+      "screenReader": false
+    }
+  },
+  "general": {
+    "preferredEditor": "vscode"
+  },
+  "experimental": {
+    "worktrees": false
+  },
+  "mcpServers": {
+    "example-server": {
+      "command": "echo",
+      "args": ["hello"]
+    }
+  }
+}
