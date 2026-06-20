@@ -6,8 +6,12 @@ type StreamEventType int
 const (
 	// StreamTextDelta appends incremental model output text.
 	StreamTextDelta StreamEventType = iota
-	// StreamToolStart announces a tool invocation (stub for Phase 08).
+	// StreamToolStart announces a tool invocation.
 	StreamToolStart
+	// StreamToolConfirm prompts the user to approve a destructive tool (interactive mode).
+	StreamToolConfirm
+	// StreamToolResult reports tool execution outcome text.
+	StreamToolResult
 	// StreamError carries a non-fatal stream error for display.
 	StreamError
 	// StreamDone marks the end of a single assistant turn stream.
@@ -20,6 +24,8 @@ type StreamEvent struct {
 	Text     string
 	ToolName string
 	Err      error
+	// ConfirmReply is set for StreamToolConfirm; the TUI sends true/false when the user responds.
+	ConfirmReply chan bool
 }
 
 // StatusBar holds footer metadata shown below the input area.

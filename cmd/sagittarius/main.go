@@ -86,7 +86,7 @@ func runHeadless(prompt, modelOverride string) int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	runner, err := buildRunner(ctx, modelOverride)
+	runner, err := buildRunner(ctx, modelOverride, false)
 	if err != nil {
 		writeStartupError(err)
 		return 1
@@ -106,7 +106,7 @@ func runInteractive(screenReader bool, modelOverride string) int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	runner, err := buildRunner(ctx, modelOverride)
+	runner, err := buildRunner(ctx, modelOverride, true)
 	if err != nil {
 		writeStartupError(err)
 		return 1
@@ -142,7 +142,7 @@ func runInteractive(screenReader bool, modelOverride string) int {
 	return 0
 }
 
-func buildRunner(ctx context.Context, modelOverride string) (*agent.Runner, error) {
+func buildRunner(ctx context.Context, modelOverride string, interactive bool) (*agent.Runner, error) {
 	settings, err := loadSettings()
 	if err != nil {
 		return nil, err
@@ -164,8 +164,9 @@ func buildRunner(ctx context.Context, modelOverride string) (*agent.Runner, erro
 	}
 
 	return agent.NewRunner(agent.RunnerConfig{
-		Generator: gen,
-		Model:     model,
+		Generator:   gen,
+		Model:       model,
+		Interactive: interactive,
 	})
 }
 
