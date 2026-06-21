@@ -5,16 +5,21 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/undeadindustries/sagittarius/internal/agents"
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/credentials"
+	"github.com/undeadindustries/sagittarius/internal/mcp"
 	"github.com/undeadindustries/sagittarius/internal/provider"
+	"github.com/undeadindustries/sagittarius/internal/skills"
 	"github.com/undeadindustries/sagittarius/internal/slash"
+	"github.com/undeadindustries/sagittarius/internal/tools"
 	"github.com/undeadindustries/sagittarius/internal/ui"
 )
 
 // AppConfig wires the interactive agent loop with slash command support.
 type AppConfig struct {
 	Runner        *Runner
+	Runtime       *Runtime
 	ProviderLabel string
 	Model         string
 	Loader        *config.Loader
@@ -27,6 +32,7 @@ type AppConfig struct {
 // App adapts Runner to ui.App for interactive TUI sessions.
 type App struct {
 	runner    *Runner
+	runtime   *Runtime
 	status    ui.StatusBar
 	processor *slash.Processor
 	deps      slash.Deps
@@ -43,6 +49,7 @@ func NewApp(cfg AppConfig) *App {
 	}
 	app := &App{
 		runner:    cfg.Runner,
+		runtime:   cfg.Runtime,
 		processor: slash.NewProcessor(),
 		sessionID: cfg.SessionID,
 		status: ui.StatusBar{
@@ -173,6 +180,104 @@ func (h *appHooks) SetProviderAPIKey(ctx context.Context, providerID, apiKey str
 	return credentials.SetProviderAPIKey(ctx, providerID, apiKey)
 }
 
+func (h *appHooks) ReloadMCP(ctx context.Context) (string, error) {
+	if h.app == nil || h.app.runtime == nil || h.app.runner == nil {
+		return "", fmt.Errorf("runtime not available")
+	}
+	reg, err := h.app.runtime.ReloadTools(ctx)
+	if err != nil {
+		return "", err
+	}
+	h.app.runner.SetRegistry(reg)
+	return formatMCPReloadSummary(h.app.runtime.Catalog.MCPManager().States()), nil
+}
+
+func (h *appHooks) ReloadSkills(ctx context.Context) (string, error) {
+	if h.app == nil || h.app.runtime == nil || h.app.runner == nil {
+		return "", fmt.Errorf("runtime not available")
+	}
+	before := skillNames(h.app.runtime.Catalog.SkillManager().Skills())
+	reg, err := h.app.runtime.ReloadSkills(ctx)
+	if err != nil {
+		return "", err
+	}
+	h.app.runner.SetRegistry(reg)
+	after := skillNames(h.app.runtime.Catalog.SkillManager().Skills())
+	return formatSkillsReloadSummary(before, after), nil
+}
+
+func (h *appHooks) ReloadAgents(ctx context.Context) (agents.ReloadSummary, error) {
+	if h.app == nil || h.app.runtime == nil {
+		return agents.ReloadSummary{}, fmt.Errorf("runtime not available")
+	}
+	return h.app.runtime.ReloadAgents(ctx)
+}
+
+func (h *appHooks) MCPStates() []mcp.ServerState {
+	if h.app == nil || h.app.runtime == nil {
+		return nil
+	}
+	return h.app.runtime.Catalog.MCPManager().States()
+}
+
+func (h *appHooks) SkillList() []skills.Definition {
+	if h.app == nil || h.app.runtime == nil {
+		return nil
+	}
+	return h.app.runtime.Catalog.SkillManager().Skills()
+}
+
+func (h *appHooks) AgentList() []agents.Definition {
+	if h.app == nil || h.app.runtime == nil {
+		return nil
+	}
+	return h.app.runtime.Agents.AllDefinitions()
+}
+
+func skillNames(items []skills.Definition) map[string]struct{} {
+	out := make(map[string]struct{}, len(items))
+	for _, item := range items {
+		out[item.Name] = struct{}{}
+	}
+	return out
+}
+
+func formatSkillsReloadSummary(before, after map[string]struct{}) string {
+	added := 0
+	removed := 0
+	for name := range after {
+		if _, ok := before[name]; !ok {
+			added++
+		}
+	}
+	for name := range before {
+		if _, ok := after[name]; !ok {
+			removed++
+		}
+	}
+	msg := "Agent skills reloaded successfully."
+	if added > 0 || removed > 0 {
+		msg += fmt.Sprintf(" (%d added, %d removed)", added, removed)
+	}
+	return msg
+}
+
+func formatMCPReloadSummary(states []mcp.ServerState) string {
+	if len(states) == 0 {
+		return "MCP servers reloaded. No servers configured."
+	}
+	var lines []string
+	lines = append(lines, "MCP servers reloaded:")
+	for _, st := range states {
+		line := fmt.Sprintf("  %s: %s (%d tools)", st.Name, st.Status, st.ToolCount)
+		if st.LastError != "" {
+			line += " — " + st.LastError
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
 // SetGenerator replaces the content generator (used after provider changes)
 // and clears any recorded provider-unavailable error.
 func (r *Runner) SetGenerator(gen provider.ContentGenerator) {
@@ -188,6 +293,20 @@ func (r *Runner) SetModel(model string) {
 	if model != "" {
 		r.model = model
 	}
+}
+
+// SetRegistry replaces the tool registry and rebuilds the scheduler.
+func (r *Runner) SetRegistry(registry *tools.Registry) {
+	if registry == nil {
+		return
+	}
+	r.registry = registry
+	r.scheduler = tools.NewScheduler(registry, approvalToPolicy(r.approval), r.interactive)
+}
+
+// Registry returns the active tool registry.
+func (r *Runner) Registry() *tools.Registry {
+	return r.registry
 }
 
 // ReloadSystemInstruction re-reads GEMINI.md / AGENTS.md into the system prompt.

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/undeadindustries/sagittarius/internal/agents"
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/credentials"
 	"github.com/undeadindustries/sagittarius/internal/provider"
@@ -117,14 +118,60 @@ func memoryCommand() Command {
 func skillsCommand() Command {
 	return Command{
 		Name:        "skills",
-		Description: "Manage agent skills (Phase 12)",
+		Description: "Manage agent skills (list, reload)",
 		SubCommands: []Command{
 			{
+				Name:        "list",
+				Description: "List discovered skills",
+				Handler:     handleSkillsList,
+			},
+			{
 				Name:        "reload",
-				Description: "Reload discovered skills (stub until Phase 12)",
+				Description: "Reload discovered skills from disk and extensions",
 				Handler:     handleSkillsReload,
 			},
 		},
+		Handler: handleSkillsList,
+	}
+}
+
+func mcpCommand() Command {
+	return Command{
+		Name:        "mcp",
+		Description: "Manage MCP servers (list, reload)",
+		SubCommands: []Command{
+			{
+				Name:        "list",
+				Description: "List configured MCP servers and status",
+				Handler:     handleMCPList,
+			},
+			{
+				Name:        "reload",
+				Description: "Reload MCP servers and rediscover tools",
+				Handler:     handleMCPReload,
+			},
+		},
+		Handler: handleMCPList,
+	}
+}
+
+func agentsCommand() Command {
+	return Command{
+		Name:        "agents",
+		Description: "Manage local agents (list, reload)",
+		SubCommands: []Command{
+			{
+				Name:        "list",
+				Description: "List discovered agent definitions",
+				Handler:     handleAgentsList,
+			},
+			{
+				Name:        "reload",
+				Description: "Reload agent definitions from disk and extensions",
+				Handler:     handleAgentsReload,
+			},
+		},
+		Handler: handleAgentsList,
 	}
 }
 
@@ -450,8 +497,86 @@ func handleMemoryReload(ctx *Context) Result {
 	return InfoResult("Memory reloaded from GEMINI.md / AGENTS.md.")
 }
 
-func handleSkillsReload(_ *Context) Result {
-	return InfoResult("Skills reload is a stub until Phase 12 (MCP, skills, extensions).")
+func handleSkillsReload(ctx *Context) Result {
+	if ctx.Deps.Hooks == nil {
+		return InfoResult("Skills reload unavailable.")
+	}
+	msg, err := ctx.Deps.Hooks.ReloadSkills(ctx.Ctx)
+	if err != nil {
+		return ErrorResult(fmt.Errorf("reload skills: %w", err))
+	}
+	return InfoResult(msg)
+}
+
+func handleSkillsList(ctx *Context) Result {
+	if ctx.Deps.Hooks == nil {
+		return InfoResult("Skills unavailable.")
+	}
+	skillsList := ctx.Deps.Hooks.SkillList()
+	if len(skillsList) == 0 {
+		return InfoResult("No skills discovered.")
+	}
+	lines := []string{"Discovered skills:"}
+	for _, skill := range skillsList {
+		lines = append(lines, fmt.Sprintf("  %s — %s", skill.Name, skill.Description))
+	}
+	return InfoResult(strings.Join(lines, "\n"))
+}
+
+func handleMCPReload(ctx *Context) Result {
+	if ctx.Deps.Hooks == nil {
+		return InfoResult("MCP reload unavailable.")
+	}
+	msg, err := ctx.Deps.Hooks.ReloadMCP(ctx.Ctx)
+	if err != nil {
+		return ErrorResult(fmt.Errorf("reload mcp: %w", err))
+	}
+	return InfoResult(msg)
+}
+
+func handleMCPList(ctx *Context) Result {
+	if ctx.Deps.Hooks == nil {
+		return InfoResult("MCP unavailable.")
+	}
+	states := ctx.Deps.Hooks.MCPStates()
+	if len(states) == 0 {
+		return InfoResult("No MCP servers configured.")
+	}
+	lines := []string{"MCP servers:"}
+	for _, st := range states {
+		line := fmt.Sprintf("  %s: %s (%d tools)", st.Name, st.Status, st.ToolCount)
+		if st.LastError != "" {
+			line += " — " + st.LastError
+		}
+		lines = append(lines, line)
+	}
+	return InfoResult(strings.Join(lines, "\n"))
+}
+
+func handleAgentsReload(ctx *Context) Result {
+	if ctx.Deps.Hooks == nil {
+		return InfoResult("Agents reload unavailable.")
+	}
+	summary, err := ctx.Deps.Hooks.ReloadAgents(ctx.Ctx)
+	if err != nil {
+		return ErrorResult(fmt.Errorf("reload agents: %w", err))
+	}
+	return InfoResult(agents.FormatSummary(summary))
+}
+
+func handleAgentsList(ctx *Context) Result {
+	if ctx.Deps.Hooks == nil {
+		return InfoResult("Agents unavailable.")
+	}
+	defs := ctx.Deps.Hooks.AgentList()
+	if len(defs) == 0 {
+		return InfoResult("No agents discovered.")
+	}
+	lines := []string{"Discovered agents:"}
+	for _, def := range defs {
+		lines = append(lines, fmt.Sprintf("  %s — %s (%s)", def.Name, def.Description, def.Kind))
+	}
+	return InfoResult(strings.Join(lines, "\n"))
 }
 
 func providerExists(s *config.Settings, id string) bool {

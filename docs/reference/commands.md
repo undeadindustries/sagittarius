@@ -79,13 +79,44 @@ to later phases — see [Deferred commands](#deferred-commands).
 
 ### `/skills`
 
-- **Description:** Manage agent skills (**stub** until Phase 12).
+- **Description:** Manage agent skills discovered from `SKILL.md` files.
 
 #### Sub-commands
 
+- **`list`**
+  - **Description:** List discovered skills (user, workspace, extension paths).
+  - **Usage:** `/skills list` or `/skills`
 - **`reload`**
-  - **Description:** Reload discovered skills (stub — acknowledges only).
+  - **Description:** Rescan skill directories and refresh the `activate_skill` tool schema.
   - **Usage:** `/skills reload`
+
+### `/mcp`
+
+- **Description:** Manage MCP servers configured in `settings.json` (`mcpServers`).
+
+#### Sub-commands
+
+- **`list`**
+  - **Description:** Show MCP server connection status and discovered tool counts.
+  - **Usage:** `/mcp list` or `/mcp`
+- **`reload`**
+  - **Description:** Reconnect MCP servers and rediscover tools.
+  - **Usage:** `/mcp reload`
+
+See also: [MCP server configuration](../tools/mcp-server.md).
+
+### `/agents`
+
+- **Description:** Manage discovered local agent definitions (stub registry — execution deferred).
+
+#### Sub-commands
+
+- **`list`**
+  - **Description:** List agent definitions from user/project/extension paths.
+  - **Usage:** `/agents list` or `/agents`
+- **`reload`**
+  - **Description:** Rescan agent markdown definitions.
+  - **Usage:** `/agents reload`
 
 ### `/reasoning`
 
@@ -118,7 +149,11 @@ incrementally; track gaps in `AGENTS.md`.
 | Command | Planned phase |
 |---------|----------------|
 | `/about`, `/bug`, `/chat`, `/clear`, `/compress`, `/copy` | Post-parity / incremental |
-| `/commands`, `/directory`, `/extensions`, `/mcp` | Phase 12 |
-| `/agents`, full `/skills` | Phase 12 |
+| `/commands`, `/directory`, `/extensions` | Post-parity / incremental |
+| `/mcp auth`, `/mcp enable`/`disable` | Phase 12+ incremental |
+| `/skills enable`/`disable`/`link` | Phase 12+ incremental |
+| `/agents enable`/`disable`/`config` | Phase 12+ incremental |
 | `/auth signin` / OAuth dialogs | Deferred auth paths |
 | ACP headless registry | Post-parity |
+
+Implemented in Phase 12: `/mcp` (list, reload), `/skills` (list, reload), `/agents` (list, reload), `activate_skill` tool.

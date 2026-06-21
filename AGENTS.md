@@ -43,8 +43,8 @@ tests, security docs, and commit messages accordingly.
 
 | Field | Value |
 |-------|-------|
-| **Overall** | Phase 11 complete — Context management |
-| **Active phase** | Phase 12 — MCP, skills, extensions |
+| **Overall** | Phase 12 complete — MCP, skills, extensions |
+| **Active phase** | Phase 13 — Sessions & advanced CLI |
 | **Go toolchain** | **1.26.4** at `/home/rob/local/go1.26.4`, symlinked system-wide via `/usr/local/bin/go`. apt Go 1.22 removed. |
 | **Binary name** | `sagittarius` |
 | **Module** | `github.com/undeadindustries/sagittarius` |
@@ -66,7 +66,7 @@ tests, security docs, and commit messages accordingly.
 | 09 | Slash commands | Complete |
 | 10 | OpenAI Responses API | Complete |
 | 11 | Context management | Complete |
-| 12 | MCP, skills, extensions | Not started |
+| 12 | MCP, skills, extensions | Complete |
 | 13 | Sessions & advanced CLI | Not started |
 | 14 | Parity validation | Not started |
 | 15 | Interaction modes (post-parity) | Not started |
@@ -229,6 +229,25 @@ Budget/ejection/adaptive run on built-in defaults (not yet user-exposed —
 deferred). Per-provider placement (vs. the fork's single global `local.*` block)
 follows AD-003.
 
+### AD-016 — MCP, skills, extensions architecture (2026-06-21)
+
+Phase 12 adds four packages wired through `agent.Runtime` and `agent.Catalog`:
+
+| Package | Role |
+|---------|------|
+| `internal/mcp` | MCP client + manager; stdio (`CommandTransport`), Streamable HTTP, SSE via official `github.com/modelcontextprotocol/go-sdk` v1.6.1; qualified tool names `mcp_<server>_<tool>` |
+| `internal/skills` | `SKILL.md` discovery (`~/.gemini/skills`, `~/.agents/skills`, workspace mirrors); session activate tracking |
+| `internal/agents` | Stub registry — discovers `.md` agent definitions from user/project/extension paths; execution deferred |
+| `internal/extensions` | Stub loader — `~/.gemini/extensions/*/gemini-extension.json`, settings `extensions` passthrough; merges extension MCP servers + skills |
+
+**Tool catalog:** `agent.Catalog` assembles `tools.NewBuiltinRegistry` + `activate_skill` + MCP tools; `Runner.SetRegistry` on reload. Slash hooks: `/mcp reload`, `/skills reload`, `/agents reload`.
+
+**Credentials:** MCP bearer tokens use `credentials.MCPServerServiceName` → `gemini-cli-mcp-<server>` (env → keychain → encrypted file). Header `${ENV}` expansion in `mcp.ExpandEnvVars`. **OAuth MCP flows deferred** (fork `MCPOAuthProvider` not ported).
+
+**Stubbed vs full:** Extension marketplace, policy/rules/checkers, MCP prompts/resources, OAuth, built-in fork skills, agent execution/subagents, filesystem watcher (manual reload only).
+
+**Dependency:** One added dependency — official MCP Go SDK (documented here; stdlib JSON-RPC deemed higher correctness risk for stdio+HTTP).
+
 ---
 
 ## Workspace Layout
@@ -272,15 +291,33 @@ internal/ui/              # ui.UI interface
 internal/ui/bubbletea/    # Bubble Tea implementation (only place that imports charm)
 internal/ui/demo/         # Phase 04 echo App (replaced in Phase 07)
 internal/slash/
+internal/mcp/
+internal/skills/
+internal/agents/
+internal/extensions/
 internal/version/
 internal/log/
 ```
 
 ---
 
+Phase 12 complete (2026-06-21): internal/mcp (SDK client, manager, DiscoveredTool, credentials bearer), internal/skills (SKILL.md loader/manager), internal/agents (stub registry), internal/extensions (stub loader), agent.Runtime/Catalog, tools.activate_skill, /mcp /skills /agents reload+list, docs/tools/mcp-server.md; tests TestMCPListToolsMock, TestSkillDiscovery, TestActivateSkillTool.
+Next: Phase 13 — Sessions & advanced CLI
+Blockers: pre-existing data race in credentials.ResetForTesting still surfaces under `go test -race ./internal/provider/`; MCP OAuth, MCP prompts/resources, full /skills enable/disable, extension marketplace deferred.
+
 Phase 11 complete (2026-06-20): internal/contextmgmt package (tokens heuristic, masking_defaults, truncation, tool_output_masking, pre_turn_budget, adaptive_threshold, write_file_ejection, compression, manager) gated by IsOpenAIChatMode; provider.ResolveContextManagement + config masking knobs (toolOutputMasking*); agent.NewContextManager + newProviderSummarizer (active model only); runner pre-turn/post-tool hook via Manager.PrepareTurn; main wiring with per-process sessionID. Tests: write_file_ejection_test (Eject* cases), compression_test (FindCompressSplitPoint + Compress* cases incl. truncation/verification/anchored), tool_output_masking_test, pre_turn_budget_test, adaptive_threshold_test, masking_defaults_test, manager_test (TestManagerMaskingAppliedOnOpenAIChat, TestManagerMaskingNotAppliedWhenDisabled, TestManagerNilIsPassThrough), provider TestResolveContextManagementGating (gemini/openai-responses not masked, openai-chat enabled).
-Next: Phase 12 — MCP, skills, extensions
+Next: Phase 13 — Sessions & advanced CLI
 Blockers: pre-existing data race in credentials.ResetForTesting (hybrid.go:95-98 unguarded globals) surfaces under `go test -race ./internal/provider/` via parallel test cleanups; not Phase 11 code, left untouched per scope. Fix by guarding the sharedFileStore globals with fileStoreMu. Follow-up: dedicated loop-detection/next-speaker port (active-model rule already holds — no secondary model exists yet).
+
+### Built-in fork skills not ported (Phase 12)
+
+Upstream ships one built-in skill in `packages/core/src/skills/builtin/`:
+
+| Skill | Status |
+|-------|--------|
+| `skill-creator` | **Not ported** — helper scripts (`validate_skill`, `package_skill`, `init_skill`) and full workflow deferred |
+
+User/workspace/extension `SKILL.md` discovery and `activate_skill` **are** ported.
 
 Phase 10 complete (2026-06-20): OpenAIResponsesGenerator + openai_responses_wire (SSE mapper, request translation, chaining trim), built-in openai-responses, ResponsesURL/EndpointConfig reasoning+chaining fields, factory branch, IsOpenAIResponsesMode, session reasoning override, /reasoning slash (show/clear/save/levels), docs/reference/commands.md; tests TestResponsesTextDelta, TestResponsesFunctionCall, TestReasoningEffortInRequest, TestNoLocalMaskingOnResponsesPath, TestFactorySelectsOpenAIResponses, TestReasoningNotApplicableOnGemini, TestReasoningApplicableOnResponses.
 Next: Phase 11 — Context management
@@ -334,10 +371,14 @@ Track against fork `docs/reference/commands.md`. Implemented subset documented i
 `docs/reference/commands.md`.
 
 - [ ] `/about`, `/bug`, `/chat`/`/resume`, `/clear`, `/compress`, `/copy`
-- [ ] `/commands`, `/directory`, `/extensions`, `/mcp`, `/agents`
-- [ ] Full `/skills` (list/enable/disable — Phase 12)
+- [ ] `/commands`, `/directory`, `/extensions`
+- [ ] Full `/skills` enable/disable/link/consent (list + reload implemented Phase 12)
+- [ ] `/mcp auth`, `/mcp enable`/`disable` (list + reload implemented Phase 12)
+- [ ] `/agents enable`/`disable`/`config` (list + reload implemented Phase 12)
 - [ ] `/auth signin`/`signout` OAuth dialogs
 - [ ] ACP headless command registry
+
+Implemented in Phase 12: `/mcp` (list, reload), `/skills` (list, reload), `/agents` (list, reload), `activate_skill` tool.
 
 Implemented in Phase 10: `/reasoning` (show, clear, save, session levels).
 

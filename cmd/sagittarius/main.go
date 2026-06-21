@@ -86,11 +86,12 @@ func runHeadless(prompt, modelOverride string) int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	runner, _, _, err := buildRunner(ctx, modelOverride, false)
+	runner, _, _, runtime, err := buildRunner(ctx, modelOverride, false)
 	if err != nil {
 		writeStartupError(err)
 		return 1
 	}
+	defer func() { _ = runtime.Close() }()
 
 	if err := runner.RunHeadless(ctx, prompt, os.Stdout); err != nil {
 		if errors.Is(err, context.Canceled) {
@@ -106,11 +107,12 @@ func runInteractive(screenReader bool, modelOverride string) int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	runner, loader, settings, err := buildRunner(ctx, modelOverride, true)
+	runner, loader, settings, runtime, err := buildRunner(ctx, modelOverride, true)
 	if err != nil {
 		writeStartupError(err)
 		return 1
 	}
+	defer func() { _ = runtime.Close() }()
 
 	endpoint, err := provider.ResolveEndpointConfig(settings)
 	if err != nil {
@@ -125,6 +127,7 @@ func runInteractive(screenReader bool, modelOverride string) int {
 
 	app := agent.NewApp(agent.AppConfig{
 		Runner:        runner,
+		Runtime:       runtime,
 		ProviderLabel: providerLabel,
 		Model:         runner.Model(),
 		Loader:        loader,
@@ -155,15 +158,15 @@ func runInteractive(screenReader bool, modelOverride string) int {
 	return 0
 }
 
-func buildRunner(ctx context.Context, modelOverride string, interactive bool) (*agent.Runner, *config.Loader, *config.Settings, error) {
+func buildRunner(ctx context.Context, modelOverride string, interactive bool) (*agent.Runner, *config.Loader, *config.Settings, *agent.Runtime, error) {
 	settings, loader, err := loadSettings()
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	endpoint, err := provider.ResolveEndpointConfig(settings)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, nil, err
 	}
 
 	model := endpoint.Model
@@ -176,11 +179,21 @@ func buildRunner(ctx context.Context, modelOverride string, interactive bool) (*
 		// Interactive sessions open even without a usable provider so the user
 		// can recover via /auth or /provider use. Headless mode still fails.
 		if !interactive || !errors.Is(genErr, credentials.ErrAPIKeyMissing) {
-			return nil, nil, nil, genErr
+			return nil, nil, nil, nil, genErr
 		}
 	}
 
 	ctxMgr := agent.NewContextManager(settings, gen, model, sessionID())
+
+	runtime, err := agent.NewRuntime(ctx, agent.RuntimeConfig{
+		Settings:      settings,
+		ClientName:    "sagittarius",
+		ClientVersion: version.String(),
+		Trusted:       true,
+	})
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
 
 	runner, err := agent.NewRunner(agent.RunnerConfig{
 		Generator:      gen,
@@ -189,12 +202,16 @@ func buildRunner(ctx context.Context, modelOverride string, interactive bool) (*
 		ContextManager: ctxMgr,
 	})
 	if err != nil {
-		return nil, nil, nil, err
+		_ = runtime.Close()
+		return nil, nil, nil, nil, err
+	}
+	if reg, err := runtime.ReloadTools(ctx); err == nil {
+		runner.SetRegistry(reg)
 	}
 	if genErr != nil {
 		runner.SetGeneratorError(genErr)
 	}
-	return runner, loader, settings, nil
+	return runner, loader, settings, runtime, nil
 }
 
 // sessionID returns a stable per-process identifier for context-manager state.
