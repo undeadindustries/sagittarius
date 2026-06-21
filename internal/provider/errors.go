@@ -33,7 +33,7 @@ func MapAPIError(err error) error {
 	case strings.Contains(msg, "api key not valid"),
 		strings.Contains(msg, "invalid api key"),
 		strings.Contains(msg, "api_key_invalid"):
-		return fmt.Errorf("%w: check GEMINI_API_KEY or GOOGLE_API_KEY, or run /provider set gemini-apikey key",
+		return fmt.Errorf("%w: check GEMINI_API_KEY or GOOGLE_API_KEY, or open /providers to set a key",
 			ErrInvalidAPIKey)
 	case strings.Contains(msg, "quota"),
 		strings.Contains(msg, "rate limit"),
@@ -56,7 +56,7 @@ func mapAPIError(apiErr genai.APIError) error {
 		if msg == "" {
 			msg = "the API key was rejected"
 		}
-		return fmt.Errorf("%w: %s. Set GEMINI_API_KEY or GOOGLE_API_KEY, or run /provider set gemini-apikey key",
+		return fmt.Errorf("%w: %s. Set GEMINI_API_KEY or GOOGLE_API_KEY, or open /providers to set a key",
 			ErrInvalidAPIKey, msg)
 	case 404:
 		if msg == "" {

@@ -36,14 +36,13 @@ func TestParityHelpOutput(t *testing.T) {
 
 	// 2. Verify expected subcommand paths.
 	expectedPaths := []string{
-		"/provider list",
-		"/provider use",
-		"/provider show",
-		"/provider set",
-		"/provider add",
-		"/provider remove",
+		"/providers list",
+		"/providers use",
+		"/providers show",
+		"/providers set",
+		"/providers add",
+		"/providers remove",
 		"/model",
-		"/auth",
 		"/memory reload",
 		"/skills list",
 		"/skills reload",
@@ -176,26 +175,26 @@ func TestParityProviderList(t *testing.T) {
 	reg := slash.NewRegistry()
 	helpText := reg.RenderHelp()
 
-	// Verify the provider command and its subcommands are present.
+	// Verify the providers command and its subcommands are present.
 	providerSubcmds := []string{"list", "use", "show", "set", "add", "remove"}
 	for _, sub := range providerSubcmds {
-		want := "/provider " + sub
+		want := "/providers " + sub
 		if !strings.Contains(helpText, want) {
-			t.Errorf("missing provider subcommand in help: %s", want)
+			t.Errorf("missing providers subcommand in help: %s", want)
 		}
 	}
 
-	// Verify the slash registry has a provider command.
+	// Verify the slash registry has a providers command.
 	cmds := reg.List()
 	var foundProvider bool
 	for _, cmd := range cmds {
-		if cmd.Name == "provider" {
+		if cmd.Name == "providers" {
 			foundProvider = true
 			break
 		}
 	}
 	if !foundProvider {
-		t.Fatal("slash registry missing 'provider' command")
+		t.Fatal("slash registry missing 'providers' command")
 	}
 
 	// Built-in provider IDs that must ship in the binary's registry. Asserting

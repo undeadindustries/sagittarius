@@ -1,0 +1,54 @@
+// Package providersdialog implements the interactive `/providers` management
+// wizard for the Bubble Tea TUI. It is a self-contained overlay model that the
+// main TUI embeds; all settings/credential side effects go through the Deps
+// interface so the dialog never imports the agent or slash packages directly
+// (preserves the AD-004 UI-library boundary in the other direction).
+package providersdialog
+
+import (
+	"context"
+
+	"github.com/undeadindustries/sagittarius/internal/config"
+)
+
+// ProviderEntry is a row in the provider lists (switch / edit-pick / list).
+type ProviderEntry struct {
+	ID          string // canonical settings.json id (e.g. gemini-apikey)
+	DisplayID   string // short id shown to the user (e.g. gemini)
+	DisplayName string
+	WireFormat  config.WireFormat
+	IsCustom    bool
+	IsActive    bool
+	Model       string
+}
+
+// Deps performs the settings and credential side effects the dialog needs.
+// Implementations live in the agent layer (which owns the runner, loader, and
+// credential store). All mutating methods persist settings and rebuild the
+// active runner when the change affects the active provider.
+type Deps interface {
+	// ListProviders returns every configured provider (built-in + custom).
+	ListProviders() []ProviderEntry
+	// ActiveProviderID returns the canonical active provider id (may be empty).
+	ActiveProviderID() string
+	// SwitchProvider sets the active provider and rebuilds the runner.
+	SwitchProvider(ctx context.Context, id string) error
+	// SetAPIKey stores an API key for a provider in the OS keychain / fallback.
+	SetAPIKey(ctx context.Context, id, key string) error
+	// AddCustomProvider registers a custom provider; apiKey is optional.
+	AddCustomProvider(ctx context.Context, id string, def config.CustomProviderDefinition, apiKey string) error
+	// RemoveCustomProvider deletes a custom provider definition.
+	RemoveCustomProvider(ctx context.Context, id string) error
+	// DiscoverModels lists chat models from a provider endpoint (network call).
+	DiscoverModels(ctx context.Context, id string) ([]string, error)
+	// SetModel sets the active model for a provider (allowlist-free, like /model).
+	SetModel(ctx context.Context, id, model string) error
+	// ApplySetting validates and applies a provider instance setting.
+	ApplySetting(ctx context.Context, id, key, value string) error
+	// UpdateCustomDefinition edits a custom provider definition field.
+	UpdateCustomDefinition(ctx context.Context, id, field, value string) error
+	// ProviderSettings returns the current instance setting values for display.
+	ProviderSettings(id string) map[string]string
+	// ValidSettingKeys returns the editable instance keys for a provider.
+	ValidSettingKeys(id string) []string
+}

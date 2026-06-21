@@ -34,8 +34,8 @@ func quitCommand() Command {
 
 func providerCommand() Command {
 	return Command{
-		Name:        "provider",
-		Description: "Manage providers (list, switch, configure custom backends)",
+		Name:        "providers",
+		Description: "Manage providers — opens an interactive menu (switch, edit, add, remove, models)",
 		SubCommands: []Command{
 			{
 				Name:        "list",
@@ -46,6 +46,7 @@ func providerCommand() Command {
 				Name:        "use",
 				Description: "Switch the active provider",
 				Handler:     handleProviderUse,
+				ArgComplete: completeProviderIDs,
 			},
 			{
 				Name:        "show",
@@ -54,7 +55,7 @@ func providerCommand() Command {
 			},
 			{
 				Name:        "set",
-				Description: "Set a provider field (model, baseUrl, key for non-Gemini)",
+				Description: "Set a provider setting (model, baseUrl, temperature, …)",
 				Handler:     handleProviderSet,
 			},
 			{
@@ -66,10 +67,17 @@ func providerCommand() Command {
 				Name:        "remove",
 				Description: "Remove a custom provider",
 				Handler:     handleProviderRemove,
+				ArgComplete: completeCustomProviderIDs,
 			},
 		},
-		Handler: handleProviderList,
+		Handler: handleProviders,
 	}
+}
+
+// handleProviders opens the interactive providers wizard. The TUI consumes the
+// dialog result; subcommands remain available for explicit text operations.
+func handleProviders(_ *Context) Result {
+	return DialogResult(DialogProviders)
 }
 
 func modelCommand() Command {
@@ -84,21 +92,6 @@ func modelCommand() Command {
 			},
 		},
 		Handler: handleModelSet,
-	}
-}
-
-func authCommand() Command {
-	return Command{
-		Name:        "auth",
-		Description: "Store an API key for the active provider",
-		SubCommands: []Command{
-			{
-				Name:        "set",
-				Description: "Store an API key for the active provider",
-				Handler:     handleAuthSet,
-			},
-		},
-		Handler: handleAuthSet,
 	}
 }
 
@@ -262,11 +255,11 @@ func handleProviderList(ctx *Context) Result {
 			lines = append(lines, formatProviderLine(s, id, name+" [custom]", active))
 		}
 	} else {
-		lines = append(lines, "", "No custom providers. Add one with /provider add <id> <baseUrl> [displayName]")
+		lines = append(lines, "", "No custom providers. Add one with /providers add <id> <baseUrl> [displayName]")
 	}
 
 	if active == "" {
-		lines = append(lines, "", "No active provider. Run /provider use <id> to select one.")
+		lines = append(lines, "", "No active provider. Run /providers use <id> to select one.")
 	}
 	return InfoResult(strings.Join(lines, "\n"))
 }
@@ -276,7 +269,7 @@ func formatProviderLine(s *config.Settings, id, displayName, active string) stri
 	if id == active {
 		marker = "> "
 	}
-	line := fmt.Sprintf("%s%s (%s)", marker, id, displayName)
+	line := fmt.Sprintf("%s%s (%s)", marker, config.ProviderDisplayID(id), displayName)
 	endpoint, err := provider.ResolveEndpointConfig(providerSettingsForID(s, id))
 	if err != nil {
 		return line + fmt.Sprintf("\n    [config error: %v]", err)
@@ -303,7 +296,7 @@ func providerSettingsForID(s *config.Settings, providerID string) *config.Settin
 func handleProviderUse(ctx *Context) Result {
 	id := strings.TrimSpace(ctx.Args)
 	if id == "" {
-		return InfoResult("Usage: /provider use <id>  (run /provider list to see ids)")
+		return InfoResult("Usage: /providers use <id>  (run /providers list to see ids)")
 	}
 	if ctx.Deps.Loader == nil || ctx.Deps.Settings == nil {
 		return InfoResult("Provider commands unavailable: settings not loaded.")
@@ -320,7 +313,7 @@ func handleProviderUse(ctx *Context) Result {
 		msg += fmt.Sprintf(" (%s, model %s)", label, model)
 	}
 	if def, ok := config.LookupBuiltInProvider(id); ok && def.WireFormat == config.WireFormatGemini {
-		msg += " Use /auth to set your API key if needed."
+		msg += " Open /providers to set your API key if needed."
 	}
 	return InfoResult(msg)
 }
@@ -353,19 +346,16 @@ func handleProviderSet(ctx *Context) Result {
 		return InfoResult("Provider commands unavailable: settings not loaded.")
 	}
 
-	def, ok := config.LookupBuiltInProvider(parsed.ID)
-	if ok && def.WireFormat == config.WireFormatGemini {
-		return InfoResult("Gemini providers use upstream defaults. Use /auth for credentials, or /provider use <id> to switch.")
-	}
+	def, geminiOK := config.LookupBuiltInProvider(parsed.ID)
+	isGemini := geminiOK && def.WireFormat == config.WireFormatGemini
 
 	if !providerExists(ctx.Deps.Settings, parsed.ID) {
-		return InfoResult(fmt.Sprintf("Unknown provider %q. Run /provider list.", parsed.ID))
+		return InfoResult(fmt.Sprintf("Unknown provider %q. Run /providers list.", parsed.ID))
 	}
 
-	switch parsed.Field {
-	case "key":
+	if parsed.Field == "key" {
 		if parsed.Value == "" {
-			return InfoResult(fmt.Sprintf("Usage: /provider set %s key <api-key>", parsed.ID))
+			return InfoResult(fmt.Sprintf("Usage: /providers set %s key <api-key>", parsed.ID))
 		}
 		if err := ctx.Deps.Hooks.SetProviderAPIKey(ctx.Ctx, parsed.ID, parsed.Value); err != nil {
 			return ErrorResult(fmt.Errorf("save key for %s: %w", parsed.ID, err))
@@ -376,26 +366,24 @@ func handleProviderSet(ctx *Context) Result {
 			}
 		}
 		return InfoResult(fmt.Sprintf("API key saved for %s (%s).", parsed.ID, credentials.Redact(parsed.Value)))
-	case "model", "baseurl", "baseUrl":
-		field := parsed.Field
-		if field == "baseurl" {
-			field = "baseUrl"
-		}
-		if err := provider.SetProviderField(ctx.Deps.Settings, parsed.ID, field, parsed.Value); err != nil {
-			return ErrorResult(err)
-		}
-		if err := ctx.Deps.Loader.Save(ctx.Deps.Settings); err != nil {
-			return ErrorResult(fmt.Errorf("persist provider settings: %w", err))
-		}
-		if ctx.Deps.Settings.ActiveProvider() == parsed.ID {
-			if _, _, err := ctx.Deps.Hooks.RebuildRunner(ctx.Ctx); err != nil {
-				return ErrorResult(fmt.Errorf("rebuild runner after field update: %w", err))
-			}
-		}
-		return InfoResult(fmt.Sprintf("Set %s %s → %s", parsed.ID, field, parsed.Value))
-	default:
-		return InfoResult("Supported fields: model, baseUrl, key")
 	}
+
+	if isGemini {
+		return InfoResult("Gemini providers use upstream defaults and expose no editable settings. Open /providers to set an API key, or /providers use <id> to switch.")
+	}
+
+	if err := provider.ApplyProviderSetting(ctx.Deps.Settings, parsed.ID, parsed.Field, parsed.Value); err != nil {
+		return ErrorResult(err)
+	}
+	if err := ctx.Deps.Loader.Save(ctx.Deps.Settings); err != nil {
+		return ErrorResult(fmt.Errorf("persist provider settings: %w", err))
+	}
+	if ctx.Deps.Settings.ActiveProvider() == parsed.ID {
+		if _, _, err := ctx.Deps.Hooks.RebuildRunner(ctx.Ctx); err != nil {
+			return ErrorResult(fmt.Errorf("rebuild runner after field update: %w", err))
+		}
+	}
+	return InfoResult(fmt.Sprintf("Set %s %s → %s", parsed.ID, parsed.Field, parsed.Value))
 }
 
 type providerSetArgs struct {
@@ -407,7 +395,7 @@ type providerSetArgs struct {
 func parseProviderSetArgs(args string) (providerSetArgs, string) {
 	parts := strings.Fields(strings.TrimSpace(args))
 	if len(parts) < 2 {
-		return providerSetArgs{}, "Usage: /provider set <id> <field> <value>  (field: model | baseUrl | key)"
+		return providerSetArgs{}, "Usage: /providers set <id> <field> <value>  (e.g. model, baseUrl, temperature, key)"
 	}
 	id, field := parts[0], parts[1]
 	value := strings.TrimSpace(strings.TrimPrefix(args, id))
@@ -418,7 +406,7 @@ func parseProviderSetArgs(args string) (providerSetArgs, string) {
 func handleProviderAdd(ctx *Context) Result {
 	parts := strings.Fields(strings.TrimSpace(ctx.Args))
 	if len(parts) < 2 {
-		return InfoResult("Usage: /provider add <id> <baseUrl> [displayName] [apiKeyEnvVar]")
+		return InfoResult("Usage: /providers add <id> <baseUrl> [displayName] [apiKeyEnvVar]")
 	}
 	id, baseURL := parts[0], parts[1]
 	displayName := id
@@ -445,13 +433,13 @@ func handleProviderAdd(ctx *Context) Result {
 	if err := ctx.Deps.Loader.Save(ctx.Deps.Settings); err != nil {
 		return ErrorResult(fmt.Errorf("persist custom provider: %w", err))
 	}
-	return InfoResult(fmt.Sprintf("Added custom provider %q (%s). Run /provider use %s to activate.", id, displayName, id))
+	return InfoResult(fmt.Sprintf("Added custom provider %q (%s). Run /providers use %s to activate.", id, displayName, id))
 }
 
 func handleProviderRemove(ctx *Context) Result {
 	id := strings.TrimSpace(ctx.Args)
 	if id == "" {
-		return InfoResult("Usage: /provider remove <id>")
+		return InfoResult("Usage: /providers remove <id>")
 	}
 	if ctx.Deps.Loader == nil || ctx.Deps.Settings == nil {
 		return InfoResult("Provider commands unavailable: settings not loaded.")
@@ -497,7 +485,7 @@ func handleModelSet(ctx *Context) Result {
 	}
 	active := ctx.Deps.Settings.ActiveProvider()
 	if active == "" {
-		return InfoResult("No active provider. Run /provider use <id> first.")
+		return InfoResult("No active provider. Run /providers use <id> first.")
 	}
 	if err := provider.SetProviderModel(ctx.Deps.Settings, active, model); err != nil {
 		return ErrorResult(err)
@@ -509,30 +497,6 @@ func handleModelSet(ctx *Context) Result {
 		return ErrorResult(fmt.Errorf("rebuild runner after model change: %w", err))
 	}
 	return InfoResult(fmt.Sprintf("Model set to %s for provider %s.", model, active))
-}
-
-func handleAuthSet(ctx *Context) Result {
-	if ctx.Deps.Settings == nil {
-		return InfoResult("Auth commands unavailable: settings not loaded.")
-	}
-	key := strings.TrimSpace(ctx.Args)
-	if strings.HasPrefix(strings.ToLower(key), "set ") {
-		key = strings.TrimSpace(key[4:])
-	}
-	if key == "" {
-		return InfoResult("Usage: /auth <api-key>  or  /auth set <api-key>")
-	}
-	active := ctx.Deps.Settings.ActiveProvider()
-	if active == "" {
-		return InfoResult("No active provider. Run /provider use <id> first.")
-	}
-	if err := ctx.Deps.Hooks.SetProviderAPIKey(ctx.Ctx, active, key); err != nil {
-		return ErrorResult(fmt.Errorf("save api key: %w", err))
-	}
-	if _, _, err := ctx.Deps.Hooks.RebuildRunner(ctx.Ctx); err != nil {
-		return ErrorResult(fmt.Errorf("rebuild runner after auth: %w", err))
-	}
-	return InfoResult(fmt.Sprintf("API key stored for %s (%s).", active, credentials.Redact(key)))
 }
 
 func handleMemoryReload(ctx *Context) Result {
@@ -625,6 +589,7 @@ func handleAgentsList(ctx *Context) Result {
 }
 
 func providerExists(s *config.Settings, id string) bool {
+	id = config.NormalizeProviderID(id)
 	if _, ok := config.LookupBuiltInProvider(id); ok {
 		return true
 	}

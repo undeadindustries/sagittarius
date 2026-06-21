@@ -3,6 +3,7 @@ package provider
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/undeadindustries/sagittarius/internal/config"
@@ -29,7 +30,7 @@ func IsOpenAIResponsesMode(settings *config.Settings) bool {
 
 // SetActiveProvider updates providers.active to providerID.
 func SetActiveProvider(settings *config.Settings, providerID string) error {
-	providerID = strings.TrimSpace(providerID)
+	providerID = config.NormalizeProviderID(providerID)
 	if providerID == "" {
 		return fmt.Errorf("set active provider: id is required")
 	}
@@ -89,29 +90,286 @@ func SetProviderModel(settings *config.Settings, providerID, model string) error
 	return setProviderInstance(settings, providerID, cfg)
 }
 
-// SetProviderField updates a single provider instance field (model or baseUrl).
-func SetProviderField(settings *config.Settings, providerID, field, value string) error {
-	field = strings.TrimSpace(field)
+// InstanceSettingValues returns the currently-set provider instance overrides as
+// display strings, keyed by setting name. Unset (nil/empty) fields are omitted.
+// It is used by the providers wizard edit sheet to show current values.
+func InstanceSettingValues(settings *config.Settings, providerID string) map[string]string {
+	out := map[string]string{}
+	inst := providerInstance(settings, config.NormalizeProviderID(providerID))
+	if inst == nil {
+		return out
+	}
+	if inst.Model != "" {
+		out["model"] = inst.Model
+	}
+	if inst.BaseURL != "" {
+		out["baseUrl"] = inst.BaseURL
+	}
+	if inst.PromptMode != "" {
+		out["promptMode"] = string(inst.PromptMode)
+	}
+	if inst.ToolCallParsing != "" {
+		out["toolCallParsing"] = string(inst.ToolCallParsing)
+	}
+	if inst.SystemPromptOverride != "" {
+		out["systemPromptOverride"] = inst.SystemPromptOverride
+	}
+	if inst.ReasoningEffort != "" {
+		out["reasoningEffort"] = inst.ReasoningEffort
+	}
+	if inst.ContextLimit != nil {
+		out["contextLimit"] = strconv.Itoa(*inst.ContextLimit)
+	}
+	if inst.Timeout != nil {
+		out["timeout"] = strconv.Itoa(*inst.Timeout)
+	}
+	if inst.CompressionThreshold != nil {
+		out["compressionThreshold"] = strconv.FormatFloat(*inst.CompressionThreshold, 'g', -1, 64)
+	}
+	if inst.PreserveFraction != nil {
+		out["preserveFraction"] = strconv.FormatFloat(*inst.PreserveFraction, 'g', -1, 64)
+	}
+	if inst.Temperature != nil {
+		out["temperature"] = strconv.FormatFloat(*inst.Temperature, 'g', -1, 64)
+	}
+	if inst.ToolOutputMaskingProtectionFraction != nil {
+		out["toolOutputMaskingProtectionFraction"] = strconv.FormatFloat(*inst.ToolOutputMaskingProtectionFraction, 'g', -1, 64)
+	}
+	if inst.ToolOutputMaskingPrunableFraction != nil {
+		out["toolOutputMaskingPrunableFraction"] = strconv.FormatFloat(*inst.ToolOutputMaskingPrunableFraction, 'g', -1, 64)
+	}
+	if inst.EnableTools != nil {
+		out["enableTools"] = strconv.FormatBool(*inst.EnableTools)
+	}
+	if inst.UseResponseChaining != nil {
+		out["useResponseChaining"] = strconv.FormatBool(*inst.UseResponseChaining)
+	}
+	if inst.ToolOutputMaskingEnabled != nil {
+		out["toolOutputMaskingEnabled"] = strconv.FormatBool(*inst.ToolOutputMaskingEnabled)
+	}
+	if inst.ToolOutputMaskingProtectLatestTurn != nil {
+		out["toolOutputMaskingProtectLatestTurn"] = strconv.FormatBool(*inst.ToolOutputMaskingProtectLatestTurn)
+	}
+	return out
+}
+
+// customDefForProvider returns a pointer to the custom definition for providerID,
+// or nil if providerID is a built-in or unknown.
+func customDefForProvider(settings *config.Settings, providerID string) *config.CustomProviderDefinition {
+	if settings == nil || settings.Providers == nil || settings.Providers.Custom == nil {
+		return nil
+	}
+	if def, ok := settings.Providers.Custom[providerID]; ok {
+		return &def
+	}
+	return nil
+}
+
+// ApplyProviderSetting validates key against the provider's wire-format allowlist
+// (config.ValidSettingKeysForProvider) and applies the parsed value to the
+// provider instance overrides. It returns a descriptive error for unknown keys or
+// values that fail to parse for their typed field.
+func ApplyProviderSetting(settings *config.Settings, providerID, key, value string) error {
+	key = strings.TrimSpace(key)
 	value = strings.TrimSpace(value)
-	if field == "" {
-		return fmt.Errorf("set provider field: field is required")
+	if key == "" {
+		return fmt.Errorf("apply provider setting: key is required")
 	}
 	if settings == nil {
-		return fmt.Errorf("set provider field: settings are required")
+		return fmt.Errorf("apply provider setting: settings are required")
 	}
-	cfg, err := ensureProviderInstance(settings, providerID)
+
+	canonical := config.NormalizeProviderID(providerID)
+	allowed := config.ValidSettingKeysForProvider(canonical, customDefForProvider(settings, canonical))
+	if len(allowed) == 0 {
+		return fmt.Errorf("provider %q exposes no editable settings", providerID)
+	}
+	if !containsString(allowed, key) {
+		return fmt.Errorf("setting %q is not editable for provider %q (allowed: %s)", key, providerID, strings.Join(allowed, ", "))
+	}
+
+	cfg, err := ensureProviderInstance(settings, canonical)
 	if err != nil {
 		return err
 	}
-	switch field {
+	if err := assignInstanceSetting(cfg, key, value); err != nil {
+		return err
+	}
+	return setProviderInstance(settings, canonical, cfg)
+}
+
+func assignInstanceSetting(cfg *config.ProviderInstanceConfig, key, value string) error {
+	switch key {
 	case "model":
 		cfg.Model = value
 	case "baseUrl":
 		cfg.BaseURL = value
+	case "promptMode":
+		mode := config.PromptMode(value)
+		if mode != config.PromptModeLite && mode != config.PromptModeFull {
+			return fmt.Errorf("promptMode must be %q or %q", config.PromptModeLite, config.PromptModeFull)
+		}
+		cfg.PromptMode = mode
+	case "toolCallParsing":
+		mode := config.ToolCallParsingMode(value)
+		switch mode {
+		case config.ToolCallParsingStrict, config.ToolCallParsingLenient, config.ToolCallParsingLoose:
+			cfg.ToolCallParsing = mode
+		default:
+			return fmt.Errorf("toolCallParsing must be strict, lenient, or loose")
+		}
+	case "systemPromptOverride":
+		cfg.SystemPromptOverride = value
+	case "reasoningEffort":
+		if !IsValidReasoningLevel(value) {
+			return fmt.Errorf("reasoningEffort %q is not a valid level", value)
+		}
+		cfg.ReasoningEffort = value
+	case "contextLimit":
+		n, err := parseInt(key, value)
+		if err != nil {
+			return err
+		}
+		cfg.ContextLimit = n
+	case "timeout":
+		n, err := parseInt(key, value)
+		if err != nil {
+			return err
+		}
+		cfg.Timeout = n
+	case "compressionThreshold":
+		f, err := parseFloat(key, value)
+		if err != nil {
+			return err
+		}
+		cfg.CompressionThreshold = f
+	case "preserveFraction":
+		f, err := parseFloat(key, value)
+		if err != nil {
+			return err
+		}
+		cfg.PreserveFraction = f
+	case "temperature":
+		f, err := parseFloat(key, value)
+		if err != nil {
+			return err
+		}
+		cfg.Temperature = f
+	case "toolOutputMaskingProtectionFraction":
+		f, err := parseFloat(key, value)
+		if err != nil {
+			return err
+		}
+		cfg.ToolOutputMaskingProtectionFraction = f
+	case "toolOutputMaskingPrunableFraction":
+		f, err := parseFloat(key, value)
+		if err != nil {
+			return err
+		}
+		cfg.ToolOutputMaskingPrunableFraction = f
+	case "enableTools":
+		b, err := parseBool(key, value)
+		if err != nil {
+			return err
+		}
+		cfg.EnableTools = b
+	case "useResponseChaining":
+		b, err := parseBool(key, value)
+		if err != nil {
+			return err
+		}
+		cfg.UseResponseChaining = b
+	case "toolOutputMaskingEnabled":
+		b, err := parseBool(key, value)
+		if err != nil {
+			return err
+		}
+		cfg.ToolOutputMaskingEnabled = b
+	case "toolOutputMaskingProtectLatestTurn":
+		b, err := parseBool(key, value)
+		if err != nil {
+			return err
+		}
+		cfg.ToolOutputMaskingProtectLatestTurn = b
 	default:
-		return fmt.Errorf("set provider field: unsupported field %q", field)
+		return fmt.Errorf("apply provider setting: unsupported key %q", key)
 	}
-	return setProviderInstance(settings, providerID, cfg)
+	return nil
+}
+
+// UpdateCustomProviderDefinition edits a definition-level field (displayName,
+// baseUrl, wireFormat, apiKeyEnvVar) on providers.custom.<id>. Instance overrides
+// (model, temperature, ...) go through ApplyProviderSetting instead.
+func UpdateCustomProviderDefinition(settings *config.Settings, id, field, value string) error {
+	id = strings.TrimSpace(id)
+	field = strings.TrimSpace(field)
+	value = strings.TrimSpace(value)
+	if settings == nil || settings.Providers == nil || settings.Providers.Custom == nil {
+		return fmt.Errorf("update custom provider: %q not found", id)
+	}
+	def, ok := settings.Providers.Custom[id]
+	if !ok {
+		return fmt.Errorf("update custom provider: %q not found", id)
+	}
+	switch field {
+	case "displayName":
+		if value == "" {
+			value = id
+		}
+		def.DisplayName = value
+	case "baseUrl":
+		if value == "" {
+			return fmt.Errorf("update custom provider: baseUrl is required")
+		}
+		def.BaseURL = value
+	case "wireFormat":
+		wf := config.WireFormat(value)
+		if wf != config.WireFormatOpenAIChat && wf != config.WireFormatOpenAIResponses {
+			return fmt.Errorf("wireFormat must be %q or %q", config.WireFormatOpenAIChat, config.WireFormatOpenAIResponses)
+		}
+		def.WireFormat = wf
+	case "apiKeyEnvVar":
+		def.APIKeyEnvVar = value
+	case "defaultModel":
+		def.DefaultModel = value
+	default:
+		return fmt.Errorf("update custom provider: unsupported field %q", field)
+	}
+	settings.Providers.Custom[id] = def
+	return nil
+}
+
+func parseInt(key, value string) (*int, error) {
+	n, err := strconv.Atoi(value)
+	if err != nil {
+		return nil, fmt.Errorf("%s must be an integer: %w", key, err)
+	}
+	return &n, nil
+}
+
+func parseFloat(key, value string) (*float64, error) {
+	f, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return nil, fmt.Errorf("%s must be a number: %w", key, err)
+	}
+	return &f, nil
+}
+
+func parseBool(key, value string) (*bool, error) {
+	b, err := strconv.ParseBool(value)
+	if err != nil {
+		return nil, fmt.Errorf("%s must be true or false: %w", key, err)
+	}
+	return &b, nil
+}
+
+func containsString(haystack []string, needle string) bool {
+	for _, s := range haystack {
+		if s == needle {
+			return true
+		}
+	}
+	return false
 }
 
 // AddCustomProvider registers a user-defined OpenAI-compatible provider.

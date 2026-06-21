@@ -21,6 +21,26 @@ func (quitApp) HandleInput(context.Context, string) (<-chan ui.StreamEvent, erro
 	return ch, nil
 }
 
+// completerApp is a quitApp that also serves a fixed completion list, used to
+// exercise the inline suggestion UI.
+type completerApp struct {
+	quitApp
+	res ui.Completions
+}
+
+func (c completerApp) Complete(input string) ui.Completions {
+	if input == "" || input[0] != '/' {
+		return ui.Completions{ReplaceFrom: len(input)}
+	}
+	return c.res
+}
+
+func typeRunes(m *model, s string) {
+	for _, r := range s {
+		m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{r}})
+	}
+}
+
 func TestUIRunCancelClean(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	term := NewTerminal(ui.Options{
@@ -115,5 +135,116 @@ func TestHandleKeyCtrlC(t *testing.T) {
 	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlC})
 	if cmd == nil {
 		t.Fatal("expected quit on ctrl+c")
+	}
+}
+
+func suggestApp() completerApp {
+	return completerApp{res: ui.Completions{
+		Items: []ui.Suggestion{
+			{Label: "provider", Description: "Manage providers", Insert: "provider", AppendSpace: true},
+			{Label: "quit", Description: "Exit", Insert: "quit"},
+		},
+		ReplaceFrom: 1,
+	}}
+}
+
+func TestSuggestionsAppearOnSlash(t *testing.T) {
+	t.Parallel()
+	m := newModel(ui.Options{}, suggestApp(), NewTerminal(ui.Options{}))
+	typeRunes(m, "/")
+	if len(m.suggestions) != 2 {
+		t.Fatalf("suggestions = %d, want 2", len(m.suggestions))
+	}
+	if m.suggestionIdx != -1 {
+		t.Fatalf("suggestionIdx = %d, want -1 (no highlight until arrow)", m.suggestionIdx)
+	}
+}
+
+func TestSuggestionArrowNavigationWraps(t *testing.T) {
+	t.Parallel()
+	m := newModel(ui.Options{}, suggestApp(), NewTerminal(ui.Options{}))
+	typeRunes(m, "/")
+
+	m.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	if m.suggestionIdx != 0 {
+		t.Fatalf("after down idx = %d, want 0", m.suggestionIdx)
+	}
+	m.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	if m.suggestionIdx != 1 {
+		t.Fatalf("after second down idx = %d, want 1", m.suggestionIdx)
+	}
+	m.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	if m.suggestionIdx != 0 {
+		t.Fatalf("after wrap down idx = %d, want 0", m.suggestionIdx)
+	}
+	m.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	if m.suggestionIdx != 1 {
+		t.Fatalf("after wrap up idx = %d, want 1", m.suggestionIdx)
+	}
+}
+
+func TestTabCompletesAndAppendsSpace(t *testing.T) {
+	t.Parallel()
+	m := newModel(ui.Options{}, suggestApp(), NewTerminal(ui.Options{}))
+	typeRunes(m, "/")
+
+	// Tab with no highlight accepts the first suggestion ("provider").
+	m.handleKey(tea.KeyMsg{Type: tea.KeyTab})
+	if got := m.input.Value(); got != "/provider " {
+		t.Fatalf("input after tab = %q, want %q", got, "/provider ")
+	}
+}
+
+func TestEnterOnTerminalSuggestionSubmits(t *testing.T) {
+	t.Parallel()
+	m := newModel(ui.Options{}, suggestApp(), NewTerminal(ui.Options{}))
+	typeRunes(m, "/")
+
+	// Highlight "quit" (terminal, no trailing space) and press enter.
+	m.handleKey(tea.KeyMsg{Type: tea.KeyDown}) // idx 0 provider
+	m.handleKey(tea.KeyMsg{Type: tea.KeyDown}) // idx 1 quit
+	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected submit cmd for terminal suggestion")
+	}
+	msg := cmd()
+	sm, ok := msg.(submitMsg)
+	if !ok {
+		t.Fatalf("msg type %T, want submitMsg", msg)
+	}
+	if sm.line != "/quit" {
+		t.Fatalf("submitted line = %q, want /quit", sm.line)
+	}
+	if len(m.suggestions) != 0 {
+		t.Error("suggestions should be cleared after submit")
+	}
+}
+
+func TestEnterOnParentSuggestionDoesNotSubmit(t *testing.T) {
+	t.Parallel()
+	m := newModel(ui.Options{}, suggestApp(), NewTerminal(ui.Options{}))
+	typeRunes(m, "/")
+
+	m.handleKey(tea.KeyMsg{Type: tea.KeyDown}) // highlight "provider" (AppendSpace)
+	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd != nil {
+		t.Fatal("parent suggestion should complete, not submit")
+	}
+	if got := m.input.Value(); got != "/provider " {
+		t.Fatalf("input = %q, want %q", got, "/provider ")
+	}
+}
+
+func TestNoSuggestionsForPlainText(t *testing.T) {
+	t.Parallel()
+	m := newModel(ui.Options{}, suggestApp(), NewTerminal(ui.Options{}))
+	typeRunes(m, "hello")
+	if len(m.suggestions) != 0 {
+		t.Fatalf("plain text produced %d suggestions", len(m.suggestions))
+	}
+	// Enter on plain text submits normally.
+	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil {
+		t.Fatal("expected submit for plain text")
 	}
 }

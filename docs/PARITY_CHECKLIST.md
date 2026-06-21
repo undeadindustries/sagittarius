@@ -52,17 +52,16 @@ SAGITTARIUS_PARITY_FORK=1 go test -v ./tests/parity/
 | `/resume` | ✅ Implemented | Text-list variant (AD-019); fork has full TUI browser |
 | `/resume list` | ✅ Implemented | |
 | `/clear` | ✅ Implemented | |
-| `/provider` | ✅ Implemented | |
-| `/provider list` | ✅ Implemented | |
-| `/provider use` | ✅ Implemented | |
-| `/provider show` | ✅ Implemented | Fork equivalent: deduced from `models` subcommand context |
-| `/provider set` | ✅ Implemented | |
-| `/provider add` | ✅ Implemented | |
-| `/provider remove` | ✅ Implemented | |
+| `/providers` | ✅ Implemented | Renamed from fork `/provider` (plural). Bare command opens an interactive wizard (AD-025) |
+| `/providers list` | ✅ Implemented | |
+| `/providers use` | ✅ Implemented | |
+| `/providers show` | ✅ Implemented | Fork equivalent: deduced from `models` subcommand context |
+| `/providers set` | ✅ Implemented | Wire-format-gated fields (AD-025); `set <id> key` stores an API key |
+| `/providers add` | ✅ Implemented | Wizard add flow discovers models and prompts for a default (AD-025) |
+| `/providers remove` | ✅ Implemented | |
 | `/model` | ✅ Implemented | |
 | `/model list` | ✅ Implemented | Fork uses `/provider models` naming; Sagittarius uses `/model list` |
-| `/auth` | ✅ Implemented | |
-| `/auth set` | ✅ Implemented | |
+| `/auth` | ↔ Intentionally removed | Folded into the `/providers` wizard "Set API key" screen (AD-025). Headless: `/providers set <id> key <api-key>` |
 | `/memory` | ✅ Implemented | |
 | `/memory reload` | ✅ Implemented | |
 | `/skills` | ✅ Implemented | |
@@ -108,7 +107,7 @@ Fork-superset commands present in the fork but not in scope:
 | `gemini-apikey` | ✅ Implemented | Full Gemini native wire format (google.golang.org/genai v1.61.0) |
 | `openai` | ✅ Implemented | OpenAI Chat Completions (SSE, tool calls, XML fallback) |
 | `openai-responses` | ✅ Implemented | OpenAI Responses API (SSE, reasoning effort) |
-| Custom OpenAI-compat | ✅ Implemented | `/provider add` + `wireFormat: openai-chat` |
+| Custom OpenAI-compat | ✅ Implemented | `/providers add` + `wireFormat: openai-chat` |
 | OpenRouter | ✅ Implemented | Same adapter as custom OpenAI-compat |
 | `anthropic-messages` | ❌ Deferred | Fork open TODO — native Anthropic adapter |
 | `aws-bedrock` | ❌ Deferred | Fork open TODO |

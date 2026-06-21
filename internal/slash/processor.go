@@ -6,12 +6,24 @@ import (
 	"strings"
 )
 
+// DialogKind identifies an interactive TUI dialog a command requests to open.
+// Empty means no dialog. Headless callers ignore this and use subcommands.
+type DialogKind string
+
+const (
+	// DialogProviders opens the providers management wizard.
+	DialogProviders DialogKind = "providers"
+)
+
 // Result is the outcome of processing one slash command.
 type Result struct {
-	Handled  bool
-	Quit     bool
-	Messages []string
-	Err      error
+	Handled bool
+	Quit    bool
+	// OpenDialog, when non-empty, asks the interactive TUI to open a dialog
+	// overlay. It is only meaningful in interactive sessions.
+	OpenDialog DialogKind
+	Messages   []string
+	Err        error
 }
 
 // Context carries per-invocation state for command handlers.
@@ -96,6 +108,11 @@ func joinOr(items []string) string {
 // InfoResult returns a handled result with info messages.
 func InfoResult(msgs ...string) Result {
 	return Result{Handled: true, Messages: msgs}
+}
+
+// DialogResult returns a handled result that asks the TUI to open a dialog.
+func DialogResult(kind DialogKind) Result {
+	return Result{Handled: true, OpenDialog: kind}
 }
 
 // ErrorResult returns a handled result with an error.

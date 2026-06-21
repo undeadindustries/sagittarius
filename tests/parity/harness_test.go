@@ -394,14 +394,17 @@ type forkCommandEntry struct {
 var forkInScopeCommands = []forkCommandEntry{
 	{name: "help", description: "For help on gemini-cli"},
 	{name: "quit", description: "Exit the cli"},
-	{name: "provider", description: "", parent: ""},
-	{name: "list", description: "List configured providers (built-in + custom) and active state", parent: "provider"},
-	{name: "use", description: "", parent: "provider"},       // description varies
-	{name: "set", description: "", parent: "provider"},       // description varies
-	{name: "add", description: "", parent: "provider"},       // description varies
-	{name: "remove", description: "", parent: "provider"},    // description varies
+	// Sagittarius renames the fork's `/provider` to `/providers` (plural) and
+	// folds the fork's separate `/auth` command into the providers wizard's
+	// "Set API key" screen. Both are intentional divergences documented in
+	// PARITY_CHECKLIST.md (AD-025).
+	{name: "providers", description: "", parent: ""},
+	{name: "list", description: "List configured providers (built-in + custom) and active state", parent: "providers"},
+	{name: "use", description: "", parent: "providers"},    // description varies
+	{name: "set", description: "", parent: "providers"},    // description varies
+	{name: "add", description: "", parent: "providers"},    // description varies
+	{name: "remove", description: "", parent: "providers"}, // description varies
 	{name: "model", description: "Manage model configuration"},
-	{name: "auth", description: "Manage authentication"},
 	{name: "memory", description: "Commands for interacting with memory"},
 	{name: "reload", description: "Reload the memory from the source", parent: "memory"},
 	{name: "skills", description: "", parent: ""},
@@ -419,6 +422,6 @@ var forkInScopeCommands = []forkCommandEntry{
 
 // inScopeTopLevelNames is the set of top-level command names Sagittarius must implement.
 var inScopeTopLevelNames = []string{
-	"help", "quit", "provider", "model", "auth", "memory",
+	"help", "quit", "providers", "model", "memory",
 	"skills", "mcp", "agents", "reasoning", "resume", "clear",
 }

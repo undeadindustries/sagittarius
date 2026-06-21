@@ -18,8 +18,18 @@ const (
 	StreamInfo
 	// StreamQuit signals the TUI should exit the session.
 	StreamQuit
+	// StreamOpenDialog asks the TUI to open an interactive dialog overlay.
+	StreamOpenDialog
 	// StreamDone marks the end of a single assistant turn stream.
 	StreamDone
+)
+
+// DialogKind identifies an interactive TUI dialog requested by the agent layer.
+type DialogKind string
+
+const (
+	// DialogProviders opens the providers management wizard.
+	DialogProviders DialogKind = "providers"
 )
 
 // StreamEvent is a single streaming update rendered in the scrollback viewport.
@@ -30,6 +40,8 @@ type StreamEvent struct {
 	Err      error
 	// ConfirmReply is set for StreamToolConfirm; the TUI sends true/false when the user responds.
 	ConfirmReply chan bool
+	// Dialog is set for StreamOpenDialog and names the overlay to open.
+	Dialog DialogKind
 }
 
 // StatusBar holds footer metadata shown below the input area.

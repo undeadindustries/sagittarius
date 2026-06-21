@@ -1,5 +1,7 @@
 package config
 
+import "strings"
+
 // WireFormat identifies the HTTP wire protocol spoken by a provider endpoint.
 type WireFormat string
 
@@ -35,7 +37,7 @@ type BuiltInProvider struct {
 var BuiltInProviders = map[BuiltInProviderID]BuiltInProvider{
 	BuiltInGeminiAPIKey: {
 		ID:                  BuiltInGeminiAPIKey,
-		DisplayName:         "Gemini (API key)",
+		DisplayName:         "Gemini",
 		DefaultBaseURL:      "",
 		APIKeyEnvVar:        "GEMINI_API_KEY",
 		WireFormat:          WireFormatGemini,
@@ -67,6 +69,103 @@ var BuiltInProviders = map[BuiltInProviderID]BuiltInProvider{
 
 // LookupBuiltInProvider returns the registry entry for id, or false if unknown.
 func LookupBuiltInProvider(id string) (BuiltInProvider, bool) {
-	def, ok := BuiltInProviders[BuiltInProviderID(id)]
+	def, ok := BuiltInProviders[BuiltInProviderID(NormalizeProviderID(id))]
 	return def, ok
+}
+
+// NormalizeProviderID maps user-facing aliases to canonical settings.json ids.
+// The canonical id for Gemini remains "gemini-apikey" (fork-compatible); users
+// may type "gemini" in /provider use and completion.
+func NormalizeProviderID(id string) string {
+	switch strings.ToLower(strings.TrimSpace(id)) {
+	case "gemini":
+		return string(BuiltInGeminiAPIKey)
+	default:
+		return strings.TrimSpace(id)
+	}
+}
+
+// ProviderDisplayID returns the short id shown in /providers list and completion.
+func ProviderDisplayID(canonicalID string) string {
+	if canonicalID == string(BuiltInGeminiAPIKey) {
+		return "gemini"
+	}
+	return canonicalID
+}
+
+// openAIChatSettingKeys are the per-instance keys editable for an openai-chat
+// provider. Mirrors fork providerRegistry.ts OPENAI_COMPAT_SETTING_KEYS plus the
+// Sagittarius per-provider tool-output masking knobs (AD-015), which are modelled
+// per provider here rather than in a single global local.* block.
+var openAIChatSettingKeys = []string{
+	"model",
+	"baseUrl",
+	"contextLimit",
+	"promptMode",
+	"enableTools",
+	"timeout",
+	"compressionThreshold",
+	"preserveFraction",
+	"temperature",
+	"toolCallParsing",
+	"systemPromptOverride",
+	"toolOutputMaskingEnabled",
+	"toolOutputMaskingProtectionFraction",
+	"toolOutputMaskingPrunableFraction",
+	"toolOutputMaskingProtectLatestTurn",
+}
+
+// openAIResponsesSettingKeys are the per-instance keys editable for an
+// openai-responses provider. Mirrors fork OPENAI_RESPONSES_SETTING_KEYS: the
+// openai-chat set minus toolCallParsing (Responses returns structured
+// function_call items) plus reasoningEffort and useResponseChaining.
+var openAIResponsesSettingKeys = []string{
+	"model",
+	"baseUrl",
+	"contextLimit",
+	"promptMode",
+	"enableTools",
+	"timeout",
+	"compressionThreshold",
+	"preserveFraction",
+	"temperature",
+	"reasoningEffort",
+	"useResponseChaining",
+	"systemPromptOverride",
+}
+
+// ValidSettingKeys returns the editable providers.<id>.* leaf keys for a wire
+// format. Gemini providers expose none — upstream owns those defaults (fork
+// GEMINI_SETTING_KEYS = []).
+func ValidSettingKeys(wf WireFormat) []string {
+	switch wf {
+	case WireFormatOpenAIChat:
+		return append([]string(nil), openAIChatSettingKeys...)
+	case WireFormatOpenAIResponses:
+		return append([]string(nil), openAIResponsesSettingKeys...)
+	default:
+		return nil
+	}
+}
+
+// ProviderWireFormat resolves the wire format for a provider id. For custom
+// providers the caller passes the definition (its WireFormat wins, defaulting to
+// openai-chat). Unknown ids return an empty wire format.
+func ProviderWireFormat(id string, custom *CustomProviderDefinition) WireFormat {
+	if def, ok := LookupBuiltInProvider(id); ok {
+		return def.WireFormat
+	}
+	if custom != nil {
+		if custom.WireFormat != "" {
+			return custom.WireFormat
+		}
+		return WireFormatOpenAIChat
+	}
+	return ""
+}
+
+// ValidSettingKeysForProvider returns the editable leaf keys for a provider id,
+// resolving its wire format from the registry or custom definition.
+func ValidSettingKeysForProvider(id string, custom *CustomProviderDefinition) []string {
+	return ValidSettingKeys(ProviderWireFormat(id, custom))
 }
