@@ -108,15 +108,14 @@ func TestHelpListsProviderSubcommands(t *testing.T) {
 	checks := []string{
 		"/help",
 		"/quit",
-		"/provider",
-		"/provider list",
-		"/provider use",
-		"/provider show",
-		"/provider set",
-		"/provider add",
-		"/provider remove",
+		"/providers",
+		"/providers list",
+		"/providers use",
+		"/providers show",
+		"/providers set",
+		"/providers add",
+		"/providers remove",
 		"/model",
-		"/auth",
 		"/memory reload",
 		"/skills reload",
 		"/mcp reload",
@@ -146,7 +145,7 @@ func TestProviderUsePersists(t *testing.T) {
 	deps, loader, hooks := testDeps(t, settings)
 	p := slash.NewProcessor()
 
-	result := p.Process(ctx, "/provider use openai", deps)
+	result := p.Process(ctx, "/providers use openai", deps)
 	if !result.Handled {
 		t.Fatal("expected handled")
 	}
@@ -178,7 +177,7 @@ func TestQuitExits(t *testing.T) {
 	}
 }
 
-func TestAuthStoresKey(t *testing.T) {
+func TestProviderSetKeyStoresKey(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	settings := &config.Settings{
@@ -191,9 +190,9 @@ func TestAuthStoresKey(t *testing.T) {
 	deps, _, hooks := testDeps(t, settings)
 	p := slash.NewProcessor()
 
-	result := p.Process(ctx, "/auth test-secret-key", deps)
+	result := p.Process(ctx, "/providers set gemini-apikey key test-secret-key", deps)
 	if result.Err != nil {
-		t.Fatalf("auth error: %v", result.Err)
+		t.Fatalf("set key error: %v", result.Err)
 	}
 	if hooks.storedKeys[string(config.BuiltInGeminiAPIKey)] != "test-secret-key" {
 		t.Fatalf("stored key = %q", hooks.storedKeys[string(config.BuiltInGeminiAPIKey)])
@@ -207,7 +206,7 @@ func TestAuthStoresKey(t *testing.T) {
 	}
 }
 
-func TestProviderSetRejectedForGemini(t *testing.T) {
+func TestProviderSetSettingRejectedForGemini(t *testing.T) {
 	t.Parallel()
 	settings := &config.Settings{
 		Providers: &config.ProvidersSettings{
@@ -216,19 +215,16 @@ func TestProviderSetRejectedForGemini(t *testing.T) {
 		},
 		Raw: map[string]json.RawMessage{},
 	}
-	deps, _, hooks := testDeps(t, settings)
+	deps, _, _ := testDeps(t, settings)
 	p := slash.NewProcessor()
 
-	result := p.Process(context.Background(), "/provider set gemini-apikey key secret", deps)
+	result := p.Process(context.Background(), "/providers set gemini-apikey temperature 0.5", deps)
 	if result.Err != nil {
 		t.Fatalf("unexpected error: %v", result.Err)
 	}
 	combined := strings.Join(result.Messages, " ")
-	if !strings.Contains(combined, "/auth") {
-		t.Fatalf("expected /auth guidance, got: %q", combined)
-	}
-	if _, ok := hooks.storedKeys[string(config.BuiltInGeminiAPIKey)]; ok {
-		t.Fatal("gemini key should not be stored via /provider set")
+	if !strings.Contains(combined, "no editable settings") {
+		t.Fatalf("expected no-editable-settings guidance, got: %q", combined)
 	}
 }
 
@@ -240,7 +236,7 @@ func TestHelpCommandViaProcessor(t *testing.T) {
 		t.Fatalf("result = %+v", result)
 	}
 	combined := strings.Join(result.Messages, "\n")
-	for _, name := range []string{"/provider", "/model", "/auth", "/memory", "/skills"} {
+	for _, name := range []string{"/providers", "/model", "/memory", "/skills"} {
 		if !strings.Contains(combined, name) {
 			t.Errorf("help output missing %s", name)
 		}
@@ -274,7 +270,7 @@ func TestProviderAddRemove(t *testing.T) {
 	deps, loader, _ := testDeps(t, settings)
 	p := slash.NewProcessor()
 
-	add := p.Process(ctx, "/provider add local-vllm http://127.0.0.1:8000/v1 Local", deps)
+	add := p.Process(ctx, "/providers add local-vllm http://127.0.0.1:8000/v1 Local", deps)
 	if add.Err != nil {
 		t.Fatalf("add: %v", add.Err)
 	}
@@ -286,7 +282,7 @@ func TestProviderAddRemove(t *testing.T) {
 		t.Fatal("custom provider not persisted")
 	}
 
-	rm := p.Process(ctx, "/provider remove local-vllm", deps)
+	rm := p.Process(ctx, "/providers remove local-vllm", deps)
 	if rm.Err != nil {
 		t.Fatalf("remove: %v", rm.Err)
 	}

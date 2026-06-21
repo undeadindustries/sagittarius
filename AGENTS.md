@@ -300,6 +300,97 @@ refreshes model before each generate round; `-m` pins model and skips mode routi
 Subagent helper: `agents.ResolveSubagentModel` (execution still stubbed). UX: `/mode`,
 TUI **Ctrl+Shift+M** cycles modes. Docs: `docs/interaction-modes.md`.
 
+### AD-023 — Slash autocompletion via ui.Completer seam (2026-06-21)
+
+Inline slash-command autocompletion in the TUI is routed through a new optional
+`ui.Completer` interface (`Complete(input string) ui.Completions`) so the Bubble
+Tea layer never imports `internal/slash` directly (keeps AD-004 swap boundary).
+`agent.App` implements `ui.Completer` by delegating to `slash.Registry.Complete`,
+mapping `slash.Suggestion` → `ui.Suggestion`.
+
+`slash.Registry.Complete(input, deps)` is read-only and non-blocking (UI thread,
+every keystroke — **no network**): it walks the command tree, returning
+command/subcommand candidates, or argument candidates when a leaf command defines
+`Command.ArgComplete func(deps, prefix) []string`. Wired arg completers: `/provider
+use` (built-in + custom ids) and `/provider remove` (custom only). Model-name
+completion is intentionally **not** wired (would require a network `DiscoverModels`
+call). `/mode` and `/reasoning` values are already subcommands, so they complete
+via the command path.
+
+TUI behaviour (`internal/ui/bubbletea`): suggestions appear under the input when
+the line starts with `/`; Up/Down navigate with wrap-around (no auto-highlight —
+the user can keep typing); Tab accepts the highlight (or best match); Enter
+accepts a highlighted parent (appends a space, reveals subcommands/args) or
+submits a terminal command; Esc dismisses. List capped at 8 rows + "… N more".
+
+### AD-024 — Per-model-per-provider settings (design only) (2026-06-21)
+
+Future enhancement, **not implemented** this phase. A provider instance block will
+gain an optional `models` map so individual models can override provider-level
+defaults (e.g. reasoning effort, temperature):
+
+```json
+"providers": {
+  "openai": {
+    "model": "gpt-4o-mini",
+    "models": {
+      "gpt-4o-mini": { "temperature": 0.2 },
+      "gpt-5-codex":  { "reasoningEffort": "high" }
+    }
+  }
+}
+```
+
+Resolution order: `models[activeModel].*` → provider instance defaults → registry
+defaults. Mode routing (`sagittarius.modes.*.provider`) layers on top later. The
+providers wizard edit sheet would gain a per-model sub-screen. Deferred.
+
+### AD-025 — Providers TUI wizard, `/providers` rename, `/auth` removal (2026-06-21)
+
+The fork's `/provider` command is renamed to `/providers` (plural, no alias) and
+the fork's separate `/auth` command is **removed** — API-key entry now lives in
+the providers wizard. Both are intentional divergences from the fork, documented
+in `docs/PARITY_CHECKLIST.md`.
+
+| Surface | Behaviour |
+|---------|-----------|
+| `/providers` (no args, TTY) | Opens an interactive Bubble Tea wizard overlay |
+| `/providers list\|use\|show\|set\|add\|remove` | Text subcommands retained for scripting (headless never processes slash; these run in the TUI) |
+| API keys | Wizard "Set API key" screen, or `/providers set <id> key <api-key>` |
+
+**New package `internal/ui/providersdialog`** (bubbletea-only overlay): a screen
+state machine — menu, switch, editPick, edit, editField, setKey, add, addModels,
+remove, models. Side effects go through a `providersdialog.Deps` interface
+implemented in the agent layer (`agent.App.ProviderDialogDeps`), so the TUI never
+imports the agent/slash packages (preserves AD-004 in the other direction).
+
+**Seams:** `slash.Result.OpenDialog DialogKind` (set by the bare `/providers`
+handler) → `agent.handleSlash` emits `ui.StreamOpenDialog{Dialog: DialogProviders}`
+→ bubbletea opens the overlay via the `providerDialogHost` capability interface.
+While the overlay is active the model still routes stream events (e.g. the
+terminating `StreamDone`) and window resizes to the host; keys and async
+`modelsLoadedMsg` go to the overlay.
+
+**Wire-format field allowlists** (fork `providerRegistry.ts` parity):
+`config.ValidSettingKeys(wf)` / `ValidSettingKeysForProvider(id, custom)` —
+`gemini` exposes none; `openai-chat` exposes the OpenAI-compat keys plus the
+per-provider tool-output masking knobs (AD-015); `openai-responses` swaps
+`toolCallParsing` for `reasoningEffort` + `useResponseChaining`.
+`provider.ApplyProviderSetting` validates against this allowlist and parses typed
+values; `provider.UpdateCustomProviderDefinition` edits definition fields;
+`provider.ResolveEndpointForProvider` resolves any provider's endpoint (for model
+discovery) without changing the active provider.
+
+**Add flow:** after a custom provider is saved, the wizard immediately calls
+`DiscoverModels` and lets the user pick a default model, then auto-switches to the
+new provider (matches the user's "immediately connect" requirement).
+
+Tests: `config` ValidSettingKeys per wire format; `provider` ApplyProviderSetting
+typed/rejection + UpdateCustomProviderDefinition + ResolveEndpointForProvider;
+`providersdialog` table-driven screen transitions with a fake Deps; `bubbletea`
+overlay open/close/StreamDone routing. `go test ./...` green, `-race` clean on
+touched packages.
+
 ---
 
 ## Workspace Layout
@@ -358,6 +449,9 @@ internal/log/
 Phase 13 complete (2026-06-21): internal/session package (Recorder, LoadSession, ListSessions, DeleteSession, Selector/ResolveSession, ProjectHash/ChatsDir, ConvertToProviderHistory, FormatSessionList); CLI flags --resume/-r, --list-sessions, --delete-session, --output-format text|json|stream-json, --worktree stub (AD-020); session recording wired into agent/runner.go (user/model/tool messages); /resume and /clear slash commands; slash.Hooks extended with ListSessions/ClearHistory; Runner.ClearHistory + InitialHistory; JSONL format fork-compatible. Tests: TestSessionRoundTrip, TestResumeLatest, TestListSessionsEmpty, TestResumeByIndex, TestResumeByUUID, TestResumeInvalidIdentifier, TestProjectHash, TestConvertToProviderHistory, TestDeleteSession, TestFormatSessionList.
 Phase 15 complete (2026-06-21): internal/config sagittarius.* typed settings + round-trip; internal/modes (Mode, State, ResolveModel, ResolveSubagentModel); runner mode routing before each generate round; /mode slash + Ctrl+Shift+M TUI cycle; agents.ResolveSubagentModel; docs/interaction-modes.md; AD-022. Tests: TestModeSelectsModel, TestSubagentModelFallback, TestGlobalDefaultWhenUnset, TestModeSwitchMidSession, TestSagittariusSettingsRoundTrip.
 Phase 15 Bugbot fixes (2026-06-21): context manager now tracks the runner's live mode-resolved model — NewContextManager takes modelFn func() string (was a captured string) and the summarizer resolves it per call, so chat compression/summarization on the openai-chat path uses the same model as user turns across provider rebuilds AND mid-session /mode switches (was using endpoint.Model / provider default — AD-015 violation); main.go builds the context manager after the runner using runner.Model so startup also matches a non-default mode model; TUI footer refreshes idleStatus from app.Status() on StreamDone so /mode and Ctrl+Shift+M are reflected (was reset to the startup-captured status); ValidateSagittariusSettings no longer rejects a suffix-only mode block (ResolveModel falls back to defaultModel/provider default while the suffix applies); NewRunner no longer treats InitialMode==0 as unset (ModeAgent is the zero value — explicit ModeAgent was silently overridden by sagittarius.defaultMode; callers resolve DefaultFromSettings themselves, as main.go already does). Tests added: TestValidateSuffixOnlyModeAccepted, TestExplicitAgentModeNotOverriddenByDefault. Verified: go test ./... pass, -race clean on touched packages.
+Slash autocompletion (2026-06-21, post-Phase 15): inline TUI suggestions as you type a `/` command — Up/Down select (wrap, no auto-highlight), Tab completes, Enter accepts-or-submits, Esc dismisses. New `ui.Completer` seam (bubbletea never imports slash); `agent.App.Complete` → `slash.Registry.Complete`; `Command.ArgComplete` powers value completion for `/providers use` (all ids) and `/providers remove` (custom only). AD-023. Tests: slash completion_test.go (7), bubbletea suggestion nav/accept (6). Model-name arg completion deferred (needs network DiscoverModels). Verified: go test ./... pass, -race clean on slash/agent/bubbletea.
+
+Providers TUI wizard (2026-06-21, post-Phase 15): renamed `/provider` → `/providers` (no alias), removed `/auth` (API keys now in the wizard). New `internal/ui/providersdialog` overlay package (menu/switch/editPick/edit/setKey/add/addModels/remove/models) driven via `providersdialog.Deps` implemented by `agent.App.ProviderDialogDeps`. Seams: `slash.Result.OpenDialog` → `ui.StreamOpenDialog` → bubbletea overlay (`providerDialogHost`). `config.ValidSettingKeys*` wire-format allowlists; `provider.ApplyProviderSetting` (typed+validated), `UpdateCustomProviderDefinition`, `ResolveEndpointForProvider`, `InstanceSettingValues`. Add flow discovers models and prompts for a default, then auto-switches. AD-024 (per-model settings, design only), AD-025. Docs: commands.md, PARITY_CHECKLIST.md updated. Tests: config ValidSettingKeys (4), provider apply/update/resolve (6), providersdialog transitions (6), bubbletea overlay (4). Verified: go test ./... pass, vet clean, -race clean on slash/ui/agent/config.
 Next: —
 Blockers: fork mock server comparison partial; checkpointing (/restore) deferred (AD-018); sandbox not ported (AD-017); full /resume TUI browser deferred (AD-019); git worktrees stub (AD-020); pre-existing credentials data race ./internal/provider/; TestReasoningApplicableOnResponses flake; debug-mode tool disable + wireLogger port deferred.
 
@@ -445,7 +539,8 @@ Track against fork `docs/reference/commands.md`. Implemented subset documented i
 - [ ] Full `/skills` enable/disable/link/consent (list + reload implemented Phase 12)
 - [ ] `/mcp auth`, `/mcp enable`/`disable` (list + reload implemented Phase 12)
 - [ ] `/agents enable`/`disable`/`config` (list + reload implemented Phase 12)
-- [ ] `/auth signin`/`signout` OAuth dialogs
+- [x] `/providers` wizard + API-key entry (post-Phase 15, AD-025) — replaces `/provider` and `/auth`
+- [ ] `/auth signin`/`signout` OAuth dialogs (OAuth still deferred, AD-002)
 - [ ] ACP headless command registry
 
 Implemented in Phase 12: `/mcp` (list, reload), `/skills` (list, reload), `/agents` (list, reload), `activate_skill` tool.

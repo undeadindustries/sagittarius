@@ -13,14 +13,14 @@ var ErrAPIKeyMissing = errors.New("api key missing")
 func missingAPIKeyError(providerID string) error {
 	envName := primaryEnvVarName(providerID)
 	if providerID == string(config.BuiltInGeminiAPIKey) {
-		return fmt.Errorf("%w: when using Gemini API, set %s or %s, or store a key with /provider set %s key",
-			ErrAPIKeyMissing, envGeminiAPIKey, envGoogleAPIKey, providerID)
+		return fmt.Errorf("%w: set %s or %s in your environment, or open /providers to store a key",
+			ErrAPIKeyMissing, envGeminiAPIKey, envGoogleAPIKey)
 	}
 	if def, ok := config.LookupBuiltInProvider(providerID); ok {
-		return fmt.Errorf("%w: set %s or store a key with /provider set %s key (%s)",
+		return fmt.Errorf("%w: set %s or store a key with /providers set %s key (%s)",
 			ErrAPIKeyMissing, def.APIKeyEnvVar, providerID, def.DisplayName)
 	}
-	return fmt.Errorf("%w: set %s or store a key with /provider set %s key",
+	return fmt.Errorf("%w: set %s or store a key with /providers set %s key",
 		ErrAPIKeyMissing, envName, providerID)
 }
 

@@ -1,7 +1,8 @@
 # CLI commands
 
-Sagittarius supports built-in slash commands for session control, provider
-configuration, and authentication. Commands start with `/`.
+Sagittarius supports built-in slash commands for session control and provider
+configuration. Commands start with `/`. Provider credentials are managed inside
+the `/providers` wizard rather than a separate `/auth` command.
 
 This document mirrors the fork reference (`gemini-cli/docs/reference/commands.md`)
 for the subset implemented in Sagittarius. Commands not listed here are deferred
@@ -20,31 +21,43 @@ to later phases — see [Deferred commands](#deferred-commands).
 - **Usage:** `/quit`
 - **Note:** `Ctrl+C` also exits.
 
-### `/provider`
+### `/providers`
 
 - **Description:** Manage providers (built-in and custom OpenAI-compatible backends).
+- **Interactive:** Running `/providers` with no sub-command opens an interactive
+  menu (wizard): switch the active provider, edit a provider's settings, set an
+  API key, add a custom provider (with immediate model discovery so you can pick
+  a default model), remove a custom provider, or browse a provider's models.
+- **API keys:** There is no separate `/auth` command. Set API keys from the
+  wizard's "Set API key" screen, or via `/providers set <id> key <api-key>` for
+  scripting.
 
-#### Sub-commands
+#### Sub-commands (text operations)
 
 - **`list`**
   - **Description:** List configured providers and which one is active.
-  - **Usage:** `/provider list`
+  - **Usage:** `/providers list`
 - **`use <id>`**
   - **Description:** Switch the active provider (persisted to `settings.json`).
-  - **Usage:** `/provider use openai`
+  - **Usage:** `/providers use openai`
 - **`show`**
   - **Description:** Show the active provider, model, wire format, and base URL.
-  - **Usage:** `/provider show`
+  - **Usage:** `/providers show`
 - **`set <id> <field> <value>`**
-  - **Description:** Set `model`, `baseUrl`, or `key` on a non-Gemini provider.
-  - **Usage:** `/provider set openai model gpt-4o`
-  - **Fork rule:** `/provider set gemini-apikey key …` is rejected — use `/auth`.
+  - **Description:** Set any editable setting for a provider. Allowed fields depend
+    on the provider's wire format (e.g. `model`, `baseUrl`, `temperature`,
+    `contextLimit`, `toolCallParsing`, and for `openai-responses` also
+    `reasoningEffort`, `useResponseChaining`). The special field `key` stores an
+    API key in secure storage.
+  - **Usage:** `/providers set openai temperature 0.2`
+  - **Note:** Gemini providers expose no editable settings (upstream owns those
+    defaults); only `key` is accepted for Gemini.
 - **`add <id> <baseUrl> [displayName] [apiKeyEnvVar]`**
   - **Description:** Register a custom OpenAI-compatible provider.
-  - **Usage:** `/provider add local-vllm http://127.0.0.1:8000/v1`
+  - **Usage:** `/providers add local-vllm http://127.0.0.1:8000/v1`
 - **`remove <id>`**
   - **Description:** Remove a custom provider (built-ins cannot be removed).
-  - **Usage:** `/provider remove local-vllm`
+  - **Usage:** `/providers remove local-vllm`
 
 ### `/model`
 
@@ -60,12 +73,6 @@ to later phases — see [Deferred commands](#deferred-commands).
 
 - **Usage:** `/model <model-id>`
 - **Example:** `/model gpt-4o-mini`
-
-### `/auth`
-
-- **Description:** Store an API key for the **active** provider in secure storage.
-- **Usage:** `/auth <api-key>` or `/auth set <api-key>`
-- **Note:** Keys are redacted in scrollback. For Gemini, use `/auth` (not `/provider set … key`).
 
 ### `/memory`
 

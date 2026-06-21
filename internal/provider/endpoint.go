@@ -87,6 +87,28 @@ func ResolveEndpointConfig(settings *config.Settings) (EndpointConfig, error) {
 	return EndpointConfig{}, fmt.Errorf("resolve endpoint: unknown provider %q", providerID)
 }
 
+// ResolveEndpointForProvider resolves the endpoint config for an arbitrary
+// provider id, regardless of which provider is currently active. It clones the
+// settings with providerID forced active so model discovery and edit previews can
+// target any configured provider.
+func ResolveEndpointForProvider(settings *config.Settings, providerID string) (EndpointConfig, error) {
+	if settings == nil {
+		return EndpointConfig{}, fmt.Errorf("resolve endpoint: settings are required")
+	}
+	providerID = config.NormalizeProviderID(providerID)
+	if providerID == "" {
+		return EndpointConfig{}, fmt.Errorf("resolve endpoint: provider id is required")
+	}
+	clone := *settings
+	prov := config.ProvidersSettings{}
+	if clone.Providers != nil {
+		prov = *clone.Providers
+	}
+	prov.Active = providerID
+	clone.Providers = &prov
+	return ResolveEndpointConfig(&clone)
+}
+
 func resolveBuiltInEndpoint(
 	settings *config.Settings,
 	providerID string,

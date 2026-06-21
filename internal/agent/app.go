@@ -32,6 +32,9 @@ type AppConfig struct {
 	SessionID string
 }
 
+// App implements the optional ui.Completer interface for slash autocompletion.
+var _ ui.Completer = (*App)(nil)
+
 // App adapts Runner to ui.App for interactive TUI sessions.
 type App struct {
 	runner    *Runner
@@ -84,6 +87,23 @@ func (a *App) Status() ui.StatusBar {
 	return a.status
 }
 
+// Complete implements ui.Completer, providing slash-command, subcommand, and
+// argument (e.g. provider id) completions for the interactive input line. It is
+// read-only and non-blocking so the TUI can call it on every keystroke.
+func (a *App) Complete(input string) ui.Completions {
+	comp := a.processor.Registry().Complete(input, a.deps)
+	items := make([]ui.Suggestion, 0, len(comp.Items))
+	for _, s := range comp.Items {
+		items = append(items, ui.Suggestion{
+			Label:       s.Label,
+			Description: s.Description,
+			Insert:      s.Insert,
+			AppendSpace: s.AppendSpace,
+		})
+	}
+	return ui.Completions{Items: items, ReplaceFrom: comp.ReplaceFrom}
+}
+
 // CycleInteractionMode advances agent → plan → ask → debug → agent.
 func (a *App) CycleInteractionMode(ctx context.Context) (<-chan ui.StreamEvent, error) {
 	if a.runner == nil {
@@ -109,6 +129,9 @@ func (a *App) handleSlash(ctx context.Context, input string) (<-chan ui.StreamEv
 		}
 		if result.Err != nil {
 			out <- ui.StreamEvent{Type: ui.StreamError, Err: result.Err}
+		}
+		if result.OpenDialog != "" {
+			out <- ui.StreamEvent{Type: ui.StreamOpenDialog, Dialog: mapDialogKind(result.OpenDialog)}
 		}
 		out <- ui.StreamEvent{Type: ui.StreamDone}
 	}()
