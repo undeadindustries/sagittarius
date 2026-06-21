@@ -81,6 +81,53 @@ func collectEvents(t *testing.T, events <-chan ui.StreamEvent) []ui.StreamEvent 
 	return out
 }
 
+func TestSessionMetricsAccumulate(t *testing.T) {
+	t.Parallel()
+
+	gen := &fakeGenerator{
+		batches: [][]provider.StreamResponse{{
+			{TextDelta: "Hello there, this is a reply."},
+			{Done: true},
+		}},
+	}
+	runner, err := NewRunner(RunnerConfig{
+		Generator:   gen,
+		Model:       "test-model",
+		WorkDir:     t.TempDir(),
+		Interactive: false,
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	events, err := runner.RunTurn(testContext(t), "hi there")
+	if err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+	collectEvents(t, events)
+
+	stats := runner.Stats()
+	if stats.Turns != 1 {
+		t.Errorf("Turns = %d, want 1", stats.Turns)
+	}
+	if stats.OutputTokens <= 0 {
+		t.Errorf("OutputTokens = %d, want > 0", stats.OutputTokens)
+	}
+	if stats.InputTokens <= 0 {
+		t.Errorf("InputTokens = %d, want > 0", stats.InputTokens)
+	}
+	if stats.ContextTokens <= 0 {
+		t.Errorf("ContextTokens = %d, want > 0", stats.ContextTokens)
+	}
+	// No context manager configured, so no limit is known.
+	if stats.ContextLimit != 0 {
+		t.Errorf("ContextLimit = %d, want 0 (no manager)", stats.ContextLimit)
+	}
+	if got := stats.ContextPercent(); got != -1 {
+		t.Errorf("ContextPercent = %d, want -1 when no limit", got)
+	}
+}
+
 func TestRunnerSingleTurnMock(t *testing.T) {
 	t.Parallel()
 

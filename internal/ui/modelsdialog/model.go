@@ -5,6 +5,8 @@ import (
 	"fmt"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/undeadindustries/sagittarius/internal/ui/theme"
 )
 
 // Model is the models picker overlay. It is driven by the parent Bubble Tea
@@ -14,6 +16,7 @@ import (
 type Model struct {
 	deps Deps
 	ctx  context.Context
+	th   theme.Theme
 
 	width  int
 	height int
@@ -37,6 +40,7 @@ func New(ctx context.Context, deps Deps) Model {
 	m := Model{
 		deps:          deps,
 		ctx:           ctx,
+		th:            theme.Default(),
 		providerID:    id,
 		providerLabel: deps.ActiveProviderLabel(),
 	}
@@ -60,6 +64,12 @@ func (m Model) Status() string { return m.status }
 func (m Model) SetSize(w, h int) Model {
 	m.width = w
 	m.height = h
+	return m
+}
+
+// SetTheme applies the resolved color theme to the overlay.
+func (m Model) SetTheme(th theme.Theme) Model {
+	m.th = th
 	return m
 }
 // Update advances the picker for one message.

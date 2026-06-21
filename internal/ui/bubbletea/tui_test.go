@@ -3,6 +3,8 @@ package bubbletea
 import (
 	"context"
 	"errors"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -127,6 +129,79 @@ func TestModelStreamPump(t *testing.T) {
 	}
 	_ = updated
 	_ = next()
+}
+
+func TestScrollbackRolesRender(t *testing.T) {
+	t.Parallel()
+	m := newModel(ui.Options{ThemeName: "greyscale"}, quitApp{}, NewTerminal(ui.Options{}))
+	m.width = 80
+	m.height = 24
+
+	m.addBlock(roleUser, "hello there")
+	m.addResponseDelta("Hi, ")
+	m.addResponseDelta("how can I help?")
+	m.closeResponse()
+	m.addBlock(roleInfo, "context reloaded")
+	m.addBlock(roleError, "boom")
+
+	out := stripANSI(m.renderScrollback(80))
+	for _, want := range []string{"> hello there", "✦ Hi, how can I help?", "ℹ context reloaded", "✕ boom"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("scrollback missing %q\n%s", want, out)
+		}
+	}
+}
+
+// stripANSI removes SGR escape sequences so tests can assert on plain text.
+var ansiSeq = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func stripANSI(s string) string { return ansiSeq.ReplaceAllString(s, "") }
+
+func TestResponseDeltasAccumulateIntoOneBlock(t *testing.T) {
+	t.Parallel()
+	m := newModel(ui.Options{}, quitApp{}, NewTerminal(ui.Options{}))
+	m.addResponseDelta("a")
+	m.addResponseDelta("b")
+	m.addResponseDelta("c")
+	if got := len(m.blocks); got != 1 {
+		t.Fatalf("blocks = %d, want 1 accumulated response block", got)
+	}
+	if m.blocks[0].text != "abc" || m.blocks[0].role != roleResponse {
+		t.Fatalf("block = %+v, want {roleResponse abc}", m.blocks[0])
+	}
+	// A non-text block must close the response so the next delta starts fresh.
+	m.addBlock(roleInfo, "x")
+	m.addResponseDelta("d")
+	if got := len(m.blocks); got != 3 {
+		t.Fatalf("blocks = %d, want 3 (response, info, response)", got)
+	}
+}
+
+func TestConfirmBandVisibleWhilePending(t *testing.T) {
+	t.Parallel()
+	m := newModel(ui.Options{ThemeName: "greyscale"}, quitApp{}, NewTerminal(ui.Options{}))
+	m.width = 80
+	m.height = 24
+
+	if band := m.renderConfirmBand(); band != "" {
+		t.Fatalf("confirm band should be empty when idle, got %q", band)
+	}
+
+	reply := make(chan bool, 1)
+	m.handleStream(ui.StreamEvent{Type: ui.StreamToolConfirm, ToolName: "write_file", Text: "/tmp/x", ConfirmReply: reply})
+	band := m.renderConfirmBand()
+	if !strings.Contains(band, "write_file") || !strings.Contains(band, "(y/n)") {
+		t.Fatalf("confirm band missing prompt: %q", band)
+	}
+
+	// Answering clears the band.
+	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
+	if got := <-reply; !got {
+		t.Fatal("expected y to send true")
+	}
+	if band := m.renderConfirmBand(); band != "" {
+		t.Fatalf("confirm band should clear after answer, got %q", band)
+	}
 }
 
 func TestHandleKeyCtrlC(t *testing.T) {

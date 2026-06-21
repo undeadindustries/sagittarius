@@ -73,6 +73,13 @@ func (t *Terminal) Run(ctx context.Context, app ui.App) error {
 	t.mu.Unlock()
 
 	_, err := p.Run()
+
+	// Print the goodbye summary to the restored (normal) screen after the
+	// alt-screen program tears down, so it persists in the user's scrollback.
+	if !t.opts.Headless && m.exitSummary != "" {
+		fmt.Print("\n" + m.exitSummary)
+	}
+
 	if err != nil {
 		return fmt.Errorf("bubbletea run: %w", err)
 	}

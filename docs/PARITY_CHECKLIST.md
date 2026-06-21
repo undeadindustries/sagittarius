@@ -120,6 +120,31 @@ Fork-superset commands present in the fork but not in scope:
 
 ---
 
+## TUI presentation parity (Phase 16, AD-028)
+
+Functional TUI parity shipped in Phases 04–07; Phase 16 closes the presentation
+gap with the fork's Ink UI. See `docs/tui-themes.md` for the user-facing guide.
+
+| Surface | Status | Notes |
+|---------|--------|-------|
+| Semantic theme system | ✅ Implemented | `internal/ui/theme`: purple-leaning `Default`, monochrome `Greyscale` |
+| `NO_COLOR` / `ui.theme: greyscale` | ✅ Implemented | Either forces monochrome (bold/faint/reverse only) |
+| Structured message roles | ✅ Implemented | User `>`, assistant `✦`, info `ℹ`, error `✕`, tool `⚙`/`↳`, confirm `?` |
+| Confirm focus band | ✅ Implemented | Purple-bordered panel above the input while a y/n confirm is pending |
+| Launch banner + tips | ✅ Implemented | Sagittarius ASCII logo, version, tips; gated by `ui.hideBanner` / `ui.hideTips` |
+| Footer context usage | ✅ Implemented | `% context` (+ compact token total on wide terminals) when a context limit is known |
+| Exit goodbye screen | ✅ Implemented | Stats + `sagittarius --resume <id>` printed after teardown |
+| Markdown / code rendering | ✅ Implemented (basic) | Headings, lists, fenced code, inline bold/italic/code for assistant output |
+| `/theme` command + picker | ⏳ Deferred (16g) | Theme is settings/`NO_COLOR`-driven for now |
+| Rich tool confirm (radio/diff) | ⏳ Deferred (16g) | y/n confirm retained (intentional divergence) |
+| Full footer column config | ⏳ Deferred (16g) | Fork `ui.footer.items` registry not ported |
+| Screen-reader prefixes | ⏳ Deferred (16g) | `--screen-reader` still only disables the alt-screen |
+
+**Intentional divergences:** y/n tool confirmations (vs fork radio dialog), purple
+accent (vs fork green focus), binary name `sagittarius --resume`.
+
+---
+
 ## Headless flag parity
 
 | Flag | Status | Notes |

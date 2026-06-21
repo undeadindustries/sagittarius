@@ -23,6 +23,16 @@ type Options struct {
 	// Notice is an optional startup message shown in the scrollback (e.g. a
 	// missing-API-key warning) so interactive sessions can open and recover.
 	Notice string
+	// ThemeName selects the color theme ("default" or "greyscale"). Empty means
+	// the default purple theme. Resolved in the bubbletea layer via the
+	// internal/ui/theme package; the agent layer never inspects it.
+	ThemeName string
+	// NoColor forces the greyscale theme regardless of ThemeName (NO_COLOR env).
+	NoColor bool
+	// HideBanner suppresses the ASCII launch logo (settings ui.hideBanner).
+	HideBanner bool
+	// HideTips suppresses the welcome tips block (settings ui.hideTips).
+	HideTips bool
 }
 
 // UI is the library-agnostic terminal interface. Agent code must depend on this

@@ -32,8 +32,11 @@ type AppConfig struct {
 	SessionID string
 }
 
-// App implements the optional ui.Completer interface for slash autocompletion.
-var _ ui.Completer = (*App)(nil)
+// App implements the optional ui.Completer and ui.MetricsProvider interfaces.
+var (
+	_ ui.Completer       = (*App)(nil)
+	_ ui.MetricsProvider = (*App)(nil)
+)
 
 // App adapts Runner to ui.App for interactive TUI sessions.
 type App struct {
@@ -85,6 +88,19 @@ func (a *App) HandleInput(ctx context.Context, input string) (<-chan ui.StreamEv
 // Status returns footer metadata for the TUI status bar.
 func (a *App) Status() ui.StatusBar {
 	return a.status
+}
+
+// SessionMetrics implements ui.MetricsProvider, exposing live session telemetry
+// for the footer and exit summary. Provider/session identifiers come from the
+// app; counts and token estimates come from the runner.
+func (a *App) SessionMetrics() ui.SessionStats {
+	if a.runner == nil {
+		return ui.SessionStats{SessionID: a.sessionID, Provider: a.status.Left}
+	}
+	stats := a.runner.Stats()
+	stats.SessionID = a.sessionID
+	stats.Provider = a.status.Left
+	return stats
 }
 
 // Complete implements ui.Completer, providing slash-command, subcommand, and

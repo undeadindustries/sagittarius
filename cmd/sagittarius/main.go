@@ -339,6 +339,12 @@ func runHeadlessJSON(ctx context.Context, runner *agent.Runner, prompt string, s
 	return 0
 }
 
+// noColorEnv reports whether the NO_COLOR convention (any non-empty value)
+// requests monochrome output. See https://no-color.org.
+func noColorEnv() bool {
+	return os.Getenv("NO_COLOR") != ""
+}
+
 func emitJSONLine(v interface{}) {
 	b, _ := json.Marshal(v)
 	fmt.Println(string(b))
@@ -389,12 +395,17 @@ func runInteractive(screenReader bool, modelOverride, resume string) int {
 		notice = "⚠ " + genErr.Error()
 	}
 
+	uiCfg := settings.UI()
 	termUI := bubbletea.NewTerminal(ui.Options{
 		ScreenReader:  screenReader,
 		BannerTitle:   "Sagittarius",
 		Version:       version.String(),
 		InitialStatus: app.Status(),
 		Notice:        notice,
+		ThemeName:     uiCfg.Theme,
+		NoColor:       noColorEnv(),
+		HideBanner:    uiCfg.HideBanner,
+		HideTips:      uiCfg.HideTips,
 	})
 
 	if err := termUI.Run(ctx, app); err != nil {

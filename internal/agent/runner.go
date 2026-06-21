@@ -89,6 +89,7 @@ type Runner struct {
 	lastRequest          *provider.GenerateRequest
 	lastRequestMu        sync.RWMutex
 	sessionRecorder      *session.Recorder
+	metrics              *sessionMetrics
 }
 
 // NewRunner constructs a Runner and discovers project memory for the system prompt.
@@ -152,6 +153,7 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		state:                StateIdle,
 		sessionRecorder:      cfg.SessionRecorder,
 		history:              history,
+		metrics:              newSessionMetrics(),
 	}
 	if !cfg.ModelPinned {
 		runner.refreshModelFromMode()
@@ -294,6 +296,7 @@ func (r *Runner) RunTurn(ctx context.Context, userInput string) (<-chan ui.Strea
 	}
 
 	r.setState(StateIdle)
+	r.metrics.recordTurn()
 	r.history = append(r.history, provider.Message{
 		Role:  provider.RoleUser,
 		Parts: []provider.Part{{Text: userInput}},
@@ -364,6 +367,7 @@ func (r *Runner) runAgentLoop(ctx context.Context, out chan<- ui.StreamEvent) {
 		}
 		req := r.buildGenerateRequest()
 		r.storeLastRequest(req)
+		r.metrics.recordRequest(req.Messages)
 
 		respCh, err := gen.GenerateContentStream(ctx, req)
 		if err != nil {
@@ -375,6 +379,7 @@ func (r *Runner) runAgentLoop(ctx context.Context, out chan<- ui.StreamEvent) {
 		if streamErr != nil {
 			return
 		}
+		r.metrics.recordOutput(modelText)
 
 		r.appendModelMessage(modelText, toolCalls)
 
@@ -397,6 +402,7 @@ func (r *Runner) runAgentLoop(ctx context.Context, out chan<- ui.StreamEvent) {
 			out <- ui.StreamEvent{Type: ui.StreamError, Err: err}
 			return
 		}
+		r.metrics.recordTools(len(toolCalls), countToolFailures(responses))
 		r.appendFunctionResponses(responses)
 		r.setState(StateStreaming)
 	}
@@ -604,6 +610,35 @@ func (r *Runner) setState(state State) {
 func (r *Runner) ClearHistory() {
 	r.history = r.history[:0]
 	r.turnCounter = 0
+}
+
+// countToolFailures counts function responses that carry an "error" key, the
+// convention used by the tool scheduler for failed or denied executions.
+func countToolFailures(responses []provider.FunctionResponse) int {
+	n := 0
+	for i := range responses {
+		if _, ok := responses[i].Response["error"]; ok {
+			n++
+		}
+	}
+	return n
+}
+
+// Stats returns a UI-facing snapshot of session telemetry (turn/tool counts,
+// token estimates, context-window usage, and elapsed time).
+func (r *Runner) Stats() ui.SessionStats {
+	turns, toolCalls, toolFailures, inTok, outTok, ctxTok, dur := r.metrics.snapshot()
+	return ui.SessionStats{
+		Model:         r.Model(),
+		Turns:         turns,
+		ToolCalls:     toolCalls,
+		ToolFailures:  toolFailures,
+		InputTokens:   inTok,
+		OutputTokens:  outTok,
+		ContextTokens: ctxTok,
+		ContextLimit:  r.contextManager().ContextLimit(),
+		Duration:      dur,
+	}
 }
 
 // RotateSession starts a new session-recording file, abandoning the current
