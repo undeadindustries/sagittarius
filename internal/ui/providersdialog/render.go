@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/undeadindustries/sagittarius/internal/config"
+	"github.com/undeadindustries/sagittarius/internal/ui"
 )
 
 var (
@@ -26,27 +27,37 @@ func (m Model) View() string {
 	b.WriteString(m.screenBody())
 
 	if m.info != "" {
-		b.WriteString("\n\n" + dimStyle.Render(m.info))
+		b.WriteString("\n\n" + dimStyle.Render(m.wrap(m.info)))
 	}
 	if m.errMsg != "" {
-		b.WriteString("\n\n" + errStyle.Render("✗ "+m.errMsg))
+		b.WriteString("\n\n" + errStyle.Render(m.wrap("✗ "+m.errMsg)))
 	}
 	b.WriteString("\n\n" + dimStyle.Render(m.footerHint()))
 
-	return boxStyle.Render(b.String())
+	body := b.String()
+	if m.width > 0 {
+		return boxStyle.Width(m.width).Render(body)
+	}
+	return boxStyle.Render(body)
+}
+
+func (m Model) wrap(s string) string {
+	return ui.WrapText(s, m.contentWidth())
 }
 
 func (m Model) footerHint() string {
 	switch m.screen {
-	case screenEditField, screenSetKey:
+	case screenEditField, screenSetKey, screenModelsAdd:
 		return "Enter to save • Esc to cancel"
 	case screenAdd:
 		if m.add.fieldIdx == addFieldWire {
 			return "←/→ toggle • Enter next • Esc cancel"
 		}
 		return "Enter next field • Esc cancel"
-	case screenAddModels, screenModels:
+	case screenAddModels:
 		return "↑/↓ select • Enter choose • Esc back"
+	case screenModels:
+		return "↑/↓ move • Space toggle • A all/none • a add • Enter save • Esc back"
 	default:
 		return "↑/↓ move • Enter select • Esc back"
 	}
@@ -65,7 +76,9 @@ func (m Model) screenBody() string {
 	case screenEditField:
 		return m.renderTextEntry(fmt.Sprintf("Set %s for %s", m.editingKey, config.ProviderDisplayID(m.targetID)))
 	case screenSetKey:
-		return m.renderTextEntry(fmt.Sprintf("Set API key for %s", config.ProviderDisplayID(m.targetID)))
+		return m.renderTextEntry(fmt.Sprintf("Set API key for %s\n(Paste your key, then Enter — field starts blank)", config.ProviderDisplayID(m.targetID)))
+	case screenModelsAdd:
+		return m.renderTextEntry("Add model name")
 	case screenAdd:
 		return m.renderAdd()
 	case screenAddModels:
@@ -73,7 +86,7 @@ func (m Model) screenBody() string {
 	case screenRemove:
 		return m.renderRemove()
 	case screenModels:
-		return m.renderModels("Models on "+config.ProviderDisplayID(m.targetID), false)
+		return m.renderActivation("Activate models on " + config.ProviderDisplayID(m.targetID))
 	}
 	return ""
 }
@@ -179,12 +192,63 @@ func (m Model) renderModels(title string, pickable bool) string {
 	if len(m.models) == 0 {
 		b.WriteString(dimStyle.Render("No models returned by the endpoint."))
 		if pickable {
-			b.WriteString("\n" + dimStyle.Render("Provider was added; set a model later via /providers set."))
+			b.WriteString("\n" + dimStyle.Render("Provider was added; set a model later from the /providers edit sheet."))
 		}
 		return b.String()
 	}
-	for i, model := range m.models {
-		b.WriteString(renderRow(model, i == m.cursor) + "\n")
+	b.WriteString(m.renderScrollableRows(m.models, nil))
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m Model) renderActivation(title string) string {
+	var b strings.Builder
+	b.WriteString(title + "\n\n")
+	if m.loading {
+		b.WriteString(dimStyle.Render("Connecting and listing models…"))
+		return b.String()
+	}
+	if m.modelsErr != "" {
+		b.WriteString(errStyle.Render(m.wrap("✗ "+m.modelsErr)) + "\n\n")
+		if len(m.models) > 0 {
+			b.WriteString(dimStyle.Render("Showing saved models — edit below or press a to add more.") + "\n\n")
+		} else {
+			b.WriteString(dimStyle.Render("Press a to add a model name manually, or Esc to go back.") + "\n")
+			return b.String()
+		}
+	}
+	if len(m.models) == 0 {
+		b.WriteString(dimStyle.Render("No models yet. Press a to add a model name.") + "\n")
+		return b.String()
+	}
+	b.WriteString(dimStyle.Render("Checked models are active. Space toggles, A all/none, a adds, Enter saves.") + "\n\n")
+	b.WriteString(m.renderScrollableRows(m.models, m.checked))
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// renderScrollableRows renders a window of list rows that fits the terminal height.
+func (m Model) renderScrollableRows(labels []string, checked []bool) string {
+	total := len(labels)
+	if total == 0 {
+		return ""
+	}
+	start, end := m.listWindow(total)
+	var b strings.Builder
+	if start > 0 {
+		b.WriteString(dimStyle.Render(fmt.Sprintf("  … %d more above", start)) + "\n")
+	}
+	for i := start; i < end; i++ {
+		label := labels[i]
+		if checked != nil {
+			box := "[ ]"
+			if i < len(checked) && checked[i] {
+				box = "[x]"
+			}
+			label = box + " " + label
+		}
+		b.WriteString(renderRow(label, i == m.cursor) + "\n")
+	}
+	if end < total {
+		b.WriteString(dimStyle.Render(fmt.Sprintf("  … %d more below", total-end)) + "\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

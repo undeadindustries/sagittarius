@@ -91,7 +91,7 @@ func (r *Registry) registerBuiltins() {
 		resumeCommand(),
 		clearCommand(),
 		providerCommand(),
-		modelCommand(),
+		modelsCommand(),
 		memoryCommand(),
 		skillsCommand(),
 		mcpCommand(),

@@ -51,4 +51,10 @@ type Deps interface {
 	ProviderSettings(id string) map[string]string
 	// ValidSettingKeys returns the editable instance keys for a provider.
 	ValidSettingKeys(id string) []string
+	// ActiveModels returns the curated active-model set for a provider (the raw
+	// saved set, no fallback). Empty means the provider is not yet curated, in
+	// which case the activation screen checks every discovered model by default.
+	ActiveModels(id string) []string
+	// SetActiveModels persists the curated active-model set for a provider.
+	SetActiveModels(ctx context.Context, id string, models []string) error
 }

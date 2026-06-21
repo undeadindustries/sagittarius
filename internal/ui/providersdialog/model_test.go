@@ -3,6 +3,8 @@ package providersdialog
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -24,6 +26,7 @@ type fakeDeps struct {
 	models       []string
 	discoverErr  error
 	settingsByID map[string]map[string]string
+	activeModels map[string][]string
 }
 
 func newFakeDeps() *fakeDeps {
@@ -85,6 +88,14 @@ func (f *fakeDeps) ValidSettingKeys(id string) []string {
 			return config.ValidSettingKeys(p.WireFormat)
 		}
 	}
+	return nil
+}
+func (f *fakeDeps) ActiveModels(id string) []string { return f.activeModels[id] }
+func (f *fakeDeps) SetActiveModels(_ context.Context, id string, models []string) error {
+	if f.activeModels == nil {
+		f.activeModels = map[string][]string{}
+	}
+	f.activeModels[id] = models
 	return nil
 }
 
@@ -211,6 +222,116 @@ func TestAddFlowDiscoversAndPicksModel(t *testing.T) {
 	}
 	if deps.switched != "local-vllm" {
 		t.Fatalf("switched = %q, want local-vllm", deps.switched)
+	}
+}
+
+func TestToggleAllChecked(t *testing.T) {
+	deps := newFakeDeps()
+	deps.active = "openai"
+	deps.models = []string{"a", "b", "c"}
+	m := New(context.Background(), deps)
+
+	m, cmd := send(m, key("down"), key("down"), key("down"), key("down"), key("down"), key("enter"))
+	m, _ = send(m, cmd())
+	if len(m.checked) != 3 || !m.checked[0] || !m.checked[1] || !m.checked[2] {
+		t.Fatalf("expected all checked by default, got %v", m.checked)
+	}
+
+	m, _ = send(m, key("A"))
+	for i, c := range m.checked {
+		if c {
+			t.Fatalf("checked[%d] = true after deselect all", i)
+		}
+	}
+
+	m, _ = send(m, key("A"))
+	for i, c := range m.checked {
+		if !c {
+			t.Fatalf("checked[%d] = false after select all", i)
+		}
+	}
+}
+
+func TestListScrollWindow(t *testing.T) {
+	deps := newFakeDeps()
+	deps.active = "openai"
+	models := make([]string, 40)
+	for i := range models {
+		models[i] = fmt.Sprintf("model-%02d", i)
+	}
+	deps.models = models
+	m := New(context.Background(), deps)
+
+	m, cmd := send(m, key("down"), key("down"), key("down"), key("down"), key("down"), key("enter"))
+	m, _ = send(m, cmd())
+	m = m.SetSize(80, 20)
+
+	view := m.View()
+	if !strings.Contains(view, "more below") {
+		t.Fatalf("expected scroll indicator in view:\n%s", view)
+	}
+	if strings.Contains(view, "model-39") {
+		t.Fatal("last model should not render when windowed")
+	}
+
+	for i := 0; i < 50; i++ {
+		m, _ = send(m, key("down"))
+	}
+	view = m.View()
+	if !strings.Contains(view, "more above") {
+		t.Fatalf("expected above indicator after scrolling down:\n%s", view)
+	}
+	if strings.Contains(view, "model-00") {
+		t.Fatal("first model should not render when scrolled down")
+	}
+}
+
+func TestManageModelsActivationSaves(t *testing.T) {
+	deps := newFakeDeps()
+	deps.active = "openai"
+	deps.models = []string{"qwen3", "llama3", "mistral"}
+	m := New(context.Background(), deps)
+
+	// Menu → "Manage models (activate/deactivate)" (index 5).
+	m, cmd := send(m, key("down"), key("down"), key("down"), key("down"), key("down"), key("enter"))
+	if m.screen != screenModels {
+		t.Fatalf("screen = %d, want models", m.screen)
+	}
+	if cmd == nil {
+		t.Fatal("expected discover command")
+	}
+	m, _ = send(m, cmd())
+	// Uncurated → every model checked by default.
+	for i, c := range m.checked {
+		if !c {
+			t.Fatalf("model %d not checked by default", i)
+		}
+	}
+	// Uncheck the second model (llama3), then save.
+	m, _ = send(m, key("down"), key(" "), key("enter"))
+	got := deps.activeModels["openai"]
+	if len(got) != 2 || got[0] != "qwen3" || got[1] != "mistral" {
+		t.Fatalf("saved activeModels = %v, want [qwen3 mistral]", got)
+	}
+	if m.screen != screenMenu {
+		t.Fatalf("screen = %d, want menu after save", m.screen)
+	}
+}
+
+func TestManageModelsGeminiStartsDiscovery(t *testing.T) {
+	deps := newFakeDeps() // active is gemini-apikey (WireFormatGemini)
+	m := New(context.Background(), deps)
+
+	// Menu → "Manage models" (index 5).
+	m, cmd := send(m, key("down"), key("down"), key("down"), key("down"), key("down"), key("enter"))
+	if m.screen != screenModels {
+		t.Fatalf("screen = %d, want models", m.screen)
+	}
+	if !m.loading {
+		t.Fatal("expected loading=true while discovering Gemini models")
+	}
+	if cmd == nil {
+		t.Fatal("expected discover command for Gemini (models.list API)")
 	}
 }
 

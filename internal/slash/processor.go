@@ -7,12 +7,15 @@ import (
 )
 
 // DialogKind identifies an interactive TUI dialog a command requests to open.
-// Empty means no dialog. Headless callers ignore this and use subcommands.
+// Empty means no dialog. Headless mode never processes slash commands, so this
+// is only meaningful in interactive sessions.
 type DialogKind string
 
 const (
 	// DialogProviders opens the providers management wizard.
 	DialogProviders DialogKind = "providers"
+	// DialogModels opens the active-provider model picker.
+	DialogModels DialogKind = "models"
 )
 
 // Result is the outcome of processing one slash command.

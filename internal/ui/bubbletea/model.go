@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/undeadindustries/sagittarius/internal/ui"
+	"github.com/undeadindustries/sagittarius/internal/ui/modelsdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/providersdialog"
 )
 
@@ -19,6 +20,12 @@ import (
 // it discovers the capability via this interface.
 type providerDialogHost interface {
 	ProviderDialogDeps() providersdialog.Deps
+}
+
+// modelsDialogHost is implemented by an App that can supply the models picker
+// dependencies. Same capability-interface pattern as providerDialogHost.
+type modelsDialogHost interface {
+	ModelsDialogDeps() modelsdialog.Deps
 }
 
 type streamEventMsg struct {
@@ -57,9 +64,17 @@ type model struct {
 	suggestionIdx  int // -1 means nothing highlighted (user is still typing)
 	completionFrom int // byte offset in the input where the active token starts
 
-	// overlay holds the active modal dialog (e.g. the providers wizard). When
-	// non-nil it takes over input and rendering until it reports Done.
+	// overlay holds the active providers wizard. When non-nil it takes over
+	// input and rendering until it reports Done.
 	overlay *providersdialog.Model
+	// modelsOverlay holds the active models picker (mutually exclusive with
+	// overlay).
+	modelsOverlay *modelsdialog.Model
+}
+
+// hasOverlay reports whether any modal dialog is currently active.
+func (m *model) hasOverlay() bool {
+	return m.overlay != nil || m.modelsOverlay != nil
 }
 
 // maxVisibleSuggestions caps the inline suggestion list height.
@@ -104,7 +119,7 @@ func (m *model) Init() tea.Cmd {
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	if m.overlay != nil {
+	if m.hasOverlay() {
 		return m.updateOverlay(msg)
 	}
 	switch msg := msg.(type) {
@@ -137,8 +152,14 @@ func (m *model) updateOverlay(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		o := m.overlay.SetSize(msg.Width, msg.Height)
-		m.overlay = &o
+		if m.overlay != nil {
+			o := m.overlay.SetSize(msg.Width, msg.Height)
+			m.overlay = &o
+		}
+		if m.modelsOverlay != nil {
+			o := m.modelsOverlay.SetSize(msg.Width, msg.Height)
+			m.modelsOverlay = &o
+		}
 		return m, nil
 	case streamEventMsg:
 		return m.handleStream(msg.event)
@@ -147,37 +168,62 @@ func (m *model) updateOverlay(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 
-	next, cmd := m.overlay.Update(msg)
-	if next.Done() {
-		status := next.Status()
-		m.overlay = nil
-		if status != "" {
-			m.appendOutput(status + "\n")
+	if m.overlay != nil {
+		next, cmd := m.overlay.Update(msg)
+		if next.Done() {
+			m.closeOverlay(next.Status())
+			return m, cmd
 		}
-		m.refreshIdleStatus()
-		m.status = m.idleStatus
+		m.overlay = &next
 		return m, cmd
 	}
-	m.overlay = &next
+
+	next, cmd := m.modelsOverlay.Update(msg)
+	if next.Done() {
+		m.closeOverlay(next.Status())
+		return m, cmd
+	}
+	m.modelsOverlay = &next
 	return m, cmd
 }
 
+// closeOverlay removes any active dialog, surfaces its closing status, and
+// resets the footer to the (possibly refreshed) idle status.
+func (m *model) closeOverlay(status string) {
+	m.overlay = nil
+	m.modelsOverlay = nil
+	if status != "" {
+		m.appendOutput(status + "\n")
+	}
+	m.refreshIdleStatus()
+	m.status = m.idleStatus
+}
+
 func (m *model) openDialog(kind ui.DialogKind) {
-	if kind != ui.DialogProviders {
-		return
-	}
-	host, ok := m.app.(providerDialogHost)
-	if !ok {
-		m.appendOutput("Providers dialog is unavailable in this session.\n")
-		return
-	}
 	ctx := m.ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	o := providersdialog.New(ctx, host.ProviderDialogDeps())
-	o = o.SetSize(m.width, m.height)
-	m.overlay = &o
+	switch kind {
+	case ui.DialogProviders:
+		host, ok := m.app.(providerDialogHost)
+		if !ok {
+			m.appendOutput("Providers dialog is unavailable in this session.\n")
+			return
+		}
+		o := providersdialog.New(ctx, host.ProviderDialogDeps())
+		o = o.SetSize(m.width, m.height)
+		m.overlay = &o
+	case ui.DialogModels:
+		host, ok := m.app.(modelsDialogHost)
+		if !ok {
+			m.appendOutput("Models dialog is unavailable in this session.\n")
+			return
+		}
+		o := modelsdialog.New(ctx, host.ModelsDialogDeps())
+		o = o.SetSize(m.width, m.height)
+		m.modelsOverlay = &o
+	}
 }
 
 func (m *model) View() string {
@@ -186,6 +232,9 @@ func (m *model) View() string {
 	}
 	if m.overlay != nil {
 		return m.overlay.View()
+	}
+	if m.modelsOverlay != nil {
+		return m.modelsOverlay.View()
 	}
 	header := renderHeader(m.opts, m.width)
 	footer := renderFooter(m.status, m.width)

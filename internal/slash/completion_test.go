@@ -1,10 +1,7 @@
 package slash
 
 import (
-	"strings"
 	"testing"
-
-	"github.com/undeadindustries/sagittarius/internal/config"
 )
 
 func labels(items []Suggestion) []string {
@@ -29,10 +26,13 @@ func TestCompleteTopLevelShowsAllCommands(t *testing.T) {
 	reg := NewRegistry()
 	got := reg.Complete("/", Deps{})
 
-	for _, want := range []string{"help", "quit", "providers", "model", "mode", "mcp"} {
+	for _, want := range []string{"help", "quit", "providers", "models", "mode", "mcp"} {
 		if !contains(got.Items, want) {
 			t.Errorf("top-level completion missing %q (got %v)", want, labels(got.Items))
 		}
+	}
+	if contains(got.Items, "model") {
+		t.Errorf("/model should be gone, replaced by /models (got %v)", labels(got.Items))
 	}
 	if got.ReplaceFrom != 1 {
 		t.Errorf("ReplaceFrom = %d, want 1", got.ReplaceFrom)
@@ -47,79 +47,41 @@ func TestCompletePrefixFiltersCommands(t *testing.T) {
 	if len(got.Items) != 1 || got.Items[0].Label != "providers" {
 		t.Fatalf("/prov completion = %v, want [providers]", labels(got.Items))
 	}
-	if !got.Items[0].AppendSpace {
-		t.Error("providers suggestion should append a space (has subcommands)")
+	// /providers is now menu-first with no subcommands or arg completer, so it
+	// is a terminal command — accepting it should submit, not append a space.
+	if got.Items[0].AppendSpace {
+		t.Error("providers suggestion should not append a space (menu-first, no subcommands)")
 	}
-	// Token starts right after the leading slash.
 	if got.ReplaceFrom != 1 {
 		t.Errorf("ReplaceFrom = %d, want 1", got.ReplaceFrom)
 	}
 }
 
-func TestCompleteSubcommands(t *testing.T) {
+func TestCompleteModelsIsTerminal(t *testing.T) {
 	t.Parallel()
 	reg := NewRegistry()
-	got := reg.Complete("/providers ", Deps{})
+	got := reg.Complete("/model", Deps{})
 
-	for _, want := range []string{"list", "use", "show", "set", "add", "remove"} {
+	if len(got.Items) != 1 || got.Items[0].Label != "models" {
+		t.Fatalf("/model completion = %v, want [models]", labels(got.Items))
+	}
+	if got.Items[0].AppendSpace {
+		t.Error("models suggestion should not append a space (menu-first, no subcommands)")
+	}
+}
+
+func TestCompleteSubcommandsStillWork(t *testing.T) {
+	t.Parallel()
+	reg := NewRegistry()
+	got := reg.Complete("/mcp ", Deps{})
+
+	for _, want := range []string{"list", "reload"} {
 		if !contains(got.Items, want) {
-			t.Errorf("subcommand completion missing %q (got %v)", want, labels(got.Items))
+			t.Errorf("/mcp subcommand completion missing %q (got %v)", want, labels(got.Items))
 		}
 	}
-	if got.ReplaceFrom != len("/providers ") {
-		t.Errorf("ReplaceFrom = %d, want %d", got.ReplaceFrom, len("/providers "))
-	}
-}
-
-func TestCompleteProviderArgListsProviders(t *testing.T) {
-	t.Parallel()
-	reg := NewRegistry()
-	deps := Deps{Settings: &config.Settings{Providers: &config.ProvidersSettings{
-		Custom: map[string]config.CustomProviderDefinition{"my-vllm": {BaseURL: "http://x/v1"}},
-	}}}
-
-	got := reg.Complete("/providers use ", deps)
-	for _, want := range []string{"gemini", "openai", "openai-responses", "my-vllm"} {
-		if !contains(got.Items, want) {
-			t.Errorf("provider-arg completion missing %q (got %v)", want, labels(got.Items))
-		}
-	}
-	if got.ReplaceFrom != len("/providers use ") {
-		t.Errorf("ReplaceFrom = %d, want %d", got.ReplaceFrom, len("/providers use "))
-	}
-}
-
-func TestCompleteProviderArgPrefixFilter(t *testing.T) {
-	t.Parallel()
-	reg := NewRegistry()
-	got := reg.Complete("/providers use ope", Deps{})
-
-	for _, s := range got.Items {
-		if !strings.HasPrefix(s.Label, "ope") {
-			t.Errorf("prefix filter leaked %q", s.Label)
-		}
-	}
-	if !contains(got.Items, "openai") || !contains(got.Items, "openai-responses") {
-		t.Errorf("expected openai variants, got %v", labels(got.Items))
-	}
-	if got.ReplaceFrom != len("/providers use ") {
-		t.Errorf("ReplaceFrom = %d, want %d (token start)", got.ReplaceFrom, len("/providers use "))
-	}
-}
-
-func TestCompleteRemoveOnlyCustom(t *testing.T) {
-	t.Parallel()
-	reg := NewRegistry()
-	deps := Deps{Settings: &config.Settings{Providers: &config.ProvidersSettings{
-		Custom: map[string]config.CustomProviderDefinition{"my-vllm": {BaseURL: "http://x/v1"}},
-	}}}
-
-	got := reg.Complete("/providers remove ", deps)
-	if !contains(got.Items, "my-vllm") {
-		t.Errorf("remove completion missing custom provider (got %v)", labels(got.Items))
-	}
-	if contains(got.Items, "openai") {
-		t.Error("remove completion should not list built-in providers")
+	if got.ReplaceFrom != len("/mcp ") {
+		t.Errorf("ReplaceFrom = %d, want %d", got.ReplaceFrom, len("/mcp "))
 	}
 }
 

@@ -34,15 +34,10 @@ func TestParityHelpOutput(t *testing.T) {
 		}
 	}
 
-	// 2. Verify expected subcommand paths.
+	// 2. Verify expected subcommand paths. /providers and /models are menu-first
+	// single-surface commands (AD-026): they have no typed subcommands, so they
+	// are not listed here.
 	expectedPaths := []string{
-		"/providers list",
-		"/providers use",
-		"/providers show",
-		"/providers set",
-		"/providers add",
-		"/providers remove",
-		"/model",
 		"/memory reload",
 		"/skills list",
 		"/skills reload",
@@ -60,11 +55,18 @@ func TestParityHelpOutput(t *testing.T) {
 		}
 	}
 
+	// 2b. The retired provider/model subcommand trees must NOT appear (AD-026).
+	for _, gone := range []string{"/providers list", "/providers use", "/providers set", "/model "} {
+		if strings.Contains(helpText, gone) {
+			t.Errorf("help output should not list retired subcommand: %s", gone)
+		}
+	}
+
 	// 3. Spot-check descriptions are present (non-empty help).
 	descChecks := []string{
 		"List slash commands",
 		"Exit the interactive session",
-		"Switch the active provider",
+		"Manage providers",
 	}
 	for _, want := range descChecks {
 		if !strings.Contains(helpText, want) {
@@ -171,30 +173,31 @@ func TestParityHeadlessMock(t *testing.T) {
 func TestParityProviderList(t *testing.T) {
 	t.Parallel()
 
-	// The Sagittarius help output includes all provider-related commands.
+	// The /providers and /models commands are menu-first single-surface
+	// commands (AD-026): the slash registry exposes them with no subcommands.
 	reg := slash.NewRegistry()
-	helpText := reg.RenderHelp()
 
-	// Verify the providers command and its subcommands are present.
-	providerSubcmds := []string{"list", "use", "show", "set", "add", "remove"}
-	for _, sub := range providerSubcmds {
-		want := "/providers " + sub
-		if !strings.Contains(helpText, want) {
-			t.Errorf("missing providers subcommand in help: %s", want)
-		}
-	}
-
-	// Verify the slash registry has a providers command.
 	cmds := reg.List()
-	var foundProvider bool
+	var foundProviders, foundModels bool
 	for _, cmd := range cmds {
-		if cmd.Name == "providers" {
-			foundProvider = true
-			break
+		switch cmd.Name {
+		case "providers":
+			foundProviders = true
+			if len(cmd.SubCommands) != 0 {
+				t.Errorf("/providers should have no subcommands (menu-first), got %d", len(cmd.SubCommands))
+			}
+		case "models":
+			foundModels = true
+			if len(cmd.SubCommands) != 0 {
+				t.Errorf("/models should have no subcommands (menu-first), got %d", len(cmd.SubCommands))
+			}
 		}
 	}
-	if !foundProvider {
+	if !foundProviders {
 		t.Fatal("slash registry missing 'providers' command")
+	}
+	if !foundModels {
+		t.Fatal("slash registry missing 'models' command")
 	}
 
 	// Built-in provider IDs that must ship in the binary's registry. Asserting
