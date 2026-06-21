@@ -43,7 +43,7 @@ Add servers to `settings.json`:
 - Secrets belong in environment variables or secure storage — not in
   `settings.json` (see `SECURITY.md`).
 - Optional bearer tokens for MCP servers can be stored via the credentials
-  layer (`gemini-cli-mcp-<server>` service naming, fork-compatible).
+  layer (`sagittarius-mcp-<server>` service naming).
 - OAuth MCP authentication is **deferred** in v1; complex OAuth flows will be
   added in a follow-up.
 

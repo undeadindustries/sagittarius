@@ -30,7 +30,7 @@ func (m *model) renderExitSummary() string {
 func (m *model) renderExitStats(stats ui.SessionStats) string {
 	label := m.th.Secondary
 	rows := [][2]string{
-		{"Session", shortID(stats.SessionID)},
+		{"Session", strings.TrimSpace(stats.SessionID)},
 		{"Provider", stats.Provider},
 		{"Model", stats.Model},
 		{"Turns", fmt.Sprintf("%d", stats.Turns)},
@@ -67,13 +67,6 @@ func resumeHint(sessionID string) string {
 		return ""
 	}
 	return "To resume this session: sagittarius --resume " + sessionID
-}
-
-func shortID(id string) string {
-	if len(id) > 8 {
-		return id[:8]
-	}
-	return id
 }
 
 func formatDuration(d time.Duration) string {

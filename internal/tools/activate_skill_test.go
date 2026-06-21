@@ -12,7 +12,7 @@ func TestActivateSkillTool(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	skillRoot := filepath.Join(dir, ".gemini", "skills", "writer")
+	skillRoot := filepath.Join(dir, ".sagittarius", "skills", "writer")
 	if err := os.MkdirAll(skillRoot, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}

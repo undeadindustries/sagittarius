@@ -154,19 +154,23 @@ func forkDir() string {
 func setupTempHome(t *testing.T, baseURL string) string {
 	t.Helper()
 	home := t.TempDir()
-	geminiDir := filepath.Join(home, ".gemini")
-	if err := os.MkdirAll(geminiDir, 0o700); err != nil {
-		t.Fatalf("MkdirAll: %v", err)
-	}
 
 	settings := buildSettings(baseURL)
 	data, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
 		t.Fatalf("marshal settings: %v", err)
 	}
-	settingsPath := filepath.Join(geminiDir, "settings.json")
-	if err := os.WriteFile(settingsPath, data, 0o600); err != nil {
-		t.Fatalf("WriteFile settings: %v", err)
+
+	// Write settings for both layouts so the same temp home serves the fork
+	// (~/.gemini) and Sagittarius (~/.sagittarius) without cross-contamination.
+	for _, sub := range []string{".gemini", ".sagittarius"} {
+		dir := filepath.Join(home, sub)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "settings.json"), data, 0o600); err != nil {
+			t.Fatalf("WriteFile settings: %v", err)
+		}
 	}
 	return home
 }
@@ -188,7 +192,7 @@ func buildSettings(baseURL string) map[string]interface{} {
 }
 
 // invokeSagittarius runs the sagittarius binary with the given arguments,
-// isolated HOME (GEMINI_CLI_HOME), and optional extra env vars.  Returns
+// isolated HOME (SAGITTARIUS_HOME), and optional extra env vars.  Returns
 // combined stdout output.  Fails the test if the process exits non-zero.
 func invokeSagittarius(ctx context.Context, t *testing.T, bin, home string, extraEnv []string, args ...string) string {
 	t.Helper()
@@ -304,10 +308,12 @@ func stripForkNoise(raw string) string {
 }
 
 // baseEnv builds a minimal environment for subprocess invocations, pointing
-// GEMINI_CLI_HOME / HOME at the temp directory and scrubbing live API keys.
+// GEMINI_CLI_HOME / SAGITTARIUS_HOME / HOME at the temp directory and scrubbing
+// live API keys.
 func baseEnv(home string) []string {
 	return []string{
 		"GEMINI_CLI_HOME=" + home,
+		"SAGITTARIUS_HOME=" + home,
 		"HOME=" + home,
 		"PATH=" + os.Getenv("PATH"),
 		"OPENAI_API_KEY=test-fake-key-parity",

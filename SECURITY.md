@@ -48,9 +48,9 @@ When available, API keys are stored in the platform credential manager:
 | macOS | Keychain |
 | Windows | Credential Manager |
 
-Entries use service name `gemini-cli-provider-<providerId>` and account
-`<providerId>`, compatible with the gemini-cli fork so keys can be shared
-between tools on the same machine.
+Entries use service name `sagittarius-provider-<providerId>` and account
+`<providerId>`. The layout follows the gemini-cli fork's scheme, but the
+Sagittarius service prefix is distinct, so keys are not shared with gemini-cli.
 
 **Requirements on Linux:** `libsecret` and a running Secret Service (D-Bus).
 Headless servers, WSL without a keyring, SSH sessions, and containers often
@@ -59,13 +59,15 @@ you force file storage (below).
 
 ### Encrypted file fallback
 
-When the OS keychain is unavailable—or when `GEMINI_FORCE_FILE_STORAGE=true`—
-keys are stored in `~/.gemini/gemini-credentials.json` (or
-`$GEMINI_CLI_HOME/.gemini/gemini-credentials.json`).
+When the OS keychain is unavailable—or when `SAGITTARIUS_FORCE_FILE_STORAGE=true`—
+keys are stored in `~/.sagittarius/sagittarius-credentials.json` (or
+`$SAGITTARIUS_HOME/.sagittarius/sagittarius-credentials.json`).
 
 The file is encrypted with AES-256-GCM. The encryption key is derived via
-scrypt from the machine hostname and username (same scheme as gemini-cli
-FileKeychain). File mode is `0600`; directory mode is `0700`.
+scrypt from the machine hostname and username (the encryption format matches the
+gemini-cli FileKeychain, but the scrypt salt/password are Sagittarius-specific,
+so the file is not interchangeable with gemini-cli). File mode is `0600`;
+directory mode is `0700`.
 
 **Tradeoffs:**
 
@@ -77,7 +79,7 @@ FileKeychain). File mode is `0600`; directory mode is `0700`.
 | Backup/sync | Usually excluded from cloud backup | File may be copied with home-dir backups |
 | Compromise model | Requires OS session / keyring unlock | Requires read access to home dir **and** same hostname/username context for scrypt salt |
 
-Set `GEMINI_FORCE_FILE_STORAGE=true` when you deliberately want file storage
+Set `SAGITTARIUS_FORCE_FILE_STORAGE=true` when you deliberately want file storage
 (e.g. CI, minimal containers) and accept the weaker isolation compared to a
 system keychain.
 
@@ -96,4 +98,4 @@ Sagittarius does not log API key values. Debug output uses redacted placeholders
 ### What we do not store in settings.json
 
 API keys, bearer tokens, and other secrets must not appear in
-`~/.gemini/settings.json`. The config loader strips and rejects such fields.
+`~/.sagittarius/settings.json`. The config loader strips and rejects such fields.

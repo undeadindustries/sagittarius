@@ -20,9 +20,9 @@ import (
 )
 
 const (
-	fileCredentialsName = "gemini-credentials.json"
-	scryptPassword      = "gemini-cli-oauth"
-	scryptSaltSuffix    = "gemini-cli"
+	fileCredentialsName = "sagittarius-credentials.json"
+	scryptPassword      = "sagittarius-oauth"
+	scryptSaltSuffix    = "sagittarius"
 )
 
 // fileStore implements Store using an AES-256-GCM encrypted JSON file.
@@ -41,7 +41,7 @@ var (
 	credentialsPathForTesting string
 )
 
-// SetCredentialsPathForTesting overrides ~/.gemini/gemini-credentials.json for tests.
+// SetCredentialsPathForTesting overrides ~/.sagittarius/sagittarius-credentials.json for tests.
 func SetCredentialsPathForTesting(path string) {
 	credentialsPathForTesting = path
 	sharedFileStore = nil
@@ -55,7 +55,7 @@ func sharedEncryptedFileStore(service string) (*fileStore, error) {
 		if credentialsPathForTesting != "" {
 			path = credentialsPathForTesting
 		} else {
-			dir, err := config.ResolveGeminiDir()
+			dir, err := config.ResolveSagittariusDir()
 			if err != nil {
 				sharedFileStoreErr = fmt.Errorf("resolve gemini dir: %w", err)
 				return

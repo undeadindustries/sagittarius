@@ -1,18 +1,18 @@
-// Package config loads and persists Sagittarius settings from the shared
-// gemini-cli settings.json under ~/.gemini/.
+// Package config loads and persists Sagittarius settings from settings.json
+// under ~/.sagittarius/.
 //
 // # Config paths
 //
-// Global settings live at $HOME/.gemini/settings.json. Path resolution matches
-// fork Storage.getGlobalSettingsPath() and homedir() in paths.ts:
+// Global settings live at $HOME/.sagittarius/settings.json. Path resolution
+// matches the fork Storage.getGlobalSettingsPath() and homedir() seams:
 //
-//   - GEMINI_CLI_HOME — if set, used instead of os.UserHomeDir(); settings path
-//     becomes $GEMINI_CLI_HOME/.gemini/settings.json.
+//   - SAGITTARIUS_HOME — if set, used instead of os.UserHomeDir(); settings path
+//     becomes $SAGITTARIUS_HOME/.sagittarius/settings.json.
 //
 // System paths (read-only in fork; documented for later phases):
 //
-//   - GEMINI_CLI_SYSTEM_SETTINGS_PATH — overrides /etc/gemini-cli/settings.json
-//   - GEMINI_CLI_SYSTEM_DEFAULTS_PATH — overrides system-defaults.json sibling
+//   - SAGITTARIUS_SYSTEM_SETTINGS_PATH — overrides /etc/sagittarius/settings.json
+//   - SAGITTARIUS_SYSTEM_DEFAULTS_PATH — overrides system-defaults.json sibling
 //
 // # Environment overlays (fork parity)
 //

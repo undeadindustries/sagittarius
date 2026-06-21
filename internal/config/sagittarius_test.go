@@ -28,6 +28,8 @@ func TestSagittariusSettingsRoundTrip(t *testing.T) {
       "default": { "model": "sub-default" },
       "investigator": { "model": "investigator-model" }
     },
+    "compression": { "model": "compressor-model" },
+    "tools": { "model": "tools-model" },
     "futureFeature": true
   },
   "ui": { "theme": "dark" }
@@ -60,6 +62,12 @@ func TestSagittariusSettingsRoundTrip(t *testing.T) {
 	if got := s.Sagittarius.Subagents.Named["investigator"].Model; got != "investigator-model" {
 		t.Errorf("investigator model = %q", got)
 	}
+	if s.Sagittarius.Compression == nil || s.Sagittarius.Compression.Model != "compressor-model" {
+		t.Errorf("compression model = %+v", s.Sagittarius.Compression)
+	}
+	if s.Sagittarius.Tools == nil || s.Sagittarius.Tools.Model != "tools-model" {
+		t.Errorf("tools model = %+v", s.Sagittarius.Tools)
+	}
 	if _, ok := s.Sagittarius.Extra["futureFeature"]; !ok {
 		t.Error("futureFeature passthrough missing")
 	}
@@ -76,6 +84,12 @@ func TestSagittariusSettingsRoundTrip(t *testing.T) {
 	}
 	if got := reloaded.Sagittarius.DefaultModels["openai"]; got != "gpt-4o-mini" {
 		t.Errorf("reloaded defaultModels[openai] = %q", got)
+	}
+	if reloaded.Sagittarius.Compression == nil || reloaded.Sagittarius.Compression.Model != "compressor-model" {
+		t.Errorf("reloaded compression model = %+v", reloaded.Sagittarius.Compression)
+	}
+	if reloaded.Sagittarius.Tools == nil || reloaded.Sagittarius.Tools.Model != "tools-model" {
+		t.Errorf("reloaded tools model = %+v", reloaded.Sagittarius.Tools)
 	}
 }
 

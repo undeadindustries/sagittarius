@@ -391,25 +391,26 @@ func TestRejectSecretsInJSON(t *testing.T) {
 	}
 }
 
-func TestResolveGeminiDir(t *testing.T) {
+func TestResolveSagittariusDir(t *testing.T) {
 	t.Run("default home", func(t *testing.T) {
-		dir, err := ResolveGeminiDir()
+		dir, err := ResolveSagittariusDir()
 		if err != nil {
-			t.Fatalf("ResolveGeminiDir: %v", err)
+			t.Fatalf("ResolveSagittariusDir: %v", err)
 		}
-		if filepath.Base(dir) != ".gemini" {
-			t.Errorf("dir = %q, want suffix .gemini", dir)
+		if filepath.Base(dir) != ".sagittarius" {
+			t.Errorf("dir = %q, want suffix .sagittarius", dir)
 		}
 	})
 
-	t.Run("GEMINI_CLI_HOME override", func(t *testing.T) {
-		t.Setenv("GEMINI_CLI_HOME", t.TempDir())
-		dir, err := ResolveGeminiDir()
+	t.Run("SAGITTARIUS_HOME override", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("SAGITTARIUS_HOME", home)
+		dir, err := ResolveSagittariusDir()
 		if err != nil {
-			t.Fatalf("ResolveGeminiDir: %v", err)
+			t.Fatalf("ResolveSagittariusDir: %v", err)
 		}
-		if filepath.Base(dir) != ".gemini" {
-			t.Errorf("dir = %q", dir)
+		if dir != filepath.Join(home, ".sagittarius") {
+			t.Errorf("dir = %q, want %q", dir, filepath.Join(home, ".sagittarius"))
 		}
 	})
 }

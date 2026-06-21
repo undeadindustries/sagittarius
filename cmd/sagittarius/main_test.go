@@ -96,16 +96,16 @@ func TestNormalizeResumeArgs(t *testing.T) {
 
 func TestRunHeadlessMissingAPIKey(t *testing.T) {
 	home := t.TempDir()
-	geminiDir := filepath.Join(home, ".gemini")
-	if err := os.MkdirAll(geminiDir, 0o700); err != nil {
+	sagDir := filepath.Join(home, ".sagittarius")
+	if err := os.MkdirAll(sagDir, 0o700); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	settings := filepath.Join(geminiDir, "settings.json")
+	settings := filepath.Join(sagDir, "settings.json")
 	if err := os.WriteFile(settings, []byte(`{"providers":{"active":"gemini-apikey"}}`), 0o600); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	t.Setenv("GEMINI_CLI_HOME", home)
+	t.Setenv("SAGITTARIUS_HOME", home)
 	withoutEnv(t, "GOOGLE_API_KEY")
 	withoutEnv(t, "GEMINI_API_KEY")
 	withEmptyCredentials(t)

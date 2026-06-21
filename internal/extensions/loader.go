@@ -148,7 +148,7 @@ func extensionsFromSettings(settings *config.Settings) ([]Extension, error) {
 }
 
 func discoverInstalledExtensions() ([]Extension, error) {
-	dir, err := config.ResolveGeminiDir()
+	dir, err := config.ResolveSagittariusDir()
 	if err != nil {
 		return nil, err
 	}

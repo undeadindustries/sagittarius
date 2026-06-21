@@ -5,7 +5,7 @@ import (
 	"fmt"
 )
 
-const mcpServicePrefix = "gemini-cli-mcp-"
+const mcpServicePrefix = "sagittarius-mcp-"
 
 // MCPServerServiceName returns the keychain service for MCP server credentials.
 func MCPServerServiceName(serverName string) string {

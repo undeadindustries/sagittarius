@@ -27,6 +27,6 @@ func missingAPIKeyError(providerID string) error {
 func saveAPIKeyError(providerID string, reason error) error {
 	return fmt.Errorf("could not save API key for provider %q: %w. "+
 		"On Linux, ensure libsecret and a Secret Service (e.g. gnome-keyring) are available; "+
-		"or set GEMINI_FORCE_FILE_STORAGE=true to use encrypted file storage",
+		"or set SAGITTARIUS_FORCE_FILE_STORAGE=true to use encrypted file storage",
 		providerID, reason)
 }

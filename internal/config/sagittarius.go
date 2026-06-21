@@ -17,11 +17,26 @@ type SagittariusSettings struct {
 	// It is the provider-scoped successor to DefaultModel and sits just below the
 	// per-mode override, so it beats the raw provider instance / built-in default
 	// while still yielding to an explicit mode model (see modes.ResolveModel).
-	DefaultModels map[string]string          `json:"defaultModels,omitempty"`
-	DefaultMode   string                     `json:"defaultMode,omitempty"`
-	Modes         *SagittariusModes          `json:"modes,omitempty"`
-	Subagents     *SagittariusSubagents      `json:"subagents,omitempty"`
-	Extra         map[string]json.RawMessage `json:"-"`
+	DefaultModels map[string]string     `json:"defaultModels,omitempty"`
+	DefaultMode   string                `json:"defaultMode,omitempty"`
+	Modes         *SagittariusModes     `json:"modes,omitempty"`
+	Subagents     *SagittariusSubagents `json:"subagents,omitempty"`
+	// Compression overrides the model used for context compression /
+	// summarization. Empty Model means it follows the live mode-resolved model.
+	Compression *SagittariusUtilityConfig `json:"compression,omitempty"`
+	// Tools overrides the model used for tool-utility calls. Empty Model means
+	// it follows the live mode-resolved model. (Reserved: no model-using tool
+	// consumes it yet.)
+	Tools *SagittariusUtilityConfig  `json:"tools,omitempty"`
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// SagittariusUtilityConfig overrides the model for an auxiliary role (context
+// compression, tool-utility calls). An empty Model means the role follows the
+// live mode-resolved model rather than a fixed override.
+type SagittariusUtilityConfig struct {
+	Model string                     `json:"model,omitempty"`
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // SagittariusModes holds per-interaction-mode overrides.

@@ -198,11 +198,13 @@ func (h *appHooks) RebuildRunner(ctx context.Context) (string, string, error) {
 	// Rebuild the context manager so local-context defenses track the new wire
 	// format. NewContextManager returns nil off the openai-chat path, making
 	// context management a pure pass-through for gemini-native / openai-responses.
-	// Pass runner.Model (resolved per call) so chat compression/summarization
-	// always runs against the model user turns use, including after a mid-session
-	// /mode switch that does not rebuild the runner (AD-015 active-model rule).
+	// Pass runner.CompressionModel (resolved per call) so chat compression/
+	// summarization runs against the live model user turns use — including after a
+	// mid-session /mode switch that does not rebuild the runner — unless a
+	// sagittarius.compression.model override is configured (AD-015 active-model
+	// rule; per-utility override).
 	h.app.runner.SetContextManager(
-		NewContextManager(h.app.deps.Settings, gen, h.app.runner.Model, h.app.sessionID),
+		NewContextManager(h.app.deps.Settings, gen, h.app.runner.CompressionModel, h.app.sessionID),
 	)
 
 	label := endpoint.ProviderID

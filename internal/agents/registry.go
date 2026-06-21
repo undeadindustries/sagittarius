@@ -54,7 +54,7 @@ func (r *Registry) Reload(ctx context.Context, extensionAgents []Definition) (Re
 		}
 	}
 	if r.trusted {
-		projectAgents := filepath.Join(r.workDir, config.GeminiDir, "agents")
+		projectAgents := filepath.Join(r.workDir, config.SagittariusDir, "agents")
 		agents, loadErrs := LoadFromDirectory(projectAgents)
 		collected = append(collected, agents...)
 		for _, e := range loadErrs {
@@ -96,7 +96,7 @@ func (r *Registry) AllDefinitions() []Definition {
 }
 
 func userAgentsDir() (string, error) {
-	dir, err := config.ResolveGeminiDir()
+	dir, err := config.ResolveSagittariusDir()
 	if err != nil {
 		return "", err
 	}
