@@ -56,6 +56,7 @@ type Runner struct {
 	registry      *tools.Registry
 	scheduler     *tools.Scheduler
 	history       []provider.Message
+	ctxMgrMu      sync.RWMutex
 	ctxMgr        *contextmgmt.Manager
 	turnCounter   int
 	state         State
@@ -311,10 +312,11 @@ func (r *Runner) runAgentLoop(ctx context.Context, out chan<- ui.StreamEvent) {
 // hook. Defenses degrade gracefully: on error the runner proceeds with whatever
 // history PrepareTurn returns. A nil ContextManager makes this a no-op.
 func (r *Runner) prepareContext(ctx context.Context) {
-	if r.ctxMgr == nil {
+	mgr := r.contextManager()
+	if mgr == nil {
 		return
 	}
-	prepared, err := r.ctxMgr.PrepareTurn(ctx, r.history, r.turnCounter)
+	prepared, err := mgr.PrepareTurn(ctx, r.history, r.turnCounter)
 	r.turnCounter++
 	if prepared != nil {
 		r.history = prepared
@@ -323,6 +325,22 @@ func (r *Runner) prepareContext(ctx context.Context) {
 		// PrepareTurn already logged; proceed with the (best-effort) history.
 		return
 	}
+}
+
+// SetContextManager swaps the active context manager. It is called after a
+// provider change so local-context defenses match the new wire format: a nil
+// manager (e.g. switching to gemini-native or openai-responses) makes context
+// management a pure pass-through.
+func (r *Runner) SetContextManager(mgr *contextmgmt.Manager) {
+	r.ctxMgrMu.Lock()
+	r.ctxMgr = mgr
+	r.ctxMgrMu.Unlock()
+}
+
+func (r *Runner) contextManager() *contextmgmt.Manager {
+	r.ctxMgrMu.RLock()
+	defer r.ctxMgrMu.RUnlock()
+	return r.ctxMgr
 }
 
 func (r *Runner) buildGenerateRequest() *provider.GenerateRequest {

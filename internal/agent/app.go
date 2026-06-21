@@ -19,6 +19,9 @@ type AppConfig struct {
 	Model         string
 	Loader        *config.Loader
 	Settings      *config.Settings
+	// SessionID keys the context manager's adaptive state and offload dirs. It
+	// is reused across provider switches so offload paths stay stable.
+	SessionID string
 }
 
 // App adapts Runner to ui.App for interactive TUI sessions.
@@ -27,6 +30,7 @@ type App struct {
 	status    ui.StatusBar
 	processor *slash.Processor
 	deps      slash.Deps
+	sessionID string
 }
 
 // NewApp wraps runner for interactive use and exposes footer metadata.
@@ -40,6 +44,7 @@ func NewApp(cfg AppConfig) *App {
 	app := &App{
 		runner:    cfg.Runner,
 		processor: slash.NewProcessor(),
+		sessionID: cfg.SessionID,
 		status: ui.StatusBar{
 			Left:  cfg.ProviderLabel,
 			Right: cfg.Model,
@@ -114,6 +119,13 @@ func (h *appHooks) RebuildRunner(ctx context.Context) (string, string, error) {
 
 	h.app.runner.SetGenerator(gen)
 	h.app.runner.SetModel(endpoint.Model)
+
+	// Rebuild the context manager so local-context defenses track the new wire
+	// format. NewContextManager returns nil off the openai-chat path, making
+	// context management a pure pass-through for gemini-native / openai-responses.
+	h.app.runner.SetContextManager(
+		NewContextManager(h.app.deps.Settings, gen, endpoint.Model, h.app.sessionID),
+	)
 
 	label := endpoint.ProviderID
 	if def, ok := config.LookupBuiltInProvider(endpoint.ProviderID); ok {

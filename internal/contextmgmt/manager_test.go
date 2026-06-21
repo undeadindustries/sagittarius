@@ -70,6 +70,45 @@ func TestManagerMaskingNotAppliedWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestManagerLatchesFailedCompression(t *testing.T) {
+	t.Parallel()
+	// A summarizer that always inflates the token count. The first non-forced
+	// compression must latch hasFailedCompression so subsequent non-forced turns
+	// skip re-summarization entirely (truncation only), matching the fork.
+	q := &queuedSummarizer{responses: []string{"x", strings.Repeat("a", 8_000), "x", strings.Repeat("a", 8_000)}}
+	history := []Message{
+		msg("user", strings.Repeat("alpha ", 8)),
+		msg("model", strings.Repeat("beta ", 8)),
+		msg("user", strings.Repeat("gamma ", 8)),
+		msg("model", strings.Repeat("delta ", 8)),
+	}
+
+	m := NewManager(ManagerConfig{
+		Enabled:              true,
+		ContextLimit:         50, // threshold 0.4 -> fires at 20 tokens; history is larger
+		CompressionThreshold: 0.4,
+		PreserveFraction:     0.3,
+		Summarize:            q.fn,
+	})
+
+	if _, err := m.PrepareTurn(context.Background(), cloneHistory(history), 0); err != nil {
+		t.Fatalf("first PrepareTurn: %v", err)
+	}
+	if !m.hasFailedCompression {
+		t.Fatal("expected hasFailedCompression to latch after an inflated summary")
+	}
+	if len(q.calls) != 2 {
+		t.Fatalf("summarizer calls after first turn = %d, want 2 (initial + verify)", len(q.calls))
+	}
+
+	if _, err := m.PrepareTurn(context.Background(), cloneHistory(history), 1); err != nil {
+		t.Fatalf("second PrepareTurn: %v", err)
+	}
+	if len(q.calls) != 2 {
+		t.Fatalf("summarizer calls after second turn = %d, want 2 (no re-summarization)", len(q.calls))
+	}
+}
+
 func TestManagerNilIsPassThrough(t *testing.T) {
 	t.Parallel()
 	var m *Manager

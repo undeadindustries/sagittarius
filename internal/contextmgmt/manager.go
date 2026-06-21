@@ -75,6 +75,12 @@ type Manager struct {
 	adaptive   *AdaptiveTracker
 	exempt     map[string]bool
 	logger     *slog.Logger
+	// hasFailedCompression records that a non-forced compression previously
+	// inflated the token count. Once set, later non-forced compressions skip
+	// summarization (truncation only) to avoid repeated failures and cost,
+	// mirroring the fork's hasFailedCompressionAttempt. PrepareTurn runs one
+	// turn at a time on the runner goroutine, so no lock is required.
+	hasFailedCompression bool
 }
 
 // NewManager builds a Manager from cfg. A disabled config yields a pass-through.
@@ -209,10 +215,17 @@ func (m *Manager) applyBudgetCompression(ctx context.Context, history []Message,
 		Threshold:          threshold,
 		EffectiveLimit:     m.cfg.ContextLimit,
 		PreserveFraction:   preserveFraction,
+		HasFailedAttempt:   m.hasFailedCompression,
 	})
 	if err != nil {
 		m.logger.Warn("context: compression failed", "error", err)
 		return history, err
+	}
+
+	// Latch the failure flag when a non-forced summarization inflated the token
+	// count, matching the fork: hasFailed = hasFailed || !force.
+	if res.Info.Status == CompressionFailedInflatedTokenCount && !budgetTriggered {
+		m.hasFailedCompression = true
 	}
 
 	if m.cfg.AdaptiveEnabled {

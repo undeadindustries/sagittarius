@@ -129,6 +129,7 @@ func runInteractive(screenReader bool, modelOverride string) int {
 		Model:         runner.Model(),
 		Loader:        loader,
 		Settings:      settings,
+		SessionID:     sessionID(),
 	})
 
 	var notice string
@@ -179,8 +180,7 @@ func buildRunner(ctx context.Context, modelOverride string, interactive bool) (*
 		}
 	}
 
-	sessionID := fmt.Sprintf("sagittarius-%d", os.Getpid())
-	ctxMgr := agent.NewContextManager(settings, gen, model, sessionID)
+	ctxMgr := agent.NewContextManager(settings, gen, model, sessionID())
 
 	runner, err := agent.NewRunner(agent.RunnerConfig{
 		Generator:      gen,
@@ -195,6 +195,12 @@ func buildRunner(ctx context.Context, modelOverride string, interactive bool) (*
 		runner.SetGeneratorError(genErr)
 	}
 	return runner, loader, settings, nil
+}
+
+// sessionID returns a stable per-process identifier for context-manager state.
+// Reused across provider switches so offloaded-output paths remain consistent.
+func sessionID() string {
+	return fmt.Sprintf("sagittarius-%d", os.Getpid())
 }
 
 func loadSettings() (*config.Settings, *config.Loader, error) {

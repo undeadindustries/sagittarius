@@ -52,6 +52,11 @@ func SetActiveProvider(settings *config.Settings, providerID string) error {
 }
 
 // SaveActiveProvider sets the active provider and persists settings via loader.
+//
+// Switching providers invalidates session state scoped to the previous backend:
+// the Responses API previous_response_id (a chained id is meaningless to another
+// endpoint) and the session-only reasoning override. Both are cleared on a
+// successful switch, matching the fork.
 func SaveActiveProvider(loader *config.Loader, settings *config.Settings, providerID string) error {
 	if loader == nil {
 		return fmt.Errorf("save active provider: loader is required")
@@ -59,7 +64,12 @@ func SaveActiveProvider(loader *config.Loader, settings *config.Settings, provid
 	if err := SetActiveProvider(settings, providerID); err != nil {
 		return err
 	}
-	return loader.Save(settings)
+	if err := loader.Save(settings); err != nil {
+		return err
+	}
+	ClearLastResponseID()
+	ClearSessionReasoningOverride()
+	return nil
 }
 
 // SetProviderModel updates the model override for providerID.

@@ -18,6 +18,14 @@ const (
 	// proactiveCompressAt is the projected-usage fraction that forces an early
 	// compression before the turn (fork preTurnBudget threshold).
 	proactiveCompressAt = 0.85
+	// ejectionMinAgeTurns is the minimum age (turns from the end) before a
+	// write_file call is eligible for ejection (fork
+	// DEFAULT_LOCAL_WRITE_FILE_EJECTION_MIN_AGE_TURNS).
+	ejectionMinAgeTurns = 1
+	// ejectionMinTokensPerCall skips write_file payloads below this estimated
+	// token count so trivial writes are not ejected (fork
+	// DEFAULT_LOCAL_WRITE_FILE_EJECTION_MIN_TOKENS_PER_CALL).
+	ejectionMinTokensPerCall = 200
 )
 
 // NewContextManager builds the Phase 11 context manager for the active provider.
@@ -54,6 +62,8 @@ func NewContextManager(
 		MaskingPrunableFraction:     cm.MaskingPrunableFraction,
 		MaskingProtectLatestTurn:    cm.MaskingProtectLatestTurn,
 		EjectionEnabled:             true,
+		EjectionMinAgeTurns:         ejectionMinAgeTurns,
+		EjectionMinTokensPerCall:    ejectionMinTokensPerCall,
 		BudgetEnabled:               true,
 		ReservedResponseTokens:      reservedResponseTokens,
 		ProactiveCompressAt:         proactiveCompressAt,
