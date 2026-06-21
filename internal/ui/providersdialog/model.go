@@ -117,6 +117,10 @@ type Model struct {
 
 	// listOffset is the first visible row in long scrollable lists (models screen).
 	listOffset int
+
+	// modelsFrom records which screen opened the activation screen so back/save
+	// returns there: screenEdit (per-provider edit sheet) or screenMenu.
+	modelsFrom screen
 }
 
 // New constructs the wizard at the menu screen with the current provider list.
@@ -317,6 +321,12 @@ func (m Model) back() (Model, tea.Cmd) {
 	case screenModelsAdd:
 		m.screen = screenModels
 		m.syncInputWidth()
+	case screenModels:
+		if m.modelsFrom == screenEdit {
+			return m.returnToEdit(), nil
+		}
+		m.screen = screenMenu
+		m.cursor = 0
 	case screenAddModels:
 		// Provider already added; just return to menu.
 		m.providers = m.deps.ListProviders()
@@ -327,6 +337,18 @@ func (m Model) back() (Model, tea.Cmd) {
 		m.cursor = 0
 	}
 	return m, nil
+}
+
+// returnToEdit rebuilds and shows the edit sheet for the current target provider.
+// Used to return from the activation screen when it was opened from the edit sheet.
+func (m Model) returnToEdit() Model {
+	m.providers = m.deps.ListProviders()
+	if p, ok := m.findProvider(m.targetID); ok {
+		m.editItems = m.buildEditItems(p)
+	}
+	m.screen = screenEdit
+	m.cursor = 0
+	return m
 }
 
 // ---- list lengths --------------------------------------------------------
@@ -419,6 +441,9 @@ func (m Model) saveActivation() (Model, tea.Cmd) {
 	}
 
 	m.info = m.status
+	if m.modelsFrom == screenEdit {
+		return m.returnToEdit(), nil
+	}
 	m.providers = m.deps.ListProviders()
 	m.screen = screenMenu
 	m.cursor = 0
@@ -534,7 +559,7 @@ func (m Model) selectEditPick() (Model, tea.Cmd) {
 
 func (m Model) buildEditItems(p ProviderEntry) []editItem {
 	items := []editItem{{label: "Set API key", kind: editAPIKey}}
-	items = append(items, editItem{label: "model", kind: editModel, key: "model"})
+	items = append(items, editItem{label: "Manage models (activate/deactivate)", kind: editModel, key: "model"})
 
 	if p.IsCustom {
 		items = append(items,
@@ -572,15 +597,10 @@ func (m Model) selectEdit() (Model, tea.Cmd) {
 	case editAPIKey:
 		return m.enterSetKey(), nil
 	case editModel:
-		// The default model is a provider-wide default typed here; per-provider
-		// model activation lives in "Manage models", and /models picks the live
-		// model from the activated set.
-		m.editingKey = "model"
-		m.editingKind = editModel
-		m.input = freshInput("default model name (e.g. gpt-4o, gemini-2.5-pro)")
-		m.input.SetValue(currentValue(m.deps.ProviderSettings(m.targetID), "model"))
-		m.screen = screenEditField
-		return m, nil
+		// Open the activation screen for this provider: discover its models and
+		// let the user activate/deactivate the curated set. The live model is then
+		// chosen from that set via /models (and coerced when deactivated).
+		return m.enterModels(m.targetID)
 	case editWireDefn:
 		// Toggle and apply immediately.
 		next := config.WireFormatOpenAIChat
@@ -619,6 +639,11 @@ func (m Model) enterSetKey() Model {
 }
 
 func (m Model) enterModels(id string) (Model, tea.Cmd) {
+	if m.screen == screenEdit {
+		m.modelsFrom = screenEdit
+	} else if m.screen != screenAddModels {
+		m.modelsFrom = screenMenu
+	}
 	m.targetID = id
 	m.models = nil
 	m.checked = nil

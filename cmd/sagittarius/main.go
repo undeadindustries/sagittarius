@@ -376,15 +376,24 @@ func runInteractive(screenReader bool, modelOverride, resume string) int {
 	}
 	defer func() { _ = runtime.Close() }()
 
-	endpoint, err := provider.ResolveEndpointConfig(settings)
-	if err != nil {
-		writeStartupError(err)
-		return 1
+	needsOnboarding := agent.NeedsProviderSetup(ctx, settings)
+
+	var endpoint provider.EndpointConfig
+	var endpointErr error
+	if !needsOnboarding {
+		endpoint, endpointErr = provider.ResolveEndpointConfig(settings)
+		if endpointErr != nil {
+			writeStartupError(endpointErr)
+			return 1
+		}
 	}
 
-	providerLabel := endpoint.ProviderID
-	if def, ok := config.LookupBuiltInProvider(endpoint.ProviderID); ok {
-		providerLabel = def.DisplayName
+	providerLabel := "Setup required"
+	if !needsOnboarding {
+		providerLabel = endpoint.ProviderID
+		if def, ok := config.LookupBuiltInProvider(endpoint.ProviderID); ok {
+			providerLabel = def.DisplayName
+		}
 	}
 
 	app := agent.NewApp(agent.AppConfig{
@@ -398,21 +407,24 @@ func runInteractive(screenReader bool, modelOverride, resume string) int {
 	})
 
 	var notice string
-	if genErr := runner.GeneratorError(); genErr != nil {
-		notice = "⚠ " + genErr.Error()
+	if !needsOnboarding {
+		if genErr := runner.GeneratorError(); genErr != nil {
+			notice = "⚠ " + genErr.Error()
+		}
 	}
 
 	uiCfg := settings.UI()
 	termUI := bubbletea.NewTerminal(ui.Options{
-		ScreenReader:  screenReader,
-		BannerTitle:   "Sagittarius",
-		Version:       version.String(),
-		InitialStatus: app.Status(),
-		Notice:        notice,
-		ThemeName:     uiCfg.Theme,
-		NoColor:       noColorEnv(),
-		HideBanner:    uiCfg.HideBanner,
-		HideTips:      uiCfg.HideTips,
+		ScreenReader:    screenReader,
+		BannerTitle:     "Sagittarius",
+		Version:         version.String(),
+		InitialStatus:   app.Status(),
+		Notice:          notice,
+		ThemeName:       uiCfg.Theme,
+		NoColor:         noColorEnv(),
+		HideBanner:      uiCfg.HideBanner,
+		HideTips:        uiCfg.HideTips,
+		NeedsOnboarding: needsOnboarding,
 	})
 
 	if err := termUI.Run(ctx, app); err != nil {
@@ -432,12 +444,21 @@ func buildRunner(ctx context.Context, modelOverride string, interactive bool, re
 		return nil, nil, nil, nil, err
 	}
 
-	endpoint, err := provider.ResolveEndpointConfig(settings)
-	if err != nil {
-		return nil, nil, nil, nil, err
+	needsSetup := interactive && agent.NeedsProviderSetup(ctx, settings)
+
+	var endpoint provider.EndpointConfig
+	var endpointErr error
+	if !needsSetup {
+		endpoint, endpointErr = provider.ResolveEndpointConfig(settings)
+		if endpointErr != nil {
+			return nil, nil, nil, nil, endpointErr
+		}
 	}
 
-	model := endpoint.Model
+	model := agent.PlaceholderModel()
+	if !needsSetup {
+		model = endpoint.Model
+	}
 	modelPinned := modelOverride != ""
 	if modelOverride != "" {
 		model = modelOverride
@@ -445,7 +466,7 @@ func buildRunner(ctx context.Context, modelOverride string, interactive bool, re
 
 	gen, genErr := provider.NewContentGenerator(ctx, settings)
 	if genErr != nil {
-		if !interactive || !errors.Is(genErr, credentials.ErrAPIKeyMissing) {
+		if !needsSetup && (!interactive || !errors.Is(genErr, credentials.ErrAPIKeyMissing)) {
 			return nil, nil, nil, nil, genErr
 		}
 	}

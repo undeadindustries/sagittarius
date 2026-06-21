@@ -173,6 +173,7 @@ func ActiveModelsFor(settings *config.Settings, providerID string) []string {
 	if inst := providerInstance(settings, id); inst != nil && len(inst.ActiveModels) > 0 {
 		out := make([]string, len(inst.ActiveModels))
 		copy(out, inst.ActiveModels)
+		SortModelIDs(out)
 		return out
 	}
 	endpoint, err := ResolveEndpointForProvider(settings, id)
@@ -315,6 +316,11 @@ func assignInstanceSetting(cfg *config.ProviderInstanceConfig, key, value string
 		}
 	case "systemPromptOverride":
 		cfg.SystemPromptOverride = value
+	case "personality":
+		if !config.KnownPersonality(value) {
+			return fmt.Errorf("personality %q is not recognized (want programmer, sysadmin, or assistant)", value)
+		}
+		cfg.Personality = strings.ToLower(strings.TrimSpace(value))
 	case "reasoningEffort":
 		if !IsValidReasoningLevel(value) {
 			return fmt.Errorf("reasoningEffort %q is not a valid level", value)

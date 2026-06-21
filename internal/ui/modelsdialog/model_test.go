@@ -7,52 +7,56 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-type fakeDeps struct {
-	active   string
-	label    string
-	models   []string
-	current  string
-	setModel map[string]string
+type selected struct {
+	provider string
+	model    string
 }
 
-func (f *fakeDeps) ActiveProviderID() string    { return f.active }
-func (f *fakeDeps) ActiveProviderLabel() string { return f.label }
-func (f *fakeDeps) ActiveModels(string) []string {
-	return f.models
+type fakeDeps struct {
+	entries  []ModelEntry
+	active   string
+	current  string
+	selected *selected
 }
-func (f *fakeDeps) CurrentModel(string) string { return f.current }
-func (f *fakeDeps) SetModel(_ context.Context, id, model string) error {
-	if f.setModel == nil {
-		f.setModel = map[string]string{}
-	}
-	f.setModel[id] = model
+
+func (f *fakeDeps) ListActiveModels() []ModelEntry { return f.entries }
+func (f *fakeDeps) ActiveProviderID() string        { return f.active }
+func (f *fakeDeps) CurrentModel() string            { return f.current }
+func (f *fakeDeps) SelectModel(_ context.Context, providerID, model string) error {
+	f.selected = &selected{provider: providerID, model: model}
 	return nil
 }
 
 func keyMsg(t tea.KeyType) tea.KeyMsg { return tea.KeyMsg{Type: t} }
 
-func TestSelectSetsActiveModel(t *testing.T) {
+func TestSelectSwitchesProviderAndModel(t *testing.T) {
 	deps := &fakeDeps{
-		active:  "openai",
-		label:   "openai",
-		models:  []string{"gpt-4o", "gpt-4o-mini", "o3"},
-		current: "gpt-4o",
+		entries: []ModelEntry{
+			{ProviderID: "gemini-apikey", ProviderLabel: "gemini", Model: "gemini-2.5-pro"},
+			{ProviderID: "openai", ProviderLabel: "openai", Model: "gpt-4o"},
+			{ProviderID: "openrouter", ProviderLabel: "openrouter", Model: "google/gemma-3"},
+		},
+		active:  "gemini-apikey",
+		current: "gemini-2.5-pro",
 	}
 	m := New(context.Background(), deps)
-	// Cursor starts on the current model (gpt-4o, index 0).
+	// Cursor starts on the current entry (gemini/gemini-2.5-pro, index 0).
 	if m.cursor != 0 {
-		t.Fatalf("cursor = %d, want 0 (current model)", m.cursor)
+		t.Fatalf("cursor = %d, want 0 (current entry)", m.cursor)
 	}
-	// Move to o3 (index 2) and select it.
+	// Move to openrouter/google/gemma-3 (index 2) and select it.
 	m, _ = m.Update(keyMsg(tea.KeyDown))
 	m, _ = m.Update(keyMsg(tea.KeyDown))
 	m, _ = m.Update(keyMsg(tea.KeyEnter))
 
-	if deps.setModel["openai"] != "o3" {
-		t.Fatalf("setModel = %v, want o3", deps.setModel)
+	if deps.selected == nil {
+		t.Fatal("SelectModel was not called")
 	}
-	if m.current != "o3" {
-		t.Fatalf("current = %q, want o3", m.current)
+	if deps.selected.provider != "openrouter" || deps.selected.model != "google/gemma-3" {
+		t.Fatalf("selected = %+v, want openrouter/google/gemma-3", deps.selected)
+	}
+	if m.curProvider != "openrouter" || m.curModel != "google/gemma-3" {
+		t.Fatalf("current = %s/%s, want openrouter/google/gemma-3", m.curProvider, m.curModel)
 	}
 	if m.Done() {
 		t.Fatal("selecting should not close the picker")
@@ -60,7 +64,11 @@ func TestSelectSetsActiveModel(t *testing.T) {
 }
 
 func TestEscCloses(t *testing.T) {
-	deps := &fakeDeps{active: "openai", label: "openai", models: []string{"gpt-4o"}}
+	deps := &fakeDeps{
+		entries: []ModelEntry{{ProviderID: "openai", ProviderLabel: "openai", Model: "gpt-4o"}},
+		active:  "openai",
+		current: "gpt-4o",
+	}
 	m := New(context.Background(), deps)
 	m, _ = m.Update(keyMsg(tea.KeyEsc))
 	if !m.Done() {
@@ -68,13 +76,13 @@ func TestEscCloses(t *testing.T) {
 	}
 }
 
-func TestNoActiveProvider(t *testing.T) {
-	deps := &fakeDeps{active: ""}
+func TestNoActiveModels(t *testing.T) {
+	deps := &fakeDeps{}
 	m := New(context.Background(), deps)
 	if m.errMsg == "" {
-		t.Fatal("expected an error message when no provider is active")
+		t.Fatal("expected an error message when there are no active models")
 	}
 	if m.View() == "" {
-		t.Fatal("view should render the no-provider message")
+		t.Fatal("view should render the no-models message")
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 )
@@ -73,6 +74,7 @@ func DiscoverModels(
 		}
 		out = append(out, ModelInfo{ID: id})
 	}
+	sortModelInfos(out)
 	return out
 }
 
@@ -149,7 +151,19 @@ func fetchGeminiModels(ctx context.Context, listURL string, client *http.Client)
 	if len(out) == 0 {
 		return nil, fmt.Errorf("no generateContent models returned by Gemini API")
 	}
+	sortModelInfos(out)
 	return out, nil
+}
+
+// SortModelIDs sorts model ids lexicographically in place.
+func SortModelIDs(ids []string) {
+	slices.Sort(ids)
+}
+
+func sortModelInfos(infos []ModelInfo) {
+	slices.SortFunc(infos, func(a, b ModelInfo) int {
+		return strings.Compare(a.ID, b.ID)
+	})
 }
 
 func geminiSupportsGenerateContent(methods []string) bool {

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 	"github.com/undeadindustries/sagittarius/internal/tools"
 	"github.com/undeadindustries/sagittarius/internal/ui"
@@ -296,6 +297,74 @@ func TestAGENTSMDInjection(t *testing.T) {
 	if !strings.Contains(req.SystemInstruction, memoryPath) {
 		t.Fatalf("system instruction = %q, want memory path", req.SystemInstruction)
 	}
+}
+
+// TestSystemPromptComposesPersonalityAndMemory verifies the runner sends the
+// programmer base prompt composed with AGENTS.md memory, and that a provider
+// promptMode of "lite" selects the low-context variant.
+func TestSystemPromptComposesPersonalityAndMemory(t *testing.T) {
+	t.Parallel()
+
+	newRunnerWith := func(t *testing.T, settings *config.Settings) *provider.GenerateRequest {
+		t.Helper()
+		projectDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(projectDir, "AGENTS.md"), []byte("Use Go idioms."), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		gen := &fakeGenerator{batches: [][]provider.StreamResponse{{{Done: true}}}}
+		runner, err := NewRunner(RunnerConfig{
+			Generator:   gen,
+			Model:       "test-model",
+			WorkDir:     projectDir,
+			Interactive: false,
+			Settings:    settings,
+		})
+		if err != nil {
+			t.Fatalf("NewRunner: %v", err)
+		}
+		events, err := runner.RunTurn(testContext(t), "hello")
+		if err != nil {
+			t.Fatalf("RunTurn: %v", err)
+		}
+		drainEvents(t, events)
+		req := gen.lastRequest()
+		if req == nil {
+			t.Fatal("expected generate request")
+		}
+		return req
+	}
+
+	t.Run("full default", func(t *testing.T) {
+		req := newRunnerWith(t, nil)
+		if !strings.Contains(req.SystemInstruction, "# Core Mandates") {
+			t.Errorf("system instruction missing programmer full anchor:\n%s", req.SystemInstruction)
+		}
+		if !strings.Contains(req.SystemInstruction, "Use Go idioms.") {
+			t.Error("system instruction should include AGENTS.md memory")
+		}
+		if !strings.Contains(req.SystemInstruction, "test-model") {
+			t.Error("system instruction should name the model in its identity line")
+		}
+	})
+
+	t.Run("lite via provider promptMode", func(t *testing.T) {
+		settings := &config.Settings{
+			Providers: &config.ProvidersSettings{
+				Active: "openai",
+				OpenAI: &config.ProviderInstanceConfig{PromptMode: config.PromptModeLite},
+			},
+		}
+		req := newRunnerWith(t, settings)
+		if !strings.Contains(req.SystemInstruction, "## Tool Usage") {
+			t.Errorf("lite system instruction missing anchor:\n%s", req.SystemInstruction)
+		}
+		if strings.Contains(req.SystemInstruction, "# Core Mandates") {
+			t.Error("lite variant should not contain the full Core Mandates section")
+		}
+		if !strings.Contains(req.SystemInstruction, "Use Go idioms.") {
+			t.Error("lite system instruction should still include AGENTS.md memory")
+		}
+	})
 }
 
 func TestRunnerToolCallStub(t *testing.T) {

@@ -41,6 +41,15 @@ type ProviderInstanceConfig struct {
 	UseResponseChaining  *bool               `json:"useResponseChaining,omitempty"`
 	WireFormat           WireFormat          `json:"wireFormat,omitempty"`
 
+	// Personality selects the system-prompt personality for this provider
+	// (e.g. "programmer"). Empty falls back to sagittarius.systemPrompt.personality.
+	Personality string `json:"personality,omitempty"`
+
+	// Models holds optional per-model overrides keyed by model id (minimal
+	// AD-024 slice: personality + promptMode only). A model entry beats the
+	// provider-level Personality/PromptMode for system-prompt resolution.
+	Models map[string]ProviderModelConfig `json:"models,omitempty"`
+
 	// ActiveModels is the curated set of models the user has activated for this
 	// provider (the /providers model-activation screen writes it; /models reads
 	// it). Empty/absent means "not yet curated" -- /models falls back to the
@@ -57,6 +66,65 @@ type ProviderInstanceConfig struct {
 	ToolOutputMaskingProtectLatestTurn  *bool    `json:"toolOutputMaskingProtectLatestTurn,omitempty"`
 
 	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// ProviderModelConfig holds per-model overrides under providers.<id>.models.<model>.
+// Minimal AD-024 slice: only the system-prompt knobs are modeled today. Unknown
+// keys round-trip via Extra.
+type ProviderModelConfig struct {
+	Personality string                     `json:"personality,omitempty"`
+	PromptMode  PromptMode                 `json:"promptMode,omitempty"`
+	Extra       map[string]json.RawMessage `json:"-"`
+}
+
+// UnmarshalJSON decodes the known per-model fields and preserves unknown keys.
+func (c *ProviderModelConfig) UnmarshalJSON(data []byte) error {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return err
+	}
+	c.Extra = make(map[string]json.RawMessage)
+	for key, val := range obj {
+		switch key {
+		case "personality":
+			if err := json.Unmarshal(val, &c.Personality); err != nil {
+				return err
+			}
+		case "promptMode":
+			if err := json.Unmarshal(val, &c.PromptMode); err != nil {
+				return err
+			}
+		default:
+			c.Extra[key] = val
+		}
+	}
+	if len(c.Extra) == 0 {
+		c.Extra = nil
+	}
+	return nil
+}
+
+// MarshalJSON emits the known per-model fields plus any preserved unknown keys.
+func (c ProviderModelConfig) MarshalJSON() ([]byte, error) {
+	obj := make(map[string]json.RawMessage)
+	if c.Personality != "" {
+		b, err := json.Marshal(c.Personality)
+		if err != nil {
+			return nil, err
+		}
+		obj["personality"] = b
+	}
+	if c.PromptMode != "" {
+		b, err := json.Marshal(c.PromptMode)
+		if err != nil {
+			return nil, err
+		}
+		obj["promptMode"] = b
+	}
+	for key, val := range c.Extra {
+		obj[key] = val
+	}
+	return json.Marshal(obj)
 }
 
 // CustomProviderDefinition is a user-defined OpenAI-compatible provider under
@@ -102,4 +170,29 @@ func (s *Settings) ActiveProvider() string {
 		return s.Providers.Active
 	}
 	return ""
+}
+
+// ProviderInstance returns the provider instance config for id (after alias
+// normalization), or nil when none is configured. Custom providers stored under
+// providers.<id> round-trip through Extra.
+func (s *Settings) ProviderInstance(id string) *ProviderInstanceConfig {
+	if s == nil || s.Providers == nil {
+		return nil
+	}
+	switch NormalizeProviderID(id) {
+	case string(BuiltInOpenAI):
+		return s.Providers.OpenAI
+	case string(BuiltInGeminiAPIKey):
+		return s.Providers.GeminiAPIKey
+	case string(BuiltInOpenAIResponses):
+		return s.Providers.OpenAIResponses
+	default:
+		if raw, ok := s.Providers.Extra[NormalizeProviderID(id)]; ok {
+			var cfg ProviderInstanceConfig
+			if err := json.Unmarshal(raw, &cfg); err == nil {
+				return &cfg
+			}
+		}
+		return nil
+	}
 }

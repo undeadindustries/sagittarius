@@ -9,8 +9,8 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/ui/theme"
 )
 
-// Model is the models picker overlay. It is driven by the parent Bubble Tea
-// model exactly like the providers wizard: the parent forwards messages to
+// Model is the global models picker overlay. It is driven by the parent Bubble
+// Tea model exactly like the providers wizard: the parent forwards messages to
 // Update while active and renders View; when Done reports true the parent
 // removes the overlay.
 type Model struct {
@@ -21,10 +21,9 @@ type Model struct {
 	width  int
 	height int
 
-	providerID    string
-	providerLabel string
-	models        []string
-	current       string
+	entries     []ModelEntry
+	curProvider string
+	curModel    string
 
 	cursor int
 	done   bool
@@ -34,23 +33,20 @@ type Model struct {
 	info   string
 }
 
-// New constructs the picker for the active provider's active models.
+// New constructs the picker over every activated model across all providers.
 func New(ctx context.Context, deps Deps) Model {
-	id := deps.ActiveProviderID()
 	m := Model{
-		deps:          deps,
-		ctx:           ctx,
-		th:            theme.Default(),
-		providerID:    id,
-		providerLabel: deps.ActiveProviderLabel(),
+		deps: deps,
+		ctx:  ctx,
+		th:   theme.Default(),
 	}
-	if id == "" {
-		m.errMsg = "No active provider. Open /providers to switch or add one."
-		return m
+	m.entries = deps.ListActiveModels()
+	m.curProvider = deps.ActiveProviderID()
+	m.curModel = deps.CurrentModel()
+	m.cursor = currentIndex(m.entries, m.curProvider, m.curModel)
+	if len(m.entries) == 0 {
+		m.errMsg = "No active models. Open /providers → Manage models to activate some."
 	}
-	m.models = deps.ActiveModels(id)
-	m.current = deps.CurrentModel(id)
-	m.cursor = indexOf(m.models, m.current)
 	return m
 }
 
@@ -72,6 +68,7 @@ func (m Model) SetTheme(th theme.Theme) Model {
 	m.th = th
 	return m
 }
+
 // Update advances the picker for one message.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	key, ok := msg.(tea.KeyMsg)
@@ -83,10 +80,10 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.done = true
 		return m, nil
 	case "up", "k":
-		m.cursor = wrapDec(m.cursor, len(m.models))
+		m.cursor = wrapDec(m.cursor, len(m.entries))
 		return m, nil
 	case "down", "j":
-		m.cursor = wrapInc(m.cursor, len(m.models))
+		m.cursor = wrapInc(m.cursor, len(m.entries))
 		return m, nil
 	case "enter":
 		return m.selectCurrent()
@@ -95,24 +92,26 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 }
 
 func (m Model) selectCurrent() (Model, tea.Cmd) {
-	if m.cursor < 0 || m.cursor >= len(m.models) {
+	if m.cursor < 0 || m.cursor >= len(m.entries) {
 		return m, nil
 	}
-	model := m.models[m.cursor]
-	if err := m.deps.SetModel(m.ctx, m.providerID, model); err != nil {
+	e := m.entries[m.cursor]
+	if err := m.deps.SelectModel(m.ctx, e.ProviderID, e.Model); err != nil {
 		m.errMsg = err.Error()
 		return m, nil
 	}
-	m.current = model
-	m.status = fmt.Sprintf("Model → %s for %s.", model, m.providerLabel)
+	m.curProvider = e.ProviderID
+	m.curModel = e.Model
+	m.status = fmt.Sprintf("Active → %s / %s.", e.ProviderLabel, e.Model)
 	m.info = m.status
 	m.errMsg = ""
 	return m, nil
 }
 
-func indexOf(items []string, target string) int {
-	for i, it := range items {
-		if it == target {
+// currentIndex returns the entry index matching the active provider+model, or 0.
+func currentIndex(entries []ModelEntry, providerID, model string) int {
+	for i, e := range entries {
+		if e.ProviderID == providerID && e.Model == model {
 			return i
 		}
 	}

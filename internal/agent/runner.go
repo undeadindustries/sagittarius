@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/contextmgmt"
 	"github.com/undeadindustries/sagittarius/internal/modes"
+	"github.com/undeadindustries/sagittarius/internal/prompt"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 	"github.com/undeadindustries/sagittarius/internal/session"
 	"github.com/undeadindustries/sagittarius/internal/tools"
@@ -72,9 +74,14 @@ type Runner struct {
 	settingsMu           sync.RWMutex
 	settings             *config.Settings
 	modeState            *modes.State
-	system               string
-	systemBase           string
-	approval             ApprovalMode
+	// system is the full system instruction sent to the provider:
+	// systemBase + mode suffix. systemBase is the personality prompt + memory.
+	// memory is the AGENTS.md content alone (re-composed on rebuild). All three
+	// are guarded by modelMu (read alongside model in buildGenerateRequest).
+	system     string
+	systemBase string
+	memory     string
+	approval   ApprovalMode
 	interactive          bool
 	workDir              string
 	regMu                sync.RWMutex
@@ -112,7 +119,7 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		}
 	}
 
-	system, err := DiscoverSystemInstruction(workDir)
+	memory, err := DiscoverSystemInstruction(workDir)
 	if err != nil {
 		return nil, fmt.Errorf("agent runner: %w", err)
 	}
@@ -142,8 +149,7 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		modelPinned:          cfg.ModelPinned,
 		settings:             cfg.Settings,
 		modeState:            modes.NewState(cfg.InitialMode),
-		systemBase:           system,
-		system:               system,
+		memory:               memory,
 		approval:             mode,
 		interactive:          cfg.Interactive,
 		workDir:              ws.Root(),
@@ -157,7 +163,8 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 	}
 	if !cfg.ModelPinned {
 		runner.refreshModelFromMode()
-		runner.applyModeSystemSuffix()
+	} else {
+		runner.rebuildSystem()
 	}
 	return runner, nil
 }
@@ -229,7 +236,8 @@ func (r *Runner) SetInteractionMode(mode modes.Mode) string {
 	}
 	if !r.modelPinned {
 		r.refreshModelFromMode()
-		r.applyModeSystemSuffix()
+	} else {
+		r.rebuildSystem()
 	}
 	return r.Model()
 }
@@ -241,7 +249,8 @@ func (r *Runner) SetSettings(s *config.Settings) {
 	r.settingsMu.Unlock()
 	if !r.modelPinned {
 		r.refreshModelFromMode()
-		r.applyModeSystemSuffix()
+	} else {
+		r.rebuildSystem()
 	}
 }
 
@@ -255,6 +264,8 @@ func (r *Runner) SetProviderDefaultModel(model string) {
 	r.providerDefaultModel = model
 	if !r.modelPinned {
 		r.refreshModelFromMode()
+	} else {
+		r.rebuildSystem()
 	}
 }
 
@@ -505,15 +516,115 @@ func (r *Runner) refreshModelFromMode() {
 	r.modelMu.Lock()
 	r.model = resolved
 	r.modelMu.Unlock()
+	r.rebuildSystem()
+}
+
+// rebuildSystem recomposes the base prompt (personality + memory) and then the
+// full system instruction (base + mode suffix). Call it whenever the model,
+// provider, settings, mode, or memory change.
+func (r *Runner) rebuildSystem() {
+	r.rebuildBasePrompt()
+	r.applyModeSystemSuffix()
+}
+
+// rebuildBasePrompt resolves the personality and variant for the live
+// (provider, model), builds the personality prompt with an honest identity
+// line, and concatenates the AGENTS.md memory. The result is stored in
+// systemBase (mode suffix is appended separately by applyModeSystemSuffix).
+func (r *Runner) rebuildBasePrompt() {
+	r.modelMu.RLock()
+	model := r.model
+	memory := r.memory
+	r.modelMu.RUnlock()
+
+	settings := r.settingsSnapshot()
+	providerID := r.activeProviderID()
+
+	base := prompt.Build(prompt.Options{
+		Personality: prompt.ResolvePersonality(settings, providerID, model),
+		Variant:     prompt.ResolveVariant(settings, providerID, model),
+		Identity: prompt.Identity{
+			Model:        model,
+			ProviderName: r.providerDisplayName(providerID),
+		},
+		ToolNames:      r.toolDeclarationNames(),
+		Interactive:    r.interactive,
+		IsGitRepo:      isGitRepo(r.workDir),
+		SandboxEnabled: false, // sandbox not ported (AD-017)
+	})
+
+	if memory = strings.TrimSpace(memory); memory != "" {
+		base = strings.TrimRight(base, "\n") + "\n\n" + memory
+	}
+
+	r.modelMu.Lock()
+	r.systemBase = base
+	r.modelMu.Unlock()
 }
 
 func (r *Runner) applyModeSystemSuffix() {
 	suffix := modes.SystemPromptSuffix(r.InteractionMode(), r.sagittariusSettings())
+	r.modelMu.Lock()
 	base := r.systemBase
 	if suffix != "" {
 		base = strings.TrimRight(base, "\n") + "\n\n" + suffix
 	}
 	r.system = base
+	r.modelMu.Unlock()
+}
+
+// settingsSnapshot returns the current full settings under the settings lock.
+func (r *Runner) settingsSnapshot() *config.Settings {
+	r.settingsMu.RLock()
+	defer r.settingsMu.RUnlock()
+	return r.settings
+}
+
+// providerDisplayName resolves a human-readable label for providerID (built-in
+// display name, custom provider displayName, or the id itself).
+func (r *Runner) providerDisplayName(providerID string) string {
+	if strings.TrimSpace(providerID) == "" {
+		return ""
+	}
+	if def, ok := config.LookupBuiltInProvider(providerID); ok {
+		return def.DisplayName
+	}
+	settings := r.settingsSnapshot()
+	if settings != nil && settings.Providers != nil {
+		if custom, ok := settings.Providers.Custom[providerID]; ok && custom.DisplayName != "" {
+			return custom.DisplayName
+		}
+	}
+	return providerID
+}
+
+// toolDeclarationNames lists the wire names of the registered tools for the
+// prompt's "Available Tools" section.
+func (r *Runner) toolDeclarationNames() []string {
+	decls := r.toolRegistry().ListDeclarations()
+	names := make([]string, 0, len(decls))
+	for _, d := range decls {
+		if d.Name != "" {
+			names = append(names, d.Name)
+		}
+	}
+	return names
+}
+
+// isGitRepo reports whether dir (or an ancestor) contains a .git entry.
+func isGitRepo(dir string) bool {
+	dir = strings.TrimSpace(dir)
+	for dir != "" {
+		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+			return true
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return false
 }
 
 // toolRegistry returns the active tool registry under the registry lock.

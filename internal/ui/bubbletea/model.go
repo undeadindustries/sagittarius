@@ -12,6 +12,7 @@ import (
 
 	"github.com/undeadindustries/sagittarius/internal/ui"
 	"github.com/undeadindustries/sagittarius/internal/ui/modelsdialog"
+	"github.com/undeadindustries/sagittarius/internal/ui/onboardingdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/providersdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/theme"
 )
@@ -27,6 +28,11 @@ type providerDialogHost interface {
 // dependencies. Same capability-interface pattern as providerDialogHost.
 type modelsDialogHost interface {
 	ModelsDialogDeps() modelsdialog.Deps
+}
+
+// onboardingHost is implemented by an App that can supply first-run setup deps.
+type onboardingHost interface {
+	OnboardingDialogDeps() onboardingdialog.Deps
 }
 
 type streamEventMsg struct {
@@ -106,13 +112,15 @@ type model struct {
 	// input and rendering until it reports Done.
 	overlay *providersdialog.Model
 	// modelsOverlay holds the active models picker (mutually exclusive with
-	// overlay).
+	// overlay and onboardingOverlay).
 	modelsOverlay *modelsdialog.Model
+	// onboardingOverlay holds the first-run provider setup wizard.
+	onboardingOverlay *onboardingdialog.Model
 }
 
 // hasOverlay reports whether any modal dialog is currently active.
 func (m *model) hasOverlay() bool {
-	return m.overlay != nil || m.modelsOverlay != nil
+	return m.onboardingOverlay != nil || m.overlay != nil || m.modelsOverlay != nil
 }
 
 // maxVisibleSuggestions caps the inline suggestion list height.
@@ -159,6 +167,9 @@ func newModel(opts ui.Options, app ui.App, term *Terminal) *model {
 }
 
 func (m *model) Init() tea.Cmd {
+	if m.opts.NeedsOnboarding {
+		m.openOnboarding()
+	}
 	return textinput.Blink
 }
 
@@ -206,6 +217,10 @@ func (m *model) updateOverlay(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
+		if m.onboardingOverlay != nil {
+			o := m.onboardingOverlay.SetSize(msg.Width, msg.Height)
+			m.onboardingOverlay = &o
+		}
 		if m.overlay != nil {
 			o := m.overlay.SetSize(msg.Width, msg.Height)
 			m.overlay = &o
@@ -219,6 +234,16 @@ func (m *model) updateOverlay(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleStream(msg.event)
 	case tea.QuitMsg:
 		return m, m.beginQuit()
+	}
+
+	if m.onboardingOverlay != nil {
+		next, cmd := m.onboardingOverlay.Update(msg)
+		if next.Done() {
+			m.closeOverlay(next.Status())
+			return m, cmd
+		}
+		m.onboardingOverlay = &next
+		return m, cmd
 	}
 
 	if m.overlay != nil {
@@ -243,6 +268,7 @@ func (m *model) updateOverlay(msg tea.Msg) (tea.Model, tea.Cmd) {
 // closeOverlay removes any active dialog, surfaces its closing status, and
 // resets the footer to the (possibly refreshed) idle status.
 func (m *model) closeOverlay(status string) {
+	m.onboardingOverlay = nil
 	m.overlay = nil
 	m.modelsOverlay = nil
 	if status != "" {
@@ -250,6 +276,24 @@ func (m *model) closeOverlay(status string) {
 	}
 	m.refreshIdleStatus()
 	m.status = m.idleStatus
+}
+
+func (m *model) openOnboarding() {
+	ctx := m.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	host, ok := m.app.(onboardingHost)
+	if !ok {
+		m.addBlock(roleInfo, "First-run setup is unavailable in this session.")
+		return
+	}
+	o := onboardingdialog.New(ctx, host.OnboardingDialogDeps())
+	o = o.SetTheme(m.th)
+	if m.width > 0 && m.height > 0 {
+		o = o.SetSize(m.width, m.height)
+	}
+	m.onboardingOverlay = &o
 }
 
 func (m *model) openDialog(kind ui.DialogKind) {
@@ -284,6 +328,9 @@ func (m *model) openDialog(kind ui.DialogKind) {
 func (m *model) View() string {
 	if m.quitting {
 		return ""
+	}
+	if m.onboardingOverlay != nil {
+		return m.onboardingOverlay.View()
 	}
 	if m.overlay != nil {
 		return m.overlay.View()

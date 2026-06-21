@@ -6,6 +6,28 @@ import (
 	"strings"
 )
 
+// Personality ids recognized for the system prompt. Canonical home is config so
+// both internal/prompt and internal/provider can validate without an import
+// cycle (tools imports provider, so provider must not import prompt).
+const (
+	PersonalityProgrammer = "programmer"
+	PersonalitySysadmin   = "sysadmin"
+	PersonalityAssistant  = "assistant"
+)
+
+var knownPersonalities = map[string]struct{}{
+	PersonalityProgrammer: {},
+	PersonalitySysadmin:   {},
+	PersonalityAssistant:  {},
+}
+
+// KnownPersonality reports whether id is a recognized personality (case- and
+// space-insensitive). Empty is not recognized.
+func KnownPersonality(id string) bool {
+	_, ok := knownPersonalities[strings.ToLower(strings.TrimSpace(id))]
+	return ok
+}
+
 // SagittariusSettings holds Sagittarius-specific settings under the top-level
 // "sagittarius" key in settings.json. Unknown sub-keys round-trip via Extra.
 type SagittariusSettings struct {
@@ -27,8 +49,21 @@ type SagittariusSettings struct {
 	// Tools overrides the model used for tool-utility calls. Empty Model means
 	// it follows the live mode-resolved model. (Reserved: no model-using tool
 	// consumes it yet.)
-	Tools *SagittariusUtilityConfig  `json:"tools,omitempty"`
-	Extra map[string]json.RawMessage `json:"-"`
+	Tools *SagittariusUtilityConfig `json:"tools,omitempty"`
+	// SystemPrompt sets the global default personality + variant for the system
+	// prompt. Provider and per-model overrides take precedence (see
+	// prompt.ResolvePersonality / ResolveVariant).
+	SystemPrompt *SagittariusSystemPromptConfig `json:"systemPrompt,omitempty"`
+	Extra        map[string]json.RawMessage     `json:"-"`
+}
+
+// SagittariusSystemPromptConfig is the global default for the system-prompt
+// personality and variant. Empty fields fall back to the built-in defaults
+// (programmer / full).
+type SagittariusSystemPromptConfig struct {
+	Personality string                     `json:"personality,omitempty"`
+	Variant     string                     `json:"variant,omitempty"`
+	Extra       map[string]json.RawMessage `json:"-"`
 }
 
 // SagittariusUtilityConfig overrides the model for an auxiliary role (context
@@ -87,6 +122,15 @@ func ValidateSagittariusSettings(s *SagittariusSettings) error {
 	if dm := strings.TrimSpace(s.DefaultMode); dm != "" {
 		if _, ok := validInteractionModes[strings.ToLower(dm)]; !ok {
 			return fmt.Errorf("sagittarius.defaultMode %q: want agent, plan, ask, or debug", dm)
+		}
+	}
+	if s.SystemPrompt != nil {
+		if v := strings.TrimSpace(s.SystemPrompt.Variant); v != "" {
+			switch strings.ToLower(v) {
+			case "full", "lite":
+			default:
+				return fmt.Errorf("sagittarius.systemPrompt.variant %q: want full or lite", v)
+			}
 		}
 	}
 	return nil

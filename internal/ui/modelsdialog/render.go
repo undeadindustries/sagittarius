@@ -53,18 +53,14 @@ func (m Model) contentWidth() int {
 
 func (m Model) body() string {
 	dim := m.th.Dim
-	if m.providerID == "" {
-		return dim.Render("(no active provider)")
-	}
 	var b strings.Builder
-	b.WriteString(dim.Render("Active provider: "+m.providerLabel) + "\n\n")
-	if len(m.models) == 0 {
+	if len(m.entries) == 0 {
 		b.WriteString(dim.Render("No active models. Open /providers → Manage models to activate some."))
 		return b.String()
 	}
-	for i, model := range m.models {
-		label := model
-		if model == m.current {
+	for i, e := range m.entries {
+		label := e.ProviderLabel + " - " + e.Model
+		if e.ProviderID == m.curProvider && e.Model == m.curModel {
 			label += dim.Render("  — current")
 		}
 		b.WriteString(m.renderRow(label, i == m.cursor) + "\n")

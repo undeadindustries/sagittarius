@@ -42,6 +42,22 @@ func TestApplyProviderSettingTypedFields(t *testing.T) {
 	}
 }
 
+func TestApplyProviderSettingPersonality(t *testing.T) {
+	t.Parallel()
+	s := openAISettings()
+
+	if err := ApplyProviderSetting(s, "openai", "personality", "Sysadmin"); err != nil {
+		t.Fatalf("personality: %v", err)
+	}
+	if got := s.Providers.OpenAI.Personality; got != "sysadmin" {
+		t.Fatalf("personality = %q, want normalized %q", got, "sysadmin")
+	}
+
+	if err := ApplyProviderSetting(s, "openai", "personality", "wizard"); err == nil {
+		t.Fatal("expected unknown personality to be rejected")
+	}
+}
+
 func TestApplyProviderSettingRejectsUnknownKey(t *testing.T) {
 	t.Parallel()
 	s := openAISettings()
