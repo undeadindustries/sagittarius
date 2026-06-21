@@ -9,14 +9,11 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/config"
 )
 
-const (
-	geminiMDFilename = "GEMINI.md"
-	agentsMDFilename = "AGENTS.md"
-)
+const agentsMDFilename = "AGENTS.md"
 
 // DiscoverSystemInstruction loads project and global memory files for the system prompt.
-// It walks upward from startDir for GEMINI.md (AGENTS.md when GEMINI.md is absent per
-// directory) and prepends ~/.gemini/GEMINI.md when present.
+// It walks upward from startDir collecting AGENTS.md files and prepends the global
+// ~/.sagittarius/AGENTS.md when present.
 func DiscoverSystemInstruction(startDir string) (string, error) {
 	if strings.TrimSpace(startDir) == "" {
 		var err error
@@ -57,17 +54,17 @@ func DiscoverSystemInstruction(startDir string) (string, error) {
 }
 
 func globalMemoryPath() (string, error) {
-	dir, err := config.ResolveGeminiDir()
+	path, err := config.ResolveGlobalAgentsPath()
 	if err != nil {
 		return "", fmt.Errorf("resolve global memory dir: %w", err)
 	}
-	return filepath.Join(dir, geminiMDFilename), nil
+	return path, nil
 }
 
 func discoverProjectMemoryPaths(startDir string) ([]string, error) {
-	geminiDir, err := config.ResolveGeminiDir()
+	homeDir, err := config.ResolveSagittariusDir()
 	if err != nil {
-		return nil, fmt.Errorf("resolve gemini dir: %w", err)
+		return nil, fmt.Errorf("resolve sagittarius dir: %w", err)
 	}
 
 	var paths []string
@@ -82,7 +79,7 @@ func discoverProjectMemoryPaths(startDir string) ([]string, error) {
 			}
 		}
 
-		if samePath(current, geminiDir) {
+		if samePath(current, homeDir) {
 			break
 		}
 
@@ -97,10 +94,6 @@ func discoverProjectMemoryPaths(startDir string) ([]string, error) {
 }
 
 func memoryFileInDir(dir string) string {
-	geminiPath := filepath.Join(dir, geminiMDFilename)
-	if _, err := os.Stat(geminiPath); err == nil {
-		return geminiPath
-	}
 	agentsPath := filepath.Join(dir, agentsMDFilename)
 	if _, err := os.Stat(agentsPath); err == nil {
 		return agentsPath

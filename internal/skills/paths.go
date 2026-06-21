@@ -7,9 +7,9 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/config"
 )
 
-// UserSkillsDir returns ~/.gemini/skills.
+// UserSkillsDir returns ~/.sagittarius/skills.
 func UserSkillsDir() (string, error) {
-	dir, err := config.ResolveGeminiDir()
+	dir, err := config.ResolveSagittariusDir()
 	if err != nil {
 		return "", err
 	}
@@ -25,9 +25,9 @@ func UserAgentSkillsDir() (string, error) {
 	return filepath.Join(home, ".agents", "skills"), nil
 }
 
-// ProjectSkillsDir returns <workDir>/.gemini/skills.
+// ProjectSkillsDir returns <workDir>/.sagittarius/skills.
 func ProjectSkillsDir(workDir string) string {
-	return filepath.Join(workDir, config.GeminiDir, "skills")
+	return filepath.Join(workDir, config.SagittariusDir, "skills")
 }
 
 // ProjectAgentSkillsDir returns <workDir>/.agents/skills.

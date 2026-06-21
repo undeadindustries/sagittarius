@@ -124,15 +124,41 @@ func ResolveModel(mode Mode, cfg *config.SagittariusSettings, providerID, provid
 	return globalDefault(cfg)
 }
 
+// ResolveUtilityModel returns the model for an auxiliary role (context
+// compression, tool-utility calls, subagents), defaulting to the live
+// mode-resolved model unless a role-specific override is configured. This
+// mirrors how mode overrides work: an explicit setting wins, otherwise the role
+// follows whatever model the main loop is currently using.
+func ResolveUtilityModel(override, liveModel string) string {
+	if o := strings.TrimSpace(override); o != "" {
+		return o
+	}
+	return strings.TrimSpace(liveModel)
+}
+
+// ResolveCompressionModel selects the model for context compression /
+// summarization: sagittarius.compression.model overrides, else the live model.
+func ResolveCompressionModel(cfg *config.SagittariusSettings, liveModel string) string {
+	return ResolveUtilityModel(utilityModel(cfg, roleCompression), liveModel)
+}
+
+// ResolveToolsModel selects the model for tool-utility calls:
+// sagittarius.tools.model overrides, else the live model.
+func ResolveToolsModel(cfg *config.SagittariusSettings, liveModel string) string {
+	return ResolveUtilityModel(utilityModel(cfg, roleTools), liveModel)
+}
+
 // ResolveSubagentModel selects a model for a named subagent.
 //
 // Resolution order (first non-empty wins):
 //  1. sagittarius.subagents.<name>.model
 //  2. sagittarius.subagents.default.model
-//  3. sagittarius.defaultModels[providerID]
-//  4. providerDefault
-//  5. sagittarius.defaultModel
-func ResolveSubagentModel(name string, cfg *config.SagittariusSettings, providerID, providerDefault string) string {
+//  3. liveModel — the live mode-resolved model the main loop is using
+//
+// The live model already encodes the full mode chain (mode override →
+// defaultModels → provider default → legacy default), so a subagent without its
+// own override simply follows the active model.
+func ResolveSubagentModel(name string, cfg *config.SagittariusSettings, liveModel string) string {
 	name = strings.TrimSpace(name)
 	if cfg != nil && cfg.Subagents != nil {
 		if entry, ok := cfg.Subagents.Named[name]; ok {
@@ -144,13 +170,31 @@ func ResolveSubagentModel(name string, cfg *config.SagittariusSettings, provider
 			return m
 		}
 	}
-	if m := providerScopedDefault(cfg, providerID); m != "" {
-		return m
+	return ResolveUtilityModel("", liveModel)
+}
+
+type utilityRole int
+
+const (
+	roleCompression utilityRole = iota
+	roleTools
+)
+
+func utilityModel(cfg *config.SagittariusSettings, role utilityRole) string {
+	if cfg == nil {
+		return ""
 	}
-	if m := strings.TrimSpace(providerDefault); m != "" {
-		return m
+	var uc *config.SagittariusUtilityConfig
+	switch role {
+	case roleCompression:
+		uc = cfg.Compression
+	case roleTools:
+		uc = cfg.Tools
 	}
-	return globalDefault(cfg)
+	if uc == nil {
+		return ""
+	}
+	return strings.TrimSpace(uc.Model)
 }
 
 // providerScopedDefault returns sagittarius.defaultModels[providerID], tolerating

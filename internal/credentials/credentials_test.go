@@ -343,7 +343,7 @@ func TestRedact(t *testing.T) {
 func TestProviderServiceName(t *testing.T) {
 	t.Parallel()
 	got := ProviderServiceName("openai")
-	want := "gemini-cli-provider-openai"
+	want := "sagittarius-provider-openai"
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}

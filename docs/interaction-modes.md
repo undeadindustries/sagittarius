@@ -66,13 +66,32 @@ provider's configured model when switching providers.
 3. Active provider’s default model (`providers.<id>.model` or built-in default)
 4. `sagittarius.defaultModel` — legacy single global default (last resort)
 
-**Subagents** (via `agents.ResolveSubagentModel` — execution still stubbed):
+### Auxiliary model roles
 
-1. `sagittarius.subagents.<name>.model`
-2. `sagittarius.subagents.default.model`
-3. `sagittarius.defaultModels[<activeProvider>]`
-4. Provider default model
-5. `sagittarius.defaultModel`
+Context compression, tool-utility calls, and subagents **default to the live
+model** — whatever the main loop currently resolves (so they automatically
+follow a `/mode` switch or provider change). Each role can be pinned to a fixed
+model with an override, the same way mode models are overridden:
+
+| Role | Override (first non-empty wins) | Default |
+|------|----------------------------------|---------|
+| Context compression / summarization | `sagittarius.compression.model` | live model |
+| Tool-utility calls (reserved; no consumer yet) | `sagittarius.tools.model` | live model |
+| Subagents (execution still stubbed) | `sagittarius.subagents.<name>.model` → `sagittarius.subagents.default.model` | live model |
+
+Because the live model already encodes the full mode/provider chain above, an
+auxiliary role without its own override needs no separate configuration.
+
+Example:
+
+```json
+{
+  "sagittarius": {
+    "compression": { "model": "gemini-2.5-flash" },
+    "subagents": { "default": { "model": "gpt-4o-mini" } }
+  }
+}
+```
 
 ## Commands
 

@@ -6,12 +6,12 @@ import (
 )
 
 const (
-	keychainServicePrefix  = "gemini-cli-provider-"
-	forceFileStorageEnvVar = "GEMINI_FORCE_FILE_STORAGE"
+	keychainServicePrefix  = "sagittarius-provider-"
+	forceFileStorageEnvVar = "SAGITTARIUS_FORCE_FILE_STORAGE"
 )
 
-// Store persists secrets for a single keychain service (gemini-cli-provider-<id>).
-// Account names match fork providerCredentialStorage (typically the provider id).
+// Store persists secrets for a single keychain service (sagittarius-provider-<id>).
+// Account names follow the fork providerCredentialStorage layout (the provider id).
 type Store interface {
 	Get(ctx context.Context, account string) (string, error)
 	Set(ctx context.Context, account, value string) error

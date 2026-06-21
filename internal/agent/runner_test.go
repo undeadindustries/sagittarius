@@ -249,7 +249,7 @@ func TestCancelMidStream(t *testing.T) {
 	}
 }
 
-func TestGEMINIMDInjection(t *testing.T) {
+func TestAGENTSMDInjection(t *testing.T) {
 	t.Parallel()
 
 	root := t.TempDir()
@@ -257,7 +257,7 @@ func TestGEMINIMDInjection(t *testing.T) {
 	if err := os.MkdirAll(projectDir, 0o755); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	memoryPath := filepath.Join(projectDir, "GEMINI.md")
+	memoryPath := filepath.Join(projectDir, "AGENTS.md")
 	if err := os.WriteFile(memoryPath, []byte("Use Go idioms."), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
@@ -291,7 +291,7 @@ func TestGEMINIMDInjection(t *testing.T) {
 		t.Fatal("expected generate request")
 	}
 	if !strings.Contains(req.SystemInstruction, "Use Go idioms.") {
-		t.Fatalf("system instruction = %q, want GEMINI.md content", req.SystemInstruction)
+		t.Fatalf("system instruction = %q, want AGENTS.md content", req.SystemInstruction)
 	}
 	if !strings.Contains(req.SystemInstruction, memoryPath) {
 		t.Fatalf("system instruction = %q, want memory path", req.SystemInstruction)

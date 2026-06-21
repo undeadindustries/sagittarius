@@ -20,6 +20,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 	"github.com/undeadindustries/sagittarius/internal/session"
+	"github.com/undeadindustries/sagittarius/internal/storage"
 	"github.com/undeadindustries/sagittarius/internal/ui"
 	"github.com/undeadindustries/sagittarius/internal/ui/bubbletea"
 	"github.com/undeadindustries/sagittarius/internal/version"
@@ -65,6 +66,12 @@ func run(args []string) int {
 
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+
+	// Ensure the global home (~/.sagittarius) exists on first run. Best-effort:
+	// a failure here should not block --version or interactive use.
+	if _, err := storage.EnsureGlobalHome(); err != nil {
+		slog.Warn("could not create sagittarius home directory", "error", err)
 	}
 
 	if *showVersion || *showVersionShort {
@@ -252,7 +259,7 @@ func runWorktreeStub(name string) int {
 						fmt.Fprintf(os.Stderr,
 							"sagittarius: --worktree is experimental and not yet fully implemented.\n"+
 								"  The flag is accepted but git worktree creation is deferred (see AD-020).\n"+
-								"  To manually set up a worktree: git worktree add .gemini/worktrees/%s -b %s\n",
+								"  To manually set up a worktree: git worktree add .sagittarius/worktrees/%s -b %s\n",
 							name, name,
 						)
 						return 1
@@ -515,7 +522,7 @@ func buildRunner(ctx context.Context, modelOverride string, interactive bool, re
 	}
 	// Build the context manager after the runner so its summarizer reads the
 	// runner's live (mode-resolved) model rather than the startup default.
-	runner.SetContextManager(agent.NewContextManager(settings, gen, runner.Model, sessID))
+	runner.SetContextManager(agent.NewContextManager(settings, gen, runner.CompressionModel, sessID))
 	if reg := runtime.Registry(); reg != nil {
 		runner.SetRegistry(reg)
 	}

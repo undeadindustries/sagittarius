@@ -40,9 +40,9 @@ const (
 // still run.
 //
 // modelFn supplies the model id at summarization time rather than capturing it
-// once, so compression tracks the runner's live interaction-mode model: passing
-// Runner.Model keeps the summarizer aligned with user turns across mode switches
-// (AD-015 active-model rule, AD-022).
+// once, so compression tracks the live model: passing Runner.CompressionModel
+// keeps the summarizer aligned with user turns across mode switches and honors a
+// sagittarius.compression.model override (AD-015 active-model rule, AD-022).
 func NewContextManager(
 	settings *config.Settings,
 	gen provider.ContentGenerator,

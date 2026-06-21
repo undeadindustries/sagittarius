@@ -11,6 +11,8 @@ var reservedSagittariusKeys = map[string]struct{}{
 	"defaultMode":   {},
 	"modes":         {},
 	"subagents":     {},
+	"compression":   {},
+	"tools":         {},
 }
 
 var reservedSagittariusModeKeys = map[string]struct{}{
@@ -266,6 +268,51 @@ func marshalSubagents(s *SagittariusSubagents) (json.RawMessage, error) {
 	return json.Marshal(obj)
 }
 
+func unmarshalUtilityConfig(raw json.RawMessage) (*SagittariusUtilityConfig, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, fmt.Errorf("decode utility config: %w", err)
+	}
+	cfg := &SagittariusUtilityConfig{Extra: make(map[string]json.RawMessage)}
+	for key, val := range obj {
+		if key == "model" {
+			if err := json.Unmarshal(val, &cfg.Model); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		cfg.Extra[key] = val
+	}
+	if len(cfg.Extra) == 0 {
+		cfg.Extra = nil
+	}
+	return cfg, nil
+}
+
+func marshalUtilityConfig(cfg *SagittariusUtilityConfig) (json.RawMessage, error) {
+	if cfg == nil {
+		return nil, nil
+	}
+	obj := make(map[string]json.RawMessage)
+	if cfg.Model != "" {
+		b, err := json.Marshal(cfg.Model)
+		if err != nil {
+			return nil, err
+		}
+		obj["model"] = b
+	}
+	for key, val := range cfg.Extra {
+		obj[key] = val
+	}
+	if len(obj) == 0 {
+		return json.RawMessage("{}"), nil
+	}
+	return json.Marshal(obj)
+}
+
 func unmarshalSagittarius(raw json.RawMessage) (*SagittariusSettings, error) {
 	if len(raw) == 0 {
 		return nil, nil
@@ -301,6 +348,18 @@ func unmarshalSagittarius(raw json.RawMessage) (*SagittariusSettings, error) {
 				return nil, err
 			}
 			s.Subagents = sub
+		case "compression":
+			u, err := unmarshalUtilityConfig(val)
+			if err != nil {
+				return nil, fmt.Errorf("decode sagittarius.compression: %w", err)
+			}
+			s.Compression = u
+		case "tools":
+			u, err := unmarshalUtilityConfig(val)
+			if err != nil {
+				return nil, fmt.Errorf("decode sagittarius.tools: %w", err)
+			}
+			s.Tools = u
 		default:
 			if _, reserved := reservedSagittariusKeys[key]; reserved {
 				continue
@@ -355,6 +414,20 @@ func marshalSagittarius(s *SagittariusSettings) (json.RawMessage, error) {
 			return nil, err
 		}
 		obj["subagents"] = b
+	}
+	if s.Compression != nil {
+		b, err := marshalUtilityConfig(s.Compression)
+		if err != nil {
+			return nil, err
+		}
+		obj["compression"] = b
+	}
+	if s.Tools != nil {
+		b, err := marshalUtilityConfig(s.Tools)
+		if err != nil {
+			return nil, err
+		}
+		obj["tools"] = b
 	}
 	for key, val := range s.Extra {
 		obj[key] = val

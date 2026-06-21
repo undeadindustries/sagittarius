@@ -48,7 +48,7 @@ tests, security docs, and commit messages accordingly.
 | **Go toolchain** | **1.26.4** at `/home/rob/local/go1.26.4`, symlinked system-wide via `/usr/local/bin/go`. apt Go 1.22 removed. |
 | **Binary name** | `sagittarius` |
 | **Module** | `github.com/undeadindustries/sagittarius` |
-| **Config** | Shared `~/.gemini/settings.json` with fork where practical |
+| **Config** | Dedicated `~/.sagittarius/settings.json` (fresh start; no `~/.gemini` reads — AD-029) |
 | **Plan docs** | `docs/plans/` — **gitignored**, local agent context only |
 
 ### Phase Progress
@@ -569,6 +569,56 @@ welcome (logo/hide/greyscale) + exit summary (stats/resume/greyscale/clean-quit)
 accumulate. `go test ./...` green, `go vet` clean, `-race` clean on
 ui/agent/config/contextmgmt.
 
+### AD-029 — Dedicated `~/.sagittarius` home, fresh start, AGENTS.md-only (2026-06-21)
+
+Sagittarius moves off the shared `~/.gemini` tenancy into a dedicated global home
+`~/.sagittarius`. **Fresh start:** `~/.gemini` is never read or migrated. This is
+an intentional divergence — cross-tool session/credential sharing with the fork
+is dropped in exchange for a clean, independently-branded namespace.
+
+**Path resolution** (`internal/config/paths.go`): `SagittariusDir = ".sagittarius"`;
+`SAGITTARIUS_HOME` replaces `GEMINI_CLI_HOME`; helpers renamed
+`ResolveSagittariusDir`/`ResolveSettingsPath`/`ResolveGlobalAgentsPath` +
+`ProjectSagittariusDir(workDir)`. System paths: `/etc/sagittarius/settings.json`
+(+ `SAGITTARIUS_SYSTEM_SETTINGS_PATH`/`_DEFAULTS_PATH`).
+
+**First-run bootstrap** (new `internal/storage`): `EnsureGlobalHome()` creates
+`~/.sagittarius` (0700) — called at the top of `cmd/sagittarius` `run()`
+(best-effort; logs a warning on failure, even before `--version`). A faithful
+port of the fork `ProjectRegistry` (`registry.go`) assigns a stable slug per
+absolute project root, persisting `projects.json` and `tmp/<slug>/.project_root`
++ `history/<slug>/.project_root` ownership markers (slugify + `-N` collision
+counter; O_EXCL lock file with stale-break + graceful timeout fallback).
+Everything else stays lazy (fork parity).
+
+**Sessions** (`internal/session`): `ChatsDir` now resolves
+`~/.sagittarius/tmp/<slug>/chats/` via `storage.ProjectTmpDir` (was SHA256
+`tmp/<hash>/`); local `geminiHome()` deleted. `ProjectHash` is retained only as
+the metadata `projectHash` content field, not for the directory layout.
+
+**Memory** (`internal/agent/memory.go`): **AGENTS.md only**, no `GEMINI.md`.
+Global `~/.sagittarius/AGENTS.md`; project walk collects `AGENTS.md` up to the
+`~/.sagittarius` boundary.
+
+**Project dir:** `<repo>/.sagittarius/` for skills/agents/settings/worktrees
+(was `.gemini`). `~/.agents/skills` sibling alias retained.
+
+**Credentials rebrand** (`internal/credentials`): file
+`sagittarius-credentials.json`; scrypt salt/password `sagittarius*` (encryption
+format matches fork FileKeychain but the file is **not** interchangeable);
+keychain services `sagittarius-provider-*` / `sagittarius-mcp-*`; env
+`SAGITTARIUS_FORCE_FILE_STORAGE`.
+
+**Deferred (unchanged):** shadow-git `/restore` under `history/<slug>/.git`
+(AD-018); `trustedFolders.json`, `installation_id`, OAuth account files;
+auto-seeding a default provider into `settings.json`.
+
+Docs: `docs/home-directory.md` (new), `SECURITY.md` updated. Tests: `storage`
+EnsureGlobalHome/idempotent + slug create-markers/stable/collision; `config`
+ResolveSagittariusDir + `SAGITTARIUS_HOME`; `agent` AGENTS.md injection;
+`credentials` service-name; parity harness writes both layouts + sets both home
+env vars. `go test ./...` green, `go vet` clean.
+
 ---
 
 ## Workspace Layout
@@ -618,6 +668,7 @@ internal/skills/
 internal/agents/
 internal/extensions/
 internal/session/          # Phase 13 session persistence (JSONL, resume, list)
+internal/storage/          # Global home (~/.sagittarius) + project slug registry (AD-029)
 internal/version/
 internal/log/
 ```
@@ -636,6 +687,10 @@ Providers/models command split (2026-06-21, post-Phase 15, AD-026): supersedes A
 Model default resolution + activation coherence (2026-06-21, post-Phase 15, AD-027): per-mode model override always wins; legacy `sagittarius.defaultModel` demoted below the provider default so it no longer clobbers the active provider's model. New `sagittarius.defaultModels` (provider id → model) tier between mode override and provider default. `modes.ResolveModel`/`ResolveSubagentModel` gained a `providerID` arg (runner passes `settings.ActiveProvider()`; `agents.ResolveSubagentModel` derives it). Activation coherence: deactivating the live model auto-switches to the first checked model (`providersdialog.Deps.CurrentModel` + `saveActivation`), centralized via `provider.CoerceModelToCurated` in `RebuildRunner`. Docs: interaction-modes.md, commands.md, AGENTS.md (AD-027). Tests: config defaultModels round-trip/omit; modes override-beats-defaults / per-provider / global-fallback; provider CoerceModelToCurated; providersdialog live-model switch/keep. Verified: go test ./... pass.
 
 Phase 16 complete (2026-06-21): TUI presentation parity (AD-028). New `internal/ui/theme` (Default purple + Greyscale, `Resolve` via `NO_COLOR`/`ui.theme`); `ui.Options.ThemeName`/`NoColor`/`HideBanner`/`HideTips`; `config.Settings.UI()` typed passthrough reader. Structured scrollback roles + purple confirm focus band; ASCII launch banner + tips (`welcome.go`); `internal/agent/metrics.go` `sessionMetrics` + `Runner.Stats()` → `ui.SessionStats` + `ui.MetricsProvider`; footer `% context` + token total; `contextmgmt.Manager.Enabled()/ContextLimit()`; exit goodbye screen (`beginQuit` + post-teardown print) with `sagittarius --resume <id>`; basic markdown for assistant output (`markdown.go`) + theme `Code` style. Dialogs (`providersdialog`/`modelsdialog`) theme-driven via `SetTheme`. Docs: `docs/tui-themes.md`, PARITY_CHECKLIST TUI section. Tests: theme (3), config UI (2), bubbletea scrollback/confirm/welcome/exit/markdown (16), agent session-metrics (1). Verified: go test ./... pass, vet clean, -race clean on ui/agent/config/contextmgmt.
+
+Dedicated `~/.sagittarius` home (2026-06-21, post-Phase 16, AD-029): moved off shared `~/.gemini` to a dedicated, fresh-start global home — `~/.gemini` never read or migrated. `internal/config/paths.go`: `SagittariusDir=".sagittarius"`, `SAGITTARIUS_HOME` (was `GEMINI_CLI_HOME`), renamed `ResolveSagittariusDir`/`ResolveGlobalAgentsPath`/`ProjectSagittariusDir`, system path `/etc/sagittarius`. New `internal/storage`: `EnsureGlobalHome()` (called top of `run()`, best-effort) + faithful `ProjectRegistry` port (`projects.json` + `tmp/<slug>/.project_root` + `history/<slug>/.project_root`, slugify + `-N` collision + O_EXCL lock). `session.ChatsDir` → `tmp/<slug>/chats/` via `storage.ProjectTmpDir` (was SHA256 hash dir); `ProjectHash` kept only for the metadata field. Memory: AGENTS.md-only (no GEMINI.md), global `~/.sagittarius/AGENTS.md`, walk to home boundary. Project dir `<repo>/.sagittarius/` (skills/agents/worktree). Credentials rebrand: `sagittarius-credentials.json`, scrypt `sagittarius*` (format-compatible, not interchangeable), keychain `sagittarius-provider-*`/`sagittarius-mcp-*`, env `SAGITTARIUS_FORCE_FILE_STORAGE`. Docs: `docs/home-directory.md` (new), SECURITY.md. Tests: storage (4), config ResolveSagittariusDir, agent AGENTS.md injection, credentials service-name, parity harness dual-layout. Verified: go test ./... pass, vet clean.
+
+Auxiliary model roles + exit-summary session id (2026-06-21, post-AD-029): (1) Exit goodbye screen now prints the full session id (`renderExitStats` uses `stats.SessionID`; removed the 8-char `shortID` that rendered `sagittarius-<pid>` as `sagittar`), matching the `--resume` hint. (2) Context compression, tool-utility calls, and subagents now **default to the live mode-resolved model**, each overridable like mode models: new `sagittarius.compression.model` / `sagittarius.tools.model` (`config.SagittariusUtilityConfig`, registered in `reservedSagittariusKeys` + marshal/unmarshal) and the existing `sagittarius.subagents.*`. New `modes.ResolveUtilityModel`/`ResolveCompressionModel`/`ResolveToolsModel`; `modes.ResolveSubagentModel` reworked to `(name, cfg, liveModel)` — drops the providerID/providerDefault chain since the live model already encodes it. `Runner.CompressionModel()`/`ToolsModel()` resolve per call; `NewContextManager` is now fed `runner.CompressionModel` (was `runner.Model`) at both call sites (app.go RebuildRunner + main.go startup). `agents.ResolveSubagentModel(name, settings, liveModel)`. `tools.model` is a reserved seam (no model-using tool consumes it yet). Docs: interaction-modes.md. Tests: modes utility-defaults+overrides + subagent-follows-live; config compression/tools round-trip. Verified: go test ./... pass, vet clean, -race clean on modes/config/agent/ui.
 Next: —
 Blockers: fork mock server comparison partial; checkpointing (/restore) deferred (AD-018); sandbox not ported (AD-017); full /resume TUI browser deferred (AD-019); git worktrees stub (AD-020); pre-existing credentials data race ./internal/provider/; TestReasoningApplicableOnResponses flake; debug-mode tool disable + wireLogger port deferred.
 

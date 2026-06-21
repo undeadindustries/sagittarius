@@ -194,6 +194,21 @@ func (r *Runner) Model() string {
 	return r.model
 }
 
+// CompressionModel returns the model used for context compression /
+// summarization: the sagittarius.compression.model override when set, otherwise
+// the live mode-resolved model. Resolved per call so it tracks mid-session model
+// changes (provider switch, /mode).
+func (r *Runner) CompressionModel() string {
+	return modes.ResolveCompressionModel(r.sagittariusSettings(), r.Model())
+}
+
+// ToolsModel returns the model used for tool-utility calls: the
+// sagittarius.tools.model override when set, otherwise the live mode-resolved
+// model. Reserved for tool-utility model routing (no consumer yet).
+func (r *Runner) ToolsModel() string {
+	return modes.ResolveToolsModel(r.sagittariusSettings(), r.Model())
+}
+
 // ModelPinned reports whether CLI or explicit pinning bypasses mode routing.
 func (r *Runner) ModelPinned() bool {
 	return r.modelPinned

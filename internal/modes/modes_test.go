@@ -141,7 +141,7 @@ func TestSubagentModelFallback(t *testing.T) {
 			},
 		},
 	}
-	providerDefault := "provider-default"
+	liveModel := "live-model"
 
 	tests := []struct {
 		name string
@@ -154,10 +154,15 @@ func TestSubagentModelFallback(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := ResolveSubagentModel(tc.name, cfg, "openai", providerDefault); got != tc.want {
+			if got := ResolveSubagentModel(tc.name, cfg, liveModel); got != tc.want {
 				t.Fatalf("ResolveSubagentModel(%q) = %q, want %q", tc.name, got, tc.want)
 			}
 		})
+	}
+
+	// With no subagent override, a subagent follows the live model.
+	if got := ResolveSubagentModel("unknown", &config.SagittariusSettings{}, liveModel); got != liveModel {
+		t.Fatalf("ResolveSubagentModel no override = %q, want live model %q", got, liveModel)
 	}
 }
 
@@ -207,8 +212,40 @@ func TestGlobalDefaultWhenUnset(t *testing.T) {
 		})
 	}
 
-	if got := ResolveSubagentModel("any", nil, "openai", providerDefault); got != providerDefault {
-		t.Fatalf("ResolveSubagentModel nil cfg = %q, want %q", got, providerDefault)
+	if got := ResolveSubagentModel("any", nil, providerDefault); got != providerDefault {
+		t.Fatalf("ResolveSubagentModel nil cfg = %q, want live model %q", got, providerDefault)
+	}
+}
+
+func TestUtilityModelsDefaultToLiveModel(t *testing.T) {
+	t.Parallel()
+
+	live := "live-model"
+
+	// No overrides: every auxiliary role follows the live model.
+	if got := ResolveCompressionModel(nil, live); got != live {
+		t.Fatalf("ResolveCompressionModel default = %q, want %q", got, live)
+	}
+	if got := ResolveToolsModel(&config.SagittariusSettings{}, live); got != live {
+		t.Fatalf("ResolveToolsModel default = %q, want %q", got, live)
+	}
+
+	// Overrides win over the live model.
+	cfg := &config.SagittariusSettings{
+		Compression: &config.SagittariusUtilityConfig{Model: "compressor-model"},
+		Tools:       &config.SagittariusUtilityConfig{Model: "tools-model"},
+	}
+	if got := ResolveCompressionModel(cfg, live); got != "compressor-model" {
+		t.Fatalf("ResolveCompressionModel override = %q, want compressor-model", got)
+	}
+	if got := ResolveToolsModel(cfg, live); got != "tools-model" {
+		t.Fatalf("ResolveToolsModel override = %q, want tools-model", got)
+	}
+
+	// An empty override Model falls back to the live model.
+	empty := &config.SagittariusSettings{Compression: &config.SagittariusUtilityConfig{}}
+	if got := ResolveCompressionModel(empty, live); got != live {
+		t.Fatalf("ResolveCompressionModel empty override = %q, want %q", got, live)
 	}
 }
 
