@@ -205,7 +205,9 @@ func buildRunner(ctx context.Context, modelOverride string, interactive bool) (*
 		_ = runtime.Close()
 		return nil, nil, nil, nil, err
 	}
-	if reg, err := runtime.ReloadTools(ctx); err == nil {
+	// NewRuntime already connected MCP servers and discovered tools; assemble
+	// the registry from that catalog rather than reconnecting a second time.
+	if reg := runtime.Registry(); reg != nil {
 		runner.SetRegistry(reg)
 	}
 	if genErr != nil {

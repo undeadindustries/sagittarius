@@ -295,17 +295,23 @@ func (r *Runner) SetModel(model string) {
 	}
 }
 
-// SetRegistry replaces the tool registry and rebuilds the scheduler.
+// SetRegistry replaces the tool registry and rebuilds the scheduler. Safe to
+// call from a slash-command handler while a turn streams on another goroutine.
 func (r *Runner) SetRegistry(registry *tools.Registry) {
 	if registry == nil {
 		return
 	}
+	scheduler := tools.NewScheduler(registry, approvalToPolicy(r.approval), r.interactive)
+	r.regMu.Lock()
 	r.registry = registry
-	r.scheduler = tools.NewScheduler(registry, approvalToPolicy(r.approval), r.interactive)
+	r.scheduler = scheduler
+	r.regMu.Unlock()
 }
 
 // Registry returns the active tool registry.
 func (r *Runner) Registry() *tools.Registry {
+	r.regMu.RLock()
+	defer r.regMu.RUnlock()
 	return r.registry
 }
 

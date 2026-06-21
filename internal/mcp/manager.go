@@ -70,6 +70,11 @@ func (m *Manager) Reload(ctx context.Context, servers map[string]config.MCPServe
 		mcpTools, err := client.ListTools(ctx)
 		if err != nil {
 			slog.Warn("mcp list tools failed", "server", name, "error", err)
+			// Tool discovery failed on a live session; close it so the stdio
+			// child process / HTTP connection is not leaked until next reload.
+			if closeErr := client.Close(); closeErr != nil {
+				slog.Warn("mcp close after list failure", "server", name, "error", closeErr)
+			}
 			state.LastError = err.Error()
 			state.Status = ServerDisconnected
 			states = append(states, state)

@@ -3,12 +3,65 @@ package agent
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/contextmgmt"
 	"github.com/undeadindustries/sagittarius/internal/provider"
+	"github.com/undeadindustries/sagittarius/internal/tools"
 )
+
+// TestRunnerRegistrySwapConcurrent guards the registry/scheduler swap against a
+// data race: SetRegistry (called from a slash-command handler) must be safe to
+// run while a turn reads the registry and scheduler on its own goroutine. Run
+// with -race to catch unsynchronized access.
+func TestRunnerRegistrySwapConcurrent(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	runner, err := NewRunner(RunnerConfig{
+		Generator:   &fakeGenerator{},
+		Model:       "test-model",
+		WorkDir:     dir,
+		Interactive: false,
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	ws, err := tools.NewWorkspace(dir)
+	if err != nil {
+		t.Fatalf("NewWorkspace: %v", err)
+	}
+
+	const iterations = 200
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			runner.SetRegistry(tools.NewBuiltinRegistry(ws))
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			_ = runner.buildGenerateRequest()
+			_ = runner.toolScheduler()
+		}
+	}()
+
+	wg.Wait()
+
+	if runner.Registry() == nil {
+		t.Fatal("registry should be non-nil after concurrent swaps")
+	}
+	if runner.toolScheduler() == nil {
+		t.Fatal("scheduler should be non-nil after concurrent swaps")
+	}
+}
 
 func toolOutputMsg(name, output string) provider.Message {
 	return provider.Message{Role: provider.RoleUser, Parts: []provider.Part{{
