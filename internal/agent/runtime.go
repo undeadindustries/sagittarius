@@ -73,6 +73,16 @@ func NewRuntime(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 	return rt, nil
 }
 
+// Registry assembles the current tool registry from the already-loaded catalog
+// without reconnecting MCP servers. Use after NewRuntime, which performs the
+// initial discovery, to avoid a redundant reconnect.
+func (r *Runtime) Registry() *tools.Registry {
+	if r == nil || r.Catalog == nil {
+		return nil
+	}
+	return r.Catalog.BuildRegistry()
+}
+
 // ReloadTools reloads extensions, MCP, skills, and returns a fresh registry.
 func (r *Runtime) ReloadTools(ctx context.Context) (*tools.Registry, error) {
 	if r == nil || r.Catalog == nil {

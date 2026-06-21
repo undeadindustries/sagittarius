@@ -53,6 +53,7 @@ type Runner struct {
 	approval      ApprovalMode
 	interactive   bool
 	workDir       string
+	regMu         sync.RWMutex
 	registry      *tools.Registry
 	scheduler     *tools.Scheduler
 	history       []provider.Message
@@ -292,7 +293,7 @@ func (r *Runner) runAgentLoop(ctx context.Context, out chan<- ui.StreamEvent) {
 			}
 		}
 
-		responses, err := r.scheduler.Execute(ctx, toolCalls, emit)
+		responses, err := r.toolScheduler().Execute(ctx, toolCalls, emit)
 		if err != nil {
 			out <- ui.StreamEvent{Type: ui.StreamError, Err: err}
 			return
@@ -348,8 +349,22 @@ func (r *Runner) buildGenerateRequest() *provider.GenerateRequest {
 		Model:             r.model,
 		SystemInstruction: r.system,
 		Messages:          append([]provider.Message(nil), r.history...),
-		Tools:             r.registry.ListDeclarations(),
+		Tools:             r.toolRegistry().ListDeclarations(),
 	}
+}
+
+// toolRegistry returns the active tool registry under the registry lock.
+func (r *Runner) toolRegistry() *tools.Registry {
+	r.regMu.RLock()
+	defer r.regMu.RUnlock()
+	return r.registry
+}
+
+// toolScheduler returns the active tool scheduler under the registry lock.
+func (r *Runner) toolScheduler() *tools.Scheduler {
+	r.regMu.RLock()
+	defer r.regMu.RUnlock()
+	return r.scheduler
 }
 
 func (r *Runner) consumeStream(
