@@ -17,6 +17,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/agent"
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/credentials"
+	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 	"github.com/undeadindustries/sagittarius/internal/session"
 	"github.com/undeadindustries/sagittarius/internal/ui"
@@ -419,6 +420,7 @@ func buildRunner(ctx context.Context, modelOverride string, interactive bool, re
 	}
 
 	model := endpoint.Model
+	modelPinned := modelOverride != ""
 	if modelOverride != "" {
 		model = modelOverride
 	}
@@ -431,7 +433,6 @@ func buildRunner(ctx context.Context, modelOverride string, interactive bool, re
 	}
 
 	sessID := persistentSessionID()
-	ctxMgr := agent.NewContextManager(settings, gen, model, sessID)
 
 	runtime, err := agent.NewRuntime(ctx, agent.RuntimeConfig{
 		Settings:      settings,
@@ -491,14 +492,19 @@ func buildRunner(ctx context.Context, modelOverride string, interactive bool, re
 		Generator:       gen,
 		Model:           model,
 		Interactive:     interactive,
-		ContextManager:  ctxMgr,
 		SessionRecorder: sessRecorder,
 		InitialHistory:  initialHistory,
+		Settings:        settings,
+		InitialMode:     modes.DefaultFromSettings(settings),
+		ModelPinned:     modelPinned,
 	})
 	if err != nil {
 		_ = runtime.Close()
 		return nil, nil, nil, nil, err
 	}
+	// Build the context manager after the runner so its summarizer reads the
+	// runner's live (mode-resolved) model rather than the startup default.
+	runner.SetContextManager(agent.NewContextManager(settings, gen, runner.Model, sessID))
 	if reg := runtime.Registry(); reg != nil {
 		runner.SetRegistry(reg)
 	}

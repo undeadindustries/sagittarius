@@ -324,15 +324,22 @@ func decodeSettingsDocument(raw []byte) (*Settings, error) {
 	}
 	s := &Settings{Raw: make(map[string]json.RawMessage, len(top))}
 	for key, val := range top {
-		if key == "providers" {
+		switch key {
+		case "providers":
 			ps, err := unmarshalProviders(val)
 			if err != nil {
 				return nil, err
 			}
 			s.Providers = ps
-			continue
+		case "sagittarius":
+			sag, err := unmarshalSagittarius(val)
+			if err != nil {
+				return nil, err
+			}
+			s.Sagittarius = sag
+		default:
+			s.Raw[key] = val
 		}
-		s.Raw[key] = val
 	}
 	return s, nil
 }
@@ -351,6 +358,13 @@ func encodeSettingsDocument(s *Settings) ([]byte, error) {
 			return nil, err
 		}
 		top["providers"] = b
+	}
+	if s.Sagittarius != nil {
+		b, err := marshalSagittarius(s.Sagittarius)
+		if err != nil {
+			return nil, err
+		}
+		top["sagittarius"] = b
 	}
 	out, err := json.MarshalIndent(top, "", "  ")
 	if err != nil {

@@ -98,5 +98,6 @@ func (r *Registry) registerBuiltins() {
 		mcpCommand(),
 		agentsCommand(),
 		reasoningCommand(),
+		modeCommand(),
 	}
 }

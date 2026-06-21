@@ -6,6 +6,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/agents"
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/mcp"
+	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 	"github.com/undeadindustries/sagittarius/internal/session"
 	"github.com/undeadindustries/sagittarius/internal/skills"
@@ -26,6 +27,9 @@ type Hooks interface {
 	// Session hooks — may be nil when no session manager is active.
 	ListSessions() ([]session.SessionInfo, error)
 	ClearHistory() error
+	// Interaction mode hooks (Phase 15).
+	SetInteractionMode(ctx context.Context, mode modes.Mode) (model string, err error)
+	InteractionMode() (mode modes.Mode, model string)
 }
 
 // Deps supplies slash command dependencies (injectable for tests).

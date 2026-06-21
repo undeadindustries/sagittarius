@@ -43,8 +43,8 @@ tests, security docs, and commit messages accordingly.
 
 | Field | Value |
 |-------|-------|
-| **Overall** | Phase 14 complete — Parity validation |
-| **Active phase** | Phase 15 — Interaction modes |
+| **Overall** | Phase 15 complete — Interaction modes |
+| **Active phase** | — (post-parity enhancements) |
 | **Go toolchain** | **1.26.4** at `/home/rob/local/go1.26.4`, symlinked system-wide via `/usr/local/bin/go`. apt Go 1.22 removed. |
 | **Binary name** | `sagittarius` |
 | **Module** | `github.com/undeadindustries/sagittarius` |
@@ -69,7 +69,7 @@ tests, security docs, and commit messages accordingly.
 | 12 | MCP, skills, extensions | Complete |
 | 13 | Sessions & advanced CLI | Complete |
 | 14 | Parity validation | Complete |
-| 15 | Interaction modes (post-parity) | Not started |
+| 15 | Interaction modes (post-parity) | Complete |
 
 **MVP milestone (Phases 01–05 + 04):** scaffolding, basic TUI, Gemini API key
 auth with secure storage, first streamed Gemini response.
@@ -275,6 +275,31 @@ Phase 14 parity harness lives in `tests/parity/` (package `parity_test`). Mock-s
 5. **Performance baseline:** Sagittarius cold-start **7ms**; fork source-run cold-start **~3.6s** (483× speedup). Fork's production bundle broken in this env — source-run is the only option here.
 6. **Help parity:** Fork slash commands are not accessible via headless mode; parity is verified via static `forkInScopeCommands` table (extracted from fork TypeScript) + Sagittarius registry comparison.
 
+### AD-022 — Interaction modes vs fork approval modes (2026-06-21)
+
+Phase 15 adds Sagittarius **interaction modes** (`agent`, `plan`, `ask`, `debug`) under
+`settings.json` → `sagittarius.*`. They control **model selection** and optional
+`systemPromptSuffix` per mode; they do **not** change tool policy.
+
+| Concern | Fork | Sagittarius |
+|---------|------|-------------|
+| Read-only planning | `--approval-mode plan` (tool policy) | Unchanged — still `ApprovalMode` / tools policy |
+| Model routing | Fork auto plan→flash routing in `general.plan.modelRouting` | `/mode` + `sagittarius.modes.*.model` |
+
+**Settings namespace:** `sagittarius.defaultModel`, `sagittarius.defaultMode`,
+`sagittarius.modes.{plan,ask,debug,agent}.*`, `sagittarius.subagents.{default,<name>}.*`.
+Unknown `sagittarius` sub-keys round-trip via `Extra` maps.
+
+**Default mode when unset:** `agent` (provider default model unless `defaultModel` set).
+
+**Debug mode (Phase 15 MVP):** extra structured logging on model resolution when mode
+is `debug`; **does not** port `wireLogger.ts` or disable tool execution (deferred).
+
+**Resolution:** `internal/modes` (`ResolveModel`, `ResolveSubagentModel`); runner
+refreshes model before each generate round; `-m` pins model and skips mode routing.
+Subagent helper: `agents.ResolveSubagentModel` (execution still stubbed). UX: `/mode`,
+TUI **Ctrl+Shift+M** cycles modes. Docs: `docs/interaction-modes.md`.
+
 ---
 
 ## Workspace Layout
@@ -318,6 +343,7 @@ internal/ui/              # ui.UI interface
 internal/ui/bubbletea/    # Bubble Tea implementation (only place that imports charm)
 internal/ui/demo/         # Phase 04 echo App (replaced in Phase 07)
 internal/slash/
+internal/modes/             # Phase 15 interaction modes + model routing
 internal/mcp/
 internal/skills/
 internal/agents/
@@ -330,10 +356,15 @@ internal/log/
 ---
 
 Phase 13 complete (2026-06-21): internal/session package (Recorder, LoadSession, ListSessions, DeleteSession, Selector/ResolveSession, ProjectHash/ChatsDir, ConvertToProviderHistory, FormatSessionList); CLI flags --resume/-r, --list-sessions, --delete-session, --output-format text|json|stream-json, --worktree stub (AD-020); session recording wired into agent/runner.go (user/model/tool messages); /resume and /clear slash commands; slash.Hooks extended with ListSessions/ClearHistory; Runner.ClearHistory + InitialHistory; JSONL format fork-compatible. Tests: TestSessionRoundTrip, TestResumeLatest, TestListSessionsEmpty, TestResumeByIndex, TestResumeByUUID, TestResumeInvalidIdentifier, TestProjectHash, TestConvertToProviderHistory, TestDeleteSession, TestFormatSessionList.
+Phase 15 complete (2026-06-21): internal/config sagittarius.* typed settings + round-trip; internal/modes (Mode, State, ResolveModel, ResolveSubagentModel); runner mode routing before each generate round; /mode slash + Ctrl+Shift+M TUI cycle; agents.ResolveSubagentModel; docs/interaction-modes.md; AD-022. Tests: TestModeSelectsModel, TestSubagentModelFallback, TestGlobalDefaultWhenUnset, TestModeSwitchMidSession, TestSagittariusSettingsRoundTrip.
+Phase 15 Bugbot fixes (2026-06-21): context manager now tracks the runner's live mode-resolved model — NewContextManager takes modelFn func() string (was a captured string) and the summarizer resolves it per call, so chat compression/summarization on the openai-chat path uses the same model as user turns across provider rebuilds AND mid-session /mode switches (was using endpoint.Model / provider default — AD-015 violation); main.go builds the context manager after the runner using runner.Model so startup also matches a non-default mode model; TUI footer refreshes idleStatus from app.Status() on StreamDone so /mode and Ctrl+Shift+M are reflected (was reset to the startup-captured status); ValidateSagittariusSettings no longer rejects a suffix-only mode block (ResolveModel falls back to defaultModel/provider default while the suffix applies); NewRunner no longer treats InitialMode==0 as unset (ModeAgent is the zero value — explicit ModeAgent was silently overridden by sagittarius.defaultMode; callers resolve DefaultFromSettings themselves, as main.go already does). Tests added: TestValidateSuffixOnlyModeAccepted, TestExplicitAgentModeNotOverriddenByDefault. Verified: go test ./... pass, -race clean on touched packages.
+Next: —
+Blockers: fork mock server comparison partial; checkpointing (/restore) deferred (AD-018); sandbox not ported (AD-017); full /resume TUI browser deferred (AD-019); git worktrees stub (AD-020); pre-existing credentials data race ./internal/provider/; TestReasoningApplicableOnResponses flake; debug-mode tool disable + wireLogger port deferred.
+
 Phase 14 complete (2026-06-21): tests/parity/ harness (TestParityHelpOutput, TestParityHeadlessMock, TestParityProviderList, TestParityColdStartPerf); mock OpenAI SSE server (httptest); SAGITTARIUS_PARITY_FORK=1 env gate for live-fork tests; docs/PARITY_CHECKLIST.md committed; AD-021 (parity harness design). Key results: all 4 tests pass, Sagittarius cold-start 7ms vs fork ~3.6s (483x), mock headless response verified end-to-end, all in-scope slash commands present. Known gaps documented in checklist.
 Phase 14 Bugbot fixes (2026-06-21): sagittariusBin now builds the binary on demand (go build → temp, cached via sync.Once) instead of t.Skip when bin/sagittarius is absent, so the headless/perf paths always run under `go test ./...` without `make build`; TestParityProviderList now asserts config.LookupBuiltInProvider + BuiltInProviders length instead of only logging the IDs; measureForkColdStart bases its ok return on cmd.Run() success (no bogus perf/speedup log on npm failure or timeout); all fork npm invocations (invokeFork/invokeForkLoose/measureForkColdStart) serialize on forkInvokeMu so t.Parallel tests don't race the shared tsx transpile cache; invokeSagittariusOutput returns exitCode -1 for non-ExitError failures (context deadline, unlaunchable binary) via errors.As so callers gating on code==0 don't misclassify a timed-out run as success. Verified: go test ./tests/parity/ (4 pass, builds bin itself), -race clean, SAGITTARIUS_PARITY_FORK=1 live run (serialized npm, 428x speedup logged).
 
-Next: Phase 15 — Interaction modes
+Next: Phase 15 complete (see handoff above) — post-parity enhancements
 Blockers: fork mock server comparison partial (fork exits before reaching mock endpoint — settings format or credential check difference); checkpointing (/restore) deferred (AD-018); sandbox not ported (AD-017); full /resume TUI browser deferred (AD-019); git worktrees stub only (AD-020); pre-existing credentials data race ./internal/provider/; TestReasoningApplicableOnResponses order-dependent flake (internal/slash).
 
 Phase 13 Bugbot fixes (2026-06-21): bare --resume/-r now resumes latest via normalizeResumeArgs (stdlib flag can't express optional-value flags); --resume is a hard error when os.Getwd fails instead of silently starting fresh; ConvertToProviderHistory no longer synthesizes placeholder tool outputs (recorder already persists real responses as the following user turn) — removes duplicate function-response turns on resume; buildProviderParts passes the recorded response map through (coerceResponseMap) instead of double-wrapping under a second "output" key; loadSessionInfo applies $rewindTo trimming so --list-sessions counts/preview match LoadSession; /clear rotates the recorder to a fresh JSONL file (Recorder.Rotate + Runner.RotateSession). Tests added: TestNormalizeResumeArgs, TestConvertToProviderHistoryToolRoundTrip, TestRecorderRotateStartsNewFile, TestListSessionsRespectsRewind.
