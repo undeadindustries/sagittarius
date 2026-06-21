@@ -4,6 +4,7 @@ docs/plans/
 # Go build artifacts
 /bin/
 bin/
+/sagittarius
 /dist/
 *.exe
 *.exe~

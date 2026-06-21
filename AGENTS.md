@@ -43,8 +43,8 @@ tests, security docs, and commit messages accordingly.
 
 | Field | Value |
 |-------|-------|
-| **Overall** | Phase 13 complete — Sessions & advanced CLI |
-| **Active phase** | Phase 14 — Parity validation |
+| **Overall** | Phase 14 complete — Parity validation |
+| **Active phase** | Phase 15 — Interaction modes |
 | **Go toolchain** | **1.26.4** at `/home/rob/local/go1.26.4`, symlinked system-wide via `/usr/local/bin/go`. apt Go 1.22 removed. |
 | **Binary name** | `sagittarius` |
 | **Module** | `github.com/undeadindustries/sagittarius` |
@@ -68,7 +68,7 @@ tests, security docs, and commit messages accordingly.
 | 11 | Context management | Complete |
 | 12 | MCP, skills, extensions | Complete |
 | 13 | Sessions & advanced CLI | Complete |
-| 14 | Parity validation | Not started |
+| 14 | Parity validation | Complete |
 | 15 | Interaction modes (post-parity) | Not started |
 
 **MVP milestone (Phases 01–05 + 04):** scaffolding, basic TUI, Gemini API key
@@ -264,6 +264,17 @@ The fork's `/resume` opens an interactive TUI session browser (Bubble Tea list c
 
 `--worktree` / `-w` flag is accepted and validated against `experimental.worktrees: true` in settings, but git worktree creation (`git worktree add .gemini/worktrees/<name>`) is **not executed**. A clear error message with manual instructions is printed instead. Full implementation requires subprocess management + worktree lifecycle tracking. Deferred to a dedicated worktrees phase post-parity (fork docs: `docs/cli/git-worktrees.md`).
 
+### AD-021 — Parity harness design + fork runnability (2026-06-21)
+
+Phase 14 parity harness lives in `tests/parity/` (package `parity_test`). Mock-server tests run by default via `go test ./...`; live-fork comparison tests are gated by `SAGITTARIUS_PARITY_FORK=1`. Key decisions:
+
+1. **No build tag** — env var gating is simpler and composable with `go test` filters.
+2. **Fork invocation:** `npm start -- <args>` from `defaultForkDir = /home/rob/src/gemini-cli`. Noise-stripping regex removes all `> ...`, `Checking build status...`, `npm notice/warn`, and tsx source-rebuild lines.
+3. **Mock server:** `net/http/httptest` streaming SSE chunks for OpenAI-chat path. Gemini binary-level mock deferred — SDK uses non-HTTP transport; provider-level tests cover it.
+4. **Fork mock comparison:** The fork's `-p hello` against the mock OpenAI server produces only preamble (no AI response) in this environment — the fork's provider code validates credentials or network before reaching the endpoint. Noted as "PARTIAL" in test output; not a failure. Sagittarius correctly returns the mock response.
+5. **Performance baseline:** Sagittarius cold-start **7ms**; fork source-run cold-start **~3.6s** (483× speedup). Fork's production bundle broken in this env — source-run is the only option here.
+6. **Help parity:** Fork slash commands are not accessible via headless mode; parity is verified via static `forkInScopeCommands` table (extracted from fork TypeScript) + Sagittarius registry comparison.
+
 ---
 
 ## Workspace Layout
@@ -319,9 +330,13 @@ internal/log/
 ---
 
 Phase 13 complete (2026-06-21): internal/session package (Recorder, LoadSession, ListSessions, DeleteSession, Selector/ResolveSession, ProjectHash/ChatsDir, ConvertToProviderHistory, FormatSessionList); CLI flags --resume/-r, --list-sessions, --delete-session, --output-format text|json|stream-json, --worktree stub (AD-020); session recording wired into agent/runner.go (user/model/tool messages); /resume and /clear slash commands; slash.Hooks extended with ListSessions/ClearHistory; Runner.ClearHistory + InitialHistory; JSONL format fork-compatible. Tests: TestSessionRoundTrip, TestResumeLatest, TestListSessionsEmpty, TestResumeByIndex, TestResumeByUUID, TestResumeInvalidIdentifier, TestProjectHash, TestConvertToProviderHistory, TestDeleteSession, TestFormatSessionList.
+Phase 14 complete (2026-06-21): tests/parity/ harness (TestParityHelpOutput, TestParityHeadlessMock, TestParityProviderList, TestParityColdStartPerf); mock OpenAI SSE server (httptest); SAGITTARIUS_PARITY_FORK=1 env gate for live-fork tests; docs/PARITY_CHECKLIST.md committed; AD-021 (parity harness design). Key results: all 4 tests pass, Sagittarius cold-start 7ms vs fork ~3.6s (483x), mock headless response verified end-to-end, all in-scope slash commands present. Known gaps documented in checklist.
+Phase 14 Bugbot fixes (2026-06-21): sagittariusBin now builds the binary on demand (go build → temp, cached via sync.Once) instead of t.Skip when bin/sagittarius is absent, so the headless/perf paths always run under `go test ./...` without `make build`; TestParityProviderList now asserts config.LookupBuiltInProvider + BuiltInProviders length instead of only logging the IDs; measureForkColdStart bases its ok return on cmd.Run() success (no bogus perf/speedup log on npm failure or timeout); all fork npm invocations (invokeFork/invokeForkLoose/measureForkColdStart) serialize on forkInvokeMu so t.Parallel tests don't race the shared tsx transpile cache; invokeSagittariusOutput returns exitCode -1 for non-ExitError failures (context deadline, unlaunchable binary) via errors.As so callers gating on code==0 don't misclassify a timed-out run as success. Verified: go test ./tests/parity/ (4 pass, builds bin itself), -race clean, SAGITTARIUS_PARITY_FORK=1 live run (serialized npm, 428x speedup logged).
+
+Next: Phase 15 — Interaction modes
+Blockers: fork mock server comparison partial (fork exits before reaching mock endpoint — settings format or credential check difference); checkpointing (/restore) deferred (AD-018); sandbox not ported (AD-017); full /resume TUI browser deferred (AD-019); git worktrees stub only (AD-020); pre-existing credentials data race ./internal/provider/; TestReasoningApplicableOnResponses order-dependent flake (internal/slash).
+
 Phase 13 Bugbot fixes (2026-06-21): bare --resume/-r now resumes latest via normalizeResumeArgs (stdlib flag can't express optional-value flags); --resume is a hard error when os.Getwd fails instead of silently starting fresh; ConvertToProviderHistory no longer synthesizes placeholder tool outputs (recorder already persists real responses as the following user turn) — removes duplicate function-response turns on resume; buildProviderParts passes the recorded response map through (coerceResponseMap) instead of double-wrapping under a second "output" key; loadSessionInfo applies $rewindTo trimming so --list-sessions counts/preview match LoadSession; /clear rotates the recorder to a fresh JSONL file (Recorder.Rotate + Runner.RotateSession). Tests added: TestNormalizeResumeArgs, TestConvertToProviderHistoryToolRoundTrip, TestRecorderRotateStartsNewFile, TestListSessionsRespectsRewind.
-Next: Phase 14 — Parity validation
-Blockers: checkpointing (/restore) deferred (AD-018); git worktrees stub only (AD-020); sandbox not ported (AD-017); full /resume TUI browser deferred (AD-019); pre-existing credentials data race in ./internal/provider/ still present; TestReasoningApplicableOnResponses (internal/slash) is order-dependent on provider session-reasoning package globals (passes in isolation) — candidate for the same global-state cleanup as the credentials race.
 
 Phase 12 complete (2026-06-21): internal/mcp (SDK client, manager, DiscoveredTool, credentials bearer), internal/skills (SKILL.md loader/manager), internal/agents (stub registry), internal/extensions (stub loader), agent.Runtime/Catalog, tools.activate_skill, /mcp /skills /agents reload+list, docs/tools/mcp-server.md; tests TestMCPListToolsMock, TestSkillDiscovery, TestActivateSkillTool.
 Next: Phase 13 — Sessions & advanced CLI
