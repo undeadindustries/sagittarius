@@ -18,6 +18,15 @@ func IsOpenAIChatMode(settings *config.Settings) bool {
 	return endpoint.WireFormat == config.WireFormatOpenAIChat
 }
 
+// IsOpenAIResponsesMode reports whether the active provider uses openai-responses wire format.
+func IsOpenAIResponsesMode(settings *config.Settings) bool {
+	endpoint, err := ResolveEndpointConfig(settings)
+	if err != nil {
+		return false
+	}
+	return endpoint.WireFormat == config.WireFormatOpenAIResponses
+}
+
 // SetActiveProvider updates providers.active to providerID.
 func SetActiveProvider(settings *config.Settings, providerID string) error {
 	providerID = strings.TrimSpace(providerID)
@@ -181,6 +190,8 @@ func setProviderInstance(settings *config.Settings, providerID string, cfg *conf
 		settings.Providers.OpenAI = cfg
 	case string(config.BuiltInGeminiAPIKey):
 		settings.Providers.GeminiAPIKey = cfg
+	case string(config.BuiltInOpenAIResponses):
+		settings.Providers.OpenAIResponses = cfg
 	default:
 		if settings.Providers.Extra == nil {
 			settings.Providers.Extra = make(map[string]json.RawMessage)
@@ -192,4 +203,62 @@ func setProviderInstance(settings *config.Settings, providerID string, cfg *conf
 		settings.Providers.Extra[providerID] = raw
 	}
 	return nil
+}
+
+// SetProviderReasoningEffort persists reasoningEffort for providerID.
+func SetProviderReasoningEffort(settings *config.Settings, providerID, level string) error {
+	level = strings.TrimSpace(level)
+	if level == "" {
+		return fmt.Errorf("set provider reasoning effort: level is required")
+	}
+	if !IsValidReasoningLevel(level) {
+		return fmt.Errorf("set provider reasoning effort: unknown level %q", level)
+	}
+	if settings == nil {
+		return fmt.Errorf("set provider reasoning effort: settings are required")
+	}
+	cfg, err := ensureProviderInstance(settings, providerID)
+	if err != nil {
+		return err
+	}
+	cfg.ReasoningEffort = level
+	return setProviderInstance(settings, providerID, cfg)
+}
+
+// EffectiveProviderSummary describes the active provider for slash commands.
+type EffectiveProviderSummary struct {
+	ProviderID      string
+	DisplayName     string
+	WireFormat      config.WireFormat
+	ReasoningEffort string
+}
+
+// EffectiveProvider returns metadata for the active provider.
+func EffectiveProvider(settings *config.Settings) (EffectiveProviderSummary, error) {
+	if settings == nil {
+		return EffectiveProviderSummary{}, fmt.Errorf("effective provider: settings are required")
+	}
+	endpoint, err := ResolveEndpointConfig(settings)
+	if err != nil {
+		return EffectiveProviderSummary{}, err
+	}
+	summary := EffectiveProviderSummary{
+		ProviderID:      endpoint.ProviderID,
+		WireFormat:      endpoint.WireFormat,
+		ReasoningEffort: endpoint.ReasoningEffort,
+	}
+	if def, ok := config.LookupBuiltInProvider(endpoint.ProviderID); ok {
+		summary.DisplayName = def.DisplayName
+	} else if settings.Providers != nil {
+		if custom, ok := settings.Providers.Custom[endpoint.ProviderID]; ok {
+			summary.DisplayName = custom.DisplayName
+			if summary.DisplayName == "" {
+				summary.DisplayName = endpoint.ProviderID
+			}
+		}
+	}
+	if summary.DisplayName == "" {
+		summary.DisplayName = endpoint.ProviderID
+	}
+	return summary, nil
 }

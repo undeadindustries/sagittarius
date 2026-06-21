@@ -43,8 +43,8 @@ tests, security docs, and commit messages accordingly.
 
 | Field | Value |
 |-------|-------|
-| **Overall** | Phase 09 complete — slash commands |
-| **Active phase** | Phase 10 — OpenAI Responses API |
+| **Overall** | Phase 11 complete — Context management |
+| **Active phase** | Phase 12 — MCP, skills, extensions |
 | **Go toolchain** | **1.26.4** at `/home/rob/local/go1.26.4`, symlinked system-wide via `/usr/local/bin/go`. apt Go 1.22 removed. |
 | **Binary name** | `sagittarius` |
 | **Module** | `github.com/undeadindustries/sagittarius` |
@@ -64,8 +64,8 @@ tests, security docs, and commit messages accordingly.
 | 07 | Agent loop & headless `-p` | Complete |
 | 08 | Core tools | Complete |
 | 09 | Slash commands | Complete |
-| 10 | OpenAI Responses API | Not started |
-| 11 | Context management | Not started |
+| 10 | OpenAI Responses API | Complete |
+| 11 | Context management | Complete |
 | 12 | MCP, skills, extensions | Not started |
 | 13 | Sessions & advanced CLI | Not started |
 | 14 | Parity validation | Not started |
@@ -171,6 +171,64 @@ stub). `agent.App` intercepts `/` input before the runner; slash output uses
 tests. Fork rule: Gemini keys via `/auth`, not `/provider set … key`. Reference:
 `docs/reference/commands.md`.
 
+### AD-014 — OpenAI Responses adapter separate from chat (2026-06-20)
+
+Phase 10 implements `OpenAIResponsesGenerator` as a sibling of
+`OpenAIChatGenerator` (not merged). `wireFormat: openai-responses` uses
+`POST /v1/responses`, SSE `response.*` events, flat tool declarations,
+`reasoning.effort`, optional `previous_response_id` chaining, and built-in
+`openai-responses` (default model `gpt-5-codex`). Session reasoning override
+lives in `provider` session state; `/reasoning` slash commands persist via
+`providers.<id>.reasoningEffort`. `IsOpenAIResponsesMode` hook returns true
+for responses wire format; `IsOpenAIChatMode` stays false on this path (no
+Phase 11 client-side local masking).
+
+### AD-015 — Local-context defenses in internal/contextmgmt, openai-chat only (2026-06-20)
+
+Phase 11 ports the fork's local-context defenses into a new package
+`internal/contextmgmt` (named to avoid colliding with stdlib `context`). Every
+defense is gated on `provider.IsOpenAIChatMode` (the fork's `isLocalMode`): the
+agent builds a `*contextmgmt.Manager` only for `wireFormat: openai-chat`, and a
+nil/disabled manager is a pure pass-through. **Gemini-native and
+openai-responses paths are never masked or compressed client-side** (consistent
+with AD-014).
+
+`Manager.PrepareTurn` runs at the top of every tool round (so it is both the
+pre-turn and post-tool hook) and applies, in order: (1) **write-file ejection**
+(Layer 3 only — fork TODOs #1–#4 deferred), (2) **tool-output masking** (fork
+`toolOutputMaskingService` "Hybrid Backward-Scanned FIFO", with
+`localMaskingDefaults` scaled to the resolved context limit and floored by
+`minProtectionTokens`/`minPrunableTokens`), and (3) **pre-turn budget** +
+**adaptive threshold** + **chat compression** (`chatCompressionService`:
+`<state_snapshot>` summarize → verify, split-point on `preserveFraction`,
+oversized-tool-response truncation with disk offload). The pre-turn budget layer
+only *forces* early compression; the normal threshold check still runs when the
+budget does not trigger.
+
+**Active model only:** compression/summarization uses the active provider model
+via an injected `Summarizer` adapter (`agent.newProviderSummarizer`) — no
+secondary/per-utility model routing (fork open TODO deferred). Loop-detection /
+next-speaker model selection: the Go port has no separate loop-detector yet, so
+there is no secondary model to redirect; the active-model rule is satisfied by
+construction and noted as a follow-up for Phase 12+.
+
+**Token counting:** stdlib-only deterministic heuristic in `tokens.go`
+(`charsPerToken = 4`, with a higher divisor for ASCII-heavy text and a JSON
+structural surcharge for function-call/response parts) — no tokenizer
+dependency. Documented as an approximation; budget math consumes it the same way
+the fork consumes its tokenizer counts.
+
+**Adaptive state** is per-session and thread-safe (`AdaptiveTracker` with
+`sync.Mutex` + ring buffer), not the fork's package-level mutable state.
+
+**Settings** (per-provider under `providers.<id>.*`, fork-compatible leaf names):
+`contextLimit`, `compressionThreshold`, `preserveFraction`,
+`toolOutputMaskingEnabled`, `toolOutputMaskingProtectionFraction`,
+`toolOutputMaskingPrunableFraction`, `toolOutputMaskingProtectLatestTurn`.
+Budget/ejection/adaptive run on built-in defaults (not yet user-exposed —
+deferred). Per-provider placement (vs. the fork's single global `local.*` block)
+follows AD-003.
+
 ---
 
 ## Workspace Layout
@@ -220,9 +278,15 @@ internal/log/
 
 ---
 
-Phase 09 complete (2026-06-20): internal/slash (Command, Registry, Parser, Processor, Deps/Hooks), built-ins /help /quit /provider /model /auth /memory reload /skills reload stub, agent.App slash interception, ui StreamInfo/StreamQuit, provider SetProviderModel/Field/AddCustom/RemoveCustom, docs/reference/commands.md; tests TestHelpListsProviderSubcommands, TestProviderUsePersists, TestQuitExits, TestAuthStoresKey, TestProviderSetRejectedForGemini.
-Next: Phase 10 — OpenAI Responses API
+Phase 11 complete (2026-06-20): internal/contextmgmt package (tokens heuristic, masking_defaults, truncation, tool_output_masking, pre_turn_budget, adaptive_threshold, write_file_ejection, compression, manager) gated by IsOpenAIChatMode; provider.ResolveContextManagement + config masking knobs (toolOutputMasking*); agent.NewContextManager + newProviderSummarizer (active model only); runner pre-turn/post-tool hook via Manager.PrepareTurn; main wiring with per-process sessionID. Tests: write_file_ejection_test (Eject* cases), compression_test (FindCompressSplitPoint + Compress* cases incl. truncation/verification/anchored), tool_output_masking_test, pre_turn_budget_test, adaptive_threshold_test, masking_defaults_test, manager_test (TestManagerMaskingAppliedOnOpenAIChat, TestManagerMaskingNotAppliedWhenDisabled, TestManagerNilIsPassThrough), provider TestResolveContextManagementGating (gemini/openai-responses not masked, openai-chat enabled).
+Next: Phase 12 — MCP, skills, extensions
+Blockers: pre-existing data race in credentials.ResetForTesting (hybrid.go:95-98 unguarded globals) surfaces under `go test -race ./internal/provider/` via parallel test cleanups; not Phase 11 code, left untouched per scope. Fix by guarding the sharedFileStore globals with fileStoreMu. Follow-up: dedicated loop-detection/next-speaker port (active-model rule already holds — no secondary model exists yet).
+
+Phase 10 complete (2026-06-20): OpenAIResponsesGenerator + openai_responses_wire (SSE mapper, request translation, chaining trim), built-in openai-responses, ResponsesURL/EndpointConfig reasoning+chaining fields, factory branch, IsOpenAIResponsesMode, session reasoning override, /reasoning slash (show/clear/save/levels), docs/reference/commands.md; tests TestResponsesTextDelta, TestResponsesFunctionCall, TestReasoningEffortInRequest, TestNoLocalMaskingOnResponsesPath, TestFactorySelectsOpenAIResponses, TestReasoningNotApplicableOnGemini, TestReasoningApplicableOnResponses.
+Next: Phase 11 — Context management
 Blockers: none
+
+Phase 09 complete (2026-06-20): internal/slash (Command, Registry, Parser, Processor, Deps/Hooks), built-ins /help /quit /provider /model /auth /memory reload /skills reload stub, agent.App slash interception, ui StreamInfo/StreamQuit, provider SetProviderModel/Field/AddCustom/RemoveCustom, docs/reference/commands.md; tests TestHelpListsProviderSubcommands, TestProviderUsePersists, TestQuitExits, TestAuthStoresKey, TestProviderSetRejectedForGemini.
 
 Phase 08 complete (2026-06-20): internal/tools (Tool interface, Registry, read_file/write_file/list_directory/run_shell_command/grep_search, path validation, shell safety, Scheduler, policy default/autoEdit/yolo), Runner multi-round tool loop with declarations on GenerateRequest, ui StreamToolConfirm/StreamToolResult, bubbletea y/n confirmation; tests TestReadFileTool, TestWriteFileConfirmation, TestShellBlockedWhenDenied, TestToolSchemaOpenAICompat, TestRipgrepIntegration, TestRunnerToolRoundTrip.
 
@@ -274,6 +338,8 @@ Track against fork `docs/reference/commands.md`. Implemented subset documented i
 - [ ] Full `/skills` (list/enable/disable — Phase 12)
 - [ ] `/auth signin`/`signout` OAuth dialogs
 - [ ] ACP headless command registry
+
+Implemented in Phase 10: `/reasoning` (show, clear, save, session levels).
 
 ### Auth paths deferred
 

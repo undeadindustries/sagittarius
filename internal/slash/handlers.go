@@ -152,6 +152,14 @@ func handleProviderList(ctx *Context) Result {
 		lines = append(lines, formatProviderLine(s, string(id), def.DisplayName, active))
 	}
 
+	lines = append(lines, "", "Hosted (OpenAI Responses):")
+	for id, def := range config.BuiltInProviders {
+		if def.WireFormat != config.WireFormatOpenAIResponses {
+			continue
+		}
+		lines = append(lines, formatProviderLine(s, string(id), def.DisplayName, active))
+	}
+
 	if s.Providers != nil && len(s.Providers.Custom) > 0 {
 		lines = append(lines, "", "Custom (user-defined):")
 		for id, custom := range s.Providers.Custom {

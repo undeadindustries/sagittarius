@@ -252,3 +252,60 @@ func TestProviderAddRemove(t *testing.T) {
 		t.Fatalf("remove: %v", rm.Err)
 	}
 }
+
+func TestReasoningNotApplicableOnGemini(t *testing.T) {
+	t.Parallel()
+	provider.ClearSessionReasoningOverride()
+
+	settings := &config.Settings{
+		Providers: &config.ProvidersSettings{
+			Active:       string(config.BuiltInGeminiAPIKey),
+			GeminiAPIKey: &config.ProviderInstanceConfig{},
+		},
+		Raw: map[string]json.RawMessage{},
+	}
+	deps, _, _ := testDeps(t, settings)
+	p := slash.NewProcessor()
+
+	result := p.Process(context.Background(), "/reasoning show", deps)
+	if result.Err != nil {
+		t.Fatalf("unexpected error: %v", result.Err)
+	}
+	combined := strings.Join(result.Messages, "\n")
+	if !strings.Contains(combined, "not applicable") && !strings.Contains(combined, "only applies to OpenAI Responses") {
+		t.Fatalf("expected not-applicable message, got: %q", combined)
+	}
+}
+
+func TestReasoningApplicableOnResponses(t *testing.T) {
+	t.Parallel()
+	provider.ClearSessionReasoningOverride()
+	t.Cleanup(provider.ClearSessionReasoningOverride)
+
+	settings := &config.Settings{
+		Providers: &config.ProvidersSettings{
+			Active:          string(config.BuiltInOpenAIResponses),
+			OpenAIResponses: &config.ProviderInstanceConfig{ReasoningEffort: "low"},
+		},
+		Raw: map[string]json.RawMessage{},
+	}
+	deps, _, _ := testDeps(t, settings)
+	p := slash.NewProcessor()
+
+	show := p.Process(context.Background(), "/reasoning show", deps)
+	if show.Err != nil {
+		t.Fatalf("show error: %v", show.Err)
+	}
+	combined := strings.Join(show.Messages, "\n")
+	if !strings.Contains(combined, "low") {
+		t.Fatalf("expected resolved low effort, got: %q", combined)
+	}
+
+	set := p.Process(context.Background(), "/reasoning high", deps)
+	if set.Err != nil {
+		t.Fatalf("set error: %v", set.Err)
+	}
+	if provider.SessionReasoningOverride() != "high" {
+		t.Fatalf("override = %q, want high", provider.SessionReasoningOverride())
+	}
+}

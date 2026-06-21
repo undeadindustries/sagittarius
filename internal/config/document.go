@@ -43,6 +43,18 @@ func unmarshalProviderInstance(raw json.RawMessage) (*ProviderInstanceConfig, er
 		"reasoningEffort":     func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.ReasoningEffort) },
 		"useResponseChaining": func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.UseResponseChaining) },
 		"wireFormat":          func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.WireFormat) },
+		"toolOutputMaskingEnabled": func(b json.RawMessage) error {
+			return json.Unmarshal(b, &cfg.ToolOutputMaskingEnabled)
+		},
+		"toolOutputMaskingProtectionFraction": func(b json.RawMessage) error {
+			return json.Unmarshal(b, &cfg.ToolOutputMaskingProtectionFraction)
+		},
+		"toolOutputMaskingPrunableFraction": func(b json.RawMessage) error {
+			return json.Unmarshal(b, &cfg.ToolOutputMaskingPrunableFraction)
+		},
+		"toolOutputMaskingProtectLatestTurn": func(b json.RawMessage) error {
+			return json.Unmarshal(b, &cfg.ToolOutputMaskingProtectLatestTurn)
+		},
 	}
 	for key, val := range obj {
 		if decode, ok := known[key]; ok {
@@ -93,6 +105,10 @@ func marshalProviderInstance(cfg *ProviderInstanceConfig) (json.RawMessage, erro
 		{"reasoningEffort", cfg.ReasoningEffort},
 		{"useResponseChaining", cfg.UseResponseChaining},
 		{"wireFormat", cfg.WireFormat},
+		{"toolOutputMaskingEnabled", cfg.ToolOutputMaskingEnabled},
+		{"toolOutputMaskingProtectionFraction", cfg.ToolOutputMaskingProtectionFraction},
+		{"toolOutputMaskingPrunableFraction", cfg.ToolOutputMaskingPrunableFraction},
+		{"toolOutputMaskingProtectLatestTurn", cfg.ToolOutputMaskingProtectLatestTurn},
 	}
 	for _, f := range fields {
 		if err := setField(f.key, f.val); err != nil {
@@ -208,6 +224,13 @@ func unmarshalProviders(raw json.RawMessage) (*ProvidersSettings, error) {
 		}
 		ps.GeminiAPIKey = cfg
 	}
+	if val, ok := obj["openai-responses"]; ok {
+		cfg, err := unmarshalProviderInstance(val)
+		if err != nil {
+			return nil, err
+		}
+		ps.OpenAIResponses = cfg
+	}
 	if val, ok := obj["custom"]; ok {
 		var customObj map[string]json.RawMessage
 		if err := json.Unmarshal(val, &customObj); err != nil {
@@ -259,6 +282,13 @@ func marshalProviders(ps *ProvidersSettings) (json.RawMessage, error) {
 			return nil, err
 		}
 		obj["gemini-apikey"] = b
+	}
+	if ps.OpenAIResponses != nil {
+		b, err := marshalProviderInstance(ps.OpenAIResponses)
+		if err != nil {
+			return nil, err
+		}
+		obj["openai-responses"] = b
 	}
 	if len(ps.Custom) > 0 {
 		customObj := make(map[string]json.RawMessage, len(ps.Custom))

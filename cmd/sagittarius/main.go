@@ -174,15 +174,19 @@ func buildRunner(ctx context.Context, modelOverride string, interactive bool) (*
 	if genErr != nil {
 		// Interactive sessions open even without a usable provider so the user
 		// can recover via /auth or /provider use. Headless mode still fails.
-		if !(interactive && errors.Is(genErr, credentials.ErrAPIKeyMissing)) {
+		if !interactive || !errors.Is(genErr, credentials.ErrAPIKeyMissing) {
 			return nil, nil, nil, genErr
 		}
 	}
 
+	sessionID := fmt.Sprintf("sagittarius-%d", os.Getpid())
+	ctxMgr := agent.NewContextManager(settings, gen, model, sessionID)
+
 	runner, err := agent.NewRunner(agent.RunnerConfig{
-		Generator:   gen,
-		Model:       model,
-		Interactive: interactive,
+		Generator:      gen,
+		Model:          model,
+		Interactive:    interactive,
+		ContextManager: ctxMgr,
 	})
 	if err != nil {
 		return nil, nil, nil, err

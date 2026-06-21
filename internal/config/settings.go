@@ -26,21 +26,31 @@ const (
 // ProviderInstanceConfig holds per-instance overrides under providers.<id>.*
 // Field names match fork settingsSchema.ts (openai / openai-compat sheet).
 type ProviderInstanceConfig struct {
-	Model                string                     `json:"model,omitempty"`
-	BaseURL              string                     `json:"baseUrl,omitempty"`
-	ContextLimit         *int                       `json:"contextLimit,omitempty"`
-	CompressionThreshold *float64                   `json:"compressionThreshold,omitempty"`
-	PreserveFraction     *float64                   `json:"preserveFraction,omitempty"`
-	PromptMode           PromptMode                 `json:"promptMode,omitempty"`
-	EnableTools          *bool                      `json:"enableTools,omitempty"`
-	Timeout              *int                       `json:"timeout,omitempty"`
-	Temperature          *float64                   `json:"temperature,omitempty"`
-	ToolCallParsing      ToolCallParsingMode        `json:"toolCallParsing,omitempty"`
-	SystemPromptOverride string                     `json:"systemPromptOverride,omitempty"`
-	ReasoningEffort      string                     `json:"reasoningEffort,omitempty"`
-	UseResponseChaining  *bool                      `json:"useResponseChaining,omitempty"`
-	WireFormat           WireFormat                 `json:"wireFormat,omitempty"`
-	Extra                map[string]json.RawMessage `json:"-"`
+	Model                string              `json:"model,omitempty"`
+	BaseURL              string              `json:"baseUrl,omitempty"`
+	ContextLimit         *int                `json:"contextLimit,omitempty"`
+	CompressionThreshold *float64            `json:"compressionThreshold,omitempty"`
+	PreserveFraction     *float64            `json:"preserveFraction,omitempty"`
+	PromptMode           PromptMode          `json:"promptMode,omitempty"`
+	EnableTools          *bool               `json:"enableTools,omitempty"`
+	Timeout              *int                `json:"timeout,omitempty"`
+	Temperature          *float64            `json:"temperature,omitempty"`
+	ToolCallParsing      ToolCallParsingMode `json:"toolCallParsing,omitempty"`
+	SystemPromptOverride string              `json:"systemPromptOverride,omitempty"`
+	ReasoningEffort      string              `json:"reasoningEffort,omitempty"`
+	UseResponseChaining  *bool               `json:"useResponseChaining,omitempty"`
+	WireFormat           WireFormat          `json:"wireFormat,omitempty"`
+
+	// Phase 11 context-management knobs (active only for openai-chat). Names
+	// mirror the fork local.* leaf keys; they live per-provider here because
+	// Sagittarius providers differ by config rather than a single local block
+	// (AD-003 / AD-015). Unset (nil) means "use the built-in default".
+	ToolOutputMaskingEnabled            *bool    `json:"toolOutputMaskingEnabled,omitempty"`
+	ToolOutputMaskingProtectionFraction *float64 `json:"toolOutputMaskingProtectionFraction,omitempty"`
+	ToolOutputMaskingPrunableFraction   *float64 `json:"toolOutputMaskingPrunableFraction,omitempty"`
+	ToolOutputMaskingProtectLatestTurn  *bool    `json:"toolOutputMaskingProtectLatestTurn,omitempty"`
+
+	Extra map[string]json.RawMessage `json:"-"`
 }
 
 // CustomProviderDefinition is a user-defined OpenAI-compatible provider under
@@ -57,10 +67,11 @@ type CustomProviderDefinition struct {
 
 // ProvidersSettings is the typed providers.* subset from settings.json.
 type ProvidersSettings struct {
-	Active       string                              `json:"active,omitempty"`
-	OpenAI       *ProviderInstanceConfig             `json:"openai,omitempty"`
-	GeminiAPIKey *ProviderInstanceConfig             `json:"gemini-apikey,omitempty"`
-	Custom       map[string]CustomProviderDefinition `json:"custom,omitempty"`
+	Active          string                              `json:"active,omitempty"`
+	OpenAI          *ProviderInstanceConfig             `json:"openai,omitempty"`
+	GeminiAPIKey    *ProviderInstanceConfig             `json:"gemini-apikey,omitempty"`
+	OpenAIResponses *ProviderInstanceConfig             `json:"openai-responses,omitempty"`
+	Custom          map[string]CustomProviderDefinition `json:"custom,omitempty"`
 	// Extra holds other provider instance blocks (e.g. openai-responses, local-vllm)
 	// as raw JSON so round-trip does not drop keys Sagittarius does not model yet.
 	Extra map[string]json.RawMessage `json:"-"`

@@ -13,8 +13,9 @@ const (
 type BuiltInProviderID string
 
 const (
-	BuiltInGeminiAPIKey BuiltInProviderID = "gemini-apikey"
-	BuiltInOpenAI       BuiltInProviderID = "openai"
+	BuiltInGeminiAPIKey    BuiltInProviderID = "gemini-apikey"
+	BuiltInOpenAI          BuiltInProviderID = "openai"
+	BuiltInOpenAIResponses BuiltInProviderID = "openai-responses"
 )
 
 // BuiltInProvider describes a frozen registry entry shipped with the binary.
@@ -31,7 +32,6 @@ type BuiltInProvider struct {
 }
 
 // BuiltInProviders maps built-in provider ids to their registry defaults.
-// Phase 02 covers gemini-apikey and openai only; others arrive in later phases.
 var BuiltInProviders = map[BuiltInProviderID]BuiltInProvider{
 	BuiltInGeminiAPIKey: {
 		ID:                  BuiltInGeminiAPIKey,
@@ -51,6 +51,16 @@ var BuiltInProviders = map[BuiltInProviderID]BuiltInProvider{
 		WireFormat:          WireFormatOpenAIChat,
 		DefaultModel:        "gpt-4o-mini",
 		DefaultContextLimit: 128_000,
+		RequiresAPIKey:      true,
+	},
+	BuiltInOpenAIResponses: {
+		ID:                  BuiltInOpenAIResponses,
+		DisplayName:         "OpenAI Responses",
+		DefaultBaseURL:      "https://api.openai.com/v1/responses",
+		APIKeyEnvVar:        "OPENAI_API_KEY",
+		WireFormat:          WireFormatOpenAIResponses,
+		DefaultModel:        "gpt-5-codex",
+		DefaultContextLimit: 400_000,
 		RequiresAPIKey:      true,
 	},
 }

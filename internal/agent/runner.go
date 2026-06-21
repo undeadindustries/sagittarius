@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/undeadindustries/sagittarius/internal/contextmgmt"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 	"github.com/undeadindustries/sagittarius/internal/tools"
 	"github.com/undeadindustries/sagittarius/internal/ui"
@@ -37,6 +38,9 @@ type RunnerConfig struct {
 	ApprovalMode ApprovalMode
 	// Interactive enables TUI confirmation prompts; headless mode sets false.
 	Interactive bool
+	// ContextManager applies local-context defenses pre-turn and post-tool. Nil
+	// (non-openai-chat providers) makes context management a pure pass-through.
+	ContextManager *contextmgmt.Manager
 }
 
 // Runner orchestrates conversation history and provider streaming for the agent loop.
@@ -52,6 +56,8 @@ type Runner struct {
 	registry      *tools.Registry
 	scheduler     *tools.Scheduler
 	history       []provider.Message
+	ctxMgr        *contextmgmt.Manager
+	turnCounter   int
 	state         State
 	stateMu       sync.RWMutex
 	lastRequest   *provider.GenerateRequest
@@ -105,6 +111,7 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		workDir:     ws.Root(),
 		registry:    registry,
 		scheduler:   scheduler,
+		ctxMgr:      cfg.ContextManager,
 		state:       StateIdle,
 	}, nil
 }
@@ -253,6 +260,7 @@ func (r *Runner) runAgentLoop(ctx context.Context, out chan<- ui.StreamEvent) {
 	r.setState(StateStreaming)
 
 	for round := 0; round < tools.MaxToolRounds; round++ {
+		r.prepareContext(ctx)
 		req := r.buildGenerateRequest()
 		r.storeLastRequest(req)
 
@@ -295,6 +303,26 @@ func (r *Runner) runAgentLoop(ctx context.Context, out chan<- ui.StreamEvent) {
 	r.setState(StateDone)
 	out <- ui.StreamEvent{Type: ui.StreamError, Text: "max tool rounds exceeded"}
 	out <- ui.StreamEvent{Type: ui.StreamDone}
+}
+
+// prepareContext applies the local-context defenses (ejection, masking, and
+// over-budget compression) to history before each generate request. It runs at
+// the top of every tool round, so it acts as both the pre-turn and post-tool
+// hook. Defenses degrade gracefully: on error the runner proceeds with whatever
+// history PrepareTurn returns. A nil ContextManager makes this a no-op.
+func (r *Runner) prepareContext(ctx context.Context) {
+	if r.ctxMgr == nil {
+		return
+	}
+	prepared, err := r.ctxMgr.PrepareTurn(ctx, r.history, r.turnCounter)
+	r.turnCounter++
+	if prepared != nil {
+		r.history = prepared
+	}
+	if err != nil {
+		// PrepareTurn already logged; proceed with the (best-effort) history.
+		return
+	}
 }
 
 func (r *Runner) buildGenerateRequest() *provider.GenerateRequest {

@@ -13,22 +13,28 @@ const defaultOpenAITimeout = 120 * time.Second
 
 // EndpointConfig holds resolved connection parameters for a provider endpoint.
 type EndpointConfig struct {
-	ProviderID      string
-	BaseURL         string
-	Model           string
-	WireFormat      config.WireFormat
-	Timeout         time.Duration
-	Bearer          string
-	RequiresAPIKey  bool
-	ToolCallParsing config.ToolCallParsingMode
+	ProviderID           string
+	BaseURL              string
+	Model                string
+	WireFormat           config.WireFormat
+	Timeout              time.Duration
+	Bearer               string
+	RequiresAPIKey       bool
+	ToolCallParsing      config.ToolCallParsingMode
+	ReasoningEffort      string
+	UseResponseChaining  bool
+	Temperature          *float64
+	SystemPromptOverride string
+	ToolsEnabled         bool
 }
 
 // ExtractServerRoot normalizes a provider URL to a server root suitable for
-// appending /v1/models or /v1/chat/completions.
+// appending /v1/models, /v1/chat/completions, or /v1/responses.
 func ExtractServerRoot(rawURL string) string {
 	s := strings.TrimRight(strings.TrimSpace(rawURL), "/")
 	s = strings.TrimSuffix(s, "/v1/chat/completions")
 	s = strings.TrimSuffix(s, "/v1/completions")
+	s = strings.TrimSuffix(s, "/v1/responses")
 	s = strings.TrimSuffix(s, "/v1")
 	return strings.TrimRight(s, "/")
 }
@@ -41,6 +47,16 @@ func ChatCompletionsURL(baseURL string) string {
 		return s
 	}
 	return ExtractServerRoot(s) + "/v1/chat/completions"
+}
+
+// ResponsesURL returns the POST target for OpenAI Responses API.
+// baseURL may be a full /v1/responses path or a prefix ending in /v1.
+func ResponsesURL(baseURL string) string {
+	s := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if strings.HasSuffix(s, "/v1/responses") {
+		return s
+	}
+	return ExtractServerRoot(s) + "/v1/responses"
 }
 
 // ResolveEndpointConfig merges registry defaults, custom definitions, and
@@ -86,7 +102,7 @@ func resolveBuiltInEndpoint(
 	if inst != nil && inst.BaseURL != "" {
 		baseURL = inst.BaseURL
 	}
-	if wireFormat == config.WireFormatOpenAIChat && baseURL == "" {
+	if baseURL == "" && wireFormat != config.WireFormatGemini {
 		return EndpointConfig{}, fmt.Errorf("resolve endpoint: provider %q has no baseUrl configured", providerID)
 	}
 
@@ -98,14 +114,21 @@ func resolveBuiltInEndpoint(
 		model = "local-model"
 	}
 
+	normalizedURL := normalizeEndpointURL(baseURL, wireFormat)
+
 	return EndpointConfig{
-		ProviderID:      providerID,
-		BaseURL:         ChatCompletionsURL(baseURL),
-		Model:           model,
-		WireFormat:      wireFormat,
-		Timeout:         resolveTimeout(inst, defaultOpenAITimeout),
-		RequiresAPIKey:  def.RequiresAPIKey,
-		ToolCallParsing: resolveToolCallParsing(inst),
+		ProviderID:           providerID,
+		BaseURL:              normalizedURL,
+		Model:                model,
+		WireFormat:           wireFormat,
+		Timeout:              resolveTimeout(inst, defaultOpenAITimeout),
+		RequiresAPIKey:       def.RequiresAPIKey,
+		ToolCallParsing:      resolveToolCallParsing(inst),
+		ReasoningEffort:      resolveReasoningEffort(inst),
+		UseResponseChaining:  resolveUseResponseChaining(inst),
+		Temperature:          resolveTemperature(inst),
+		SystemPromptOverride: resolveSystemPromptOverride(inst),
+		ToolsEnabled:         resolveToolsEnabled(inst),
 	}, nil
 }
 
@@ -130,6 +153,7 @@ func geminiEndpointConfig(
 		Timeout:         resolveTimeout(inst, 0),
 		RequiresAPIKey:  def.RequiresAPIKey,
 		ToolCallParsing: resolveToolCallParsing(inst),
+		ToolsEnabled:    resolveToolsEnabled(inst),
 	}, nil
 }
 
@@ -166,14 +190,26 @@ func resolveCustomEndpoint(
 
 	requiresKey := custom.APIKeyEnvVar != ""
 	return EndpointConfig{
-		ProviderID:      providerID,
-		BaseURL:         ChatCompletionsURL(baseURL),
-		Model:           model,
-		WireFormat:      wireFormat,
-		Timeout:         resolveTimeout(inst, defaultOpenAITimeout),
-		RequiresAPIKey:  requiresKey,
-		ToolCallParsing: resolveToolCallParsing(inst),
+		ProviderID:           providerID,
+		BaseURL:              normalizeEndpointURL(baseURL, wireFormat),
+		Model:                model,
+		WireFormat:           wireFormat,
+		Timeout:              resolveTimeout(inst, defaultOpenAITimeout),
+		RequiresAPIKey:       requiresKey,
+		ToolCallParsing:      resolveToolCallParsing(inst),
+		ReasoningEffort:      resolveReasoningEffort(inst),
+		UseResponseChaining:  resolveUseResponseChaining(inst),
+		Temperature:          resolveTemperature(inst),
+		SystemPromptOverride: resolveSystemPromptOverride(inst),
+		ToolsEnabled:         resolveToolsEnabled(inst),
 	}, nil
+}
+
+func normalizeEndpointURL(baseURL string, wireFormat config.WireFormat) string {
+	if wireFormat == config.WireFormatOpenAIResponses {
+		return ResponsesURL(baseURL)
+	}
+	return ChatCompletionsURL(baseURL)
 }
 
 func providerInstance(settings *config.Settings, providerID string) *config.ProviderInstanceConfig {
@@ -185,6 +221,8 @@ func providerInstance(settings *config.Settings, providerID string) *config.Prov
 		return settings.Providers.OpenAI
 	case string(config.BuiltInGeminiAPIKey):
 		return settings.Providers.GeminiAPIKey
+	case string(config.BuiltInOpenAIResponses):
+		return settings.Providers.OpenAIResponses
 	default:
 		if raw, ok := settings.Providers.Extra[providerID]; ok {
 			var cfg config.ProviderInstanceConfig
@@ -208,4 +246,39 @@ func resolveToolCallParsing(inst *config.ProviderInstanceConfig) config.ToolCall
 		return inst.ToolCallParsing
 	}
 	return config.ToolCallParsingLenient
+}
+
+func resolveReasoningEffort(inst *config.ProviderInstanceConfig) string {
+	if inst == nil {
+		return ""
+	}
+	return strings.TrimSpace(inst.ReasoningEffort)
+}
+
+func resolveUseResponseChaining(inst *config.ProviderInstanceConfig) bool {
+	if inst == nil || inst.UseResponseChaining == nil {
+		return false
+	}
+	return *inst.UseResponseChaining
+}
+
+func resolveTemperature(inst *config.ProviderInstanceConfig) *float64 {
+	if inst == nil {
+		return nil
+	}
+	return inst.Temperature
+}
+
+func resolveSystemPromptOverride(inst *config.ProviderInstanceConfig) string {
+	if inst == nil {
+		return ""
+	}
+	return strings.TrimSpace(inst.SystemPromptOverride)
+}
+
+func resolveToolsEnabled(inst *config.ProviderInstanceConfig) bool {
+	if inst == nil || inst.EnableTools == nil {
+		return true
+	}
+	return *inst.EnableTools
 }
