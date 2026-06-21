@@ -87,6 +87,29 @@ to later phases — see [Deferred commands](#deferred-commands).
   - **Description:** Reload discovered skills (stub — acknowledges only).
   - **Usage:** `/skills reload`
 
+### `/reasoning`
+
+- **Description:** Show or override reasoning effort for OpenAI Responses API providers (`wireFormat: openai-responses`).
+
+#### Sub-commands
+
+- **`show`**
+  - **Description:** Show the resolved reasoning effort and whether it comes from session override or provider settings.
+  - **Usage:** `/reasoning` or `/reasoning show`
+- **`clear`**
+  - **Description:** Drop the session-only override (does not change `settings.json`).
+  - **Usage:** `/reasoning clear`
+- **`save <level>`**
+  - **Description:** Persist `<level>` to `providers.<active>.reasoningEffort`.
+  - **Usage:** `/reasoning save low`
+- **`<minimal|low|medium|high>`**
+  - **Description:** Set a session-only reasoning override (not persisted).
+  - **Usage:** `/reasoning medium`
+
+#### Notes
+
+- Only applies when the active provider uses `openai-responses`. Other wire formats return an actionable “not applicable” message.
+
 ## Deferred commands
 
 The following fork commands are **not** implemented yet. They will be added

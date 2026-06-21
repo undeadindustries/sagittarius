@@ -93,5 +93,6 @@ func (r *Registry) registerBuiltins() {
 		authCommand(),
 		memoryCommand(),
 		skillsCommand(),
+		reasoningCommand(),
 	}
 }
