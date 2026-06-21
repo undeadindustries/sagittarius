@@ -465,15 +465,22 @@ func (r *Runner) sagittariusSettings() *config.SagittariusSettings {
 	return r.settings.Sagittarius
 }
 
+func (r *Runner) activeProviderID() string {
+	r.settingsMu.RLock()
+	defer r.settingsMu.RUnlock()
+	return r.settings.ActiveProvider()
+}
+
 func (r *Runner) RefreshModelFromMode() {
 	r.refreshModelFromMode()
 }
 
 func (r *Runner) refreshModelFromMode() {
 	mode := r.InteractionMode()
+	providerID := r.activeProviderID()
 	providerDefault := r.providerDefaultModel
-	resolved := modes.ResolveModel(mode, r.sagittariusSettings(), providerDefault)
-	modes.LogModeSelection(mode, resolved, providerDefault)
+	resolved := modes.ResolveModel(mode, r.sagittariusSettings(), providerID, providerDefault)
+	modes.LogModeSelection(mode, resolved, providerID, providerDefault)
 	r.modelMu.Lock()
 	r.model = resolved
 	r.modelMu.Unlock()

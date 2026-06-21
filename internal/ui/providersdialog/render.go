@@ -36,7 +36,8 @@ func (m Model) View() string {
 
 	body := b.String()
 	if m.width > 0 {
-		return boxStyle.Width(m.width).Render(body)
+		// Width is inner content only; border + padding add 4 cols (see contentWidth).
+		return boxStyle.Width(m.contentWidth()).Render(body)
 	}
 	return boxStyle.Render(body)
 }

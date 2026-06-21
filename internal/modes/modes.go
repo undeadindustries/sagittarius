@@ -101,20 +101,38 @@ func (s *State) SetMode(mode Mode) {
 }
 
 // ResolveModel selects the model for the main agent loop.
-// Fallback: modes.<mode>.model → sagittarius.defaultModel → providerDefault.
-func ResolveModel(mode Mode, cfg *config.SagittariusSettings, providerDefault string) string {
+//
+// Resolution order (first non-empty wins):
+//  1. sagittarius.modes.<mode>.model  — the per-mode override always wins
+//  2. sagittarius.defaultModels[providerID] — provider-scoped default
+//  3. providerDefault — the provider instance / built-in default
+//  4. sagittarius.defaultModel — legacy single global default (last resort)
+//
+// Putting providerDefault ahead of the legacy global default stops a global
+// default from clobbering the active provider's configured model when switching
+// providers, while the per-mode override still trumps everything below it.
+func ResolveModel(mode Mode, cfg *config.SagittariusSettings, providerID, providerDefault string) string {
 	if m := modeModel(cfg, mode); m != "" {
 		return m
 	}
-	if cfg != nil && strings.TrimSpace(cfg.DefaultModel) != "" {
-		return strings.TrimSpace(cfg.DefaultModel)
+	if m := providerScopedDefault(cfg, providerID); m != "" {
+		return m
 	}
-	return strings.TrimSpace(providerDefault)
+	if m := strings.TrimSpace(providerDefault); m != "" {
+		return m
+	}
+	return globalDefault(cfg)
 }
 
 // ResolveSubagentModel selects a model for a named subagent.
-// Fallback: subagents.<name>.model → subagents.default.model → defaultModel → providerDefault.
-func ResolveSubagentModel(name string, cfg *config.SagittariusSettings, providerDefault string) string {
+//
+// Resolution order (first non-empty wins):
+//  1. sagittarius.subagents.<name>.model
+//  2. sagittarius.subagents.default.model
+//  3. sagittarius.defaultModels[providerID]
+//  4. providerDefault
+//  5. sagittarius.defaultModel
+func ResolveSubagentModel(name string, cfg *config.SagittariusSettings, providerID, providerDefault string) string {
 	name = strings.TrimSpace(name)
 	if cfg != nil && cfg.Subagents != nil {
 		if entry, ok := cfg.Subagents.Named[name]; ok {
@@ -126,10 +144,41 @@ func ResolveSubagentModel(name string, cfg *config.SagittariusSettings, provider
 			return m
 		}
 	}
-	if cfg != nil && strings.TrimSpace(cfg.DefaultModel) != "" {
-		return strings.TrimSpace(cfg.DefaultModel)
+	if m := providerScopedDefault(cfg, providerID); m != "" {
+		return m
 	}
-	return strings.TrimSpace(providerDefault)
+	if m := strings.TrimSpace(providerDefault); m != "" {
+		return m
+	}
+	return globalDefault(cfg)
+}
+
+// providerScopedDefault returns sagittarius.defaultModels[providerID], tolerating
+// both the canonical id and the short display alias (e.g. "gemini").
+func providerScopedDefault(cfg *config.SagittariusSettings, providerID string) string {
+	if cfg == nil || len(cfg.DefaultModels) == 0 {
+		return ""
+	}
+	id := strings.TrimSpace(providerID)
+	if id == "" {
+		return ""
+	}
+	if m := strings.TrimSpace(cfg.DefaultModels[id]); m != "" {
+		return m
+	}
+	if norm := config.NormalizeProviderID(id); norm != id {
+		if m := strings.TrimSpace(cfg.DefaultModels[norm]); m != "" {
+			return m
+		}
+	}
+	return ""
+}
+
+func globalDefault(cfg *config.SagittariusSettings) string {
+	if cfg == nil {
+		return ""
+	}
+	return strings.TrimSpace(cfg.DefaultModel)
 }
 
 // SystemPromptSuffix returns an optional suffix for the active mode.
@@ -142,13 +191,14 @@ func SystemPromptSuffix(mode Mode, cfg *config.SagittariusSettings) string {
 }
 
 // LogModeSelection emits verbose diagnostics when debug mode is active.
-func LogModeSelection(mode Mode, model, providerDefault string) {
+func LogModeSelection(mode Mode, model, providerID, providerDefault string) {
 	if mode != ModeDebug {
 		return
 	}
 	log.Default.Info("interaction mode",
 		"mode", mode.String(),
 		"resolved_model", model,
+		"provider_id", providerID,
 		"provider_default", providerDefault,
 	)
 }

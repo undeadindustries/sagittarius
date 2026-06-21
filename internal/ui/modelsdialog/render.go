@@ -34,7 +34,7 @@ func (m Model) View() string {
 
 	body := b.String()
 	if m.width > 0 {
-		return boxStyle.Width(m.width).Render(body)
+		return boxStyle.Width(m.contentWidth()).Render(body)
 	}
 	return boxStyle.Render(body)
 }

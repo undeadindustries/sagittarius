@@ -136,6 +136,35 @@ func CuratedActiveModels(settings *config.Settings, providerID string) []string 
 	return out
 }
 
+// CoerceModelToCurated keeps a provider's configured model inside its curated
+// active set. When the provider has a curated activeModels set and its resolved
+// model is not a member, the model is set to the first curated entry. It returns
+// true when the model was changed (the caller is responsible for persisting).
+// Providers without a curated set are left untouched.
+func CoerceModelToCurated(settings *config.Settings, providerID string) (bool, error) {
+	id := config.NormalizeProviderID(providerID)
+	curated := CuratedActiveModels(settings, id)
+	if len(curated) == 0 {
+		return false, nil
+	}
+	endpoint, err := ResolveEndpointForProvider(settings, id)
+	if err != nil {
+		// Endpoint resolution failure is non-fatal here: skip coercion rather
+		// than block a rebuild.
+		return false, nil
+	}
+	current := strings.TrimSpace(endpoint.Model)
+	for _, m := range curated {
+		if m == current {
+			return false, nil
+		}
+	}
+	if err := SetProviderModel(settings, id, curated[0]); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 // ActiveModelsFor returns the curated active-model set for providerID. When the
 // provider has not been curated (no activeModels), it falls back to the single
 // configured default model so /models is never empty for a usable provider.
