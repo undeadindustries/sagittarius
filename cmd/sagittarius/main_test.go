@@ -94,6 +94,29 @@ func TestNormalizeResumeArgs(t *testing.T) {
 	}
 }
 
+func TestBuildRunnerAllowsMissingProviderWhenInteractive(t *testing.T) {
+	home := t.TempDir()
+	sagDir := filepath.Join(home, ".sagittarius")
+	if err := os.MkdirAll(sagDir, 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	t.Setenv("SAGITTARIUS_HOME", home)
+	withEmptyCredentials(t)
+
+	runner, _, settings, runtime, err := buildRunner(context.Background(), "", true, "")
+	if err != nil {
+		t.Fatalf("buildRunner: %v", err)
+	}
+	defer func() { _ = runtime.Close() }()
+
+	if !agent.NeedsProviderSetup(context.Background(), settings) {
+		t.Fatal("expected setup to be needed with empty settings")
+	}
+	if runner.Model() != agent.PlaceholderModel() {
+		t.Fatalf("model = %q, want placeholder %q", runner.Model(), agent.PlaceholderModel())
+	}
+}
+
 func TestRunHeadlessMissingAPIKey(t *testing.T) {
 	home := t.TempDir()
 	sagDir := filepath.Join(home, ".sagittarius")

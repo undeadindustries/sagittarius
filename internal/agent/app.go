@@ -456,13 +456,16 @@ func (r *Runner) Registry() *tools.Registry {
 	return r.registry
 }
 
-// ReloadSystemInstruction re-reads GEMINI.md / AGENTS.md into the system prompt.
+// ReloadSystemInstruction re-reads AGENTS.md memory and recomposes the system
+// prompt (personality prompt + memory + mode suffix).
 func (r *Runner) ReloadSystemInstruction() error {
-	system, err := DiscoverSystemInstruction(r.workDir)
+	memory, err := DiscoverSystemInstruction(r.workDir)
 	if err != nil {
 		return err
 	}
-	r.systemBase = system
-	r.applyModeSystemSuffix()
+	r.modelMu.Lock()
+	r.memory = memory
+	r.modelMu.Unlock()
+	r.rebuildSystem()
 	return nil
 }

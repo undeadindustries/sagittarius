@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/credentials"
@@ -189,6 +191,7 @@ func modelIDsFromInfos(infos []provider.ModelInfo) []string {
 	for _, info := range infos {
 		models = append(models, info.ID)
 	}
+	provider.SortModelIDs(models)
 	return models
 }
 
@@ -298,7 +301,9 @@ func (a *App) ModelsDialogDeps() modelsdialog.Deps {
 }
 
 // modelsDialogDeps implements modelsdialog.Deps over the App's runner, loader,
-// and settings. It is scoped to the active provider.
+// and settings. The /models picker is global: it lists every activated model
+// across all configured providers and selecting one switches the active
+// provider and its live model in a single step.
 type modelsDialogDeps struct {
 	app *App
 }
@@ -313,21 +318,11 @@ func (d *modelsDialogDeps) ActiveProviderID() string {
 	return d.settings().ActiveProvider()
 }
 
-func (d *modelsDialogDeps) ActiveProviderLabel() string {
+func (d *modelsDialogDeps) CurrentModel() string {
 	id := d.ActiveProviderID()
 	if id == "" {
 		return ""
 	}
-	return config.ProviderDisplayID(id)
-}
-
-// ActiveModels returns the active provider's activated models, resolved with
-// the uncurated fallback to the configured default model.
-func (d *modelsDialogDeps) ActiveModels(id string) []string {
-	return provider.ActiveModelsFor(d.settings(), id)
-}
-
-func (d *modelsDialogDeps) CurrentModel(id string) string {
 	endpoint, err := provider.ResolveEndpointForProvider(d.settings(), id)
 	if err != nil {
 		return ""
@@ -335,19 +330,74 @@ func (d *modelsDialogDeps) CurrentModel(id string) string {
 	return endpoint.Model
 }
 
-func (d *modelsDialogDeps) SetModel(ctx context.Context, id, model string) error {
+// ListActiveModels returns every activated (curated) model across all built-in
+// and custom providers, plus the active provider's current model so the picker
+// is never empty when something is in use.
+func (d *modelsDialogDeps) ListActiveModels() []modelsdialog.ModelEntry {
+	s := d.settings()
+	if s == nil {
+		return nil
+	}
+	var entries []modelsdialog.ModelEntry
+	seen := map[string]bool{}
+	add := func(id, model string) {
+		model = strings.TrimSpace(model)
+		if id == "" || model == "" {
+			return
+		}
+		key := id + "\x00" + model
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		entries = append(entries, modelsdialog.ModelEntry{
+			ProviderID:    id,
+			ProviderLabel: config.ProviderDisplayID(id),
+			Model:         model,
+		})
+	}
+	addProvider := func(id string) {
+		for _, model := range provider.CuratedActiveModels(s, id) {
+			add(id, model)
+		}
+	}
+	for id := range config.BuiltInProviders {
+		addProvider(string(id))
+	}
+	if s.Providers != nil {
+		for id := range s.Providers.Custom {
+			addProvider(id)
+		}
+	}
+	if active := config.NormalizeProviderID(s.ActiveProvider()); active != "" {
+		add(active, d.CurrentModel())
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].ProviderLabel != entries[j].ProviderLabel {
+			return entries[i].ProviderLabel < entries[j].ProviderLabel
+		}
+		return entries[i].Model < entries[j].Model
+	})
+	return entries
+}
+
+// SelectModel switches to providerID (if it differs from the active provider)
+// and sets its live model, then rebuilds the runner.
+func (d *modelsDialogDeps) SelectModel(ctx context.Context, id, model string) error {
 	if d.loader() == nil || d.settings() == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	if err := provider.SetProviderModel(d.settings(), config.NormalizeProviderID(id), model); err != nil {
+	id = config.NormalizeProviderID(id)
+	if err := provider.SetProviderModel(d.settings(), id, model); err != nil {
 		return err
 	}
-	if err := d.loader().Save(d.settings()); err != nil {
+	if d.ActiveProviderID() != id {
+		if err := provider.SaveActiveProvider(d.loader(), d.settings(), id); err != nil {
+			return err
+		}
+	} else if err := d.loader().Save(d.settings()); err != nil {
 		return err
 	}
-	if d.ActiveProviderID() == config.NormalizeProviderID(id) {
-		_, _, err := d.app.deps.Hooks.RebuildRunner(ctx)
-		return err
-	}
-	return nil
+	_, _, err := d.app.deps.Hooks.RebuildRunner(ctx)
+	return err
 }

@@ -25,11 +25,15 @@ func (d dialogApp) ModelsDialogDeps() modelsdialog.Deps       { return d.modelsD
 
 type stubModelsDeps struct{}
 
-func (stubModelsDeps) ActiveProviderID() string                      { return "openai" }
-func (stubModelsDeps) ActiveProviderLabel() string                   { return "openai" }
-func (stubModelsDeps) ActiveModels(string) []string                  { return []string{"gpt-4o", "gpt-4o-mini"} }
-func (stubModelsDeps) CurrentModel(string) string                    { return "gpt-4o" }
-func (stubModelsDeps) SetModel(context.Context, string, string) error { return nil }
+func (stubModelsDeps) ListActiveModels() []modelsdialog.ModelEntry {
+	return []modelsdialog.ModelEntry{
+		{ProviderID: "openai", ProviderLabel: "openai", Model: "gpt-4o"},
+		{ProviderID: "openai", ProviderLabel: "openai", Model: "gpt-4o-mini"},
+	}
+}
+func (stubModelsDeps) ActiveProviderID() string                       { return "openai" }
+func (stubModelsDeps) CurrentModel() string                           { return "gpt-4o" }
+func (stubModelsDeps) SelectModel(context.Context, string, string) error { return nil }
 
 type stubDialogDeps struct{}
 

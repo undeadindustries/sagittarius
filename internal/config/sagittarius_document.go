@@ -13,6 +13,7 @@ var reservedSagittariusKeys = map[string]struct{}{
 	"subagents":     {},
 	"compression":   {},
 	"tools":         {},
+	"systemPrompt":  {},
 }
 
 var reservedSagittariusModeKeys = map[string]struct{}{
@@ -313,6 +314,66 @@ func marshalUtilityConfig(cfg *SagittariusUtilityConfig) (json.RawMessage, error
 	return json.Marshal(obj)
 }
 
+func unmarshalSystemPromptConfig(raw json.RawMessage) (*SagittariusSystemPromptConfig, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, fmt.Errorf("decode systemPrompt config: %w", err)
+	}
+	cfg := &SagittariusSystemPromptConfig{Extra: make(map[string]json.RawMessage)}
+	for key, val := range obj {
+		switch key {
+		case "personality":
+			if err := json.Unmarshal(val, &cfg.Personality); err != nil {
+				return nil, err
+			}
+		case "variant":
+			if err := json.Unmarshal(val, &cfg.Variant); err != nil {
+				return nil, err
+			}
+		default:
+			cfg.Extra[key] = val
+		}
+	}
+	if len(cfg.Extra) == 0 {
+		cfg.Extra = nil
+	}
+	return cfg, nil
+}
+
+func marshalSystemPromptConfig(cfg *SagittariusSystemPromptConfig) (json.RawMessage, error) {
+	if cfg == nil {
+		return nil, nil
+	}
+	obj := make(map[string]json.RawMessage)
+	add := func(key, v string) error {
+		if v == "" {
+			return nil
+		}
+		b, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		obj[key] = b
+		return nil
+	}
+	if err := add("personality", cfg.Personality); err != nil {
+		return nil, err
+	}
+	if err := add("variant", cfg.Variant); err != nil {
+		return nil, err
+	}
+	for key, val := range cfg.Extra {
+		obj[key] = val
+	}
+	if len(obj) == 0 {
+		return json.RawMessage("{}"), nil
+	}
+	return json.Marshal(obj)
+}
+
 func unmarshalSagittarius(raw json.RawMessage) (*SagittariusSettings, error) {
 	if len(raw) == 0 {
 		return nil, nil
@@ -360,6 +421,12 @@ func unmarshalSagittarius(raw json.RawMessage) (*SagittariusSettings, error) {
 				return nil, fmt.Errorf("decode sagittarius.tools: %w", err)
 			}
 			s.Tools = u
+		case "systemPrompt":
+			sp, err := unmarshalSystemPromptConfig(val)
+			if err != nil {
+				return nil, fmt.Errorf("decode sagittarius.systemPrompt: %w", err)
+			}
+			s.SystemPrompt = sp
 		default:
 			if _, reserved := reservedSagittariusKeys[key]; reserved {
 				continue
@@ -428,6 +495,13 @@ func marshalSagittarius(s *SagittariusSettings) (json.RawMessage, error) {
 			return nil, err
 		}
 		obj["tools"] = b
+	}
+	if s.SystemPrompt != nil {
+		b, err := marshalSystemPromptConfig(s.SystemPrompt)
+		if err != nil {
+			return nil, err
+		}
+		obj["systemPrompt"] = b
 	}
 	for key, val := range s.Extra {
 		obj[key] = val

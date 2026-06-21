@@ -11,6 +11,19 @@ start a session in a project for the first time it also records the project in a
 small registry. Everything else is created lazily, only when the corresponding
 feature is used, matching the fork's behavior.
 
+### Interactive first run (no provider configured)
+
+If you launch the TUI with no active provider or no API key for the active
+provider, Sagittarius opens a first-run setup overlay instead of exiting:
+
+1. Choose **Gemini**, **OpenRouter**, or a **custom OpenAI-compatible** endpoint.
+2. Enter your API key (and base URL for custom endpoints).
+3. Pick a starting model from a live discovery list.
+
+Completing the wizard writes `settings.json`, stores credentials, and switches
+you into a normal chat session. Headless mode (`-p`) still requires a configured
+provider up front.
+
 ### Created eagerly
 
 | Path | Purpose |
@@ -28,7 +41,7 @@ a folder name, the second one gets a numeric suffix (`my-app-1`).
 
 | Path | Created when |
 |------|--------------|
-| `~/.sagittarius/settings.json` | You change a setting (providers wizard, `/mode`, etc.) |
+| `~/.sagittarius/settings.json` | You change a setting (first-run onboarding, providers wizard, `/mode`, etc.) |
 | `~/.sagittarius/sagittarius-credentials.json` | You store an API key and no OS keychain is available |
 | `~/.sagittarius/tmp/<slug>/chats/*.jsonl` | First conversation turn (session history) |
 | `~/.sagittarius/skills/` | You add a user skill |
@@ -72,7 +85,7 @@ Create these files yourself; Sagittarius does not generate them.
 Sagittarius starts fresh. It does not import anything from `~/.gemini`. After
 switching you will need to:
 
-- Re-enter provider API keys (via the `/providers` wizard).
+- Re-enter provider API keys (via first-run onboarding or the `/providers` wizard).
 - Re-curate your providers and active models.
 
 Session history recorded by gemini-cli under `~/.gemini/tmp/` will not appear in

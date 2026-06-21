@@ -321,6 +321,31 @@ func TestModelDiscoveryEmptyOnFailure(t *testing.T) {
 			t.Fatalf("models = %#v, want gpt-4o-mini only", models)
 		}
 	})
+
+	t.Run("success returns models sorted alphabetically", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data": []map[string]string{
+					{"id": "qwen3"},
+					{"id": "llama3"},
+					{"id": "mistral"},
+				},
+			})
+		}))
+		t.Cleanup(srv.Close)
+
+		models := DiscoverModels(ctx, srv.URL, "", srv.Client())
+		if len(models) != 3 {
+			t.Fatalf("models = %#v, want 3 entries", models)
+		}
+		for i, want := range []string{"llama3", "mistral", "qwen3"} {
+			if models[i].ID != want {
+				t.Fatalf("models[%d].ID = %q, want %q (full=%v)", i, models[i].ID, want, models)
+			}
+		}
+	})
 }
 
 func TestFactorySelectsOpenAI(t *testing.T) {

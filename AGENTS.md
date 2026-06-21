@@ -619,6 +619,77 @@ ResolveSagittariusDir + `SAGITTARIUS_HOME`; `agent` AGENTS.md injection;
 `credentials` service-name; parity harness writes both layouts + sets both home
 env vars. `go test ./...` green, `go vet` clean.
 
+### AD-030 — Personality system prompts (programmer base, full/lite variants) (2026-06-21)
+
+Sagittarius previously sent **only** `AGENTS.md` memory (+ mode suffix) as the
+system instruction — the fork's coding "brain" was never ported. AD-030 ports it
+behind a **personality** abstraction.
+
+**New leaf package `internal/prompt`** (imports only `config` + `tools`; nothing
+imports it back). `Personality` (`programmer` default; `sysadmin`/`assistant`
+**stubs** that fall back to programmer with a `// TODO`), `Variant`
+(`full` default | `lite`), `Identity{Model, ProviderName}`,
+`Options{Personality, Variant, Identity, ToolNames, Interactive, IsGitRepo,
+SandboxEnabled}`, `Build(Options) string`.
+
+- `programmerLite` — faithful port of the fork `snippets.local.ts`
+  `buildCorePrompt` (identity + tool usage + workflow + edit rules + shell safety
+  + git + sandbox), tool names mapped to Sagittarius's real tools.
+- `programmerFull` — **adapted** composition of `snippets.ts` (preamble, core
+  mandates, primary workflow, operational guidelines, git, sandbox, available
+  tools). References only real tools (`read_file`, `write_file`,
+  `list_directory`, `run_shell_command`, `grep_search`); drops
+  write_todos/plan-mode/tracker/sub-agents/hierarchical-memory.
+- **Identity** (`renderIdentity`, ported): names the model+provider when known;
+  when unknown (empty or `local-model`) **forbids** a false "I'm Google Gemini"
+  claim.
+
+**Resolution** (`internal/prompt/resolve.go`, first non-empty wins):
+per-model `providers.<id>.models.<model>.{personality,promptMode}` ->
+provider `providers.<id>.{personality,promptMode}` ->
+global `sagittarius.systemPrompt.{personality,variant}` -> built-in
+(`programmer`/`full`).
+
+**Config:** new `sagittarius.systemPrompt` block
+(`SagittariusSystemPromptConfig{Personality, Variant}`, reserved key +
+marshal/unmarshal + variant validation); `ProviderInstanceConfig` gains
+`Personality string` and `Models map[string]ProviderModelConfig`
+(`ProviderModelConfig{Personality, PromptMode}` with custom JSON for
+Extra round-trip — minimal AD-024 slice); registered in `document.go` field maps
+(+ `isEmptyValue` `map[string]ProviderModelConfig` case) and the openai-chat /
+openai-responses editable key lists (`registry.go`). Canonical personality set +
+`KnownPersonality` live in `config` (shared leaf) because `tools` imports
+`provider`, so `provider` must not import `prompt`.
+
+**Provider:** `ApplyProviderSetting` accepts `personality` (validated against
+`config.KnownPersonality`, normalized) for openai-chat/responses; gemini still
+exposes none.
+
+**Runner wiring** (`runner.go`): split state into `memory` (AGENTS.md) +
+`systemBase` (personality prompt + memory) + `system` (base + mode suffix), all
+guarded by `modelMu`. New `rebuildBasePrompt()` (resolves personality/variant,
+builds with live `Identity{model, providerDisplayName}` + tool decl names + git
+detection; sandbox false per AD-017) and `rebuildSystem()` (= rebuild base +
+apply mode suffix). Called from `NewRunner`, `refreshModelFromMode` (so model/
+mode/provider changes flip per-model overrides), and the model/settings setters.
+`app.go` `ReloadSystemInstruction` re-reads memory then `rebuildSystem`;
+`RebuildRunner` rebuilds the base via the existing `SetProviderDefaultModel` /
+`RefreshModelFromMode` calls. Provider display name resolved in-runner from
+settings (`config.LookupBuiltInProvider` + custom `DisplayName`).
+
+**Deferred:** real `sysadmin`/`assistant` content; `/personality` slash command +
+wizard UI (config/JSON-driven for now); full AD-024 per-model typed settings
+beyond personality/promptMode; fork plan-mode/tracker/sub-agent sections.
+
+Docs: `docs/system-prompts.md` (new). Tests: `prompt` full/lite anchors +
+identity known/unknown + unported-token safety + stub fallback + known
+personality/variant; `prompt` resolver precedence + builtin fallback; `config`
+systemPrompt + provider personality/models round-trip + omit-when-empty + bad
+variant; `provider` ApplyProviderSetting personality; `agent` runner
+system-instruction composition (full default + lite via provider promptMode,
+both include AGENTS.md memory + model identity). `go test ./...` green, `go vet`
+clean, `-race` clean on prompt/config/agent.
+
 ---
 
 ## Workspace Layout
@@ -691,8 +762,9 @@ Phase 16 complete (2026-06-21): TUI presentation parity (AD-028). New `internal/
 Dedicated `~/.sagittarius` home (2026-06-21, post-Phase 16, AD-029): moved off shared `~/.gemini` to a dedicated, fresh-start global home — `~/.gemini` never read or migrated. `internal/config/paths.go`: `SagittariusDir=".sagittarius"`, `SAGITTARIUS_HOME` (was `GEMINI_CLI_HOME`), renamed `ResolveSagittariusDir`/`ResolveGlobalAgentsPath`/`ProjectSagittariusDir`, system path `/etc/sagittarius`. New `internal/storage`: `EnsureGlobalHome()` (called top of `run()`, best-effort) + faithful `ProjectRegistry` port (`projects.json` + `tmp/<slug>/.project_root` + `history/<slug>/.project_root`, slugify + `-N` collision + O_EXCL lock). `session.ChatsDir` → `tmp/<slug>/chats/` via `storage.ProjectTmpDir` (was SHA256 hash dir); `ProjectHash` kept only for the metadata field. Memory: AGENTS.md-only (no GEMINI.md), global `~/.sagittarius/AGENTS.md`, walk to home boundary. Project dir `<repo>/.sagittarius/` (skills/agents/worktree). Credentials rebrand: `sagittarius-credentials.json`, scrypt `sagittarius*` (format-compatible, not interchangeable), keychain `sagittarius-provider-*`/`sagittarius-mcp-*`, env `SAGITTARIUS_FORCE_FILE_STORAGE`. Docs: `docs/home-directory.md` (new), SECURITY.md. Tests: storage (4), config ResolveSagittariusDir, agent AGENTS.md injection, credentials service-name, parity harness dual-layout. Verified: go test ./... pass, vet clean.
 
 Auxiliary model roles + exit-summary session id (2026-06-21, post-AD-029): (1) Exit goodbye screen now prints the full session id (`renderExitStats` uses `stats.SessionID`; removed the 8-char `shortID` that rendered `sagittarius-<pid>` as `sagittar`), matching the `--resume` hint. (2) Context compression, tool-utility calls, and subagents now **default to the live mode-resolved model**, each overridable like mode models: new `sagittarius.compression.model` / `sagittarius.tools.model` (`config.SagittariusUtilityConfig`, registered in `reservedSagittariusKeys` + marshal/unmarshal) and the existing `sagittarius.subagents.*`. New `modes.ResolveUtilityModel`/`ResolveCompressionModel`/`ResolveToolsModel`; `modes.ResolveSubagentModel` reworked to `(name, cfg, liveModel)` — drops the providerID/providerDefault chain since the live model already encodes it. `Runner.CompressionModel()`/`ToolsModel()` resolve per call; `NewContextManager` is now fed `runner.CompressionModel` (was `runner.Model`) at both call sites (app.go RebuildRunner + main.go startup). `agents.ResolveSubagentModel(name, settings, liveModel)`. `tools.model` is a reserved seam (no model-using tool consumes it yet). Docs: interaction-modes.md. Tests: modes utility-defaults+overrides + subagent-follows-live; config compression/tools round-trip. Verified: go test ./... pass, vet clean, -race clean on modes/config/agent/ui.
+Personality system prompts (2026-06-21, post-AD-029, AD-030): ported the fork's programmer "brain" into a new leaf package `internal/prompt` (Personality programmer-default + sysadmin/assistant stubs; Variant full-default/lite; identity-aware, real-tools-only adapted full + faithful lite). Resolution model > provider > global > builtin via `prompt.Resolve{Personality,Variant}`. Config: `sagittarius.systemPrompt` block + per-provider `personality` + per-model `models.<model>.{personality,promptMode}` (custom JSON round-trip); canonical personality set + `KnownPersonality` in `config` (provider can't import prompt — tools imports provider). `provider.ApplyProviderSetting` accepts `personality`. Runner: `memory`/`systemBase`/`system` split + `rebuildBasePrompt`/`rebuildSystem` composing personality prompt + AGENTS.md memory + mode suffix, re-resolved on every model/provider/mode/settings/memory change; provider display name + git detection in-runner. Docs: `docs/system-prompts.md`. Tests: prompt builder/identity/resolver, config round-trips, provider apply, runner full+lite composition. Verified: go test ./... green, vet clean, -race clean on prompt/config/agent.
 Next: —
-Blockers: fork mock server comparison partial; checkpointing (/restore) deferred (AD-018); sandbox not ported (AD-017); full /resume TUI browser deferred (AD-019); git worktrees stub (AD-020); pre-existing credentials data race ./internal/provider/; TestReasoningApplicableOnResponses flake; debug-mode tool disable + wireLogger port deferred.
+Blockers: fork mock server comparison partial; checkpointing (/restore) deferred (AD-018); sandbox not ported (AD-017); full /resume TUI browser deferred (AD-019); git worktrees stub (AD-020); pre-existing credentials data race ./internal/provider/; TestReasoningApplicableOnResponses flake; debug-mode tool disable + wireLogger port deferred. Deferred from AD-030: real sysadmin/assistant prompts, /personality command + wizard UI, full AD-024 per-model typed settings.
 
 Phase 14 complete (2026-06-21): tests/parity/ harness (TestParityHelpOutput, TestParityHeadlessMock, TestParityProviderList, TestParityColdStartPerf); mock OpenAI SSE server (httptest); SAGITTARIUS_PARITY_FORK=1 env gate for live-fork tests; docs/PARITY_CHECKLIST.md committed; AD-021 (parity harness design). Key results: all 4 tests pass, Sagittarius cold-start 7ms vs fork ~3.6s (483x), mock headless response verified end-to-end, all in-scope slash commands present. Known gaps documented in checklist.
 Phase 14 Bugbot fixes (2026-06-21): sagittariusBin now builds the binary on demand (go build → temp, cached via sync.Once) instead of t.Skip when bin/sagittarius is absent, so the headless/perf paths always run under `go test ./...` without `make build`; TestParityProviderList now asserts config.LookupBuiltInProvider + BuiltInProviders length instead of only logging the IDs; measureForkColdStart bases its ok return on cmd.Run() success (no bogus perf/speedup log on npm failure or timeout); all fork npm invocations (invokeFork/invokeForkLoose/measureForkColdStart) serialize on forkInvokeMu so t.Parallel tests don't race the shared tsx transpile cache; invokeSagittariusOutput returns exitCode -1 for non-ExitError failures (context deadline, unlaunchable binary) via errors.As so callers gating on code==0 don't misclassify a timed-out run as success. Verified: go test ./tests/parity/ (4 pass, builds bin itself), -race clean, SAGITTARIUS_PARITY_FORK=1 live run (serialized npm, 428x speedup logged).

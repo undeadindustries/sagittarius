@@ -398,6 +398,66 @@ func TestActivationKeepsLiveModelWhenStillChecked(t *testing.T) {
 	}
 }
 
+// TestEditModelOpensActivationAndReturns verifies the edit sheet's model row
+// opens the activation screen for the edited provider and returns to the edit
+// sheet after saving (not the top menu).
+func TestEditModelOpensActivationAndReturns(t *testing.T) {
+	deps := newFakeDeps()
+	deps.models = []string{"gemini-2.5-pro", "gemini-2.5-flash"}
+	m := New(context.Background(), deps)
+
+	// menu: 0 switch, 1 edit → editPick.
+	m, _ = send(m, key("down"), key("enter"))
+	if m.screen != screenEditPick {
+		t.Fatalf("screen = %d, want editPick", m.screen)
+	}
+	// Select gemini (index 0) → edit sheet.
+	m, _ = send(m, key("enter"))
+	if m.screen != screenEdit || m.targetID != "gemini-apikey" {
+		t.Fatalf("screen = %d target = %q, want edit/gemini-apikey", m.screen, m.targetID)
+	}
+	// Edit rows: 0 Set API key, 1 Manage models. Move to Manage models, select.
+	m, cmd := send(m, key("down"), key("enter"))
+	if m.screen != screenModels {
+		t.Fatalf("screen = %d, want models after selecting Manage models", m.screen)
+	}
+	if m.modelsFrom != screenEdit {
+		t.Fatalf("modelsFrom = %d, want screenEdit", m.modelsFrom)
+	}
+	if cmd == nil {
+		t.Fatal("expected discover command")
+	}
+	m, _ = send(m, cmd())
+	// Deactivate the second model, then save.
+	m, _ = send(m, key("down"), key(" "), key("enter"))
+	got := deps.activeModels["gemini-apikey"]
+	if len(got) != 1 || got[0] != "gemini-2.5-pro" {
+		t.Fatalf("saved activeModels = %v, want [gemini-2.5-pro]", got)
+	}
+	if m.screen != screenEdit {
+		t.Fatalf("screen = %d, want edit after save (returned from activation)", m.screen)
+	}
+}
+
+// TestEditModelActivationEscReturnsToEdit verifies Esc from the activation
+// screen returns to the edit sheet when opened from there.
+func TestEditModelActivationEscReturnsToEdit(t *testing.T) {
+	deps := newFakeDeps()
+	deps.models = []string{"gemini-2.5-pro"}
+	m := New(context.Background(), deps)
+
+	m, _ = send(m, key("down"), key("enter"), key("enter")) // edit → gemini edit sheet
+	m, cmd := send(m, key("down"), key("enter"))            // Manage models
+	if m.screen != screenModels {
+		t.Fatalf("screen = %d, want models", m.screen)
+	}
+	m, _ = send(m, cmd())
+	m, _ = send(m, key("esc"))
+	if m.screen != screenEdit {
+		t.Fatalf("screen = %d, want edit after esc from activation", m.screen)
+	}
+}
+
 func TestManageModelsGeminiStartsDiscovery(t *testing.T) {
 	deps := newFakeDeps() // active is gemini-apikey (WireFormatGemini)
 	m := New(context.Background(), deps)
