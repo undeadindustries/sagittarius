@@ -80,7 +80,8 @@ type ProvidersSettings struct {
 // Settings is the in-memory view of settings.json with typed providers and
 // passthrough for all other top-level sections.
 type Settings struct {
-	Providers *ProvidersSettings
+	Providers   *ProvidersSettings
+	Sagittarius *SagittariusSettings
 	// Raw preserves untouched top-level JSON keys (ui, general, mcp, …).
 	Raw map[string]json.RawMessage
 }

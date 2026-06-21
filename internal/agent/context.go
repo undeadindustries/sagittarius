@@ -38,10 +38,16 @@ const (
 // Compression uses the active provider model only (no secondary/per-utility
 // routing); a nil generator disables compression while masking and ejection
 // still run.
+//
+// modelFn supplies the model id at summarization time rather than capturing it
+// once, so compression tracks the runner's live interaction-mode model: passing
+// Runner.Model keeps the summarizer aligned with user turns across mode switches
+// (AD-015 active-model rule, AD-022).
 func NewContextManager(
 	settings *config.Settings,
 	gen provider.ContentGenerator,
-	model, sessionID string,
+	modelFn func() string,
+	sessionID string,
 ) *contextmgmt.Manager {
 	cm := provider.ResolveContextManagement(settings)
 	if !cm.Enabled {
@@ -50,7 +56,7 @@ func NewContextManager(
 
 	var summarize contextmgmt.Summarizer
 	if gen != nil {
-		summarize = newProviderSummarizer(gen, model)
+		summarize = newProviderSummarizer(gen, modelFn)
 	}
 
 	return contextmgmt.NewManager(contextmgmt.ManagerConfig{
@@ -80,8 +86,15 @@ func NewContextManager(
 // newProviderSummarizer adapts a ContentGenerator into a contextmgmt.Summarizer
 // that drives one non-streaming summarization turn on the active model. It
 // drains the stream, concatenating text deltas and ignoring any tool calls.
-func newProviderSummarizer(gen provider.ContentGenerator, model string) contextmgmt.Summarizer {
+// modelFn is resolved per call so the summarizer follows mid-session model
+// changes (interaction-mode switches); a nil modelFn yields an empty model id,
+// letting the provider apply its own default.
+func newProviderSummarizer(gen provider.ContentGenerator, modelFn func() string) contextmgmt.Summarizer {
 	return func(ctx context.Context, contents []contextmgmt.Message, systemInstruction string) (string, error) {
+		var model string
+		if modelFn != nil {
+			model = modelFn()
+		}
 		req := &provider.GenerateRequest{
 			Model:             model,
 			SystemInstruction: systemInstruction,

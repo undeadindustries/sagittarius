@@ -11,6 +11,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/credentials"
 	"github.com/undeadindustries/sagittarius/internal/mcp"
+	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 	"github.com/undeadindustries/sagittarius/internal/session"
 	"github.com/undeadindustries/sagittarius/internal/skills"
@@ -70,6 +71,14 @@ func (m *mockHooks) ListSessions() ([]session.SessionInfo, error) { return nil, 
 
 func (m *mockHooks) ClearHistory() error { return nil }
 
+func (m *mockHooks) SetInteractionMode(context.Context, modes.Mode) (string, error) {
+	return "gpt-4o-mini", nil
+}
+
+func (m *mockHooks) InteractionMode() (modes.Mode, string) {
+	return modes.ModeAgent, "gpt-4o-mini"
+}
+
 func testDeps(t *testing.T, settings *config.Settings) (slash.Deps, *config.Loader, *mockHooks) {
 	t.Helper()
 	dir := t.TempDir()
@@ -112,6 +121,8 @@ func TestHelpListsProviderSubcommands(t *testing.T) {
 		"/skills reload",
 		"/mcp reload",
 		"/agents reload",
+		"/mode",
+		"/mode show",
 		"List slash commands",
 		"Switch the active provider",
 	}

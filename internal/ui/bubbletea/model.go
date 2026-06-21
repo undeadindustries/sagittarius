@@ -164,6 +164,25 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
+	case "ctrl+shift+m":
+		if cycler, ok := m.app.(interface {
+			CycleInteractionMode(context.Context) (<-chan ui.StreamEvent, error)
+		}); ok {
+			ctx := m.ctx
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			events, err := cycler.CycleInteractionMode(ctx)
+			if err != nil {
+				_ = m.term.ShowError(err)
+				return m, nil
+			}
+			m.busy = true
+			m.status.Left = "mode"
+			m.stream = events
+			return m, waitStream(events)
+		}
+		return m, nil
 	case "enter":
 		line := strings.TrimSpace(m.input.Value())
 		m.input.SetValue("")
@@ -225,6 +244,7 @@ func (m *model) handleStream(ev ui.StreamEvent) (tea.Model, tea.Cmd) {
 		}
 	case ui.StreamDone:
 		m.busy = false
+		m.refreshIdleStatus()
 		m.status = m.idleStatus
 		m.stream = nil
 		return m, nil
@@ -233,6 +253,25 @@ func (m *model) handleStream(ev ui.StreamEvent) (tea.Model, tea.Cmd) {
 		return m, waitStream(m.stream)
 	}
 	return m, nil
+}
+
+// refreshIdleStatus pulls the latest status bar from the app when it exposes
+// one, so the footer reflects mid-session changes (e.g. interaction mode and
+// model after /mode or Ctrl+Shift+M) instead of the value captured at startup.
+// Apps that do not expose Status keep the original idle status.
+func (m *model) refreshIdleStatus() {
+	provider, ok := m.app.(interface{ Status() ui.StatusBar })
+	if !ok {
+		return
+	}
+	s := provider.Status()
+	if s.Left == "" && s.Right == "" {
+		return
+	}
+	if s.Right == "" {
+		s.Right = m.idleStatus.Right
+	}
+	m.idleStatus = s
 }
 
 func (m *model) appendOutput(text string) {

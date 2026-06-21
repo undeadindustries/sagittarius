@@ -9,7 +9,9 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/contextmgmt"
+	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 	"github.com/undeadindustries/sagittarius/internal/session"
 	"github.com/undeadindustries/sagittarius/internal/tools"
@@ -46,30 +48,47 @@ type RunnerConfig struct {
 	SessionRecorder *session.Recorder
 	// InitialHistory pre-populates the conversation from a resumed session.
 	InitialHistory []provider.Message
+	// Settings enables interaction-mode model routing. Nil disables mode overrides.
+	Settings *config.Settings
+	// InitialMode seeds the session interaction mode. The zero value
+	// (modes.ModeAgent) is authoritative, not "unset": callers that want the
+	// settings default must resolve it via modes.DefaultFromSettings and pass
+	// the result (cmd/sagittarius does this). This keeps an explicit ModeAgent
+	// from being silently overridden by sagittarius.defaultMode.
+	InitialMode modes.Mode
+	// ModelPinned skips mode-based routing when true (CLI -m override).
+	ModelPinned bool
 }
 
 // Runner orchestrates conversation history and provider streaming for the agent loop.
 type Runner struct {
-	genMu           sync.RWMutex
-	gen             provider.ContentGenerator
-	genErr          error
-	model           string
-	system          string
-	approval        ApprovalMode
-	interactive     bool
-	workDir         string
-	regMu           sync.RWMutex
-	registry        *tools.Registry
-	scheduler       *tools.Scheduler
-	history         []provider.Message
-	ctxMgrMu        sync.RWMutex
-	ctxMgr          *contextmgmt.Manager
-	turnCounter     int
-	state           State
-	stateMu         sync.RWMutex
-	lastRequest     *provider.GenerateRequest
-	lastRequestMu   sync.RWMutex
-	sessionRecorder *session.Recorder
+	genMu                sync.RWMutex
+	gen                  provider.ContentGenerator
+	genErr               error
+	modelMu              sync.RWMutex
+	model                string
+	providerDefaultModel string
+	modelPinned          bool
+	settingsMu           sync.RWMutex
+	settings             *config.Settings
+	modeState            *modes.State
+	system               string
+	systemBase           string
+	approval             ApprovalMode
+	interactive          bool
+	workDir              string
+	regMu                sync.RWMutex
+	registry             *tools.Registry
+	scheduler            *tools.Scheduler
+	history              []provider.Message
+	ctxMgrMu             sync.RWMutex
+	ctxMgr               *contextmgmt.Manager
+	turnCounter          int
+	state                State
+	stateMu              sync.RWMutex
+	lastRequest          *provider.GenerateRequest
+	lastRequestMu        sync.RWMutex
+	sessionRecorder      *session.Recorder
 }
 
 // NewRunner constructs a Runner and discovers project memory for the system prompt.
@@ -115,20 +134,30 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		history = append(history, cfg.InitialHistory...)
 	}
 
-	return &Runner{
-		gen:             cfg.Generator,
-		model:           cfg.Model,
-		system:          system,
-		approval:        mode,
-		interactive:     cfg.Interactive,
-		workDir:         ws.Root(),
-		registry:        registry,
-		scheduler:       scheduler,
-		ctxMgr:          cfg.ContextManager,
-		state:           StateIdle,
-		sessionRecorder: cfg.SessionRecorder,
-		history:         history,
-	}, nil
+	runner := &Runner{
+		gen:                  cfg.Generator,
+		model:                cfg.Model,
+		providerDefaultModel: cfg.Model,
+		modelPinned:          cfg.ModelPinned,
+		settings:             cfg.Settings,
+		modeState:            modes.NewState(cfg.InitialMode),
+		systemBase:           system,
+		system:               system,
+		approval:             mode,
+		interactive:          cfg.Interactive,
+		workDir:              ws.Root(),
+		registry:             registry,
+		scheduler:            scheduler,
+		ctxMgr:               cfg.ContextManager,
+		state:                StateIdle,
+		sessionRecorder:      cfg.SessionRecorder,
+		history:              history,
+	}
+	if !cfg.ModelPinned {
+		runner.refreshModelFromMode()
+		runner.applyModeSystemSuffix()
+	}
+	return runner, nil
 }
 
 func approvalToPolicy(mode ApprovalMode) tools.Policy {
@@ -158,7 +187,58 @@ func (r *Runner) LastGenerateRequest() *provider.GenerateRequest {
 
 // Model returns the configured model id for this runner.
 func (r *Runner) Model() string {
+	r.modelMu.RLock()
+	defer r.modelMu.RUnlock()
 	return r.model
+}
+
+// ModelPinned reports whether CLI or explicit pinning bypasses mode routing.
+func (r *Runner) ModelPinned() bool {
+	return r.modelPinned
+}
+
+// InteractionMode returns the active interaction mode.
+func (r *Runner) InteractionMode() modes.Mode {
+	if r.modeState == nil {
+		return modes.ModeAgent
+	}
+	return r.modeState.Mode()
+}
+
+// SetInteractionMode switches mode and refreshes the resolved model.
+func (r *Runner) SetInteractionMode(mode modes.Mode) string {
+	if r.modeState != nil {
+		r.modeState.SetMode(mode)
+	}
+	if !r.modelPinned {
+		r.refreshModelFromMode()
+		r.applyModeSystemSuffix()
+	}
+	return r.Model()
+}
+
+// SetSettings updates settings used for mode routing (e.g. after reload).
+func (r *Runner) SetSettings(s *config.Settings) {
+	r.settingsMu.Lock()
+	r.settings = s
+	r.settingsMu.Unlock()
+	if !r.modelPinned {
+		r.refreshModelFromMode()
+		r.applyModeSystemSuffix()
+	}
+}
+
+// SetProviderDefaultModel records the active provider's default model and
+// re-resolves the effective model unless pinned.
+func (r *Runner) SetProviderDefaultModel(model string) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return
+	}
+	r.providerDefaultModel = model
+	if !r.modelPinned {
+		r.refreshModelFromMode()
+	}
 }
 
 // GeneratorError returns the reason the runner has no usable provider, or nil
@@ -279,6 +359,9 @@ func (r *Runner) runAgentLoop(ctx context.Context, out chan<- ui.StreamEvent) {
 
 	for round := 0; round < tools.MaxToolRounds; round++ {
 		r.prepareContext(ctx)
+		if !r.modelPinned {
+			r.refreshModelFromMode()
+		}
 		req := r.buildGenerateRequest()
 		r.storeLastRequest(req)
 
@@ -361,12 +444,48 @@ func (r *Runner) contextManager() *contextmgmt.Manager {
 }
 
 func (r *Runner) buildGenerateRequest() *provider.GenerateRequest {
+	r.modelMu.RLock()
+	model := r.model
+	system := r.system
+	r.modelMu.RUnlock()
 	return &provider.GenerateRequest{
-		Model:             r.model,
-		SystemInstruction: r.system,
+		Model:             model,
+		SystemInstruction: system,
 		Messages:          append([]provider.Message(nil), r.history...),
 		Tools:             r.toolRegistry().ListDeclarations(),
 	}
+}
+
+func (r *Runner) sagittariusSettings() *config.SagittariusSettings {
+	r.settingsMu.RLock()
+	defer r.settingsMu.RUnlock()
+	if r.settings == nil {
+		return nil
+	}
+	return r.settings.Sagittarius
+}
+
+func (r *Runner) RefreshModelFromMode() {
+	r.refreshModelFromMode()
+}
+
+func (r *Runner) refreshModelFromMode() {
+	mode := r.InteractionMode()
+	providerDefault := r.providerDefaultModel
+	resolved := modes.ResolveModel(mode, r.sagittariusSettings(), providerDefault)
+	modes.LogModeSelection(mode, resolved, providerDefault)
+	r.modelMu.Lock()
+	r.model = resolved
+	r.modelMu.Unlock()
+}
+
+func (r *Runner) applyModeSystemSuffix() {
+	suffix := modes.SystemPromptSuffix(r.InteractionMode(), r.sagittariusSettings())
+	base := r.systemBase
+	if suffix != "" {
+		base = strings.TrimRight(base, "\n") + "\n\n" + suffix
+	}
+	r.system = base
 }
 
 // toolRegistry returns the active tool registry under the registry lock.

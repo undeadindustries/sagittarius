@@ -10,6 +10,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/credentials"
 	"github.com/undeadindustries/sagittarius/internal/mcp"
+	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 	"github.com/undeadindustries/sagittarius/internal/session"
 	"github.com/undeadindustries/sagittarius/internal/skills"
@@ -55,8 +56,9 @@ func NewApp(cfg AppConfig) *App {
 		processor: slash.NewProcessor(),
 		sessionID: cfg.SessionID,
 		status: ui.StatusBar{
-			Left:  cfg.ProviderLabel,
-			Right: cfg.Model,
+			Left:   cfg.ProviderLabel,
+			Right:  cfg.Model,
+			Detail: modeStatusDetail(cfg.Runner),
 		},
 		deps: slash.Deps{
 			Loader:   cfg.Loader,
@@ -80,6 +82,15 @@ func (a *App) HandleInput(ctx context.Context, input string) (<-chan ui.StreamEv
 // Status returns footer metadata for the TUI status bar.
 func (a *App) Status() ui.StatusBar {
 	return a.status
+}
+
+// CycleInteractionMode advances agent → plan → ask → debug → agent.
+func (a *App) CycleInteractionMode(ctx context.Context) (<-chan ui.StreamEvent, error) {
+	if a.runner == nil {
+		return nil, fmt.Errorf("runner not available")
+	}
+	next := modes.CycleMode(a.runner.InteractionMode())
+	return a.handleSlash(ctx, "/mode "+next.String())
 }
 
 func (a *App) handleSlash(ctx context.Context, input string) (<-chan ui.StreamEvent, error) {
@@ -127,13 +138,21 @@ func (h *appHooks) RebuildRunner(ctx context.Context) (string, string, error) {
 	}
 
 	h.app.runner.SetGenerator(gen)
-	h.app.runner.SetModel(endpoint.Model)
+	h.app.runner.SetProviderDefaultModel(endpoint.Model)
+	if !h.app.runner.ModelPinned() {
+		h.app.runner.RefreshModelFromMode()
+	}
+
+	resolvedModel := h.app.runner.Model()
 
 	// Rebuild the context manager so local-context defenses track the new wire
 	// format. NewContextManager returns nil off the openai-chat path, making
 	// context management a pure pass-through for gemini-native / openai-responses.
+	// Pass runner.Model (resolved per call) so chat compression/summarization
+	// always runs against the model user turns use, including after a mid-session
+	// /mode switch that does not rebuild the runner (AD-015 active-model rule).
 	h.app.runner.SetContextManager(
-		NewContextManager(h.app.deps.Settings, gen, endpoint.Model, h.app.sessionID),
+		NewContextManager(h.app.deps.Settings, gen, h.app.runner.Model, h.app.sessionID),
 	)
 
 	label := endpoint.ProviderID
@@ -146,10 +165,11 @@ func (h *appHooks) RebuildRunner(ctx context.Context) (string, string, error) {
 	}
 
 	h.app.status = ui.StatusBar{
-		Left:  label,
-		Right: endpoint.Model,
+		Left:   label,
+		Right:  resolvedModel,
+		Detail: "mode: " + h.app.runner.InteractionMode().String(),
 	}
-	return label, endpoint.Model, nil
+	return label, resolvedModel, nil
 }
 
 func (h *appHooks) ReloadSystemInstruction(ctx context.Context) error {
@@ -265,6 +285,31 @@ func (h *appHooks) ClearHistory() error {
 	return nil
 }
 
+func (h *appHooks) SetInteractionMode(_ context.Context, mode modes.Mode) (string, error) {
+	if h.app == nil || h.app.runner == nil {
+		return "", fmt.Errorf("runner not available")
+	}
+	model := h.app.runner.SetInteractionMode(mode)
+	h.app.status.Right = model
+	h.app.status.Detail = "mode: " + mode.String()
+	return model, nil
+}
+
+func (h *appHooks) InteractionMode() (modes.Mode, string) {
+	if h.app == nil || h.app.runner == nil {
+		return modes.ModeAgent, ""
+	}
+	mode := h.app.runner.InteractionMode()
+	return mode, h.app.runner.Model()
+}
+
+func modeStatusDetail(runner *Runner) string {
+	if runner == nil {
+		return "mode: agent"
+	}
+	return "mode: " + runner.InteractionMode().String()
+}
+
 func skillNames(items []skills.Definition) map[string]struct{} {
 	out := make(map[string]struct{}, len(items))
 	for _, item := range items {
@@ -318,12 +363,25 @@ func (r *Runner) SetGenerator(gen provider.ContentGenerator) {
 	r.genMu.Unlock()
 }
 
-// SetModel updates the model used for generate requests.
+// SetModel updates the model used for generate requests directly.
 func (r *Runner) SetModel(model string) {
 	model = strings.TrimSpace(model)
-	if model != "" {
-		r.model = model
+	if model == "" {
+		return
 	}
+	r.modelMu.Lock()
+	r.model = model
+	r.modelMu.Unlock()
+}
+
+// PinModel locks the runner to an explicit model, bypassing mode routing.
+func (r *Runner) PinModel(model string) {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return
+	}
+	r.modelPinned = true
+	r.SetModel(model)
 }
 
 // SetRegistry replaces the tool registry and rebuilds the scheduler. Safe to
@@ -352,6 +410,7 @@ func (r *Runner) ReloadSystemInstruction() error {
 	if err != nil {
 		return err
 	}
-	r.system = system
+	r.systemBase = system
+	r.applyModeSystemSuffix()
 	return nil
 }
