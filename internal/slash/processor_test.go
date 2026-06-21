@@ -7,9 +7,12 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/undeadindustries/sagittarius/internal/agents"
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/credentials"
+	"github.com/undeadindustries/sagittarius/internal/mcp"
 	"github.com/undeadindustries/sagittarius/internal/provider"
+	"github.com/undeadindustries/sagittarius/internal/skills"
 	"github.com/undeadindustries/sagittarius/internal/slash"
 )
 
@@ -43,6 +46,24 @@ func (m *mockHooks) SetProviderAPIKey(_ context.Context, providerID, apiKey stri
 	m.storedKeys[providerID] = apiKey
 	return nil
 }
+
+func (m *mockHooks) ReloadMCP(context.Context) (string, error) {
+	return "MCP servers reloaded.", nil
+}
+
+func (m *mockHooks) ReloadSkills(context.Context) (string, error) {
+	return "Agent skills reloaded successfully.", nil
+}
+
+func (m *mockHooks) ReloadAgents(context.Context) (agents.ReloadSummary, error) {
+	return agents.ReloadSummary{TotalLoaded: 0}, nil
+}
+
+func (m *mockHooks) MCPStates() []mcp.ServerState { return nil }
+
+func (m *mockHooks) SkillList() []skills.Definition { return nil }
+
+func (m *mockHooks) AgentList() []agents.Definition { return nil }
 
 func testDeps(t *testing.T, settings *config.Settings) (slash.Deps, *config.Loader, *mockHooks) {
 	t.Helper()
@@ -84,6 +105,8 @@ func TestHelpListsProviderSubcommands(t *testing.T) {
 		"/auth",
 		"/memory reload",
 		"/skills reload",
+		"/mcp reload",
+		"/agents reload",
 		"List slash commands",
 		"Switch the active provider",
 	}
