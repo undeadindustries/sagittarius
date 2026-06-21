@@ -88,6 +88,8 @@ func (r *Registry) registerBuiltins() {
 	r.commands = []Command{
 		helpCommand(),
 		quitCommand(),
+		resumeCommand(),
+		clearCommand(),
 		providerCommand(),
 		modelCommand(),
 		authCommand(),

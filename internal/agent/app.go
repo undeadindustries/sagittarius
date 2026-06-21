@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/undeadindustries/sagittarius/internal/agents"
@@ -10,6 +11,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/credentials"
 	"github.com/undeadindustries/sagittarius/internal/mcp"
 	"github.com/undeadindustries/sagittarius/internal/provider"
+	"github.com/undeadindustries/sagittarius/internal/session"
 	"github.com/undeadindustries/sagittarius/internal/skills"
 	"github.com/undeadindustries/sagittarius/internal/slash"
 	"github.com/undeadindustries/sagittarius/internal/tools"
@@ -232,6 +234,35 @@ func (h *appHooks) AgentList() []agents.Definition {
 		return nil
 	}
 	return h.app.runtime.Agents.AllDefinitions()
+}
+
+// ListSessions lists sessions for the current working directory.
+func (h *appHooks) ListSessions() ([]session.SessionInfo, error) {
+	projectRoot, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("resolve working directory: %w", err)
+	}
+	chatsDir, err := session.ChatsDir(projectRoot)
+	if err != nil {
+		return nil, err
+	}
+	currentID := ""
+	if h.app != nil {
+		currentID = h.app.sessionID
+	}
+	return session.ListSessions(chatsDir, currentID)
+}
+
+// ClearHistory wipes the in-memory conversation history of the runner and
+// rotates the session recorder so subsequent turns are written to a new session
+// file rather than appended to the cleared conversation.
+func (h *appHooks) ClearHistory() error {
+	if h.app == nil || h.app.runner == nil {
+		return fmt.Errorf("runner not available")
+	}
+	h.app.runner.ClearHistory()
+	h.app.runner.RotateSession()
+	return nil
 }
 
 func skillNames(items []skills.Definition) map[string]struct{} {

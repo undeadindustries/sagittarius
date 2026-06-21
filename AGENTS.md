@@ -43,8 +43,8 @@ tests, security docs, and commit messages accordingly.
 
 | Field | Value |
 |-------|-------|
-| **Overall** | Phase 12 complete — MCP, skills, extensions |
-| **Active phase** | Phase 13 — Sessions & advanced CLI |
+| **Overall** | Phase 13 complete — Sessions & advanced CLI |
+| **Active phase** | Phase 14 — Parity validation |
 | **Go toolchain** | **1.26.4** at `/home/rob/local/go1.26.4`, symlinked system-wide via `/usr/local/bin/go`. apt Go 1.22 removed. |
 | **Binary name** | `sagittarius` |
 | **Module** | `github.com/undeadindustries/sagittarius` |
@@ -67,7 +67,7 @@ tests, security docs, and commit messages accordingly.
 | 10 | OpenAI Responses API | Complete |
 | 11 | Context management | Complete |
 | 12 | MCP, skills, extensions | Complete |
-| 13 | Sessions & advanced CLI | Not started |
+| 13 | Sessions & advanced CLI | Complete |
 | 14 | Parity validation | Not started |
 | 15 | Interaction modes (post-parity) | Not started |
 
@@ -248,6 +248,22 @@ Phase 12 adds four packages wired through `agent.Runtime` and `agent.Catalog`:
 
 **Dependency:** One added dependency — official MCP Go SDK (documented here; stdlib JSON-RPC deemed higher correctness risk for stdio+HTTP).
 
+### AD-017 — Sandbox stub deferral (2026-06-21)
+
+Phase 13 decision: `sandbox.ts` (fork's Seatbelt/landlock sandbox wrapper for tool execution) is **not ported**. Rationale: the sandbox is platform-specific (macOS Seatbelt, Linux landlock), requires native syscall bindings, and is an execution environment safety feature orthogonal to session persistence. Deferred post-parity. CLI accepts no sandbox-related flags. Document in Phase 14 parity checklist.
+
+### AD-018 — Checkpointing deferred (2026-06-21)
+
+Fork checkpointing (`/restore`) requires a shadow git repository at `~/.gemini/history/<project_hash>` and a checkpoint record format in `~/.gemini/tmp/<hash>/checkpoints/`. The JSONL loader fully supports `$rewindTo` records (written by the recorder when rewinding). However, the shadow-git creation + `/restore` command are **deferred**: they require `os/exec` git subprocess management and a new slash command with significant surface area. Deferred to a follow-up phase. Note `$rewindTo` is read correctly by the session loader now so sessions checkpointed by the fork can be loaded.
+
+### AD-019 — Simplified /resume UI (2026-06-21)
+
+The fork's `/resume` opens an interactive TUI session browser (Bubble Tea list component with search, preview, delete). Phase 13 implements a **text-list** variant instead: `/resume` and `/resume list` print the session list as plain text (same output as `--list-sessions`). The full TUI session browser is deferred to Phase 15 (interaction modes). This is intentionally simpler but fully functional for text-only workflows.
+
+### AD-020 — Git worktrees stub (2026-06-21)
+
+`--worktree` / `-w` flag is accepted and validated against `experimental.worktrees: true` in settings, but git worktree creation (`git worktree add .gemini/worktrees/<name>`) is **not executed**. A clear error message with manual instructions is printed instead. Full implementation requires subprocess management + worktree lifecycle tracking. Deferred to a dedicated worktrees phase post-parity (fork docs: `docs/cli/git-worktrees.md`).
+
 ---
 
 ## Workspace Layout
@@ -295,11 +311,17 @@ internal/mcp/
 internal/skills/
 internal/agents/
 internal/extensions/
+internal/session/          # Phase 13 session persistence (JSONL, resume, list)
 internal/version/
 internal/log/
 ```
 
 ---
+
+Phase 13 complete (2026-06-21): internal/session package (Recorder, LoadSession, ListSessions, DeleteSession, Selector/ResolveSession, ProjectHash/ChatsDir, ConvertToProviderHistory, FormatSessionList); CLI flags --resume/-r, --list-sessions, --delete-session, --output-format text|json|stream-json, --worktree stub (AD-020); session recording wired into agent/runner.go (user/model/tool messages); /resume and /clear slash commands; slash.Hooks extended with ListSessions/ClearHistory; Runner.ClearHistory + InitialHistory; JSONL format fork-compatible. Tests: TestSessionRoundTrip, TestResumeLatest, TestListSessionsEmpty, TestResumeByIndex, TestResumeByUUID, TestResumeInvalidIdentifier, TestProjectHash, TestConvertToProviderHistory, TestDeleteSession, TestFormatSessionList.
+Phase 13 Bugbot fixes (2026-06-21): bare --resume/-r now resumes latest via normalizeResumeArgs (stdlib flag can't express optional-value flags); --resume is a hard error when os.Getwd fails instead of silently starting fresh; ConvertToProviderHistory no longer synthesizes placeholder tool outputs (recorder already persists real responses as the following user turn) — removes duplicate function-response turns on resume; buildProviderParts passes the recorded response map through (coerceResponseMap) instead of double-wrapping under a second "output" key; loadSessionInfo applies $rewindTo trimming so --list-sessions counts/preview match LoadSession; /clear rotates the recorder to a fresh JSONL file (Recorder.Rotate + Runner.RotateSession). Tests added: TestNormalizeResumeArgs, TestConvertToProviderHistoryToolRoundTrip, TestRecorderRotateStartsNewFile, TestListSessionsRespectsRewind.
+Next: Phase 14 — Parity validation
+Blockers: checkpointing (/restore) deferred (AD-018); git worktrees stub only (AD-020); sandbox not ported (AD-017); full /resume TUI browser deferred (AD-019); pre-existing credentials data race in ./internal/provider/ still present; TestReasoningApplicableOnResponses (internal/slash) is order-dependent on provider session-reasoning package globals (passes in isolation) — candidate for the same global-state cleanup as the credentials race.
 
 Phase 12 complete (2026-06-21): internal/mcp (SDK client, manager, DiscoveredTool, credentials bearer), internal/skills (SKILL.md loader/manager), internal/agents (stub registry), internal/extensions (stub loader), agent.Runtime/Catalog, tools.activate_skill, /mcp /skills /agents reload+list, docs/tools/mcp-server.md; tests TestMCPListToolsMock, TestSkillDiscovery, TestActivateSkillTool.
 Next: Phase 13 — Sessions & advanced CLI
@@ -370,7 +392,9 @@ From fork `AGENT.md` → OPEN TODOS:
 Track against fork `docs/reference/commands.md`. Implemented subset documented in
 `docs/reference/commands.md`.
 
-- [ ] `/about`, `/bug`, `/chat`/`/resume`, `/clear`, `/compress`, `/copy`
+- [ ] `/about`, `/bug`, `/chat` (alias for `/resume`), `/compress`, `/copy`
+- [x] `/resume` (text list, Phase 13) — TUI session browser deferred to Phase 15 (AD-019)
+- [x] `/clear` (Phase 13)
 - [ ] `/commands`, `/directory`, `/extensions`
 - [ ] Full `/skills` enable/disable/link/consent (list + reload implemented Phase 12)
 - [ ] `/mcp auth`, `/mcp enable`/`disable` (list + reload implemented Phase 12)
@@ -379,6 +403,8 @@ Track against fork `docs/reference/commands.md`. Implemented subset documented i
 - [ ] ACP headless command registry
 
 Implemented in Phase 12: `/mcp` (list, reload), `/skills` (list, reload), `/agents` (list, reload), `activate_skill` tool.
+
+Implemented in Phase 13: `/resume` (text list — TUI browser deferred AD-019), `/clear`.
 
 Implemented in Phase 10: `/reasoning` (show, clear, save, session levels).
 

@@ -12,6 +12,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/credentials"
 	"github.com/undeadindustries/sagittarius/internal/mcp"
 	"github.com/undeadindustries/sagittarius/internal/provider"
+	"github.com/undeadindustries/sagittarius/internal/session"
 	"github.com/undeadindustries/sagittarius/internal/skills"
 	"github.com/undeadindustries/sagittarius/internal/slash"
 )
@@ -64,6 +65,10 @@ func (m *mockHooks) MCPStates() []mcp.ServerState { return nil }
 func (m *mockHooks) SkillList() []skills.Definition { return nil }
 
 func (m *mockHooks) AgentList() []agents.Definition { return nil }
+
+func (m *mockHooks) ListSessions() ([]session.SessionInfo, error) { return nil, nil }
+
+func (m *mockHooks) ClearHistory() error { return nil }
 
 func testDeps(t *testing.T, settings *config.Settings) (slash.Deps, *config.Loader, *mockHooks) {
 	t.Helper()
