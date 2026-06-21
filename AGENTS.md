@@ -43,7 +43,7 @@ tests, security docs, and commit messages accordingly.
 
 | Field | Value |
 |-------|-------|
-| **Overall** | Phase 15 complete — Interaction modes |
+| **Overall** | Phase 16 complete — TUI presentation parity |
 | **Active phase** | — (post-parity enhancements) |
 | **Go toolchain** | **1.26.4** at `/home/rob/local/go1.26.4`, symlinked system-wide via `/usr/local/bin/go`. apt Go 1.22 removed. |
 | **Binary name** | `sagittarius` |
@@ -70,6 +70,7 @@ tests, security docs, and commit messages accordingly.
 | 13 | Sessions & advanced CLI | Complete |
 | 14 | Parity validation | Complete |
 | 15 | Interaction modes (post-parity) | Complete |
+| 16 | TUI presentation parity (post-parity) | Complete |
 
 **MVP milestone (Phases 01–05 + 04):** scaffolding, basic TUI, Gemini API key
 auth with secure storage, first streamed Gemini response.
@@ -495,6 +496,79 @@ alias) / TestGlobalDefaultFallbackWhenProviderUnset + rewritten existing cases;
 `provider` CoerceModelToCurated switch/noop; `providersdialog`
 activation-switches-live-model + keeps-when-checked. `go test ./...` green.
 
+### AD-028 — TUI presentation parity: semantic theme + launch/exit chrome (2026-06-21)
+
+Phase 16 closes the TUI **presentation** gap with the fork's Ink UI without
+touching the AD-004 agent/UI seam. All color lives in a new leaf package
+`internal/ui/theme` (the agent layer never imports it); the bubbletea renderer
+and the two dialog overlays consume it.
+
+**Theme system (`internal/ui/theme`):** a `Theme` struct of pre-built lipgloss
+styles (Title/Primary/Secondary/Accent/Response/Link/Code/Dim, Error/Warning/
+Success, Selected) plus border colors (BorderColor/FocusBorderColor). Two
+built-ins: `Default` (purple-leaning — accents `#9B7EDE`/`#D7AFFF`, focus
+`#9B7EDE`) and `Greyscale` (bold/faint/reverse/underline only, `lipgloss.NoColor`
+borders — emits **zero** color codes). `Resolve(name, noColor)`: `NO_COLOR`
+(any non-empty) → greyscale; `ui.theme` aliases (`greyscale`/`grayscale`/`mono`/
+…) → greyscale; else default. Wired via new `ui.Options.ThemeName`/`NoColor`
+(primitives, so `ui` does not import `theme`); `cmd/sagittarius` reads
+`config.Settings.UI()` (new typed passthrough reader for `ui.theme`/`hideBanner`/
+`hideTips`) and `NO_COLOR`. Dialogs gained `SetTheme`; their package-level style
+vars and free `renderRow`/`renderWireToggle` became theme-driven methods; box
+borders use `FocusBorderColor` in color mode.
+
+**Structured scrollback (16b):** the monolithic `output strings.Builder` became
+`[]scrollBlock{role,text}` with `openResponseIdx` accumulating streamed assistant
+deltas into one block. Roles → prefix+style: user `>`, assistant `✦`, info `ℹ`,
+error `✕`, tool-start `⚙`, tool-result `↳`, confirm `?`. Wrapping runs on plain
+text **before** styling so ANSI never corrupts wrap math. A pending tool confirm
+also renders a focused (purple-bordered) **band** above the input (`renderConfirmBand`,
++3 reserved body rows) so the y/n prompt is not buried; y/n is still the
+intentional divergence from the fork's radio dialog.
+
+**Launch (16c):** new `welcome.go` — original compact ASCII banner (arrow motif +
+spaced wordmark, per-line purple gradient), version line, active provider/model,
+tips block. Gated by `ui.hideBanner` (logo → one-line title) and `ui.hideTips`.
+
+**Telemetry + footer (16d):** new `internal/agent/metrics.go` `sessionMetrics`
+(mutex-guarded turns/tool-calls/failures + heuristic input/output/context tokens
+via `contextmgmt.EstimateTokens`). Runner hooks: `recordTurn` (RunTurn),
+`recordRequest` (per generate request — also sets live context-token estimate),
+`recordOutput` (post-stream), `recordTools` (post-execute, failures = responses
+with an `"error"` key). `Runner.Stats()` → new UI-facing `ui.SessionStats`
+(carries no provider types; `ContextPercent()` returns -1 when no limit).
+`contextmgmt.Manager` gained `Enabled()`/`ContextLimit()`. `App` implements new
+`ui.MetricsProvider`; footer appends `% context` (+ compact token total ≥80 cols)
+when a limit is known.
+
+**Exit (16e):** `beginQuit` centralizes every quit path (StreamQuit, Ctrl+C,
+QuitMsg), captures a goodbye summary, and `Terminal.Run` prints it to the
+restored screen **after** alt-screen teardown (so it persists; `View()` returns
+"" while quitting for a clean teardown). Summary: title, session/provider/model,
+turns, tool calls (% ok), duration, in/out tokens, and `sagittarius --resume
+<sessionId>`.
+
+**Markdown (16f):** `markdown.go` — minimal in-house renderer for assistant
+`roleResponse` blocks only (headings, `-/*/+` bullets → `•`, fenced code with a
+`│` left bar, inline `**bold**`/`*italic*`/`` `code` ``). Inline styling is
+applied per already-wrapped line (a marker straddling a wrap boundary degrades to
+literal text — acceptable for "basic"). User lines stay verbatim. New theme
+`Code` style (teal in default, faint in greyscale).
+
+**Deferred (16g):** `/theme` command + picker, rich confirm dialogs (radio/diff),
+full footer column config (`ui.footer.items`), extended screen-reader prefixes.
+
+**Intentional divergences kept:** y/n confirms, purple accent (vs fork green
+focus), `sagittarius --resume`.
+
+Docs: `docs/tui-themes.md` (new), `docs/PARITY_CHECKLIST.md` (TUI presentation
+section). Tests: `theme` greyscale-no-color/default-color/resolve; `config` UI()
+parse; `bubbletea` scrollback roles + response accumulation + confirm band +
+welcome (logo/hide/greyscale) + exit summary (stats/resume/greyscale/clean-quit)
++ markdown (headings/bullets/code/inline/greyscale); `agent` session-metrics
+accumulate. `go test ./...` green, `go vet` clean, `-race` clean on
+ui/agent/config/contextmgmt.
+
 ---
 
 ## Workspace Layout
@@ -560,6 +634,8 @@ Providers TUI wizard (2026-06-21, post-Phase 15): renamed `/provider` → `/prov
 Providers/models command split (2026-06-21, post-Phase 15, AD-026): supersedes AD-025's "keep subcommands". `/providers` and `/models` are now menu-first single-surface commands — typed subcommand trees retired (handlers + `arg_completers.go` deleted). `/model` → `/models` (`slash.DialogModels` → `ui.DialogModels`). New per-provider `ProviderInstanceConfig.ActiveModels` (`activeModels`, registered in config/document.go field maps + `isEmptyValue` []string case); `provider.SetActiveModels`/`CuratedActiveModels` (raw)/`ActiveModelsFor` (resolved fallback). `providersdialog` models screen repurposed into a checkbox activation toggle (Space/Enter, active-by-default; Gemini skips — no discovery); edit-sheet model row is now a typed field. New `internal/ui/modelsdialog` overlay (list active provider's active models → Enter sets live model). `bubbletea` holds two mutually-exclusive overlays (`overlay`/`modelsOverlay`), `openDialog` switches on kind, `modelsDialogHost` added. Agent: `providerDialogDeps` gains `ActiveModels`/`SetActiveModels`, new `modelsDialogDeps` + `App.ModelsDialogDeps()`, `mapDialogKind` maps DialogModels. `ApplyProviderSetting`/`ValidSettingKeys*` retained. Docs: commands.md, PARITY_CHECKLIST.md, AGENTS.md (AD-026). Tests: config round-trip+omit (2), provider activemodels (3), slash dialog-open+help+completion (rewritten), providersdialog activation+gemini (2), modelsdialog (3), bubbletea DialogModels (3), parity tables updated. Verified: go test ./... pass, vet clean, -race clean on slash/ui/config/agent.
 
 Model default resolution + activation coherence (2026-06-21, post-Phase 15, AD-027): per-mode model override always wins; legacy `sagittarius.defaultModel` demoted below the provider default so it no longer clobbers the active provider's model. New `sagittarius.defaultModels` (provider id → model) tier between mode override and provider default. `modes.ResolveModel`/`ResolveSubagentModel` gained a `providerID` arg (runner passes `settings.ActiveProvider()`; `agents.ResolveSubagentModel` derives it). Activation coherence: deactivating the live model auto-switches to the first checked model (`providersdialog.Deps.CurrentModel` + `saveActivation`), centralized via `provider.CoerceModelToCurated` in `RebuildRunner`. Docs: interaction-modes.md, commands.md, AGENTS.md (AD-027). Tests: config defaultModels round-trip/omit; modes override-beats-defaults / per-provider / global-fallback; provider CoerceModelToCurated; providersdialog live-model switch/keep. Verified: go test ./... pass.
+
+Phase 16 complete (2026-06-21): TUI presentation parity (AD-028). New `internal/ui/theme` (Default purple + Greyscale, `Resolve` via `NO_COLOR`/`ui.theme`); `ui.Options.ThemeName`/`NoColor`/`HideBanner`/`HideTips`; `config.Settings.UI()` typed passthrough reader. Structured scrollback roles + purple confirm focus band; ASCII launch banner + tips (`welcome.go`); `internal/agent/metrics.go` `sessionMetrics` + `Runner.Stats()` → `ui.SessionStats` + `ui.MetricsProvider`; footer `% context` + token total; `contextmgmt.Manager.Enabled()/ContextLimit()`; exit goodbye screen (`beginQuit` + post-teardown print) with `sagittarius --resume <id>`; basic markdown for assistant output (`markdown.go`) + theme `Code` style. Dialogs (`providersdialog`/`modelsdialog`) theme-driven via `SetTheme`. Docs: `docs/tui-themes.md`, PARITY_CHECKLIST TUI section. Tests: theme (3), config UI (2), bubbletea scrollback/confirm/welcome/exit/markdown (16), agent session-metrics (1). Verified: go test ./... pass, vet clean, -race clean on ui/agent/config/contextmgmt.
 Next: —
 Blockers: fork mock server comparison partial; checkpointing (/restore) deferred (AD-018); sandbox not ported (AD-017); full /resume TUI browser deferred (AD-019); git worktrees stub (AD-020); pre-existing credentials data race ./internal/provider/; TestReasoningApplicableOnResponses flake; debug-mode tool disable + wireLogger port deferred.
 

@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/undeadindustries/sagittarius/internal/config"
+	"github.com/undeadindustries/sagittarius/internal/ui/theme"
 )
 
 type screen int
@@ -79,6 +80,7 @@ type modelsLoadedMsg struct {
 type Model struct {
 	deps Deps
 	ctx  context.Context
+	th   theme.Theme
 
 	width  int
 	height int
@@ -126,6 +128,7 @@ func New(ctx context.Context, deps Deps) Model {
 	m := Model{
 		deps:      deps,
 		ctx:       ctx,
+		th:        theme.Default(),
 		screen:    screenMenu,
 		input:     ti,
 		add:       addState{wire: config.WireFormatOpenAIChat},
@@ -147,6 +150,12 @@ func (m Model) SetSize(w, h int) Model {
 	m.height = h
 	m.syncInputWidth()
 	m.ensureListVisible()
+	return m
+}
+
+// SetTheme applies the resolved color theme to the overlay.
+func (m Model) SetTheme(th theme.Theme) Model {
+	m.th = th
 	return m
 }
 

@@ -13,6 +13,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/ui"
 	"github.com/undeadindustries/sagittarius/internal/ui/modelsdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/providersdialog"
+	"github.com/undeadindustries/sagittarius/internal/ui/theme"
 )
 
 // providerDialogHost is implemented by an App that can supply the providers
@@ -40,24 +41,61 @@ type submitMsg struct {
 	line string
 }
 
+// scrollRole classifies a scrollback block so the renderer can apply a
+// consistent prefix glyph and color per message kind.
+type scrollRole int
+
+const (
+	roleUser scrollRole = iota
+	roleResponse
+	roleInfo
+	roleError
+	roleToolStart
+	roleToolResult
+	roleConfirm
+)
+
+// scrollBlock is one logical message in the scrollback. text may contain
+// embedded newlines; the renderer wraps and prefixes it at paint time.
+type scrollBlock struct {
+	role scrollRole
+	text string
+}
+
 type model struct {
 	opts ui.Options
 	app  ui.App
 	term *Terminal
 	ctx  context.Context
+	th   theme.Theme
 
 	width  int
 	height int
 
-	viewport     viewport.Model
-	input        textinput.Model
-	status       ui.StatusBar
-	idleStatus   ui.StatusBar
-	output       strings.Builder
-	busy         bool
-	quitting     bool
-	stream       <-chan ui.StreamEvent
+	viewport   viewport.Model
+	input      textinput.Model
+	status     ui.StatusBar
+	idleStatus ui.StatusBar
+
+	// welcome is the static banner/tips seeded above the scrollback.
+	welcome string
+	// blocks is the structured scrollback: each block carries a role so the
+	// renderer can prefix and color it consistently (user, assistant, info,
+	// error, tool lifecycle). Streamed assistant text accumulates into the
+	// block at openResponseIdx until the turn ends.
+	blocks          []scrollBlock
+	openResponseIdx int
+
+	busy     bool
+	quitting bool
+	// exitSummary is captured when quitting begins so the Terminal can print the
+	// goodbye screen after the alt-screen program tears down.
+	exitSummary string
+	stream      <-chan ui.StreamEvent
+	// confirmReply is set while a tool confirmation is pending; the confirm
+	// band renders above the input until the user answers y/n.
 	confirmReply chan bool
+	confirmText  string
 
 	// Slash-command autocompletion state.
 	suggestions    []ui.Suggestion
@@ -87,8 +125,11 @@ func newModel(opts ui.Options, app ui.App, term *Terminal) *model {
 	ti.CharLimit = 8192
 	ti.Prompt = "> "
 
+	th := theme.Resolve(opts.ThemeName, opts.NoColor)
+
+	welcome := welcomeText(opts, th)
 	vp := viewport.New(80, 20)
-	vp.SetContent(welcomeText(opts))
+	vp.SetContent(welcome)
 
 	idleStatus := opts.InitialStatus
 	if idleStatus.Left == "" && idleStatus.Right == "" {
@@ -102,20 +143,34 @@ func newModel(opts ui.Options, app ui.App, term *Terminal) *model {
 	}
 
 	m := &model{
-		opts:          opts,
-		app:           app,
-		term:          term,
-		input:         ti,
-		viewport:      vp,
-		status:        idleStatus,
-		idleStatus:    idleStatus,
-		suggestionIdx: -1,
+		opts:            opts,
+		app:             app,
+		term:            term,
+		th:              th,
+		welcome:         welcome,
+		openResponseIdx: -1,
+		input:           ti,
+		viewport:        vp,
+		status:          idleStatus,
+		idleStatus:      idleStatus,
+		suggestionIdx:   -1,
 	}
 	return m
 }
 
 func (m *model) Init() tea.Cmd {
 	return textinput.Blink
+}
+
+// beginQuit marks the session as quitting, captures the goodbye summary (so the
+// Terminal can print it after teardown), and returns the quit command. Calling
+// it more than once keeps the first captured summary.
+func (m *model) beginQuit() tea.Cmd {
+	if !m.quitting {
+		m.quitting = true
+		m.exitSummary = m.renderExitSummary()
+	}
+	return tea.Quit
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -135,8 +190,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = msg.status
 		return m, nil
 	case tea.QuitMsg:
-		m.quitting = true
-		return m, tea.Quit
+		return m, m.beginQuit()
 	}
 
 	var cmd tea.Cmd
@@ -164,8 +218,7 @@ func (m *model) updateOverlay(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case streamEventMsg:
 		return m.handleStream(msg.event)
 	case tea.QuitMsg:
-		m.quitting = true
-		return m, tea.Quit
+		return m, m.beginQuit()
 	}
 
 	if m.overlay != nil {
@@ -193,7 +246,7 @@ func (m *model) closeOverlay(status string) {
 	m.overlay = nil
 	m.modelsOverlay = nil
 	if status != "" {
-		m.appendOutput(status + "\n")
+		m.addBlock(roleInfo, status)
 	}
 	m.refreshIdleStatus()
 	m.status = m.idleStatus
@@ -208,19 +261,21 @@ func (m *model) openDialog(kind ui.DialogKind) {
 	case ui.DialogProviders:
 		host, ok := m.app.(providerDialogHost)
 		if !ok {
-			m.appendOutput("Providers dialog is unavailable in this session.\n")
+			m.addBlock(roleInfo, "Providers dialog is unavailable in this session.")
 			return
 		}
 		o := providersdialog.New(ctx, host.ProviderDialogDeps())
+		o = o.SetTheme(m.th)
 		o = o.SetSize(m.width, m.height)
 		m.overlay = &o
 	case ui.DialogModels:
 		host, ok := m.app.(modelsDialogHost)
 		if !ok {
-			m.appendOutput("Models dialog is unavailable in this session.\n")
+			m.addBlock(roleInfo, "Models dialog is unavailable in this session.")
 			return
 		}
 		o := modelsdialog.New(ctx, host.ModelsDialogDeps())
+		o = o.SetTheme(m.th)
 		o = o.SetSize(m.width, m.height)
 		m.modelsOverlay = &o
 	}
@@ -236,8 +291,8 @@ func (m *model) View() string {
 	if m.modelsOverlay != nil {
 		return m.modelsOverlay.View()
 	}
-	header := renderHeader(m.opts, m.width)
-	footer := renderFooter(m.status, m.width)
+	header := renderHeader(m.opts, m.th, m.width)
+	footer := renderFooter(m.statusWithMetrics(), m.th, m.width)
 	inputLine := m.input.View()
 	suggestions := m.renderSuggestions()
 
@@ -246,7 +301,11 @@ func (m *model) View() string {
 	m.viewport.Width = max(m.width-2, 1)
 	m.input.Width = max(m.width-lipgloss.Width(m.input.Prompt)-1, 1)
 
-	sections := []string{header, m.viewport.View(), inputLine}
+	sections := []string{header, m.viewport.View()}
+	if band := m.renderConfirmBand(); band != "" {
+		sections = append(sections, band)
+	}
+	sections = append(sections, inputLine)
 	if suggestions != "" {
 		sections = append(sections, suggestions)
 	}
@@ -254,11 +313,27 @@ func (m *model) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
 }
 
-var (
-	suggestSelectedStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("0")).Background(lipgloss.Color("254"))
-	suggestDescStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
-	suggestMoreStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Italic(true)
-)
+// renderConfirmBand draws a focused panel above the input while a tool
+// confirmation is pending, so the y/n prompt is not lost in scrollback.
+func (m *model) renderConfirmBand() string {
+	if m.confirmReply == nil {
+		return ""
+	}
+	label := m.confirmText
+	if label == "" {
+		label = "Run tool?"
+	}
+	body := m.th.Accent.Render("Confirm: ") + m.th.Primary.Render(label) +
+		"  " + m.th.Accent.Render("(y/n)")
+	style := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Padding(0, 1).
+		Width(max(m.width-2, 1))
+	if m.th.Colored {
+		style = style.BorderForeground(m.th.FocusBorderColor)
+	}
+	return style.Render(body)
+}
 
 // renderSuggestions draws the inline completion list, highlighting the selected
 // row. It returns "" when there is nothing to show.
@@ -281,17 +356,17 @@ func (m *model) renderSuggestions() string {
 			if s.Description != "" {
 				row += "  " + s.Description
 			}
-			b.WriteString(suggestSelectedStyle.Render(row))
+			b.WriteString(m.th.Selected.Render(row))
 		} else {
 			b.WriteString("  " + s.Label)
 			if s.Description != "" {
-				b.WriteString("  " + suggestDescStyle.Render(s.Description))
+				b.WriteString("  " + m.th.Secondary.Render(s.Description))
 			}
 		}
 		b.WriteString("\n")
 	}
 	if more > 0 {
-		b.WriteString(suggestMoreStyle.Render(fmt.Sprintf("  … %d more", more)))
+		b.WriteString(m.th.Dim.Render(fmt.Sprintf("  … %d more", more)))
 		b.WriteString("\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
@@ -313,15 +388,17 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "y", "Y":
 			m.confirmReply <- true
 			m.confirmReply = nil
+			m.confirmText = ""
 			m.status.Left = "thinking…"
 			return m, nil
 		case "n", "N":
 			m.confirmReply <- false
 			m.confirmReply = nil
+			m.confirmText = ""
 			m.status.Left = "thinking…"
 			return m, nil
 		case "ctrl+c":
-			return m, tea.Quit
+			return m, m.beginQuit()
 		}
 		return m, nil
 	}
@@ -329,14 +406,14 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.busy {
 		switch msg.String() {
 		case "ctrl+c":
-			return m, tea.Quit
+			return m, m.beginQuit()
 		}
 		return m, nil
 	}
 
 	switch msg.String() {
 	case "ctrl+c":
-		return m, tea.Quit
+		return m, m.beginQuit()
 	case "ctrl+shift+m":
 		if cycler, ok := m.app.(interface {
 			CycleInteractionMode(context.Context) (<-chan ui.StreamEvent, error)
@@ -475,7 +552,7 @@ func (m *model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	m.appendOutput("> " + line + "\n")
+	m.addBlock(roleUser, line)
 	m.busy = true
 	m.status.Left = "thinking…"
 
@@ -498,30 +575,40 @@ func (m *model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 func (m *model) handleStream(ev ui.StreamEvent) (tea.Model, tea.Cmd) {
 	switch ev.Type {
 	case ui.StreamTextDelta:
-		m.appendOutput(ev.Text)
+		m.addResponseDelta(ev.Text)
 	case ui.StreamInfo:
-		m.appendOutput(ev.Text)
+		m.addBlock(roleInfo, ev.Text)
 	case ui.StreamQuit:
 		m.busy = false
-		return m, tea.Quit
+		return m, m.beginQuit()
 	case ui.StreamOpenDialog:
 		m.openDialog(ev.Dialog)
 	case ui.StreamToolStart:
-		m.appendOutput("[tool: " + ev.ToolName + "]\n")
+		m.addBlock(roleToolStart, ev.ToolName)
 	case ui.StreamToolConfirm:
-		m.appendOutput("[confirm " + ev.ToolName + ": " + ev.Text + "] (y/n)\n")
+		text := ev.ToolName
+		if ev.Text != "" {
+			text += ": " + ev.Text
+		}
+		m.addBlock(roleConfirm, text)
 		m.confirmReply = ev.ConfirmReply
+		m.confirmText = text
 		m.status.Left = "confirm tool"
 	case ui.StreamToolResult:
-		m.appendOutput("[tool result: " + ev.ToolName + " " + ev.Text + "]\n")
+		text := ev.ToolName
+		if ev.Text != "" {
+			text += " " + ev.Text
+		}
+		m.addBlock(roleToolResult, text)
 	case ui.StreamError:
 		if ev.Err != nil {
-			m.appendOutput("Error: " + ev.Err.Error() + "\n")
+			m.addBlock(roleError, ev.Err.Error())
 		} else if ev.Text != "" {
-			m.appendOutput("Error: " + ev.Text + "\n")
+			m.addBlock(roleError, ev.Text)
 		}
 	case ui.StreamDone:
 		m.busy = false
+		m.closeResponse()
 		m.refreshIdleStatus()
 		m.status = m.idleStatus
 		m.stream = nil
@@ -552,9 +639,28 @@ func (m *model) refreshIdleStatus() {
 	m.idleStatus = s
 }
 
-func (m *model) appendOutput(text string) {
-	m.output.WriteString(text)
+// addBlock appends a discrete (non-streaming) scrollback block and closes any
+// open assistant response so the next text delta starts a fresh block.
+func (m *model) addBlock(role scrollRole, text string) {
+	m.blocks = append(m.blocks, scrollBlock{role: role, text: strings.TrimRight(text, "\n")})
+	m.openResponseIdx = -1
 	m.syncViewportContent()
+}
+
+// addResponseDelta accumulates streamed assistant text into the current
+// response block, starting one if none is open.
+func (m *model) addResponseDelta(text string) {
+	if m.openResponseIdx < 0 {
+		m.blocks = append(m.blocks, scrollBlock{role: roleResponse})
+		m.openResponseIdx = len(m.blocks) - 1
+	}
+	m.blocks[m.openResponseIdx].text += text
+	m.syncViewportContent()
+}
+
+// closeResponse ends the current assistant response block (end of turn).
+func (m *model) closeResponse() {
+	m.openResponseIdx = -1
 }
 
 func (m *model) wrapWidth() int {
@@ -566,17 +672,91 @@ func (m *model) wrapWidth() int {
 }
 
 func (m *model) syncViewportContent() {
-	m.viewport.SetContent(wrapText(m.output.String(), m.wrapWidth()))
+	m.viewport.SetContent(m.renderScrollback(m.wrapWidth()))
 	m.viewport.GotoBottom()
 }
 
+// renderScrollback paints the welcome banner plus every block with its role's
+// prefix and color, wrapped to width. Wrapping runs on the plain text before
+// styling so embedded ANSI codes never throw off the wrap math.
+func (m *model) renderScrollback(width int) string {
+	lines := make([]string, 0, len(m.blocks)+4)
+	if m.welcome != "" {
+		lines = append(lines, strings.Split(strings.TrimRight(m.welcome, "\n"), "\n")...)
+	}
+	for _, blk := range m.blocks {
+		lines = append(lines, m.renderBlock(blk, width)...)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// roleStyle returns the prefix glyph plus the prefix and body styles for a role.
+func (m *model) roleStyle(role scrollRole) (glyph string, prefix, body lipgloss.Style) {
+	switch role {
+	case roleUser:
+		return "> ", m.th.Accent, m.th.Primary
+	case roleResponse:
+		return "✦ ", m.th.Accent, m.th.Response
+	case roleInfo:
+		return "ℹ ", m.th.Secondary, m.th.Secondary
+	case roleError:
+		return "✕ ", m.th.Error, m.th.Error
+	case roleToolStart:
+		return "⚙ ", m.th.Secondary, m.th.Secondary
+	case roleToolResult:
+		return "↳ ", m.th.Dim, m.th.Dim
+	case roleConfirm:
+		return "? ", m.th.Accent, m.th.Warning
+	default:
+		return "  ", m.th.Primary, m.th.Primary
+	}
+}
+
+// renderBlock wraps a block's text and prefixes the first visual line with the
+// role glyph; continuation lines are indented to align under it. Assistant
+// responses are run through the lightweight markdown renderer; all other roles
+// render as plain styled text.
+func (m *model) renderBlock(blk scrollBlock, width int) []string {
+	glyph, prefix, body := m.roleStyle(blk.role)
+	gw := lipgloss.Width(glyph)
+	indent := strings.Repeat(" ", gw)
+
+	var rendered []string
+	if blk.role == roleResponse {
+		rendered = renderMarkdown(blk.text, max(width-gw, 1), m.th)
+	} else {
+		for _, line := range strings.Split(wrapText(blk.text, max(width-gw, 1)), "\n") {
+			rendered = append(rendered, body.Render(line))
+		}
+	}
+
+	out := make([]string, 0, len(rendered))
+	for i, line := range rendered {
+		if i == 0 {
+			out = append(out, prefix.Render(glyph)+line)
+		} else {
+			out = append(out, indent+line)
+		}
+	}
+	return out
+}
+
 func (m *model) bodyHeight() int {
-	chrome := 6 + m.suggestionRows()
+	chrome := 6 + m.suggestionRows() + m.confirmBandRows()
 	h := m.height - chrome
 	if h < 3 {
 		return 3
 	}
 	return h
+}
+
+// confirmBandRows is the height of the confirm panel (bordered: 3 lines) while
+// a tool confirmation is pending, else 0.
+func (m *model) confirmBandRows() int {
+	if m.confirmReply == nil {
+		return 0
+	}
+	return 3
 }
 
 // suggestionRows is the number of terminal lines the suggestion block occupies,
@@ -602,15 +782,7 @@ func waitStream(events <-chan ui.StreamEvent) tea.Cmd {
 	}
 }
 
-func welcomeText(opts ui.Options) string {
-	text := "Sagittarius — type a message and press Enter.\nUse /quit or Ctrl+C to exit.\n\n"
-	if opts.Notice != "" {
-		text += opts.Notice + "\n\n"
-	}
-	return text
-}
-
-func renderHeader(opts ui.Options, width int) string {
+func renderHeader(opts ui.Options, th theme.Theme, width int) string {
 	title := opts.BannerTitle
 	if title == "" {
 		title = "Sagittarius"
@@ -619,20 +791,53 @@ func renderHeader(opts ui.Options, width int) string {
 	if opts.Version != "" {
 		line += " " + opts.Version
 	}
-	style := lipgloss.NewStyle().Bold(true).Width(max(width, 1))
-	return style.Render(line)
+	return th.Title.Width(max(width, 1)).Render(line)
 }
 
-func renderFooter(status ui.StatusBar, width int) string {
+// statusWithMetrics augments the footer's right side with live context usage
+// (and a compact token total on wide terminals) when the app exposes metrics
+// and a context limit is known. It never mutates the stored status.
+func (m *model) statusWithMetrics() ui.StatusBar {
+	status := m.status
+	mp, ok := m.app.(ui.MetricsProvider)
+	if !ok {
+		return status
+	}
+	stats := mp.SessionMetrics()
+	pct := stats.ContextPercent()
+	if pct < 0 {
+		return status
+	}
+	usage := fmt.Sprintf("%d%% context", pct)
+	// Include a compact token total only when the terminal is wide enough.
+	if m.width >= 80 && stats.OutputTokens > 0 {
+		usage = fmt.Sprintf("%s · %s out", usage, compactCount(stats.OutputTokens))
+	}
+	if status.Right != "" {
+		status.Right = status.Right + "  ·  " + usage
+	} else {
+		status.Right = usage
+	}
+	return status
+}
+
+// compactCount formats a token count compactly (e.g. 1234 -> "1.2k").
+func compactCount(n int) string {
+	if n < 1000 {
+		return fmt.Sprintf("%d", n)
+	}
+	return fmt.Sprintf("%.1fk", float64(n)/1000)
+}
+
+func renderFooter(status ui.StatusBar, th theme.Theme, width int) string {
 	left := status.Left
 	right := status.Right
 	gap := max(width-lipgloss.Width(left)-lipgloss.Width(right), 1)
 	line := left + strings.Repeat(" ", gap) + right
-	style := lipgloss.NewStyle().Foreground(lipgloss.Color("241")).Width(max(width, 1))
 	if status.Detail != "" {
 		line += "\n" + status.Detail
 	}
-	return style.Render(line)
+	return th.Secondary.Width(max(width, 1)).Render(line)
 }
 
 func max(a, b int) int {

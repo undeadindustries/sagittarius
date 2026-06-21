@@ -119,6 +119,21 @@ func NewManager(cfg ManagerConfig) *Manager {
 	return m
 }
 
+// Enabled reports whether the manager applies defenses. A nil or pass-through
+// manager returns false.
+func (m *Manager) Enabled() bool {
+	return m != nil && m.cfg.Enabled
+}
+
+// ContextLimit returns the configured context window in tokens, or 0 when the
+// manager is nil/disabled. The TUI footer uses it to show a usage percentage.
+func (m *Manager) ContextLimit() int {
+	if m == nil || !m.cfg.Enabled {
+		return 0
+	}
+	return m.cfg.ContextLimit
+}
+
 // PrepareTurn applies ejection, masking, and (when over budget) compression to
 // history before a generate request. It returns the transformed history and a
 // best-effort error; callers should proceed with the returned history even when

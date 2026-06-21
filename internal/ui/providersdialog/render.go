@@ -10,36 +10,36 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/ui"
 )
 
-var (
-	titleStyle    = lipgloss.NewStyle().Bold(true)
-	selectedStyle = lipgloss.NewStyle().Bold(true)
-	dimStyle      = lipgloss.NewStyle().Faint(true)
-	errStyle      = lipgloss.NewStyle().Bold(true)
-	boxStyle      = lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			Padding(0, 1)
-)
-
 // View renders the active dialog screen.
 func (m Model) View() string {
+	dim := m.th.Dim
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("Providers") + "\n\n")
+	b.WriteString(m.th.Title.Render("Providers") + "\n\n")
 	b.WriteString(m.screenBody())
 
 	if m.info != "" {
-		b.WriteString("\n\n" + dimStyle.Render(m.wrap(m.info)))
+		b.WriteString("\n\n" + dim.Render(m.wrap(m.info)))
 	}
 	if m.errMsg != "" {
-		b.WriteString("\n\n" + errStyle.Render(m.wrap("✗ "+m.errMsg)))
+		b.WriteString("\n\n" + m.th.Error.Render(m.wrap("✗ "+m.errMsg)))
 	}
-	b.WriteString("\n\n" + dimStyle.Render(m.footerHint()))
+	b.WriteString("\n\n" + dim.Render(m.footerHint()))
 
+	box := m.boxStyle()
 	body := b.String()
 	if m.width > 0 {
 		// Width is inner content only; border + padding add 4 cols (see contentWidth).
-		return boxStyle.Width(m.contentWidth()).Render(body)
+		return box.Width(m.contentWidth()).Render(body)
 	}
-	return boxStyle.Render(body)
+	return box.Render(body)
+}
+
+func (m Model) boxStyle() lipgloss.Style {
+	s := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
+	if m.th.Colored {
+		s = s.BorderForeground(m.th.FocusBorderColor)
+	}
+	return s
 }
 
 func (m Model) wrap(s string) string {
@@ -93,22 +93,24 @@ func (m Model) screenBody() string {
 }
 
 func (m Model) renderMenu() string {
+	dim := m.th.Dim
 	var b strings.Builder
 	active := m.deps.ActiveProviderID()
 	if active != "" {
-		b.WriteString(dimStyle.Render("Active: "+config.ProviderDisplayID(active)) + "\n\n")
+		b.WriteString(dim.Render("Active: "+config.ProviderDisplayID(active)) + "\n\n")
 	}
 	for i, item := range m.menuItems() {
-		b.WriteString(renderRow(item.label, i == m.cursor) + "\n")
+		b.WriteString(m.renderRow(item.label, i == m.cursor) + "\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
 func (m Model) renderProviderList(title string, entries []ProviderEntry) string {
+	dim := m.th.Dim
 	var b strings.Builder
 	b.WriteString(title + "\n\n")
 	if len(entries) == 0 {
-		b.WriteString(dimStyle.Render("(none)"))
+		b.WriteString(dim.Render("(none)"))
 		return b.String()
 	}
 	for i, p := range entries {
@@ -120,24 +122,25 @@ func (m Model) renderProviderList(title string, entries []ProviderEntry) string 
 		if p.IsCustom {
 			marker += " [custom]"
 		}
-		b.WriteString(renderRow(label+dimStyle.Render(marker), i == m.cursor) + "\n")
+		b.WriteString(m.renderRow(label+dim.Render(marker), i == m.cursor) + "\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
 func (m Model) renderEdit() string {
+	dim := m.th.Dim
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("Editing %s (%s)\n\n", config.ProviderDisplayID(m.targetID), m.targetWire))
 	values := m.deps.ProviderSettings(m.targetID)
 	for i, item := range m.editItems {
 		label := item.label
 		if (item.kind == editOverride || item.kind == editDefn) && values[item.key] != "" {
-			label += dimStyle.Render("  = " + values[item.key])
+			label += dim.Render("  = " + values[item.key])
 		}
 		if item.kind == editWireDefn {
-			label += dimStyle.Render("  = " + string(m.targetWire))
+			label += dim.Render("  = " + string(m.targetWire))
 		}
-		b.WriteString(renderRow(label, i == m.cursor) + "\n")
+		b.WriteString(m.renderRow(label, i == m.cursor) + "\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -149,9 +152,9 @@ func (m Model) renderTextEntry(title string) string {
 func (m Model) renderAdd() string {
 	var b strings.Builder
 	b.WriteString("Add custom provider\n\n")
-	b.WriteString(dimStyle.Render(m.addSummary()) + "\n\n")
+	b.WriteString(m.th.Dim.Render(m.addSummary()) + "\n\n")
 	if m.add.fieldIdx == addFieldWire {
-		b.WriteString("wireFormat: " + renderWireToggle(m.add.wire))
+		b.WriteString("wireFormat: " + m.renderWireToggle(m.add.wire))
 		return b.String()
 	}
 	b.WriteString(addFieldLabel(m.add.fieldIdx) + "\n" + m.input.View())
@@ -179,21 +182,22 @@ func (m Model) addSummary() string {
 }
 
 func (m Model) renderModels(title string, pickable bool) string {
+	dim := m.th.Dim
 	var b strings.Builder
 	b.WriteString(title + "\n\n")
 	if m.loading {
-		b.WriteString(dimStyle.Render("Connecting and listing models…"))
+		b.WriteString(dim.Render("Connecting and listing models…"))
 		return b.String()
 	}
 	if m.modelsErr != "" {
-		b.WriteString(errStyle.Render("✗ "+m.modelsErr) + "\n\n")
-		b.WriteString(dimStyle.Render("Esc to go back."))
+		b.WriteString(m.th.Error.Render("✗ "+m.modelsErr) + "\n\n")
+		b.WriteString(dim.Render("Esc to go back."))
 		return b.String()
 	}
 	if len(m.models) == 0 {
-		b.WriteString(dimStyle.Render("No models returned by the endpoint."))
+		b.WriteString(dim.Render("No models returned by the endpoint."))
 		if pickable {
-			b.WriteString("\n" + dimStyle.Render("Provider was added; set a model later from the /providers edit sheet."))
+			b.WriteString("\n" + dim.Render("Provider was added; set a model later from the /providers edit sheet."))
 		}
 		return b.String()
 	}
@@ -202,26 +206,27 @@ func (m Model) renderModels(title string, pickable bool) string {
 }
 
 func (m Model) renderActivation(title string) string {
+	dim := m.th.Dim
 	var b strings.Builder
 	b.WriteString(title + "\n\n")
 	if m.loading {
-		b.WriteString(dimStyle.Render("Connecting and listing models…"))
+		b.WriteString(dim.Render("Connecting and listing models…"))
 		return b.String()
 	}
 	if m.modelsErr != "" {
-		b.WriteString(errStyle.Render(m.wrap("✗ "+m.modelsErr)) + "\n\n")
+		b.WriteString(m.th.Error.Render(m.wrap("✗ "+m.modelsErr)) + "\n\n")
 		if len(m.models) > 0 {
-			b.WriteString(dimStyle.Render("Showing saved models — edit below or press a to add more.") + "\n\n")
+			b.WriteString(dim.Render("Showing saved models — edit below or press a to add more.") + "\n\n")
 		} else {
-			b.WriteString(dimStyle.Render("Press a to add a model name manually, or Esc to go back.") + "\n")
+			b.WriteString(dim.Render("Press a to add a model name manually, or Esc to go back.") + "\n")
 			return b.String()
 		}
 	}
 	if len(m.models) == 0 {
-		b.WriteString(dimStyle.Render("No models yet. Press a to add a model name.") + "\n")
+		b.WriteString(dim.Render("No models yet. Press a to add a model name.") + "\n")
 		return b.String()
 	}
-	b.WriteString(dimStyle.Render("Checked models are active. Space toggles, A all/none, a adds, Enter saves.") + "\n\n")
+	b.WriteString(dim.Render("Checked models are active. Space toggles, A all/none, a adds, Enter saves.") + "\n\n")
 	b.WriteString(m.renderScrollableRows(m.models, m.checked))
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -233,9 +238,10 @@ func (m Model) renderScrollableRows(labels []string, checked []bool) string {
 		return ""
 	}
 	start, end := m.listWindow(total)
+	dim := m.th.Dim
 	var b strings.Builder
 	if start > 0 {
-		b.WriteString(dimStyle.Render(fmt.Sprintf("  … %d more above", start)) + "\n")
+		b.WriteString(dim.Render(fmt.Sprintf("  … %d more above", start)) + "\n")
 	}
 	for i := start; i < end; i++ {
 		label := labels[i]
@@ -246,10 +252,10 @@ func (m Model) renderScrollableRows(labels []string, checked []bool) string {
 			}
 			label = box + " " + label
 		}
-		b.WriteString(renderRow(label, i == m.cursor) + "\n")
+		b.WriteString(m.renderRow(label, i == m.cursor) + "\n")
 	}
 	if end < total {
-		b.WriteString(dimStyle.Render(fmt.Sprintf("  … %d more below", total-end)) + "\n")
+		b.WriteString(dim.Render(fmt.Sprintf("  … %d more below", total-end)) + "\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -259,31 +265,33 @@ func (m Model) renderRemove() string {
 	var b strings.Builder
 	b.WriteString("Remove a custom provider\n\n")
 	if len(customs) == 0 {
-		b.WriteString(dimStyle.Render("No custom providers to remove."))
+		b.WriteString(m.th.Dim.Render("No custom providers to remove."))
 		return b.String()
 	}
 	for i, p := range customs {
-		b.WriteString(renderRow(fmt.Sprintf("%s (%s)", p.DisplayID, p.DisplayName), i == m.cursor) + "\n")
+		b.WriteString(m.renderRow(fmt.Sprintf("%s (%s)", p.DisplayID, p.DisplayName), i == m.cursor) + "\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
 
-func renderRow(label string, selected bool) string {
+func (m Model) renderRow(label string, selected bool) string {
 	if selected {
-		return selectedStyle.Render("> " + label)
+		return m.th.Accent.Render("> " + label)
 	}
 	return "  " + label
 }
 
-func renderWireToggle(wire config.WireFormat) string {
+func (m Model) renderWireToggle(wire config.WireFormat) string {
+	sel := m.th.Accent
+	dim := m.th.Dim
 	chat := "openai-chat"
 	responses := "openai-responses"
 	if wire == config.WireFormatOpenAIChat {
-		chat = selectedStyle.Render("[openai-chat]")
-		responses = dimStyle.Render(" openai-responses ")
+		chat = sel.Render("[openai-chat]")
+		responses = dim.Render(" openai-responses ")
 	} else {
-		chat = dimStyle.Render(" openai-chat ")
-		responses = selectedStyle.Render("[openai-responses]")
+		chat = dim.Render(" openai-chat ")
+		responses = sel.Render("[openai-responses]")
 	}
 	return chat + "  " + responses
 }
