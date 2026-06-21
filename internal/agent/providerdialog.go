@@ -9,6 +9,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/provider"
 	"github.com/undeadindustries/sagittarius/internal/slash"
 	"github.com/undeadindustries/sagittarius/internal/ui"
+	"github.com/undeadindustries/sagittarius/internal/ui/modelsdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/providersdialog"
 )
 
@@ -17,6 +18,8 @@ func mapDialogKind(kind slash.DialogKind) ui.DialogKind {
 	switch kind {
 	case slash.DialogProviders:
 		return ui.DialogProviders
+	case slash.DialogModels:
+		return ui.DialogModels
 	default:
 		return ""
 	}
@@ -149,6 +152,21 @@ func (d *providerDialogDeps) DiscoverModels(ctx context.Context, id string) ([]s
 	if err != nil {
 		return nil, err
 	}
+
+	if endpoint.WireFormat == config.WireFormatGemini {
+		apiKey := endpoint.Bearer
+		if apiKey == "" && endpoint.RequiresAPIKey {
+			if key, kerr := credentials.ResolveProviderAPIKey(ctx, endpoint.ProviderID); kerr == nil {
+				apiKey = key
+			}
+		}
+		infos, err := provider.DiscoverGeminiModels(ctx, apiKey, nil)
+		if err != nil {
+			return nil, err
+		}
+		return modelIDsFromInfos(infos), nil
+	}
+
 	if endpoint.BaseURL == "" {
 		return nil, fmt.Errorf("provider %q has no endpoint URL to query", config.ProviderDisplayID(id))
 	}
@@ -159,11 +177,19 @@ func (d *providerDialogDeps) DiscoverModels(ctx context.Context, id string) ([]s
 		}
 	}
 	infos := provider.DiscoverModels(ctx, endpoint.BaseURL, bearer, nil)
+	models := modelIDsFromInfos(infos)
+	if len(models) == 0 {
+		return nil, fmt.Errorf("no models returned from %s (check base URL and API key)", config.ProviderDisplayID(id))
+	}
+	return models, nil
+}
+
+func modelIDsFromInfos(infos []provider.ModelInfo) []string {
 	models := make([]string, 0, len(infos))
 	for _, info := range infos {
 		models = append(models, info.ID)
 	}
-	return models, nil
+	return models
 }
 
 func (d *providerDialogDeps) SetModel(ctx context.Context, id, model string) error {
@@ -230,7 +256,85 @@ func (d *providerDialogDeps) ValidSettingKeys(id string) []string {
 	return config.ValidSettingKeysForProvider(config.NormalizeProviderID(id), custom)
 }
 
+// ActiveModels returns the raw curated active-model set (no fallback) so the
+// activation screen can pre-check the saved models.
+func (d *providerDialogDeps) ActiveModels(id string) []string {
+	return provider.CuratedActiveModels(d.settings(), id)
+}
+
+// SetActiveModels persists the curated active-model set. Activation does not
+// change the live model, so no runner rebuild is required.
+func (d *providerDialogDeps) SetActiveModels(_ context.Context, id string, models []string) error {
+	if d.loader() == nil || d.settings() == nil {
+		return fmt.Errorf("settings not loaded")
+	}
+	if err := provider.SetActiveModels(d.settings(), id, models); err != nil {
+		return err
+	}
+	return d.loader().Save(d.settings())
+}
+
 func (d *providerDialogDeps) rebuildIfActive(ctx context.Context, id string) error {
+	if d.ActiveProviderID() == config.NormalizeProviderID(id) {
+		_, _, err := d.app.deps.Hooks.RebuildRunner(ctx)
+		return err
+	}
+	return nil
+}
+
+// ModelsDialogDeps returns the side-effect adapter the /models picker uses.
+func (a *App) ModelsDialogDeps() modelsdialog.Deps {
+	return &modelsDialogDeps{app: a}
+}
+
+// modelsDialogDeps implements modelsdialog.Deps over the App's runner, loader,
+// and settings. It is scoped to the active provider.
+type modelsDialogDeps struct {
+	app *App
+}
+
+func (d *modelsDialogDeps) settings() *config.Settings { return d.app.deps.Settings }
+func (d *modelsDialogDeps) loader() *config.Loader     { return d.app.deps.Loader }
+
+func (d *modelsDialogDeps) ActiveProviderID() string {
+	if d.settings() == nil {
+		return ""
+	}
+	return d.settings().ActiveProvider()
+}
+
+func (d *modelsDialogDeps) ActiveProviderLabel() string {
+	id := d.ActiveProviderID()
+	if id == "" {
+		return ""
+	}
+	return config.ProviderDisplayID(id)
+}
+
+// ActiveModels returns the active provider's activated models, resolved with
+// the uncurated fallback to the configured default model.
+func (d *modelsDialogDeps) ActiveModels(id string) []string {
+	return provider.ActiveModelsFor(d.settings(), id)
+}
+
+func (d *modelsDialogDeps) CurrentModel(id string) string {
+	endpoint, err := provider.ResolveEndpointForProvider(d.settings(), id)
+	if err != nil {
+		return ""
+	}
+	return endpoint.Model
+}
+
+func (d *modelsDialogDeps) SetModel(ctx context.Context, id, model string) error {
+	if d.loader() == nil || d.settings() == nil {
+		return fmt.Errorf("settings not loaded")
+	}
+	if err := provider.SetProviderModel(d.settings(), config.NormalizeProviderID(id), model); err != nil {
+		return err
+	}
+	if err := d.loader().Save(d.settings()); err != nil {
+		return err
+	}
 	if d.ActiveProviderID() == config.NormalizeProviderID(id) {
 		_, _, err := d.app.deps.Hooks.RebuildRunner(ctx)
 		return err

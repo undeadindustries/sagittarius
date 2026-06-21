@@ -9,7 +9,6 @@ import (
 
 	"github.com/undeadindustries/sagittarius/internal/agents"
 	"github.com/undeadindustries/sagittarius/internal/config"
-	"github.com/undeadindustries/sagittarius/internal/credentials"
 	"github.com/undeadindustries/sagittarius/internal/mcp"
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
@@ -100,7 +99,7 @@ func testDeps(t *testing.T, settings *config.Settings) (slash.Deps, *config.Load
 	return slash.Deps{Loader: loader, Settings: settings, Hooks: hooks}, loader, hooks
 }
 
-func TestHelpListsProviderSubcommands(t *testing.T) {
+func TestHelpListsCommands(t *testing.T) {
 	t.Parallel()
 	p := slash.NewProcessor()
 	help := p.Registry().RenderHelp()
@@ -109,13 +108,7 @@ func TestHelpListsProviderSubcommands(t *testing.T) {
 		"/help",
 		"/quit",
 		"/providers",
-		"/providers list",
-		"/providers use",
-		"/providers show",
-		"/providers set",
-		"/providers add",
-		"/providers remove",
-		"/model",
+		"/models",
 		"/memory reload",
 		"/skills reload",
 		"/mcp reload",
@@ -123,48 +116,45 @@ func TestHelpListsProviderSubcommands(t *testing.T) {
 		"/mode",
 		"/mode show",
 		"List slash commands",
-		"Switch the active provider",
 	}
 	for _, want := range checks {
 		if !strings.Contains(help, want) {
 			t.Errorf("help missing %q\n%s", want, help)
 		}
 	}
+	// The provider/model subcommand trees were retired (menu-first commands).
+	for _, gone := range []string{"/providers list", "/providers use", "/providers set", "/model "} {
+		if strings.Contains(help, gone) {
+			t.Errorf("help should not list retired subcommand %q\n%s", gone, help)
+		}
+	}
 }
 
-func TestProviderUsePersists(t *testing.T) {
+func TestProvidersOpensDialog(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
-	settings := &config.Settings{
-		Providers: &config.ProvidersSettings{
-			Active:       string(config.BuiltInGeminiAPIKey),
-			GeminiAPIKey: &config.ProviderInstanceConfig{},
-		},
-		Raw: map[string]json.RawMessage{},
-	}
-	deps, loader, hooks := testDeps(t, settings)
+	deps, _, _ := testDeps(t, nil)
 	p := slash.NewProcessor()
 
-	result := p.Process(ctx, "/providers use openai", deps)
+	result := p.Process(context.Background(), "/providers", deps)
 	if !result.Handled {
 		t.Fatal("expected handled")
 	}
-	if result.Err != nil {
-		t.Fatalf("unexpected error: %v", result.Err)
+	if result.OpenDialog != slash.DialogProviders {
+		t.Fatalf("OpenDialog = %q, want %q", result.OpenDialog, slash.DialogProviders)
 	}
-	if settings.ActiveProvider() != string(config.BuiltInOpenAI) {
-		t.Fatalf("active = %q, want openai", settings.ActiveProvider())
-	}
+}
 
-	reloaded, err := loader.Load()
-	if err != nil && !strings.Contains(err.Error(), "secrets") {
-		t.Fatalf("reload settings: %v", err)
+func TestModelsOpensDialog(t *testing.T) {
+	t.Parallel()
+	deps, _, _ := testDeps(t, nil)
+	p := slash.NewProcessor()
+
+	result := p.Process(context.Background(), "/models", deps)
+	if !result.Handled {
+		t.Fatal("expected handled")
 	}
-	if reloaded.ActiveProvider() != string(config.BuiltInOpenAI) {
-		t.Fatalf("persisted active = %q, want openai", reloaded.ActiveProvider())
-	}
-	if hooks.rebuildCalls != 1 {
-		t.Fatalf("rebuild calls = %d, want 1", hooks.rebuildCalls)
+	if result.OpenDialog != slash.DialogModels {
+		t.Fatalf("OpenDialog = %q, want %q", result.OpenDialog, slash.DialogModels)
 	}
 }
 
@@ -177,57 +167,6 @@ func TestQuitExits(t *testing.T) {
 	}
 }
 
-func TestProviderSetKeyStoresKey(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	settings := &config.Settings{
-		Providers: &config.ProvidersSettings{
-			Active:       string(config.BuiltInGeminiAPIKey),
-			GeminiAPIKey: &config.ProviderInstanceConfig{},
-		},
-		Raw: map[string]json.RawMessage{},
-	}
-	deps, _, hooks := testDeps(t, settings)
-	p := slash.NewProcessor()
-
-	result := p.Process(ctx, "/providers set gemini-apikey key test-secret-key", deps)
-	if result.Err != nil {
-		t.Fatalf("set key error: %v", result.Err)
-	}
-	if hooks.storedKeys[string(config.BuiltInGeminiAPIKey)] != "test-secret-key" {
-		t.Fatalf("stored key = %q", hooks.storedKeys[string(config.BuiltInGeminiAPIKey)])
-	}
-	combined := strings.Join(result.Messages, " ")
-	if strings.Contains(combined, "test-secret-key") {
-		t.Fatal("message must not contain raw api key")
-	}
-	if !strings.Contains(combined, credentials.Redact("x")) {
-		t.Fatalf("message should contain redacted placeholder: %q", combined)
-	}
-}
-
-func TestProviderSetSettingRejectedForGemini(t *testing.T) {
-	t.Parallel()
-	settings := &config.Settings{
-		Providers: &config.ProvidersSettings{
-			Active:       string(config.BuiltInGeminiAPIKey),
-			GeminiAPIKey: &config.ProviderInstanceConfig{},
-		},
-		Raw: map[string]json.RawMessage{},
-	}
-	deps, _, _ := testDeps(t, settings)
-	p := slash.NewProcessor()
-
-	result := p.Process(context.Background(), "/providers set gemini-apikey temperature 0.5", deps)
-	if result.Err != nil {
-		t.Fatalf("unexpected error: %v", result.Err)
-	}
-	combined := strings.Join(result.Messages, " ")
-	if !strings.Contains(combined, "no editable settings") {
-		t.Fatalf("expected no-editable-settings guidance, got: %q", combined)
-	}
-}
-
 func TestHelpCommandViaProcessor(t *testing.T) {
 	t.Parallel()
 	p := slash.NewProcessor()
@@ -236,7 +175,7 @@ func TestHelpCommandViaProcessor(t *testing.T) {
 		t.Fatalf("result = %+v", result)
 	}
 	combined := strings.Join(result.Messages, "\n")
-	for _, name := range []string{"/providers", "/model", "/memory", "/skills"} {
+	for _, name := range []string{"/providers", "/models", "/memory", "/skills"} {
 		if !strings.Contains(combined, name) {
 			t.Errorf("help output missing %s", name)
 		}
@@ -253,38 +192,6 @@ func TestMemoryReloadStub(t *testing.T) {
 	}
 	if hooks.reloadCalls != 1 {
 		t.Fatalf("reload calls = %d", hooks.reloadCalls)
-	}
-}
-
-func TestProviderAddRemove(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	settings := &config.Settings{
-		Providers: &config.ProvidersSettings{
-			Active: string(config.BuiltInOpenAI),
-			OpenAI: &config.ProviderInstanceConfig{},
-			Custom: map[string]config.CustomProviderDefinition{},
-		},
-		Raw: map[string]json.RawMessage{},
-	}
-	deps, loader, _ := testDeps(t, settings)
-	p := slash.NewProcessor()
-
-	add := p.Process(ctx, "/providers add local-vllm http://127.0.0.1:8000/v1 Local", deps)
-	if add.Err != nil {
-		t.Fatalf("add: %v", add.Err)
-	}
-	reloaded, err := loader.Load()
-	if err != nil && !strings.Contains(err.Error(), "secrets") {
-		t.Fatalf("load: %v", err)
-	}
-	if reloaded.Providers.Custom["local-vllm"].BaseURL == "" {
-		t.Fatal("custom provider not persisted")
-	}
-
-	rm := p.Process(ctx, "/providers remove local-vllm", deps)
-	if rm.Err != nil {
-		t.Fatalf("remove: %v", rm.Err)
 	}
 }
 

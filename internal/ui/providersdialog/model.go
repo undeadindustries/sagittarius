@@ -24,6 +24,7 @@ const (
 	screenAddModels
 	screenRemove
 	screenModels
+	screenModelsAdd
 )
 
 // editKind classifies an editable row on the edit sheet.
@@ -107,6 +108,13 @@ type Model struct {
 	loading   bool
 	models    []string
 	modelsErr string
+
+	// checked is parallel to models on the activation (screenModels) screen:
+	// checked[i] reports whether models[i] is in the curated active set.
+	checked []bool
+
+	// listOffset is the first visible row in long scrollable lists (models screen).
+	listOffset int
 }
 
 // New constructs the wizard at the menu screen with the current provider list.
@@ -123,6 +131,7 @@ func New(ctx context.Context, deps Deps) Model {
 		add:       addState{wire: config.WireFormatOpenAIChat},
 		providers: deps.ListProviders(),
 	}
+	m.syncInputWidth()
 	return m
 }
 
@@ -136,7 +145,28 @@ func (m Model) Status() string { return m.status }
 func (m Model) SetSize(w, h int) Model {
 	m.width = w
 	m.height = h
+	m.syncInputWidth()
+	m.ensureListVisible()
 	return m
+}
+
+func (m *Model) syncInputWidth() {
+	if m.width <= 0 {
+		return
+	}
+	w := m.contentWidth() - 2 // textinput prompt "> "
+	if w < 1 {
+		w = 1
+	}
+	m.input.Width = w
+}
+
+func (m Model) contentWidth() int {
+	w := m.width - 4 // rounded border (2) + horizontal padding (2)
+	if w < 20 {
+		return 20
+	}
+	return w
 }
 
 // Update advances the dialog state machine for one message.
@@ -157,19 +187,61 @@ func (m Model) handleModelsLoaded(msg modelsLoadedMsg) Model {
 	m.loading = false
 	if msg.err != nil {
 		m.modelsErr = msg.err.Error()
-		m.models = nil
+		m.models = m.seedModels(msg.id)
+		if m.screen == screenModels {
+			m.resetListScroll()
+			m.initChecked()
+		}
 		return m
 	}
 	m.modelsErr = ""
 	m.models = msg.models
 	m.cursor = 0
+	if m.screen == screenModels {
+		if len(m.models) == 0 {
+			m.models = m.seedModels(msg.id)
+		}
+		m.resetListScroll()
+		m.initChecked()
+	}
 	return m
+}
+
+func (m Model) seedModels(id string) []string {
+	if curated := m.deps.ActiveModels(id); len(curated) > 0 {
+		out := make([]string, len(curated))
+		copy(out, curated)
+		return out
+	}
+	if name := currentValue(m.deps.ProviderSettings(id), "model"); name != "" {
+		return []string{name}
+	}
+	return nil
+}
+
+// initChecked seeds the activation checkboxes from the curated set. When the
+// provider has not been curated (no saved activeModels), every model is checked
+// — models are active by default.
+func (m *Model) initChecked() {
+	curated := m.deps.ActiveModels(m.targetID)
+	set := make(map[string]bool, len(curated))
+	for _, c := range curated {
+		set[c] = true
+	}
+	m.checked = make([]bool, len(m.models))
+	for i, mod := range m.models {
+		if len(curated) == 0 {
+			m.checked[i] = true
+			continue
+		}
+		m.checked[i] = set[mod]
+	}
 }
 
 func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	// Text-entry screens consume keys for the input buffer.
 	switch m.screen {
-	case screenEditField, screenSetKey:
+	case screenEditField, screenSetKey, screenModelsAdd:
 		return m.handleTextEntryKey(msg)
 	case screenAdd:
 		return m.handleAddKey(msg)
@@ -179,15 +251,45 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	case "esc":
 		return m.back()
 	case "up", "k":
-		m.cursor = wrapDec(m.cursor, m.listLen())
+		if m.listLen() > 0 && m.screenUsesListScroll() {
+			m.moveListCursor(-1)
+		} else if m.listLen() > 0 {
+			m.cursor = wrapDec(m.cursor, m.listLen())
+		}
 		return m, nil
 	case "down", "j":
-		m.cursor = wrapInc(m.cursor, m.listLen())
+		if m.listLen() > 0 && m.screenUsesListScroll() {
+			m.moveListCursor(1)
+		} else if m.listLen() > 0 {
+			m.cursor = wrapInc(m.cursor, m.listLen())
+		}
 		return m, nil
+	case " ":
+		if m.screen == screenModels {
+			m.toggleChecked()
+			return m, nil
+		}
+	case "A", "*":
+		if m.screen == screenModels && !m.loading && len(m.models) > 0 {
+			m.toggleAllChecked()
+			return m, nil
+		}
+	case "a":
+		if m.screen == screenModels && !m.loading {
+			return m.enterModelsAdd(), nil
+		}
 	case "enter":
 		return m.selectCurrent()
 	}
 	return m, nil
+}
+
+// toggleChecked flips the activation checkbox under the cursor.
+func (m *Model) toggleChecked() {
+	if m.cursor < 0 || m.cursor >= len(m.checked) {
+		return
+	}
+	m.checked[m.cursor] = !m.checked[m.cursor]
 }
 
 // back navigates one screen toward the menu, or closes from the menu.
@@ -203,6 +305,9 @@ func (m Model) back() (Model, tea.Cmd) {
 		m.cursor = 0
 	case screenEditField:
 		m.screen = screenEdit
+	case screenModelsAdd:
+		m.screen = screenModels
+		m.syncInputWidth()
 	case screenAddModels:
 		// Provider already added; just return to menu.
 		m.providers = m.deps.ListProviders()
@@ -228,7 +333,7 @@ func (m Model) listLen() int {
 	case screenRemove:
 		return len(m.customProviders())
 	case screenAddModels, screenModels:
-		if m.loading || m.modelsErr != "" {
+		if m.loading {
 			return 0
 		}
 		return len(m.models)
@@ -263,8 +368,35 @@ func (m Model) selectCurrent() (Model, tea.Cmd) {
 	case screenAddModels:
 		return m.selectAddModel()
 	case screenModels:
-		return m, nil // browse only
+		return m.saveActivation()
 	}
+	return m, nil
+}
+
+// saveActivation persists the checked subset as the provider's active models.
+func (m Model) saveActivation() (Model, tea.Cmd) {
+	if m.loading || len(m.models) == 0 {
+		return m, nil
+	}
+	selected := make([]string, 0, len(m.models))
+	for i, mod := range m.models {
+		if i < len(m.checked) && m.checked[i] {
+			selected = append(selected, mod)
+		}
+	}
+	if len(selected) == 0 {
+		m.errMsg = "Select at least one model (Space to toggle) before saving."
+		return m, nil
+	}
+	if err := m.deps.SetActiveModels(m.ctx, m.targetID, selected); err != nil {
+		m.errMsg = err.Error()
+		return m, nil
+	}
+	m.status = fmt.Sprintf("Saved %d active model(s) for %s.", len(selected), config.ProviderDisplayID(m.targetID))
+	m.info = m.status
+	m.providers = m.deps.ListProviders()
+	m.screen = screenMenu
+	m.cursor = 0
 	return m, nil
 }
 
@@ -282,7 +414,7 @@ func (m Model) menuItems() []menuItem {
 		{"Set API key", "setkey"},
 		{"Add provider", "add"},
 		{"Remove provider", "remove"},
-		{"Browse models", "models"},
+		{"Manage models (activate/deactivate)", "models"},
 		{"Close", "close"},
 	}
 }
@@ -318,8 +450,11 @@ func (m Model) selectMenu() (Model, tea.Cmd) {
 	case "models":
 		id := m.deps.ActiveProviderID()
 		if id == "" {
-			m.errMsg = "No active provider to browse models for."
+			m.errMsg = "No active provider to manage models for."
 			return m, nil
+		}
+		if p, ok := m.findProvider(id); ok {
+			m.targetWire = p.WireFormat
 		}
 		return m.enterModels(id)
 	case "close":
@@ -403,16 +538,15 @@ func (m Model) selectEdit() (Model, tea.Cmd) {
 	case editAPIKey:
 		return m.enterSetKey(), nil
 	case editModel:
-		if m.targetWire == config.WireFormatGemini {
-			// Gemini has no model-discovery endpoint; type the name.
-			m.editingKey = "model"
-			m.editingKind = editModel
-			m.input = freshInput("gemini model name (e.g. gemini-2.5-pro)")
-			m.input.SetValue(currentValue(m.deps.ProviderSettings(m.targetID), "model"))
-			m.screen = screenEditField
-			return m, nil
-		}
-		return m.enterModels(m.targetID)
+		// The default model is a provider-wide default typed here; per-provider
+		// model activation lives in "Manage models", and /models picks the live
+		// model from the activated set.
+		m.editingKey = "model"
+		m.editingKind = editModel
+		m.input = freshInput("default model name (e.g. gpt-4o, gemini-2.5-pro)")
+		m.input.SetValue(currentValue(m.deps.ProviderSettings(m.targetID), "model"))
+		m.screen = screenEditField
+		return m, nil
 	case editWireDefn:
 		// Toggle and apply immediately.
 		next := config.WireFormatOpenAIChat
@@ -444,22 +578,39 @@ func (m Model) selectEdit() (Model, tea.Cmd) {
 }
 
 func (m Model) enterSetKey() Model {
-	m.input = freshInput("paste API key, then Enter")
-	m.input.EchoMode = textinput.EchoPassword
+	m.input = freshSecretInput()
 	m.screen = screenSetKey
+	m.syncInputWidth()
 	return m
 }
 
 func (m Model) enterModels(id string) (Model, tea.Cmd) {
 	m.targetID = id
-	m.loading = true
 	m.models = nil
-	m.modelsErr = ""
-	m.cursor = 0
+	m.checked = nil
+	m.resetListScroll()
 	if m.screen != screenAddModels {
 		m.screen = screenModels
 	}
+	m.loading = true
+	m.modelsErr = ""
 	return m, discoverCmd(m.ctx, m.deps, id)
+}
+
+func (m Model) enterModelsAdd() Model {
+	m.input = freshInput("model name (e.g. gemini-2.5-pro)")
+	m.screen = screenModelsAdd
+	m.syncInputWidth()
+	return m
+}
+
+func (m Model) findProvider(id string) (ProviderEntry, bool) {
+	for _, p := range m.providers {
+		if p.ID == id {
+			return p, true
+		}
+	}
+	return ProviderEntry{}, false
 }
 
 // ---- text entry (edit field + set key) -----------------------------------
@@ -467,9 +618,12 @@ func (m Model) enterModels(id string) (Model, tea.Cmd) {
 func (m Model) handleTextEntryKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
-		if m.screen == screenSetKey {
+		switch m.screen {
+		case screenSetKey:
 			m.screen = screenMenu
-		} else {
+		case screenModelsAdd:
+			m.screen = screenModels
+		default:
 			m.screen = screenEdit
 		}
 		m.input.Blur()
@@ -501,7 +655,11 @@ func (m Model) commitTextEntry() (Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// edit field
+	// edit field / add model name
+	if m.screen == screenModelsAdd {
+		return m.commitModelsAdd(value)
+	}
+
 	var err error
 	switch m.editingKind {
 	case editModel:
@@ -584,8 +742,7 @@ func (m Model) advanceAdd() (Model, tea.Cmd) {
 	case addFieldEnvVar:
 		m.add.envVar = value
 		m.add.fieldIdx = addFieldAPIKey
-		m.input = freshInput("API key (optional, stored in keychain)")
-		m.input.EchoMode = textinput.EchoPassword
+		m.input = freshSecretInput()
 	case addFieldAPIKey:
 		m.add.apiKey = value
 		return m.submitAdd()
@@ -661,6 +818,28 @@ func (m Model) selectRemove() (Model, tea.Cmd) {
 
 // ---- helpers -------------------------------------------------------------
 
+func (m Model) commitModelsAdd(name string) (Model, tea.Cmd) {
+	if name == "" {
+		m.errMsg = "Model name cannot be empty."
+		return m, nil
+	}
+	for _, existing := range m.models {
+		if existing == name {
+			m.errMsg = fmt.Sprintf("Model %q is already in the list.", name)
+			return m, nil
+		}
+	}
+	m.models = append(m.models, name)
+	m.checked = append(m.checked, true)
+	m.cursor = len(m.models) - 1
+	m.ensureListVisible()
+	m.modelsErr = ""
+	m.info = fmt.Sprintf("Added %q — Space toggles, Enter saves.", name)
+	m.screen = screenModels
+	m.syncInputWidth()
+	return m, nil
+}
+
 func discoverCmd(ctx context.Context, deps Deps, id string) tea.Cmd {
 	return func() tea.Msg {
 		models, err := deps.DiscoverModels(ctx, id)
@@ -673,7 +852,18 @@ func freshInput(placeholder string) textinput.Model {
 	ti.CharLimit = 8192
 	ti.Prompt = "> "
 	ti.Placeholder = placeholder
+	ti.EchoMode = textinput.EchoNormal
+	ti.SetValue("")
 	ti.Focus()
+	return ti
+}
+
+// freshSecretInput returns a blank password field. Placeholders are omitted
+// because EchoPassword mode can leak the first placeholder character as "p".
+func freshSecretInput() textinput.Model {
+	ti := freshInput("")
+	ti.Placeholder = ""
+	ti.EchoMode = textinput.EchoPassword
 	return ti
 }
 

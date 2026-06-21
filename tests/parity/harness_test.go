@@ -396,15 +396,14 @@ var forkInScopeCommands = []forkCommandEntry{
 	{name: "quit", description: "Exit the cli"},
 	// Sagittarius renames the fork's `/provider` to `/providers` (plural) and
 	// folds the fork's separate `/auth` command into the providers wizard's
-	// "Set API key" screen. Both are intentional divergences documented in
-	// PARITY_CHECKLIST.md (AD-025).
+	// "Set API key" screen. Both `/providers` and `/models` are now menu-first
+	// single-surface commands: the fork's typed subcommand trees
+	// (list/use/set/add/remove) are retired (AD-026). All intentional
+	// divergences are documented in PARITY_CHECKLIST.md (AD-025, AD-026).
 	{name: "providers", description: "", parent: ""},
-	{name: "list", description: "List configured providers (built-in + custom) and active state", parent: "providers"},
-	{name: "use", description: "", parent: "providers"},    // description varies
-	{name: "set", description: "", parent: "providers"},    // description varies
-	{name: "add", description: "", parent: "providers"},    // description varies
-	{name: "remove", description: "", parent: "providers"}, // description varies
-	{name: "model", description: "Manage model configuration"},
+	// Sagittarius splits model selection into a dedicated menu-first `/models`
+	// command scoped to the active provider (fork's `/model`).
+	{name: "models", description: "", parent: ""},
 	{name: "memory", description: "Commands for interacting with memory"},
 	{name: "reload", description: "Reload the memory from the source", parent: "memory"},
 	{name: "skills", description: "", parent: ""},
@@ -422,6 +421,6 @@ var forkInScopeCommands = []forkCommandEntry{
 
 // inScopeTopLevelNames is the set of top-level command names Sagittarius must implement.
 var inScopeTopLevelNames = []string{
-	"help", "quit", "providers", "model", "memory",
+	"help", "quit", "providers", "models", "memory",
 	"skills", "mcp", "agents", "reasoning", "resume", "clear",
 }

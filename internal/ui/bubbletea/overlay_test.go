@@ -8,16 +8,28 @@ import (
 
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/ui"
+	"github.com/undeadindustries/sagittarius/internal/ui/modelsdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/providersdialog"
 )
 
-// dialogApp is a quitApp that can also supply providers-dialog dependencies.
+// dialogApp is a quitApp that can also supply providers- and models-dialog
+// dependencies.
 type dialogApp struct {
 	quitApp
-	deps providersdialog.Deps
+	deps       providersdialog.Deps
+	modelsDeps modelsdialog.Deps
 }
 
 func (d dialogApp) ProviderDialogDeps() providersdialog.Deps { return d.deps }
+func (d dialogApp) ModelsDialogDeps() modelsdialog.Deps       { return d.modelsDeps }
+
+type stubModelsDeps struct{}
+
+func (stubModelsDeps) ActiveProviderID() string                      { return "openai" }
+func (stubModelsDeps) ActiveProviderLabel() string                   { return "openai" }
+func (stubModelsDeps) ActiveModels(string) []string                  { return []string{"gpt-4o", "gpt-4o-mini"} }
+func (stubModelsDeps) CurrentModel(string) string                    { return "gpt-4o" }
+func (stubModelsDeps) SetModel(context.Context, string, string) error { return nil }
 
 type stubDialogDeps struct{}
 
@@ -45,9 +57,13 @@ func (stubDialogDeps) ProviderSettings(string) map[string]string { return map[st
 func (stubDialogDeps) ValidSettingKeys(string) []string {
 	return config.ValidSettingKeys(config.WireFormatOpenAIChat)
 }
+func (stubDialogDeps) ActiveModels(string) []string { return nil }
+func (stubDialogDeps) SetActiveModels(context.Context, string, []string) error {
+	return nil
+}
 
 func newDialogModel() *model {
-	app := dialogApp{deps: stubDialogDeps{}}
+	app := dialogApp{deps: stubDialogDeps{}, modelsDeps: stubModelsDeps{}}
 	m := newModel(ui.Options{}, app, NewTerminal(ui.Options{}))
 	m.ctx = context.Background()
 	m.width = 80
@@ -107,5 +123,44 @@ func TestOpenDialogUnavailableWithoutHost(t *testing.T) {
 	m.handleStream(ui.StreamEvent{Type: ui.StreamOpenDialog, Dialog: ui.DialogProviders})
 	if m.overlay != nil {
 		t.Fatal("overlay must not open without a dialog host")
+	}
+}
+
+func TestOpenModelsDialogOpensOverlay(t *testing.T) {
+	t.Parallel()
+	m := newDialogModel()
+	m.handleStream(ui.StreamEvent{Type: ui.StreamOpenDialog, Dialog: ui.DialogModels})
+	if m.modelsOverlay == nil {
+		t.Fatal("expected models overlay to be opened by StreamOpenDialog")
+	}
+	if m.overlay != nil {
+		t.Fatal("providers overlay must not open for DialogModels")
+	}
+	if m.View() == "" {
+		t.Fatal("models overlay view should render")
+	}
+}
+
+func TestModelsOverlayEscCloses(t *testing.T) {
+	t.Parallel()
+	m := newDialogModel()
+	m.handleStream(ui.StreamEvent{Type: ui.StreamOpenDialog, Dialog: ui.DialogModels})
+	if m.modelsOverlay == nil {
+		t.Fatal("models overlay not opened")
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	mm := updated.(*model)
+	if mm.modelsOverlay != nil {
+		t.Fatal("models overlay should be cleared after esc")
+	}
+}
+
+func TestModelsDialogUnavailableWithoutHost(t *testing.T) {
+	t.Parallel()
+	m := newModel(ui.Options{}, quitApp{}, NewTerminal(ui.Options{}))
+	m.ctx = context.Background()
+	m.handleStream(ui.StreamEvent{Type: ui.StreamOpenDialog, Dialog: ui.DialogModels})
+	if m.modelsOverlay != nil {
+		t.Fatal("models overlay must not open without a dialog host")
 	}
 }

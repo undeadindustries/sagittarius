@@ -30,6 +30,8 @@ type DialogKind string
 const (
 	// DialogProviders opens the providers management wizard.
 	DialogProviders DialogKind = "providers"
+	// DialogModels opens the active-provider model picker.
+	DialogModels DialogKind = "models"
 )
 
 // StreamEvent is a single streaming update rendered in the scrollback viewport.

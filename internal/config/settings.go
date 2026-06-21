@@ -41,6 +41,12 @@ type ProviderInstanceConfig struct {
 	UseResponseChaining  *bool               `json:"useResponseChaining,omitempty"`
 	WireFormat           WireFormat          `json:"wireFormat,omitempty"`
 
+	// ActiveModels is the curated set of models the user has activated for this
+	// provider (the /providers model-activation screen writes it; /models reads
+	// it). Empty/absent means "not yet curated" -- /models falls back to the
+	// configured default model. Models are active by default at browse time.
+	ActiveModels []string `json:"activeModels,omitempty"`
+
 	// Phase 11 context-management knobs (active only for openai-chat). Names
 	// mirror the fork local.* leaf keys; they live per-provider here because
 	// Sagittarius providers differ by config rather than a single local block

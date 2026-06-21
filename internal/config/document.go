@@ -55,6 +55,7 @@ func unmarshalProviderInstance(raw json.RawMessage) (*ProviderInstanceConfig, er
 		"toolOutputMaskingProtectLatestTurn": func(b json.RawMessage) error {
 			return json.Unmarshal(b, &cfg.ToolOutputMaskingProtectLatestTurn)
 		},
+		"activeModels": func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.ActiveModels) },
 	}
 	for key, val := range obj {
 		if decode, ok := known[key]; ok {
@@ -109,6 +110,7 @@ func marshalProviderInstance(cfg *ProviderInstanceConfig) (json.RawMessage, erro
 		{"toolOutputMaskingProtectionFraction", cfg.ToolOutputMaskingProtectionFraction},
 		{"toolOutputMaskingPrunableFraction", cfg.ToolOutputMaskingPrunableFraction},
 		{"toolOutputMaskingProtectLatestTurn", cfg.ToolOutputMaskingProtectLatestTurn},
+		{"activeModels", cfg.ActiveModels},
 	}
 	for _, f := range fields {
 		if err := setField(f.key, f.val); err != nil {
@@ -392,6 +394,8 @@ func isEmptyValue(v any) bool {
 		return t == nil
 	case *float64:
 		return t == nil
+	case []string:
+		return len(t) == 0
 	default:
 		return false
 	}

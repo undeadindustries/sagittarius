@@ -188,6 +188,100 @@ func TestSavePreservesUnknownKeys(t *testing.T) {
 	}
 }
 
+func TestActiveModelsRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "settings.json")
+	writeFile(t, settingsPath, readTestdata(t, "minimal.json"))
+
+	loader, err := NewLoader(WithSettingsPath(settingsPath))
+	if err != nil {
+		t.Fatalf("NewLoader: %v", err)
+	}
+	s, err := loader.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	s.Providers.OpenAI = &ProviderInstanceConfig{
+		Model:        "gpt-4o",
+		ActiveModels: []string{"gpt-4o", "gpt-4o-mini"},
+	}
+	if err := loader.Save(s); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	reloaded, err := loader.Load()
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if reloaded.Providers.OpenAI == nil {
+		t.Fatal("openai instance dropped on reload")
+	}
+	got := reloaded.Providers.OpenAI.ActiveModels
+	if len(got) != 2 || got[0] != "gpt-4o" || got[1] != "gpt-4o-mini" {
+		t.Fatalf("activeModels = %v, want [gpt-4o gpt-4o-mini]", got)
+	}
+
+	raw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	var doc struct {
+		Providers map[string]json.RawMessage `json:"providers"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("unmarshal saved file: %v", err)
+	}
+	var openai map[string]json.RawMessage
+	if err := json.Unmarshal(doc.Providers["openai"], &openai); err != nil {
+		t.Fatalf("decode openai: %v", err)
+	}
+	if _, ok := openai["activeModels"]; !ok {
+		t.Error("activeModels missing from serialized openai block")
+	}
+}
+
+func TestActiveModelsOmittedWhenEmpty(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	settingsPath := filepath.Join(dir, "settings.json")
+	writeFile(t, settingsPath, readTestdata(t, "minimal.json"))
+
+	loader, err := NewLoader(WithSettingsPath(settingsPath))
+	if err != nil {
+		t.Fatalf("NewLoader: %v", err)
+	}
+	s, err := loader.Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	s.Providers.OpenAI = &ProviderInstanceConfig{Model: "gpt-4o"}
+	if err := loader.Save(s); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	raw, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	var doc struct {
+		Providers map[string]json.RawMessage `json:"providers"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("unmarshal saved file: %v", err)
+	}
+	var openai map[string]json.RawMessage
+	if err := json.Unmarshal(doc.Providers["openai"], &openai); err != nil {
+		t.Fatalf("decode openai: %v", err)
+	}
+	if _, ok := openai["activeModels"]; ok {
+		t.Error("empty activeModels should be omitted from serialized output")
+	}
+}
+
 func TestRejectSecretsInJSON(t *testing.T) {
 	t.Parallel()
 

@@ -24,55 +24,36 @@ to later phases — see [Deferred commands](#deferred-commands).
 ### `/providers`
 
 - **Description:** Manage providers (built-in and custom OpenAI-compatible backends).
-- **Interactive:** Running `/providers` with no sub-command opens an interactive
-  menu (wizard): switch the active provider, edit a provider's settings, set an
-  API key, add a custom provider (with immediate model discovery so you can pick
-  a default model), remove a custom provider, or browse a provider's models.
-- **API keys:** There is no separate `/auth` command. Set API keys from the
-  wizard's "Set API key" screen, or via `/providers set <id> key <api-key>` for
-  scripting.
-
-#### Sub-commands (text operations)
-
-- **`list`**
-  - **Description:** List configured providers and which one is active.
-  - **Usage:** `/providers list`
-- **`use <id>`**
-  - **Description:** Switch the active provider (persisted to `settings.json`).
-  - **Usage:** `/providers use openai`
-- **`show`**
-  - **Description:** Show the active provider, model, wire format, and base URL.
-  - **Usage:** `/providers show`
-- **`set <id> <field> <value>`**
-  - **Description:** Set any editable setting for a provider. Allowed fields depend
-    on the provider's wire format (e.g. `model`, `baseUrl`, `temperature`,
+- **Menu-first:** `/providers` is a single-surface, menu-first command — it has
+  no typed subcommands. Running it opens an interactive wizard:
+  - **Switch active provider** — change the active provider (persisted to `settings.json`).
+  - **Edit a provider** — pick a provider, then edit its API key, default model,
+    and wire-format-gated settings (e.g. `temperature`, `baseUrl`,
     `contextLimit`, `toolCallParsing`, and for `openai-responses` also
-    `reasoningEffort`, `useResponseChaining`). The special field `key` stores an
-    API key in secure storage.
-  - **Usage:** `/providers set openai temperature 0.2`
-  - **Note:** Gemini providers expose no editable settings (upstream owns those
-    defaults); only `key` is accepted for Gemini.
-- **`add <id> <baseUrl> [displayName] [apiKeyEnvVar]`**
-  - **Description:** Register a custom OpenAI-compatible provider.
-  - **Usage:** `/providers add local-vllm http://127.0.0.1:8000/v1`
-- **`remove <id>`**
-  - **Description:** Remove a custom provider (built-ins cannot be removed).
-  - **Usage:** `/providers remove local-vllm`
+    `reasoningEffort`, `useResponseChaining`). Gemini providers expose no
+    editable instance settings (upstream owns those defaults) beyond the API key
+    and default model.
+  - **Set API key** — store an API key for the active provider in secure storage.
+    There is no separate `/auth` command.
+  - **Add provider** — register a custom OpenAI-compatible provider, then connect
+    and discover its models so you can pick a default and switch to it immediately.
+  - **Remove provider** — delete a custom provider (built-ins cannot be removed).
+  - **Manage models (activate/deactivate)** — browse the provider's discovered
+    models and toggle which ones are active. Models are active by default; the
+    checked subset is saved to `providers.<id>.activeModels`. Providers without a
+    model-discovery endpoint (e.g. Gemini) skip activation — set their model on
+    the edit sheet instead.
 
-### `/model`
+### `/models`
 
-- **Description:** List or set the model for the active provider.
-
-#### Sub-commands
-
-- **`list`**
-  - **Description:** Query `GET /v1/models` on the active OpenAI-compat endpoint.
-  - **Usage:** `/model list`
-
-#### Usage (set model)
-
-- **Usage:** `/model <model-id>`
-- **Example:** `/model gpt-4o-mini`
+- **Description:** Pick the active model for the **active provider**, from that
+  provider's activated models.
+- **Menu-first:** `/models` is a single-surface, menu-first command with no typed
+  subcommands. It opens an interactive list of the active provider's active
+  models (curated via `/providers` → Manage models; falls back to the configured
+  default model when uncurated). Selecting one sets it as the live model and
+  rebuilds the runner. Per-model setting edits (temperature, reasoning, …) are a
+  future enhancement (AD-024) and are not yet available.
 
 ### `/memory`
 

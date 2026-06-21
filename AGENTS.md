@@ -391,6 +391,63 @@ typed/rejection + UpdateCustomProviderDefinition + ResolveEndpointForProvider;
 overlay open/close/StreamDone routing. `go test ./...` green, `-race` clean on
 touched packages.
 
+### AD-026 — Providers/models command split, menu-first, activeModels (2026-06-21)
+
+Supersedes AD-025's "keep subcommands for scripting". A **provider** is an
+endpoint; a **model** is one model that endpoint exposes. The two concerns are
+split into two **menu-first, single-surface** slash commands — neither has a
+typed subcommand tree (headless never processes slash anyway, and the dual
+surface — autocomplete advertising `list/use/set/...` while the bare command
+opened a different menu — was confusing):
+
+| Command | Scope | Menu actions |
+|---------|-------|--------------|
+| `/providers` (`slash.DialogProviders` → `ui.DialogProviders`) | provider level | switch / edit (key + wire-format-gated defaults) / set key / add (discovers models) / remove / **Manage models** (activate/deactivate) |
+| `/models` (`slash.DialogModels` → `ui.DialogModels`) | active provider only | list activated models → select sets the live model + rebuilds runner |
+
+**Active-models curation:** `ProviderInstanceConfig.ActiveModels []string`
+(`json:"activeModels,omitempty"`, registered in `config/document.go`
+marshal/unmarshal field maps; `isEmptyValue` gains a `[]string` case so an empty
+set is omitted). `provider.SetActiveModels` (trim/dedupe/clear),
+`provider.CuratedActiveModels` (raw saved set, no fallback — used to pre-check
+the activation boxes), `provider.ActiveModelsFor` (resolved, falls back to the
+configured default model when uncurated — used by `/models`). Activation browses
+the endpoint live (`DiscoverModels`) with **every model checked by default**
+("active by default"); the checked subset is saved. Gemini / no-discovery
+providers skip activation (clear message; model set on the edit sheet).
+
+**UI:** `providersdialog` `screenModels` repurposed from read-only browse to a
+checkbox activation screen (Space toggles, Enter saves via `Deps.SetActiveModels`;
+`Deps` gains `ActiveModels`/`SetActiveModels`). The edit sheet's model row is now
+a typed field for all wire formats (no longer routes to the browse screen). New
+package `internal/ui/modelsdialog` (bubbletea-only, same overlay contract):
+lists the active provider's active models, Enter selects. `bubbletea/model.go`
+holds two mutually-exclusive overlay fields (`overlay`, `modelsOverlay`);
+`openDialog` switches on `ui.DialogKind`; `modelsDialogHost` mirrors
+`providerDialogHost`. Agent layer: `providerDialogDeps` gains
+`ActiveModels` (raw) + `SetActiveModels`; new `modelsDialogDeps` +
+`App.ModelsDialogDeps()`; `mapDialogKind` maps `slash.DialogModels`.
+
+**Removals:** `/providers` and `/model` subcommand handlers
+(`handleProviderList/Use/Show/Set/Add/Remove`, `parseProviderSetArgs`,
+`handleModelSet/List`, `providerExists`, `formatProviderLine`,
+`providerSettingsForID`) and the provider arg completers (`arg_completers.go`
+deleted). `provider.ApplyProviderSetting`/`ValidSettingKeys*` retained (edit
+sheet). The generic `Command.ArgComplete` seam (AD-023) is kept but no longer
+wired to any command.
+
+**Deferred:** per-model typed settings persistence/resolution (AD-024, still
+design-only); global/cross-provider `/models`.
+
+Tests: `config` activeModels round-trip + omit-when-empty; `provider`
+SetActiveModels/ActiveModelsFor/curated-vs-fallback; `slash` `/providers` &
+`/models` DialogResult + help has no subcommand tree + no `/model`; `slash`
+completion (top-level has `models` not `model`, both terminal); `providersdialog`
+activation toggle+save + gemini no-discovery; `modelsdialog` select-sets-model +
+esc + no-active-provider; `bubbletea` `DialogModels` overlay open/close/no-host;
+`tests/parity` tables updated (menu-first, subcommands retired). `go test ./...`
+green, `go vet` clean, `-race` clean on touched packages.
+
 ---
 
 ## Workspace Layout
@@ -452,6 +509,8 @@ Phase 15 Bugbot fixes (2026-06-21): context manager now tracks the runner's live
 Slash autocompletion (2026-06-21, post-Phase 15): inline TUI suggestions as you type a `/` command — Up/Down select (wrap, no auto-highlight), Tab completes, Enter accepts-or-submits, Esc dismisses. New `ui.Completer` seam (bubbletea never imports slash); `agent.App.Complete` → `slash.Registry.Complete`; `Command.ArgComplete` powers value completion for `/providers use` (all ids) and `/providers remove` (custom only). AD-023. Tests: slash completion_test.go (7), bubbletea suggestion nav/accept (6). Model-name arg completion deferred (needs network DiscoverModels). Verified: go test ./... pass, -race clean on slash/agent/bubbletea.
 
 Providers TUI wizard (2026-06-21, post-Phase 15): renamed `/provider` → `/providers` (no alias), removed `/auth` (API keys now in the wizard). New `internal/ui/providersdialog` overlay package (menu/switch/editPick/edit/setKey/add/addModels/remove/models) driven via `providersdialog.Deps` implemented by `agent.App.ProviderDialogDeps`. Seams: `slash.Result.OpenDialog` → `ui.StreamOpenDialog` → bubbletea overlay (`providerDialogHost`). `config.ValidSettingKeys*` wire-format allowlists; `provider.ApplyProviderSetting` (typed+validated), `UpdateCustomProviderDefinition`, `ResolveEndpointForProvider`, `InstanceSettingValues`. Add flow discovers models and prompts for a default, then auto-switches. AD-024 (per-model settings, design only), AD-025. Docs: commands.md, PARITY_CHECKLIST.md updated. Tests: config ValidSettingKeys (4), provider apply/update/resolve (6), providersdialog transitions (6), bubbletea overlay (4). Verified: go test ./... pass, vet clean, -race clean on slash/ui/agent/config.
+
+Providers/models command split (2026-06-21, post-Phase 15, AD-026): supersedes AD-025's "keep subcommands". `/providers` and `/models` are now menu-first single-surface commands — typed subcommand trees retired (handlers + `arg_completers.go` deleted). `/model` → `/models` (`slash.DialogModels` → `ui.DialogModels`). New per-provider `ProviderInstanceConfig.ActiveModels` (`activeModels`, registered in config/document.go field maps + `isEmptyValue` []string case); `provider.SetActiveModels`/`CuratedActiveModels` (raw)/`ActiveModelsFor` (resolved fallback). `providersdialog` models screen repurposed into a checkbox activation toggle (Space/Enter, active-by-default; Gemini skips — no discovery); edit-sheet model row is now a typed field. New `internal/ui/modelsdialog` overlay (list active provider's active models → Enter sets live model). `bubbletea` holds two mutually-exclusive overlays (`overlay`/`modelsOverlay`), `openDialog` switches on kind, `modelsDialogHost` added. Agent: `providerDialogDeps` gains `ActiveModels`/`SetActiveModels`, new `modelsDialogDeps` + `App.ModelsDialogDeps()`, `mapDialogKind` maps DialogModels. `ApplyProviderSetting`/`ValidSettingKeys*` retained. Docs: commands.md, PARITY_CHECKLIST.md, AGENTS.md (AD-026). Tests: config round-trip+omit (2), provider activemodels (3), slash dialog-open+help+completion (rewritten), providersdialog activation+gemini (2), modelsdialog (3), bubbletea DialogModels (3), parity tables updated. Verified: go test ./... pass, vet clean, -race clean on slash/ui/config/agent.
 Next: —
 Blockers: fork mock server comparison partial; checkpointing (/restore) deferred (AD-018); sandbox not ported (AD-017); full /resume TUI browser deferred (AD-019); git worktrees stub (AD-020); pre-existing credentials data race ./internal/provider/; TestReasoningApplicableOnResponses flake; debug-mode tool disable + wireLogger port deferred.
 
@@ -540,6 +599,7 @@ Track against fork `docs/reference/commands.md`. Implemented subset documented i
 - [ ] `/mcp auth`, `/mcp enable`/`disable` (list + reload implemented Phase 12)
 - [ ] `/agents enable`/`disable`/`config` (list + reload implemented Phase 12)
 - [x] `/providers` wizard + API-key entry (post-Phase 15, AD-025) — replaces `/provider` and `/auth`
+- [x] `/providers`/`/models` menu-first split + per-provider `activeModels` (post-Phase 15, AD-026) — subcommand trees retired, `/model` → `/models`
 - [ ] `/auth signin`/`signout` OAuth dialogs (OAuth still deferred, AD-002)
 - [ ] ACP headless command registry
 

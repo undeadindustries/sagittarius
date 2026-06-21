@@ -101,6 +101,59 @@ func TestUpdateCustomProviderDefinition(t *testing.T) {
 	}
 }
 
+func TestSetActiveModelsPersistsCuratedSet(t *testing.T) {
+	t.Parallel()
+	s := openAISettings()
+
+	if err := SetActiveModels(s, "openai", []string{" gpt-4o ", "gpt-4o-mini", "gpt-4o", ""}); err != nil {
+		t.Fatalf("SetActiveModels: %v", err)
+	}
+	got := s.Providers.OpenAI.ActiveModels
+	want := []string{"gpt-4o", "gpt-4o-mini"}
+	if len(got) != len(want) {
+		t.Fatalf("ActiveModels = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("ActiveModels[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+
+	if err := SetActiveModels(s, "openai", nil); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if s.Providers.OpenAI.ActiveModels != nil {
+		t.Fatalf("expected cleared activeModels, got %v", s.Providers.OpenAI.ActiveModels)
+	}
+}
+
+func TestActiveModelsForReturnsCuratedSet(t *testing.T) {
+	t.Parallel()
+	s := openAISettings()
+	s.Providers.OpenAI.ActiveModels = []string{"gpt-4o", "gpt-4o-mini"}
+
+	got := ActiveModelsFor(s, "openai")
+	if len(got) != 2 || got[0] != "gpt-4o" || got[1] != "gpt-4o-mini" {
+		t.Fatalf("ActiveModelsFor = %v, want curated set", got)
+	}
+	// Returned slice must be a copy: mutating it must not corrupt settings.
+	got[0] = "mutated"
+	if s.Providers.OpenAI.ActiveModels[0] != "gpt-4o" {
+		t.Fatal("ActiveModelsFor returned the backing slice, not a copy")
+	}
+}
+
+func TestActiveModelsForFallsBackToDefaultModel(t *testing.T) {
+	t.Parallel()
+	s := openAISettings()
+	s.Providers.OpenAI.Model = "gpt-4o-mini"
+
+	got := ActiveModelsFor(s, "openai")
+	if len(got) != 1 || got[0] != "gpt-4o-mini" {
+		t.Fatalf("ActiveModelsFor fallback = %v, want [gpt-4o-mini]", got)
+	}
+}
+
 func TestResolveEndpointForProviderAnyTarget(t *testing.T) {
 	t.Parallel()
 	// Active is gemini, but we resolve openai's endpoint without switching.

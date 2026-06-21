@@ -90,6 +90,72 @@ func SetProviderModel(settings *config.Settings, providerID, model string) error
 	return setProviderInstance(settings, providerID, cfg)
 }
 
+// SetActiveModels persists the curated active-model set for providerID. Values
+// are trimmed, empties dropped, and duplicates removed preserving order. An
+// empty result clears the curation (back to the uncurated fallback).
+func SetActiveModels(settings *config.Settings, providerID string, models []string) error {
+	if settings == nil {
+		return fmt.Errorf("set active models: settings are required")
+	}
+	id := config.NormalizeProviderID(providerID)
+	cfg, err := ensureProviderInstance(settings, id)
+	if err != nil {
+		return err
+	}
+	seen := make(map[string]struct{}, len(models))
+	cleaned := make([]string, 0, len(models))
+	for _, m := range models {
+		m = strings.TrimSpace(m)
+		if m == "" {
+			continue
+		}
+		if _, ok := seen[m]; ok {
+			continue
+		}
+		seen[m] = struct{}{}
+		cleaned = append(cleaned, m)
+	}
+	if len(cleaned) == 0 {
+		cfg.ActiveModels = nil
+	} else {
+		cfg.ActiveModels = cleaned
+	}
+	return setProviderInstance(settings, id, cfg)
+}
+
+// CuratedActiveModels returns the explicitly-saved active-model set for
+// providerID with no fallback. An empty result means the provider has not been
+// curated yet (the activation screen checks every discovered model by default).
+func CuratedActiveModels(settings *config.Settings, providerID string) []string {
+	inst := providerInstance(settings, config.NormalizeProviderID(providerID))
+	if inst == nil || len(inst.ActiveModels) == 0 {
+		return nil
+	}
+	out := make([]string, len(inst.ActiveModels))
+	copy(out, inst.ActiveModels)
+	return out
+}
+
+// ActiveModelsFor returns the curated active-model set for providerID. When the
+// provider has not been curated (no activeModels), it falls back to the single
+// configured default model so /models is never empty for a usable provider.
+func ActiveModelsFor(settings *config.Settings, providerID string) []string {
+	id := config.NormalizeProviderID(providerID)
+	if inst := providerInstance(settings, id); inst != nil && len(inst.ActiveModels) > 0 {
+		out := make([]string, len(inst.ActiveModels))
+		copy(out, inst.ActiveModels)
+		return out
+	}
+	endpoint, err := ResolveEndpointForProvider(settings, id)
+	if err != nil {
+		return nil
+	}
+	if endpoint.Model == "" || endpoint.Model == "local-model" {
+		return nil
+	}
+	return []string{endpoint.Model}
+}
+
 // InstanceSettingValues returns the currently-set provider instance overrides as
 // display strings, keyed by setting name. Unset (nil/empty) fields are omitted.
 // It is used by the providers wizard edit sheet to show current values.
