@@ -8,6 +8,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/credentials"
 	"github.com/undeadindustries/sagittarius/internal/provider"
+	"github.com/undeadindustries/sagittarius/internal/session"
 )
 
 func helpCommand() Command {
@@ -173,6 +174,50 @@ func agentsCommand() Command {
 		},
 		Handler: handleAgentsList,
 	}
+}
+
+func resumeCommand() Command {
+	return Command{
+		Name:        "resume",
+		Description: "List sessions or show info about resuming (use --resume flag to resume on startup)",
+		SubCommands: []Command{
+			{
+				Name:        "list",
+				Description: "List available sessions for the current project",
+				Handler:     handleResumeList,
+			},
+		},
+		Handler: handleResumeList,
+	}
+}
+
+func clearCommand() Command {
+	return Command{
+		Name:        "clear",
+		Description: "Clear the current conversation history (start a fresh turn)",
+		Handler:     handleClear,
+	}
+}
+
+func handleResumeList(ctx *Context) Result {
+	if ctx.Deps.Hooks == nil {
+		return InfoResult("Session commands unavailable.")
+	}
+	infos, err := ctx.Deps.Hooks.ListSessions()
+	if err != nil {
+		return ErrorResult(fmt.Errorf("list sessions: %w", err))
+	}
+	return InfoResult(session.FormatSessionList(infos))
+}
+
+func handleClear(ctx *Context) Result {
+	if ctx.Deps.Hooks == nil {
+		return InfoResult("Clear unavailable.")
+	}
+	if err := ctx.Deps.Hooks.ClearHistory(); err != nil {
+		return ErrorResult(fmt.Errorf("clear history: %w", err))
+	}
+	return InfoResult("Conversation history cleared. Starting fresh.")
 }
 
 func handleProviderList(ctx *Context) Result {

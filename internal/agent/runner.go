@@ -11,6 +11,7 @@ import (
 
 	"github.com/undeadindustries/sagittarius/internal/contextmgmt"
 	"github.com/undeadindustries/sagittarius/internal/provider"
+	"github.com/undeadindustries/sagittarius/internal/session"
 	"github.com/undeadindustries/sagittarius/internal/tools"
 	"github.com/undeadindustries/sagittarius/internal/ui"
 )
@@ -41,29 +42,34 @@ type RunnerConfig struct {
 	// ContextManager applies local-context defenses pre-turn and post-tool. Nil
 	// (non-openai-chat providers) makes context management a pure pass-through.
 	ContextManager *contextmgmt.Manager
+	// SessionRecorder enables session persistence. Nil disables recording.
+	SessionRecorder *session.Recorder
+	// InitialHistory pre-populates the conversation from a resumed session.
+	InitialHistory []provider.Message
 }
 
 // Runner orchestrates conversation history and provider streaming for the agent loop.
 type Runner struct {
-	genMu         sync.RWMutex
-	gen           provider.ContentGenerator
-	genErr        error
-	model         string
-	system        string
-	approval      ApprovalMode
-	interactive   bool
-	workDir       string
-	regMu         sync.RWMutex
-	registry      *tools.Registry
-	scheduler     *tools.Scheduler
-	history       []provider.Message
-	ctxMgrMu      sync.RWMutex
-	ctxMgr        *contextmgmt.Manager
-	turnCounter   int
-	state         State
-	stateMu       sync.RWMutex
-	lastRequest   *provider.GenerateRequest
-	lastRequestMu sync.RWMutex
+	genMu           sync.RWMutex
+	gen             provider.ContentGenerator
+	genErr          error
+	model           string
+	system          string
+	approval        ApprovalMode
+	interactive     bool
+	workDir         string
+	regMu           sync.RWMutex
+	registry        *tools.Registry
+	scheduler       *tools.Scheduler
+	history         []provider.Message
+	ctxMgrMu        sync.RWMutex
+	ctxMgr          *contextmgmt.Manager
+	turnCounter     int
+	state           State
+	stateMu         sync.RWMutex
+	lastRequest     *provider.GenerateRequest
+	lastRequestMu   sync.RWMutex
+	sessionRecorder *session.Recorder
 }
 
 // NewRunner constructs a Runner and discovers project memory for the system prompt.
@@ -104,17 +110,24 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 	policy := approvalToPolicy(mode)
 	scheduler := tools.NewScheduler(registry, policy, cfg.Interactive)
 
+	var history []provider.Message
+	if len(cfg.InitialHistory) > 0 {
+		history = append(history, cfg.InitialHistory...)
+	}
+
 	return &Runner{
-		gen:         cfg.Generator,
-		model:       cfg.Model,
-		system:      system,
-		approval:    mode,
-		interactive: cfg.Interactive,
-		workDir:     ws.Root(),
-		registry:    registry,
-		scheduler:   scheduler,
-		ctxMgr:      cfg.ContextManager,
-		state:       StateIdle,
+		gen:             cfg.Generator,
+		model:           cfg.Model,
+		system:          system,
+		approval:        mode,
+		interactive:     cfg.Interactive,
+		workDir:         ws.Root(),
+		registry:        registry,
+		scheduler:       scheduler,
+		ctxMgr:          cfg.ContextManager,
+		state:           StateIdle,
+		sessionRecorder: cfg.SessionRecorder,
+		history:         history,
 	}, nil
 }
 
@@ -205,6 +218,9 @@ func (r *Runner) RunTurn(ctx context.Context, userInput string) (<-chan ui.Strea
 		Role:  provider.RoleUser,
 		Parts: []provider.Part{{Text: userInput}},
 	})
+	if r.sessionRecorder != nil {
+		r.sessionRecorder.RecordUserMessage(userInput)
+	}
 
 	out := make(chan ui.StreamEvent, 8)
 	go r.runAgentLoop(ctx, out)
@@ -429,6 +445,9 @@ func (r *Runner) appendModelMessage(text string, toolCalls []provider.ToolCall) 
 		Role:  provider.RoleModel,
 		Parts: parts,
 	})
+	if r.sessionRecorder != nil {
+		r.sessionRecorder.RecordModelMessage(text, toolCalls)
+	}
 }
 
 func (r *Runner) appendFunctionResponses(responses []provider.FunctionResponse) {
@@ -444,12 +463,31 @@ func (r *Runner) appendFunctionResponses(responses []provider.FunctionResponse) 
 		Role:  provider.RoleUser,
 		Parts: parts,
 	})
+	if r.sessionRecorder != nil {
+		r.sessionRecorder.RecordFunctionResponses(responses)
+	}
 }
 
 func (r *Runner) setState(state State) {
 	r.stateMu.Lock()
 	r.state = state
 	r.stateMu.Unlock()
+}
+
+// ClearHistory wipes the in-memory conversation history so the next turn starts fresh.
+func (r *Runner) ClearHistory() {
+	r.history = r.history[:0]
+	r.turnCounter = 0
+}
+
+// RotateSession starts a new session-recording file, abandoning the current
+// one. Paired with ClearHistory by /clear so post-clear turns are recorded to a
+// fresh session instead of being appended to the cleared conversation. No-op
+// when session recording is disabled.
+func (r *Runner) RotateSession() {
+	if r.sessionRecorder != nil {
+		r.sessionRecorder.Rotate()
+	}
 }
 
 func (r *Runner) storeLastRequest(req *provider.GenerateRequest) {

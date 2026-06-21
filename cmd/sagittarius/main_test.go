@@ -60,6 +60,40 @@ func TestRunVersionFlag(t *testing.T) {
 	}
 }
 
+func TestNormalizeResumeArgs(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{"bare long at end", []string{"--resume"}, []string{"--resume=latest"}},
+		{"bare short at end", []string{"-r"}, []string{"-r=latest"}},
+		{"bare followed by flag", []string{"--resume", "-p", "hi"}, []string{"--resume=latest", "-p", "hi"}},
+		{"value space form preserved", []string{"--resume", "1"}, []string{"--resume", "1"}},
+		{"short value space form preserved", []string{"-r", "latest", "query"}, []string{"-r", "latest", "query"}},
+		{"equals form untouched", []string{"--resume=abc"}, []string{"--resume=abc"}},
+		{"unrelated args untouched", []string{"-p", "hello"}, []string{"-p", "hello"}},
+		{"terminator stops rewrite", []string{"--", "--resume"}, []string{"--", "--resume"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := normalizeResumeArgs(tc.in)
+			if len(got) != len(tc.want) {
+				t.Fatalf("normalizeResumeArgs(%v) = %v, want %v", tc.in, got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("normalizeResumeArgs(%v) = %v, want %v", tc.in, got, tc.want)
+				}
+			}
+		})
+	}
+}
+
 func TestRunHeadlessMissingAPIKey(t *testing.T) {
 	home := t.TempDir()
 	geminiDir := filepath.Join(home, ".gemini")

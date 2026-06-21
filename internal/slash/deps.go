@@ -7,6 +7,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/mcp"
 	"github.com/undeadindustries/sagittarius/internal/provider"
+	"github.com/undeadindustries/sagittarius/internal/session"
 	"github.com/undeadindustries/sagittarius/internal/skills"
 )
 
@@ -22,6 +23,9 @@ type Hooks interface {
 	MCPStates() []mcp.ServerState
 	SkillList() []skills.Definition
 	AgentList() []agents.Definition
+	// Session hooks — may be nil when no session manager is active.
+	ListSessions() ([]session.SessionInfo, error)
+	ClearHistory() error
 }
 
 // Deps supplies slash command dependencies (injectable for tests).
