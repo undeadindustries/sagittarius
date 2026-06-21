@@ -448,6 +448,53 @@ esc + no-active-provider; `bubbletea` `DialogModels` overlay open/close/no-host;
 `tests/parity` tables updated (menu-first, subcommands retired). `go test ./...`
 green, `go vet` clean, `-race` clean on touched packages.
 
+### AD-027 — Model default resolution + activation coherence (2026-06-21)
+
+Reworks how the live model is resolved so the per-mode override always wins and
+the legacy global default can no longer clobber the active provider's configured
+model.
+
+**New setting:** `sagittarius.defaultModels` (`map[string]string`, provider id →
+model). Typed field on `SagittariusSettings`; registered in
+`reservedSagittariusKeys` + marshal/unmarshal; `isEmptyValue` gains a
+`map[string]string` case so an empty map is omitted. Lookup tolerates the short
+`gemini` alias via `config.NormalizeProviderID`.
+
+**Resolution chain** (`internal/modes.ResolveModel(mode, cfg, providerID,
+providerDefault)`, first non-empty wins):
+
+1. `sagittarius.modes.<mode>.model` — per-mode override, always wins
+2. `sagittarius.defaultModels[providerID]` — provider-scoped default
+3. `providerDefault` — provider instance / built-in default
+4. `sagittarius.defaultModel` — legacy single global default (last resort)
+
+Previously the legacy `defaultModel` sat at tier 2 and overrode the provider
+default, so switching to Gemini while `defaultModel: gpt-4o` was set sent OpenAI
+model ids to Gemini. `ResolveSubagentModel` mirrors the chain after its
+named/default subagent keys. Both signatures gained a `providerID` argument; the
+runner passes `settings.ActiveProvider()` (new `Runner.activeProviderID`), and
+`agents.ResolveSubagentModel` derives it from settings. `LogModeSelection` now
+logs `provider_id`.
+
+**Activation coherence (auto-first):** deactivating the active provider's live
+model on the `/providers` → Manage models screen auto-switches the live model to
+the first still-checked model (`providersdialog.Deps.CurrentModel` +
+`saveActivation` guard; agent adapter resolves via `ResolveEndpointForProvider`).
+Centrally, `provider.CoerceModelToCurated` runs in `agent.appHooks.RebuildRunner`
+(covers provider switch and any rebuild): when a provider has a curated
+`activeModels` set and its resolved model is not a member, the model is set to
+`activeModels[0]` and persisted. Uncurated providers are untouched.
+
+**Deferred:** settings UI for `defaultModel`/`defaultModels` (JSON-only for now);
+AD-024 per-model typed settings; hard-rejecting edit-sheet models outside the
+curated set.
+
+Tests: `config` defaultModels round-trip + omit-when-empty; `modes`
+TestModeOverrideBeatsAllDefaults / TestDefaultModelsPerProvider (incl. gemini
+alias) / TestGlobalDefaultFallbackWhenProviderUnset + rewritten existing cases;
+`provider` CoerceModelToCurated switch/noop; `providersdialog`
+activation-switches-live-model + keeps-when-checked. `go test ./...` green.
+
 ---
 
 ## Workspace Layout
@@ -511,6 +558,8 @@ Slash autocompletion (2026-06-21, post-Phase 15): inline TUI suggestions as you 
 Providers TUI wizard (2026-06-21, post-Phase 15): renamed `/provider` → `/providers` (no alias), removed `/auth` (API keys now in the wizard). New `internal/ui/providersdialog` overlay package (menu/switch/editPick/edit/setKey/add/addModels/remove/models) driven via `providersdialog.Deps` implemented by `agent.App.ProviderDialogDeps`. Seams: `slash.Result.OpenDialog` → `ui.StreamOpenDialog` → bubbletea overlay (`providerDialogHost`). `config.ValidSettingKeys*` wire-format allowlists; `provider.ApplyProviderSetting` (typed+validated), `UpdateCustomProviderDefinition`, `ResolveEndpointForProvider`, `InstanceSettingValues`. Add flow discovers models and prompts for a default, then auto-switches. AD-024 (per-model settings, design only), AD-025. Docs: commands.md, PARITY_CHECKLIST.md updated. Tests: config ValidSettingKeys (4), provider apply/update/resolve (6), providersdialog transitions (6), bubbletea overlay (4). Verified: go test ./... pass, vet clean, -race clean on slash/ui/agent/config.
 
 Providers/models command split (2026-06-21, post-Phase 15, AD-026): supersedes AD-025's "keep subcommands". `/providers` and `/models` are now menu-first single-surface commands — typed subcommand trees retired (handlers + `arg_completers.go` deleted). `/model` → `/models` (`slash.DialogModels` → `ui.DialogModels`). New per-provider `ProviderInstanceConfig.ActiveModels` (`activeModels`, registered in config/document.go field maps + `isEmptyValue` []string case); `provider.SetActiveModels`/`CuratedActiveModels` (raw)/`ActiveModelsFor` (resolved fallback). `providersdialog` models screen repurposed into a checkbox activation toggle (Space/Enter, active-by-default; Gemini skips — no discovery); edit-sheet model row is now a typed field. New `internal/ui/modelsdialog` overlay (list active provider's active models → Enter sets live model). `bubbletea` holds two mutually-exclusive overlays (`overlay`/`modelsOverlay`), `openDialog` switches on kind, `modelsDialogHost` added. Agent: `providerDialogDeps` gains `ActiveModels`/`SetActiveModels`, new `modelsDialogDeps` + `App.ModelsDialogDeps()`, `mapDialogKind` maps DialogModels. `ApplyProviderSetting`/`ValidSettingKeys*` retained. Docs: commands.md, PARITY_CHECKLIST.md, AGENTS.md (AD-026). Tests: config round-trip+omit (2), provider activemodels (3), slash dialog-open+help+completion (rewritten), providersdialog activation+gemini (2), modelsdialog (3), bubbletea DialogModels (3), parity tables updated. Verified: go test ./... pass, vet clean, -race clean on slash/ui/config/agent.
+
+Model default resolution + activation coherence (2026-06-21, post-Phase 15, AD-027): per-mode model override always wins; legacy `sagittarius.defaultModel` demoted below the provider default so it no longer clobbers the active provider's model. New `sagittarius.defaultModels` (provider id → model) tier between mode override and provider default. `modes.ResolveModel`/`ResolveSubagentModel` gained a `providerID` arg (runner passes `settings.ActiveProvider()`; `agents.ResolveSubagentModel` derives it). Activation coherence: deactivating the live model auto-switches to the first checked model (`providersdialog.Deps.CurrentModel` + `saveActivation`), centralized via `provider.CoerceModelToCurated` in `RebuildRunner`. Docs: interaction-modes.md, commands.md, AGENTS.md (AD-027). Tests: config defaultModels round-trip/omit; modes override-beats-defaults / per-provider / global-fallback; provider CoerceModelToCurated; providersdialog live-model switch/keep. Verified: go test ./... pass.
 Next: —
 Blockers: fork mock server comparison partial; checkpointing (/restore) deferred (AD-018); sandbox not ported (AD-017); full /resume TUI browser deferred (AD-019); git worktrees stub (AD-020); pre-existing credentials data race ./internal/provider/; TestReasoningApplicableOnResponses flake; debug-mode tool disable + wireLogger port deferred.
 

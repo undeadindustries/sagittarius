@@ -393,11 +393,36 @@ func (m Model) saveActivation() (Model, tea.Cmd) {
 		return m, nil
 	}
 	m.status = fmt.Sprintf("Saved %d active model(s) for %s.", len(selected), config.ProviderDisplayID(m.targetID))
+
+	// Keep the live model inside the curated set: when the active provider's
+	// current model was just deactivated, switch it to the first checked model so
+	// /models and the runner never point at an unchecked model.
+	if m.targetID == m.deps.ActiveProviderID() {
+		current := m.deps.CurrentModel(m.targetID)
+		if current != "" && !containsString(selected, current) {
+			if err := m.deps.SetModel(m.ctx, m.targetID, selected[0]); err != nil {
+				m.errMsg = err.Error()
+				return m, nil
+			}
+			m.status = fmt.Sprintf("Saved %d active model(s) for %s. Live model -> %s (was unchecked).",
+				len(selected), config.ProviderDisplayID(m.targetID), selected[0])
+		}
+	}
+
 	m.info = m.status
 	m.providers = m.deps.ListProviders()
 	m.screen = screenMenu
 	m.cursor = 0
 	return m, nil
+}
+
+func containsString(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
 }
 
 // ---- menu ----------------------------------------------------------------

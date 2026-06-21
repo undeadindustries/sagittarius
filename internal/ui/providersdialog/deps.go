@@ -43,6 +43,10 @@ type Deps interface {
 	DiscoverModels(ctx context.Context, id string) ([]string, error)
 	// SetModel sets the active model for a provider (allowlist-free, like /model).
 	SetModel(ctx context.Context, id, model string) error
+	// CurrentModel returns the provider's resolved live/default model id (empty
+	// when it cannot be resolved). Used to keep the live model inside the curated
+	// active set when saving the activation screen.
+	CurrentModel(id string) string
 	// ApplySetting validates and applies a provider instance setting.
 	ApplySetting(ctx context.Context, id, key, value string) error
 	// UpdateCustomDefinition edits a custom provider definition field.

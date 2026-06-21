@@ -6,10 +6,11 @@ import (
 )
 
 var reservedSagittariusKeys = map[string]struct{}{
-	"defaultModel": {},
-	"defaultMode":  {},
-	"modes":        {},
-	"subagents":    {},
+	"defaultModel":  {},
+	"defaultModels": {},
+	"defaultMode":   {},
+	"modes":         {},
+	"subagents":     {},
 }
 
 var reservedSagittariusModeKeys = map[string]struct{}{
@@ -280,6 +281,10 @@ func unmarshalSagittarius(raw json.RawMessage) (*SagittariusSettings, error) {
 			if err := json.Unmarshal(val, &s.DefaultModel); err != nil {
 				return nil, fmt.Errorf("decode sagittarius.defaultModel: %w", err)
 			}
+		case "defaultModels":
+			if err := json.Unmarshal(val, &s.DefaultModels); err != nil {
+				return nil, fmt.Errorf("decode sagittarius.defaultModels: %w", err)
+			}
 		case "defaultMode":
 			if err := json.Unmarshal(val, &s.DefaultMode); err != nil {
 				return nil, fmt.Errorf("decode sagittarius.defaultMode: %w", err)
@@ -329,6 +334,9 @@ func marshalSagittarius(s *SagittariusSettings) (json.RawMessage, error) {
 		return nil
 	}
 	if err := add("defaultModel", s.DefaultModel); err != nil {
+		return nil, err
+	}
+	if err := add("defaultModels", s.DefaultModels); err != nil {
 		return nil, err
 	}
 	if err := add("defaultMode", s.DefaultMode); err != nil {

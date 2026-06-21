@@ -155,6 +155,17 @@ func (h *appHooks) RebuildRunner(ctx context.Context) (string, string, error) {
 	if err != nil {
 		return "", "", err
 	}
+
+	// Keep the active provider's live model inside its curated active set. After
+	// a provider switch (or any rebuild) a previously-configured model may no
+	// longer be activated; coerce it to the first curated model and persist.
+	activeID := h.app.deps.Settings.ActiveProvider()
+	if changed, cErr := provider.CoerceModelToCurated(h.app.deps.Settings, activeID); cErr == nil && changed {
+		if h.app.deps.Loader != nil {
+			_ = h.app.deps.Loader.Save(h.app.deps.Settings)
+		}
+	}
+
 	endpoint, err := provider.ResolveEndpointConfig(h.app.deps.Settings)
 	if err != nil {
 		return "", "", err

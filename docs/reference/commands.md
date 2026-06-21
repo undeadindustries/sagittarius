@@ -39,10 +39,22 @@ to later phases — see [Deferred commands](#deferred-commands).
     and discover its models so you can pick a default and switch to it immediately.
   - **Remove provider** — delete a custom provider (built-ins cannot be removed).
   - **Manage models (activate/deactivate)** — browse the provider's discovered
-    models and toggle which ones are active. Models are active by default; the
-    checked subset is saved to `providers.<id>.activeModels`. Providers without a
-    model-discovery endpoint (e.g. Gemini) skip activation — set their model on
-    the edit sheet instead.
+    models and toggle which ones are active (Space toggles one, `A` toggles
+    all/none). Models are active by default; the checked subset is saved to
+    `providers.<id>.activeModels`. If you deactivate the model currently in use
+    on the active provider, the live model is automatically switched to the first
+    still-active model so `/models` and the runner never point at a deactivated
+    model. Providers without a model-discovery endpoint (e.g. Gemini) still list
+    their known models for activation; the default model is set on the edit sheet.
+
+There are three distinct model concerns:
+
+- **Edit sheet → model**: the provider's default model (`providers.<id>.model`).
+  This is the live model unless a mode override or `-m` takes precedence.
+- **Manage models**: the curated allowlist (`providers.<id>.activeModels`) that
+  `/models` chooses from. It does not by itself change the live model, except for
+  the auto-switch described above when the live model is deactivated.
+- **`/models`**: picks the live model from the active provider's activated set.
 
 ### `/models`
 

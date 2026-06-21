@@ -27,6 +27,7 @@ type fakeDeps struct {
 	discoverErr  error
 	settingsByID map[string]map[string]string
 	activeModels map[string][]string
+	currentModel map[string]string
 }
 
 func newFakeDeps() *fakeDeps {
@@ -67,6 +68,12 @@ func (f *fakeDeps) DiscoverModels(_ context.Context, _ string) ([]string, error)
 func (f *fakeDeps) SetModel(_ context.Context, id, model string) error {
 	f.setModel[id] = model
 	return nil
+}
+func (f *fakeDeps) CurrentModel(id string) string {
+	if f.currentModel == nil {
+		return ""
+	}
+	return f.currentModel[id]
 }
 func (f *fakeDeps) ApplySetting(_ context.Context, id, key, value string) error {
 	f.applied = append(f.applied, id+"."+key+"="+value)
@@ -252,6 +259,13 @@ func TestToggleAllChecked(t *testing.T) {
 	}
 }
 
+func viewLineCount(s string) int {
+	if s == "" {
+		return 0
+	}
+	return strings.Count(s, "\n") + 1
+}
+
 func TestListScrollWindow(t *testing.T) {
 	deps := newFakeDeps()
 	deps.active = "openai"
@@ -286,6 +300,27 @@ func TestListScrollWindow(t *testing.T) {
 	}
 }
 
+func TestActivationViewFitsTerminal(t *testing.T) {
+	deps := newFakeDeps()
+	deps.active = "openai"
+	models := make([]string, 40)
+	for i := range models {
+		models[i] = fmt.Sprintf("gemini-model-%02d-with-a-long-name", i)
+	}
+	deps.models = models
+	m := New(context.Background(), deps)
+
+	m, cmd := send(m, key("down"), key("down"), key("down"), key("down"), key("down"), key("enter"))
+	m, _ = send(m, cmd())
+	m = m.SetSize(97, 35)
+
+	view := m.View()
+	lines := viewLineCount(view)
+	if lines > 35 {
+		t.Fatalf("view has %d lines, want <= 35:\n%s", lines, view)
+	}
+}
+
 func TestManageModelsActivationSaves(t *testing.T) {
 	deps := newFakeDeps()
 	deps.active = "openai"
@@ -315,6 +350,51 @@ func TestManageModelsActivationSaves(t *testing.T) {
 	}
 	if m.screen != screenMenu {
 		t.Fatalf("screen = %d, want menu after save", m.screen)
+	}
+}
+
+// TestActivationSwitchesLiveModelWhenDeactivated verifies that deactivating the
+// live model on the active provider re-points it at the first checked model.
+func TestActivationSwitchesLiveModelWhenDeactivated(t *testing.T) {
+	deps := newFakeDeps()
+	deps.active = "openai"
+	deps.models = []string{"qwen3", "llama3", "mistral"}
+	deps.currentModel = map[string]string{"openai": "qwen3"}
+	m := New(context.Background(), deps)
+
+	// Menu → "Manage models" (index 5), then load models.
+	m, cmd := send(m, key("down"), key("down"), key("down"), key("down"), key("down"), key("enter"))
+	m, _ = send(m, cmd())
+
+	// Uncheck the live model (qwen3, index 0), then save.
+	m, _ = send(m, key(" "), key("enter"))
+
+	got := deps.activeModels["openai"]
+	if len(got) != 2 || got[0] != "llama3" || got[1] != "mistral" {
+		t.Fatalf("saved activeModels = %v, want [llama3 mistral]", got)
+	}
+	if deps.setModel["openai"] != "llama3" {
+		t.Fatalf("live model = %q, want llama3 (first checked)", deps.setModel["openai"])
+	}
+}
+
+// TestActivationKeepsLiveModelWhenStillChecked verifies that the live model is
+// untouched when it remains in the curated set.
+func TestActivationKeepsLiveModelWhenStillChecked(t *testing.T) {
+	deps := newFakeDeps()
+	deps.active = "openai"
+	deps.models = []string{"qwen3", "llama3", "mistral"}
+	deps.currentModel = map[string]string{"openai": "qwen3"}
+	m := New(context.Background(), deps)
+
+	m, cmd := send(m, key("down"), key("down"), key("down"), key("down"), key("down"), key("enter"))
+	m, _ = send(m, cmd())
+
+	// Uncheck mistral (index 2), leaving the live model qwen3 checked.
+	m, _ = send(m, key("down"), key("down"), key(" "), key("enter"))
+
+	if _, ok := deps.setModel["openai"]; ok {
+		t.Fatalf("SetModel should not be called when live model stays checked, got %v", deps.setModel)
 	}
 }
 

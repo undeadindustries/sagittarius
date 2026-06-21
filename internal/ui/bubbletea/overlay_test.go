@@ -49,6 +49,7 @@ func (stubDialogDeps) DiscoverModels(context.Context, string) ([]string, error) 
 	return nil, nil
 }
 func (stubDialogDeps) SetModel(context.Context, string, string) error             { return nil }
+func (stubDialogDeps) CurrentModel(string) string                                 { return "" }
 func (stubDialogDeps) ApplySetting(context.Context, string, string, string) error { return nil }
 func (stubDialogDeps) UpdateCustomDefinition(context.Context, string, string, string) error {
 	return nil

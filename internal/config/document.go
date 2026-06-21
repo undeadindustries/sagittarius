@@ -396,6 +396,8 @@ func isEmptyValue(v any) bool {
 		return t == nil
 	case []string:
 		return len(t) == 0
+	case map[string]string:
+		return len(t) == 0
 	default:
 		return false
 	}

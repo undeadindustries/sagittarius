@@ -28,6 +28,10 @@ All keys live under the top-level `sagittarius` object so fork keys are never cl
 {
   "sagittarius": {
     "defaultModel": "gpt-4o",
+    "defaultModels": {
+      "gemini-apikey": "gemini-2.5-flash",
+      "openai": "gpt-4o-mini"
+    },
     "defaultMode": "agent",
     "modes": {
       "plan": {
@@ -45,22 +49,30 @@ All keys live under the top-level `sagittarius` object so fork keys are never cl
 }
 ```
 
-Unknown `sagittarius.*` sub-keys round-trip unchanged (forward compatibility).
+`defaultModels` maps a provider id (canonical, e.g. `gemini-apikey`, or the short
+`gemini` alias) to the default model used while that provider is active. Unknown
+`sagittarius.*` sub-keys round-trip unchanged (forward compatibility).
 
 ### Model resolution
 
+The per-mode model override **always wins**. The legacy single `defaultModel`
+now sits at the very bottom of the chain so it can no longer clobber the active
+provider's configured model when switching providers.
+
 **Main agent loop** (each turn, unless `-m` CLI override pins the model):
 
-1. `sagittarius.modes.<mode>.model`
-2. `sagittarius.defaultModel`
+1. `sagittarius.modes.<mode>.model` — the per-mode override always wins
+2. `sagittarius.defaultModels[<activeProvider>]` — provider-scoped default
 3. Active provider’s default model (`providers.<id>.model` or built-in default)
+4. `sagittarius.defaultModel` — legacy single global default (last resort)
 
 **Subagents** (via `agents.ResolveSubagentModel` — execution still stubbed):
 
 1. `sagittarius.subagents.<name>.model`
 2. `sagittarius.subagents.default.model`
-3. `sagittarius.defaultModel`
+3. `sagittarius.defaultModels[<activeProvider>]`
 4. Provider default model
+5. `sagittarius.defaultModel`
 
 ## Commands
 

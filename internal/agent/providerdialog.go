@@ -205,6 +205,16 @@ func (d *providerDialogDeps) SetModel(ctx context.Context, id, model string) err
 	return d.rebuildIfActive(ctx, id)
 }
 
+// CurrentModel returns the provider's resolved live/default model id, used by the
+// activation screen to keep the live model inside the curated active set.
+func (d *providerDialogDeps) CurrentModel(id string) string {
+	endpoint, err := provider.ResolveEndpointForProvider(d.settings(), id)
+	if err != nil {
+		return ""
+	}
+	return endpoint.Model
+}
+
 func (d *providerDialogDeps) ApplySetting(ctx context.Context, id, key, value string) error {
 	if d.loader() == nil || d.settings() == nil {
 		return fmt.Errorf("settings not loaded")

@@ -154,6 +154,43 @@ func TestActiveModelsForFallsBackToDefaultModel(t *testing.T) {
 	}
 }
 
+func TestCoerceModelToCuratedSwitchesWhenOutside(t *testing.T) {
+	t.Parallel()
+	s := openAISettings()
+	s.Providers.OpenAI.Model = "gpt-4o"
+	s.Providers.OpenAI.ActiveModels = []string{"gpt-4o-mini", "o3-mini"}
+
+	changed, err := CoerceModelToCurated(s, "openai")
+	if err != nil {
+		t.Fatalf("CoerceModelToCurated: %v", err)
+	}
+	if !changed {
+		t.Fatal("expected model to be coerced into the curated set")
+	}
+	if s.Providers.OpenAI.Model != "gpt-4o-mini" {
+		t.Fatalf("model = %q, want gpt-4o-mini (first curated)", s.Providers.OpenAI.Model)
+	}
+}
+
+func TestCoerceModelToCuratedNoopWhenInsideOrUncurated(t *testing.T) {
+	t.Parallel()
+
+	// Inside the curated set: no change.
+	s := openAISettings()
+	s.Providers.OpenAI.Model = "gpt-4o-mini"
+	s.Providers.OpenAI.ActiveModels = []string{"gpt-4o-mini", "o3-mini"}
+	if changed, err := CoerceModelToCurated(s, "openai"); err != nil || changed {
+		t.Fatalf("inside curated set: changed=%v err=%v, want no change", changed, err)
+	}
+
+	// Uncurated: never touch the model.
+	s2 := openAISettings()
+	s2.Providers.OpenAI.Model = "gpt-4o"
+	if changed, err := CoerceModelToCurated(s2, "openai"); err != nil || changed {
+		t.Fatalf("uncurated: changed=%v err=%v, want no change", changed, err)
+	}
+}
+
 func TestResolveEndpointForProviderAnyTarget(t *testing.T) {
 	t.Parallel()
 	// Active is gemini, but we resolve openai's endpoint without switching.

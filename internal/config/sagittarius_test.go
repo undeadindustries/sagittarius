@@ -15,6 +15,10 @@ func TestSagittariusSettingsRoundTrip(t *testing.T) {
   "providers": { "active": "openai", "openai": { "model": "gpt-4o" } },
   "sagittarius": {
     "defaultModel": "global-model",
+    "defaultModels": {
+      "openai": "gpt-4o-mini",
+      "gemini-apikey": "gemini-2.5-flash"
+    },
     "defaultMode": "plan",
     "modes": {
       "plan": { "model": "plan-model", "systemPromptSuffix": "Think step by step." },
@@ -44,6 +48,12 @@ func TestSagittariusSettingsRoundTrip(t *testing.T) {
 	if got := s.Sagittarius.DefaultModel; got != "global-model" {
 		t.Errorf("DefaultModel = %q", got)
 	}
+	if got := s.Sagittarius.DefaultModels["openai"]; got != "gpt-4o-mini" {
+		t.Errorf("defaultModels[openai] = %q", got)
+	}
+	if got := s.Sagittarius.DefaultModels["gemini-apikey"]; got != "gemini-2.5-flash" {
+		t.Errorf("defaultModels[gemini-apikey] = %q", got)
+	}
 	if got := s.Sagittarius.Modes.Plan.Model; got != "plan-model" {
 		t.Errorf("plan model = %q", got)
 	}
@@ -63,6 +73,27 @@ func TestSagittariusSettingsRoundTrip(t *testing.T) {
 	}
 	if reloaded.Sagittarius.DefaultMode != "plan" {
 		t.Errorf("DefaultMode = %q", reloaded.Sagittarius.DefaultMode)
+	}
+	if got := reloaded.Sagittarius.DefaultModels["openai"]; got != "gpt-4o-mini" {
+		t.Errorf("reloaded defaultModels[openai] = %q", got)
+	}
+}
+
+// TestDefaultModelsOmittedWhenEmpty guards that an empty defaultModels map is not
+// serialized, so settings.json stays clean for users who never set one.
+func TestDefaultModelsOmittedWhenEmpty(t *testing.T) {
+	t.Parallel()
+
+	raw, err := marshalSagittarius(&SagittariusSettings{DefaultModel: "only-global"})
+	if err != nil {
+		t.Fatalf("marshalSagittarius: %v", err)
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		t.Fatalf("unmarshal serialized sagittarius: %v", err)
+	}
+	if _, ok := obj["defaultModels"]; ok {
+		t.Error("empty defaultModels should be omitted from serialized output")
 	}
 }
 

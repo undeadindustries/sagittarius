@@ -9,11 +9,19 @@ import (
 // SagittariusSettings holds Sagittarius-specific settings under the top-level
 // "sagittarius" key in settings.json. Unknown sub-keys round-trip via Extra.
 type SagittariusSettings struct {
-	DefaultModel string                     `json:"defaultModel,omitempty"`
-	DefaultMode  string                     `json:"defaultMode,omitempty"`
-	Modes        *SagittariusModes          `json:"modes,omitempty"`
-	Subagents    *SagittariusSubagents      `json:"subagents,omitempty"`
-	Extra        map[string]json.RawMessage `json:"-"`
+	// DefaultModel is the legacy single global default. It now sits at the bottom
+	// of the resolution chain (below the provider instance default) so it never
+	// clobbers an active provider's configured model (see modes.ResolveModel).
+	DefaultModel string `json:"defaultModel,omitempty"`
+	// DefaultModels maps a normalized provider id to its preferred default model.
+	// It is the provider-scoped successor to DefaultModel and sits just below the
+	// per-mode override, so it beats the raw provider instance / built-in default
+	// while still yielding to an explicit mode model (see modes.ResolveModel).
+	DefaultModels map[string]string          `json:"defaultModels,omitempty"`
+	DefaultMode   string                     `json:"defaultMode,omitempty"`
+	Modes         *SagittariusModes          `json:"modes,omitempty"`
+	Subagents     *SagittariusSubagents      `json:"subagents,omitempty"`
+	Extra         map[string]json.RawMessage `json:"-"`
 }
 
 // SagittariusModes holds per-interaction-mode overrides.
