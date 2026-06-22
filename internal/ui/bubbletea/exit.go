@@ -30,6 +30,10 @@ func (m *model) renderExitSummary() string {
 
 func (m *model) renderExitStats(stats ui.SessionStats) string {
 	label := m.th.Secondary
+	sessionCostStr := ""
+	if stats.SessionCostKnown {
+		sessionCostStr = formatCostUSD(stats.SessionCostUSD)
+	}
 	rows := [][2]string{
 		{"Session", strings.TrimSpace(stats.SessionID)},
 		{"Provider", stats.Provider},
@@ -37,6 +41,7 @@ func (m *model) renderExitStats(stats ui.SessionStats) string {
 		{"Turns", fmt.Sprintf("%d", stats.Turns)},
 		{"Tool calls", toolCallsSummary(stats)},
 		{"Duration", formatDuration(stats.Duration)},
+		{"Session cost", sessionCostStr},
 	}
 
 	var b strings.Builder
@@ -67,38 +72,60 @@ func (m *model) renderExitStats(stats ui.SessionStats) string {
 	return strings.TrimRight(b.String(), "\n")
 }
 
-// renderModelUsage builds a Gemini-style breakdown grouped by model, with
-// child rows per process type (main / compression).
+// renderModelUsage builds a per-model, per-mode breakdown for the exit screen.
 //
 //	Model Usage
 //
 //	  gemini-2.5-pro           3   45.2k   1.1k
-//	    ↳ main                 3   45.2k   1.1k
-//	  gemini-1.5-flash         1    8.0k    300
-//	    ↳ compression          1    8.0k    300
+//	    ↳ agent                3   45.2k   1.1k
+//	  openai/gpt-4o            2    8.0k    300   $0.0042
+//	    ↳ plan                 1    4.0k    150   $0.0021
+//	    ↳ agent                1    4.0k    150   $0.0021
+//
+// The cost column is appended only when at least one row has CostKnown=true
+// (i.e. the session used OpenRouter for at least one request).
 func (m *model) renderModelUsage(stats []ui.ModelUsageStat) string {
-	// Collect unique models in stable order.
+	// Collect unique (provider, model) pairs in stable order. Metrics are keyed
+	// by (provider, model, mode), so grouping by model id alone would merge two
+	// providers that expose the same model id (e.g. gemini-native and openrouter
+	// both serving a gemini-* id) into one row with summed tokens/cost.
 	type modelRow struct {
-		model     string
+		label     string
 		requests  int
 		inTokens  int
 		outTokens int
-		kinds     []ui.ModelUsageStat // rows for this model
+		costUSD   float64
+		costKnown bool
+		modes     []ui.ModelUsageStat
+	}
+
+	// Determine whether any row has cost data to decide whether to show the column.
+	showCost := false
+	for _, s := range stats {
+		if s.CostKnown {
+			showCost = true
+			break
+		}
 	}
 
 	byModel := map[string]*modelRow{}
 	modelOrder := []string{}
 	for _, s := range stats {
-		mr := byModel[s.Model]
+		key := s.Provider + "\x00" + s.Model
+		mr := byModel[key]
 		if mr == nil {
-			mr = &modelRow{model: s.Model}
-			byModel[s.Model] = mr
-			modelOrder = append(modelOrder, s.Model)
+			mr = &modelRow{label: modelUsageLabel(s.Provider, s.Model)}
+			byModel[key] = mr
+			modelOrder = append(modelOrder, key)
 		}
 		mr.requests += s.Requests
 		mr.inTokens += s.InTokens
 		mr.outTokens += s.OutTokens
-		mr.kinds = append(mr.kinds, s)
+		mr.costUSD += s.CostUSD
+		if s.CostKnown {
+			mr.costKnown = true
+		}
+		mr.modes = append(mr.modes, s)
 	}
 	sort.Strings(modelOrder)
 
@@ -109,32 +136,75 @@ func (m *model) renderModelUsage(stats []ui.ModelUsageStat) string {
 	var b strings.Builder
 	b.WriteString(label.Render("  Model Usage"))
 	b.WriteString("\n")
-	b.WriteString(label.Render(fmt.Sprintf("  %-32s  %4s  %7s  %7s", "Model", "Reqs", "In", "Out")))
+	if showCost {
+		b.WriteString(label.Render(fmt.Sprintf("  %-32s  %4s  %7s  %7s  %9s", "Model", "Reqs", "In", "Out", "Cost")))
+	} else {
+		b.WriteString(label.Render(fmt.Sprintf("  %-32s  %4s  %7s  %7s", "Model", "Reqs", "In", "Out")))
+	}
 
-	for _, mod := range modelOrder {
-		mr := byModel[mod]
+	for _, key := range modelOrder {
+		mr := byModel[key]
 		b.WriteString("\n")
-		b.WriteString(primary.Render(fmt.Sprintf("  %-32s  %4d  %7s  %7s",
-			truncate(mod, 32),
-			mr.requests,
-			compactCount(mr.inTokens),
-			compactCount(mr.outTokens),
-		)))
-
-		// Sort kinds for stable output.
-		sort.Slice(mr.kinds, func(i, j int) bool { return mr.kinds[i].Kind < mr.kinds[j].Kind })
-		for _, k := range mr.kinds {
-			b.WriteString("\n")
-			b.WriteString(dim.Render(fmt.Sprintf("    ↳ %-28s  %4d  %7s  %7s",
-				k.Kind,
-				k.Requests,
-				compactCount(k.InTokens),
-				compactCount(k.OutTokens),
+		if showCost {
+			costStr := ""
+			if mr.costKnown {
+				costStr = formatCostUSD(mr.costUSD)
+			}
+			b.WriteString(primary.Render(fmt.Sprintf("  %-32s  %4d  %7s  %7s  %9s",
+				truncate(mr.label, 32),
+				mr.requests,
+				compactCount(mr.inTokens),
+				compactCount(mr.outTokens),
+				costStr,
 			)))
+		} else {
+			b.WriteString(primary.Render(fmt.Sprintf("  %-32s  %4d  %7s  %7s",
+				truncate(mr.label, 32),
+				mr.requests,
+				compactCount(mr.inTokens),
+				compactCount(mr.outTokens),
+			)))
+		}
+
+		// Sort modes for stable output.
+		sort.Slice(mr.modes, func(i, j int) bool { return mr.modes[i].Mode < mr.modes[j].Mode })
+		for _, k := range mr.modes {
+			b.WriteString("\n")
+			if showCost {
+				childCost := ""
+				if k.CostKnown {
+					childCost = formatCostUSD(k.CostUSD)
+				}
+				b.WriteString(dim.Render(fmt.Sprintf("    ↳ %-28s  %4d  %7s  %7s  %9s",
+					k.Mode,
+					k.Requests,
+					compactCount(k.InTokens),
+					compactCount(k.OutTokens),
+					childCost,
+				)))
+			} else {
+				b.WriteString(dim.Render(fmt.Sprintf("    ↳ %-28s  %4d  %7s  %7s",
+					k.Mode,
+					k.Requests,
+					compactCount(k.InTokens),
+					compactCount(k.OutTokens),
+				)))
+			}
 		}
 	}
 
 	return b.String()
+}
+
+// modelUsageLabel renders a {provider}/{model} label for the usage table,
+// falling back to the bare model id when the provider is unknown. This keeps
+// same-named models from different providers visually distinct.
+func modelUsageLabel(provider, model string) string {
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		return model
+	}
+	return provider + "/" + model
 }
 
 // truncate clips s to at most n runes, appending "…" when clipped.

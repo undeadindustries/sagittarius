@@ -219,6 +219,72 @@ func TestE2E_MockSlashModeShow(t *testing.T) {
 	}
 }
 
+func TestE2E_MockSlashToolsList(t *testing.T) {
+	skipUnlessMock(t)
+	bin := sagittariusBin(t)
+	srv := mockChatServer(t, mockModel, "e2e.txt", "ok")
+	home := mockHome(t, srv.URL, mockModel)
+	work := t.TempDir()
+
+	res := invoke(t, bin, work, mockEnv(home, ""), "--slash", "/tools list")
+	if res.exitCode != 0 {
+		t.Fatalf("exit=%d stderr=%s", res.exitCode, res.stderr)
+	}
+	for _, want := range []string{"Built-in tools", "read_file", "run_shell_command"} {
+		if !strings.Contains(res.stdout, want) {
+			t.Fatalf("/tools list missing %q:\n%s", want, res.stdout)
+		}
+	}
+}
+
+func TestE2E_MockSlashMCPReloadDiscoversTool(t *testing.T) {
+	skipUnlessMock(t)
+	bin := sagittariusBin(t)
+	srv := mockChatServer(t, mockModel, "e2e.txt", "ok")
+	home := mockHomeWithMCP(t, srv.URL, mockModel)
+	work := t.TempDir()
+	env := mockEnv(home, "")
+
+	reload := invoke(t, bin, work, env, "--slash", "/mcp reload")
+	if reload.exitCode != 0 {
+		t.Fatalf("reload exit=%d stderr=%s", reload.exitCode, reload.stderr)
+	}
+
+	list := invoke(t, bin, work, env, "--slash", "/tools desc")
+	if list.exitCode != 0 {
+		t.Fatalf("tools exit=%d stderr=%s", list.exitCode, list.stderr)
+	}
+	if !strings.Contains(list.stdout, "everything") {
+		t.Fatalf("/tools desc missing the configured server group:\n%s", list.stdout)
+	}
+}
+
+// mockHomeWithMCP writes an isolated home whose settings point the openai
+// provider at the mock server and declare one stdio MCP server. The server
+// command may fail to connect in CI; the test only asserts the server is listed.
+func mockHomeWithMCP(t *testing.T, baseURL, model string) string {
+	t.Helper()
+	home := t.TempDir()
+	dir := filepath.Join(home, ".sagittarius")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	settings := map[string]any{
+		"providers": map[string]any{
+			"active": "openai",
+			"openai": map[string]any{"baseUrl": baseURL + "/v1", "model": model},
+		},
+		"mcpServers": map[string]any{
+			"everything": map[string]any{"command": "true"},
+		},
+	}
+	data, _ := json.MarshalIndent(settings, "", "  ")
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), data, 0o600); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+	return home
+}
+
 func TestE2E_MockSlashDiffUndo(t *testing.T) {
 	skipUnlessMock(t)
 	bin := sagittariusBin(t)

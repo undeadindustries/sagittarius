@@ -8,11 +8,63 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/provider"
 )
 
+// mcpToolPrefix marks a registered tool as MCP-sourced (mirrors
+// internal/mcp.ToolPrefix; duplicated here to keep tools dependency-free).
+const mcpToolPrefix = "mcp_"
+
 // Registry holds built-in tools indexed by wire name.
 type Registry struct {
 	byName  map[string]Tool
 	order   []Tool
 	aliases map[string]string
+}
+
+// ToolSource classifies where a registered tool comes from.
+type ToolSource string
+
+const (
+	// SourceBuiltin marks a code-defined Sagittarius tool (never editable).
+	SourceBuiltin ToolSource = "builtin"
+	// SourceSkill marks the activate_skill tool (built-in, skill-backed).
+	SourceSkill ToolSource = "skill"
+	// SourceMCP marks a tool discovered from an MCP server.
+	SourceMCP ToolSource = "mcp"
+)
+
+// ToolEntry is a registry row for the read-only tool inventory UI.
+type ToolEntry struct {
+	Name        string
+	Description string
+	Source      ToolSource
+	// ReadOnly is true for built-in and skill tools, which the user can view but
+	// not edit or remove.
+	ReadOnly bool
+}
+
+// ListEntries returns one entry per registered tool, classified by source, in
+// registration order. MCP tools are flagged not read-only so the inventory UI
+// can offer per-tool enable/disable; built-in and skill tools are read-only.
+func (r *Registry) ListEntries() []ToolEntry {
+	out := make([]ToolEntry, 0, len(r.order))
+	for _, tool := range r.order {
+		name := tool.Name()
+		source := SourceBuiltin
+		readOnly := true
+		switch {
+		case strings.HasPrefix(name, mcpToolPrefix):
+			source = SourceMCP
+			readOnly = false
+		case name == activateSkillToolName:
+			source = SourceSkill
+		}
+		out = append(out, ToolEntry{
+			Name:        name,
+			Description: tool.Declaration().Description,
+			Source:      source,
+			ReadOnly:    readOnly,
+		})
+	}
+	return out
 }
 
 // NewBuiltinRegistry registers all core built-in tools for a workspace.

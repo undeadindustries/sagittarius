@@ -35,7 +35,7 @@ func (m Model) View() string {
 func (m Model) footerHint() string {
 	switch m.screen {
 	case screenPicker:
-		return "↑/↓ move • Enter assign • Esc back"
+		return "↑/↓ move • Enter assign (first row = clear) • Esc back"
 	default:
 		return "↑/↓ move • Enter assign model • r clear override • Esc close"
 	}
@@ -95,12 +95,17 @@ func (m Model) renderPicker() string {
 	dim := m.th.Dim
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("Assign model for %s mode\n\n", m.targetMode))
-	if len(m.models) == 0 {
+	if len(m.models) <= 1 { // only the sentinel, no real models
 		b.WriteString(dim.Render("No active models. Open /providers and activate some first."))
 		return b.String()
 	}
 	for i, e := range m.models {
-		label := fmt.Sprintf("%s/%s", e.DisplayID, e.Model)
+		var label string
+		if e.IsClear {
+			label = dim.Render("(use default)")
+		} else {
+			label = fmt.Sprintf("%s/%s", e.DisplayID, e.Model)
+		}
 		b.WriteString(m.renderRow(label, i == m.pickCursor) + "\n")
 	}
 	return strings.TrimRight(b.String(), "\n")

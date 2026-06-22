@@ -3,6 +3,7 @@ package providersdialog
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/textinput"
@@ -60,21 +61,23 @@ type pickerOption struct {
 // addState holds the multi-field add-provider wizard buffers.
 type addState struct {
 	fieldIdx    int
-	id          string
 	displayName string
-	baseURL     string
+	hostOrURL   string
+	port        string
+	idOverride  string // empty → auto-generated from URL at submit
 	envVar      string
 	apiKey      string
 	wire        config.WireFormat
 }
 
 const (
-	addFieldID = iota
-	addFieldName
-	addFieldBaseURL
+	addFieldName = iota
+	addFieldHostOrURL
+	addFieldPort       // shown only when hostOrURL has no port
 	addFieldWire
 	addFieldEnvVar
 	addFieldAPIKey
+	addFieldIdOverride // shows auto-generated id; user may change before confirm
 	addFieldCount
 )
 
@@ -123,6 +126,9 @@ type Model struct {
 
 	add addState
 
+	// removeTarget is the provider id pending delete confirmation on screenRemove.
+	removeTarget string
+
 	loading   bool
 	models    []string
 	modelsErr string
@@ -151,7 +157,7 @@ func New(ctx context.Context, deps Deps) Model {
 		th:        theme.Default(),
 		screen:    screenEditPick,
 		input:     ti,
-		add:       addState{wire: config.WireFormatOpenAIChat},
+		add:       addState{wire: config.WireFormatOpenAIChat, fieldIdx: addFieldName},
 		providers: deps.ListProviders(),
 	}
 	m.syncInputWidth()
@@ -282,6 +288,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m.handleTextEntryKey(msg)
 	case screenAdd:
 		return m.handleAddKey(msg)
+	case screenRemove:
+		return m.handleRemoveKey(msg)
 	}
 
 	switch msg.String() {
@@ -313,8 +321,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		}
 	case "a":
 		if m.screen == screenEditPick {
-			m.add = addState{wire: config.WireFormatOpenAIChat}
-			m.input = freshInput("provider id (e.g. local-vllm)")
+			m.add = addState{wire: config.WireFormatOpenAIChat, fieldIdx: addFieldName}
+			m.input = freshInput("display name (e.g. Local vLLM)")
 			m.screen = screenAdd
 			return m, nil
 		}
@@ -323,7 +331,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		}
 	case "x":
 		if m.screen == screenEditPick {
-			return m.removeCurrentCustom()
+			return m.confirmRemove()
 		}
 	case "r":
 		if m.screen == screenEdit {
@@ -380,6 +388,10 @@ func (m Model) back() (Model, tea.Cmd) {
 	case screenEditPick:
 		m.done = true
 		return m, nil
+	case screenRemove:
+		m.removeTarget = ""
+		m.screen = screenEditPick
+		return m, nil
 	case screenEdit:
 		m.providers = m.deps.ListProviders()
 		m.screen = screenEditPick
@@ -432,7 +444,7 @@ func (m Model) listLen() int {
 	case screenEditPicker:
 		return len(m.pickerOptions)
 	case screenRemove:
-		return len(m.customProviders())
+		return 0 // confirmation dialog; no scrollable list
 	case screenAddModels, screenModels:
 		if m.loading {
 			return 0
@@ -462,8 +474,6 @@ func (m Model) selectCurrent() (Model, tea.Cmd) {
 		return m.selectEdit()
 	case screenEditPicker:
 		return m.selectPicker()
-	case screenRemove:
-		return m.selectRemove()
 	case screenAddModels:
 		return m.selectAddModel()
 	case screenModels:
@@ -543,25 +553,59 @@ func (m Model) selectEditPick() (Model, tea.Cmd) {
 	return m, nil
 }
 
-// removeCurrentCustom removes the highlighted custom provider immediately.
-func (m Model) removeCurrentCustom() (Model, tea.Cmd) {
+// confirmRemove navigates to the delete confirmation screen for the highlighted
+// custom provider. Built-ins are rejected with an error.
+func (m Model) confirmRemove() (Model, tea.Cmd) {
 	if m.cursor < 0 || m.cursor >= len(m.providers) {
 		return m, nil
 	}
 	p := m.providers[m.cursor]
 	if !p.IsCustom {
-		m.errMsg = "Only custom providers can be removed (x). Built-ins (Gemini, OpenAI, OpenRouter) cannot be deleted."
+		m.errMsg = "Only custom providers can be removed. Built-ins cannot be deleted."
 		return m, nil
 	}
-	if err := m.deps.RemoveCustomProvider(m.ctx, p.ID); err != nil {
+	m.removeTarget = p.ID
+	m.errMsg = ""
+	m.info = ""
+	m.screen = screenRemove
+	return m, nil
+}
+
+// handleRemoveKey handles all key input on the delete confirmation screen.
+func (m Model) handleRemoveKey(msg tea.KeyMsg) (Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		return m.back()
+	case "y", "enter":
+		return m.doRemove()
+	}
+	return m, nil
+}
+
+// doRemove performs the confirmed provider removal.
+func (m Model) doRemove() (Model, tea.Cmd) {
+	if m.removeTarget == "" {
+		return m.back()
+	}
+	name := m.removeTarget
+	for _, p := range m.providers {
+		if p.ID == m.removeTarget {
+			name = p.DisplayName
+			break
+		}
+	}
+	if err := m.deps.RemoveCustomProvider(m.ctx, m.removeTarget); err != nil {
 		m.errMsg = err.Error()
 		return m, nil
 	}
+	m.removeTarget = ""
 	m.providers = m.deps.ListProviders()
-	m.info = fmt.Sprintf("Removed %s.", config.ProviderDisplayID(p.ID))
+	m.info = fmt.Sprintf("Removed %s.", name)
+	m.status = m.info
 	if m.cursor >= len(m.providers) && m.cursor > 0 {
 		m.cursor = len(m.providers) - 1
 	}
+	m.screen = screenEditPick
 	return m, nil
 }
 
@@ -571,10 +615,11 @@ func (m Model) buildEditItems(p ProviderEntry) []editItem {
 
 	if p.IsCustom {
 		items = append(items,
-			editItem{label: "displayName (definition)", kind: editDefn, key: "displayName"},
-			editItem{label: "baseUrl (definition)", kind: editDefn, key: "baseUrl"},
-			editItem{label: "wireFormat (definition)", kind: editWireDefn, key: "wireFormat"},
-			editItem{label: "apiKeyEnvVar (definition)", kind: editDefn, key: "apiKeyEnvVar"},
+			editItem{label: "Provider name", kind: editDefn, key: "displayName"},
+			editItem{label: "URL / host", kind: editDefn, key: "hostOrURL"},
+			editItem{label: "Port", kind: editDefn, key: "port"},
+			editItem{label: "Wire format", kind: editWireDefn, key: "wireFormat"},
+			editItem{label: "API key env var", kind: editDefn, key: "apiKeyEnvVar"},
 		)
 	}
 
@@ -905,28 +950,30 @@ func (m Model) handleAddKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 func (m Model) advanceAdd() (Model, tea.Cmd) {
 	value := strings.TrimSpace(m.input.Value())
 	switch m.add.fieldIdx {
-	case addFieldID:
-		if value == "" {
-			m.errMsg = "Provider id is required."
-			return m, nil
-		}
-		if _, ok := config.LookupBuiltInProvider(value); ok {
-			m.errMsg = fmt.Sprintf("%q is a built-in provider id. Choose a different id.", value)
-			return m, nil
-		}
-		m.add.id = value
-		m.add.fieldIdx = addFieldName
-		m.input = freshInput("display name (optional)")
 	case addFieldName:
-		m.add.displayName = value
-		m.add.fieldIdx = addFieldBaseURL
-		m.input = freshInput("base URL (e.g. http://127.0.0.1:8000/v1/chat/completions)")
-	case addFieldBaseURL:
 		if value == "" {
-			m.errMsg = "Base URL is required."
+			m.errMsg = "Provider name is required."
 			return m, nil
 		}
-		m.add.baseURL = value
+		m.add.displayName = value
+		m.add.fieldIdx = addFieldHostOrURL
+		m.input = freshInput("URL or host (e.g. http://127.0.0.1:8000 or 127.0.0.1)")
+	case addFieldHostOrURL:
+		if value == "" {
+			m.errMsg = "URL or hostname is required."
+			return m, nil
+		}
+		m.add.hostOrURL = value
+		if urlHasPort(value) {
+			// Port already in URL; skip port step.
+			m.add.fieldIdx = addFieldWire
+			m.input.Blur()
+		} else {
+			m.add.fieldIdx = addFieldPort
+			m.input = freshInput("port (default: 8000)")
+		}
+	case addFieldPort:
+		m.add.port = value
 		m.add.fieldIdx = addFieldWire
 		m.input.Blur()
 	case addFieldEnvVar:
@@ -935,6 +982,28 @@ func (m Model) advanceAdd() (Model, tea.Cmd) {
 		m.input = freshSecretInput()
 	case addFieldAPIKey:
 		m.add.apiKey = value
+		// Show auto-generated id for optional override.
+		baseURL, err := composeAddURL(m.add.hostOrURL, m.add.port)
+		if err != nil {
+			m.errMsg = err.Error()
+			return m, nil
+		}
+		suggested := m.deps.GenerateProviderID(baseURL)
+		m.add.idOverride = suggested
+		m.add.fieldIdx = addFieldIdOverride
+		ti := freshInput("provider id (edit or Enter to accept)")
+		ti.SetValue(suggested)
+		m.input = ti
+	case addFieldIdOverride:
+		if value == "" {
+			m.errMsg = "Provider id cannot be empty."
+			return m, nil
+		}
+		if _, ok := config.LookupBuiltInProvider(value); ok {
+			m.errMsg = fmt.Sprintf("%q conflicts with a built-in provider id.", value)
+			return m, nil
+		}
+		m.add.idOverride = value
 		return m.submitAdd()
 	}
 	m.errMsg = ""
@@ -942,25 +1011,89 @@ func (m Model) advanceAdd() (Model, tea.Cmd) {
 }
 
 func (m Model) submitAdd() (Model, tea.Cmd) {
+	baseURL, err := composeAddURL(m.add.hostOrURL, m.add.port)
+	if err != nil {
+		m.errMsg = err.Error()
+		return m, nil
+	}
 	def := config.CustomProviderDefinition{
 		DisplayName:  m.add.displayName,
-		BaseURL:      m.add.baseURL,
+		BaseURL:      baseURL,
 		APIKeyEnvVar: m.add.envVar,
 		WireFormat:   m.add.wire,
 	}
-	if err := m.deps.AddCustomProvider(m.ctx, m.add.id, def, m.add.apiKey); err != nil {
+	id := m.add.idOverride
+	if err := m.deps.AddCustomProvider(m.ctx, id, def, m.add.apiKey); err != nil {
 		m.errMsg = err.Error()
 		return m, nil
 	}
 	m.providers = m.deps.ListProviders()
-	// Immediately connect and discover models so the user can pick a default.
-	m.targetID = m.add.id
+	m.targetID = id
 	m.loading = true
 	m.models = nil
 	m.modelsErr = ""
 	m.cursor = 0
 	m.screen = screenAddModels
-	return m, discoverCmd(m.ctx, m.deps, m.add.id)
+	return m, discoverCmd(m.ctx, m.deps, id)
+}
+
+// urlHasPort reports whether hostOrURL (full URL or bare host) already
+// specifies a port so the wizard can skip the port step. A bare "host:port"
+// (no scheme) is parsed by assuming http:// so e.g. "127.0.0.1:8000" is
+// recognized as already carrying a port.
+func urlHasPort(hostOrURL string) bool {
+	candidate := strings.TrimSpace(hostOrURL)
+	if candidate == "" {
+		return false
+	}
+	if !strings.Contains(candidate, "://") {
+		candidate = "http://" + candidate
+	}
+	u, err := url.Parse(candidate)
+	if err != nil {
+		return false
+	}
+	return u.Port() != ""
+}
+
+// composeAddURL builds the canonical base URL from wizard hostOrURL + port
+// fields using stdlib url so the dialog does not import the provider package.
+// A bare host (no scheme) is treated as http://; a bare "host:port" keeps its
+// embedded port rather than appending the default, avoiding malformed URLs
+// like "http://127.0.0.1:8000:8000".
+func composeAddURL(hostOrURL, port string) (string, error) {
+	hostOrURL = strings.TrimSpace(hostOrURL)
+	port = strings.TrimSpace(port)
+	if hostOrURL == "" {
+		return "", fmt.Errorf("URL or hostname is required")
+	}
+	hadScheme := strings.Contains(hostOrURL, "://")
+	candidate := hostOrURL
+	if !hadScheme {
+		candidate = "http://" + hostOrURL
+	}
+	u, err := url.Parse(candidate)
+	if err != nil {
+		return "", fmt.Errorf("invalid URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", fmt.Errorf("URL scheme must be http or https")
+	}
+	if u.Host == "" {
+		return "", fmt.Errorf("URL must include a host")
+	}
+	if u.Port() == "" {
+		p := port
+		// A bare host with no explicit port defaults to 8000 (local vLLM);
+		// a full URL without a port is left as-is unless the user gave one.
+		if p == "" && !hadScheme {
+			p = "8000"
+		}
+		if p != "" {
+			u.Host = u.Hostname() + ":" + p
+		}
+	}
+	return u.String(), nil
 }
 
 func (m Model) selectAddModel() (Model, tea.Cmd) {
@@ -984,25 +1117,6 @@ func (m Model) selectAddModel() (Model, tea.Cmd) {
 	return m, nil
 }
 
-// ---- remove --------------------------------------------------------------
-
-func (m Model) selectRemove() (Model, tea.Cmd) {
-	customs := m.customProviders()
-	if m.cursor < 0 || m.cursor >= len(customs) {
-		return m, nil
-	}
-	id := customs[m.cursor].ID
-	if err := m.deps.RemoveCustomProvider(m.ctx, id); err != nil {
-		m.errMsg = err.Error()
-		return m, nil
-	}
-	m.status = fmt.Sprintf("Removed custom provider %q.", id)
-	m.info = m.status
-	m.providers = m.deps.ListProviders()
-	m.cursor = 0
-	m.screen = screenEditPick
-	return m, nil
-}
 
 // ---- helpers -------------------------------------------------------------
 

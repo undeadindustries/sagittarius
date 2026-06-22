@@ -74,6 +74,83 @@ func TestMCPListToolsMock(t *testing.T) {
 	}
 }
 
+func TestToolInventoryEnabledFlags(t *testing.T) {
+	t.Parallel()
+
+	session := &mockSession{
+		tools: []*sdkmcp.Tool{
+			{Name: "echo", Description: "echo tool"},
+			{Name: "danger", Description: "dangerous tool"},
+		},
+	}
+	manager := NewManager(ManagerConfig{Connector: &mockConnector{session: session}})
+
+	err := manager.Reload(context.Background(), map[string]config.MCPServerConfig{
+		"demo": {Command: "mock", ExcludeTools: []string{"danger"}},
+	})
+	if err != nil {
+		t.Fatalf("Reload() error = %v", err)
+	}
+
+	// Filtered agent path hides the excluded tool.
+	if got := len(manager.Tools()); got != 1 {
+		t.Fatalf("Tools() len = %d, want 1 (danger excluded)", got)
+	}
+
+	inv := manager.ToolInventory(context.Background())
+	if len(inv) != 1 {
+		t.Fatalf("ToolInventory() len = %d, want 1", len(inv))
+	}
+	if inv[0].Status != ServerConnected {
+		t.Fatalf("status = %q, want connected", inv[0].Status)
+	}
+	if len(inv[0].Tools) != 2 {
+		t.Fatalf("inventory tools = %d, want 2 (unfiltered)", len(inv[0].Tools))
+	}
+	got := map[string]bool{}
+	for _, tl := range inv[0].Tools {
+		got[tl.Name] = tl.Enabled
+		if tl.Name == "echo" && tl.WireName != "mcp_demo_echo" {
+			t.Fatalf("wire name = %q, want mcp_demo_echo", tl.WireName)
+		}
+	}
+	if !got["echo"] {
+		t.Fatal("echo should be enabled")
+	}
+	if got["danger"] {
+		t.Fatal("danger should be disabled by excludeTools")
+	}
+}
+
+func TestToolInventoryIncludeAllowlist(t *testing.T) {
+	t.Parallel()
+
+	session := &mockSession{
+		tools: []*sdkmcp.Tool{
+			{Name: "echo"},
+			{Name: "other"},
+		},
+	}
+	manager := NewManager(ManagerConfig{Connector: &mockConnector{session: session}})
+	if err := manager.Reload(context.Background(), map[string]config.MCPServerConfig{
+		"demo": {Command: "mock", IncludeTools: []string{"echo"}},
+	}); err != nil {
+		t.Fatalf("Reload() error = %v", err)
+	}
+
+	inv := manager.ToolInventory(context.Background())
+	got := map[string]bool{}
+	for _, tl := range inv[0].Tools {
+		got[tl.Name] = tl.Enabled
+	}
+	if !got["echo"] {
+		t.Fatal("echo should be enabled by includeTools allowlist")
+	}
+	if got["other"] {
+		t.Fatal("other should be disabled when not in includeTools allowlist")
+	}
+}
+
 func TestParseToolName(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

@@ -207,8 +207,9 @@ func TestXmlToolCallFallback(t *testing.T) {
 }
 
 func TestCustomProviderLoad(t *testing.T) {
-	t.Parallel()
-
+	// Not parallel: withEmptyCredentials overrides the process-global credential
+	// store factory. Running in parallel lets a sibling's ResetForTesting cleanup
+	// restore the real keychain mid-test (see TestOpenRouterAsCustom).
 	ctx := testContext(t)
 	withEmptyCredentials(t)
 
@@ -247,8 +248,11 @@ func TestCustomProviderLoad(t *testing.T) {
 }
 
 func TestOpenRouterAsCustom(t *testing.T) {
-	t.Parallel()
-
+	// MUST NOT be parallel: this test calls the real SetProviderAPIKey. With
+	// t.Parallel(), a sibling test's ResetForTesting cleanup could restore the
+	// real credential backend between withEmptyCredentials and the write below,
+	// clobbering the user's actual stored key with "or-key". Keep it serial so
+	// the in-memory factory override is guaranteed to be active during the write.
 	ctx := testContext(t)
 	withEmptyCredentials(t)
 	if err := credentials.SetProviderAPIKey(ctx, "openrouter", "or-key"); err != nil {
@@ -493,8 +497,8 @@ func mustMarshalJSON(t *testing.T, v any) json.RawMessage {
 }
 
 func TestOpenAIFactoryMissingKey(t *testing.T) {
-	t.Parallel()
-
+	// Not parallel: withEmptyCredentials overrides the process-global credential
+	// store factory; a raced sibling cleanup could expose the real keychain.
 	ctx := testContext(t)
 	withEmptyCredentials(t)
 	withoutEnv(t, "OPENAI_API_KEY")

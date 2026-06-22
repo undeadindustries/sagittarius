@@ -11,6 +11,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/undeadindustries/sagittarius/internal/ui"
+	"github.com/undeadindustries/sagittarius/internal/ui/mcpdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/modelpickdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/modelsdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/modesdialog"
@@ -18,6 +19,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/ui/providersdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/systempromptdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/theme"
+	"github.com/undeadindustries/sagittarius/internal/ui/toolsdialog"
 )
 
 // providerDialogHost is implemented by an App that can supply the providers
@@ -49,6 +51,18 @@ type modesDialogHost interface {
 // system-prompt picker dependencies.
 type systemPromptDialogHost interface {
 	SystemPromptDialogDeps() systempromptdialog.Deps
+}
+
+// mcpDialogHost is implemented by an App that can supply the MCP server wizard
+// dependencies.
+type mcpDialogHost interface {
+	MCPDialogDeps() mcpdialog.Deps
+}
+
+// toolsDialogHost is implemented by an App that can supply the tool inventory
+// dependencies.
+type toolsDialogHost interface {
+	ToolsDialogDeps() toolsdialog.Deps
 }
 
 // onboardingHost is implemented by an App that can supply first-run setup deps.
@@ -141,6 +155,10 @@ type model struct {
 	modesOverlay *modesdialog.Model
 	// systemPromptOverlay holds the project system-prompt preset picker.
 	systemPromptOverlay *systempromptdialog.Model
+	// mcpOverlay holds the MCP server management wizard.
+	mcpOverlay *mcpdialog.Model
+	// toolsOverlay holds the tool inventory.
+	toolsOverlay *toolsdialog.Model
 	// onboardingOverlay holds the first-run provider setup wizard.
 	onboardingOverlay *onboardingdialog.Model
 }
@@ -149,7 +167,7 @@ type model struct {
 func (m *model) hasOverlay() bool {
 	return m.onboardingOverlay != nil || m.overlay != nil ||
 		m.modelsOverlay != nil || m.modelPickOverlay != nil || m.modesOverlay != nil ||
-		m.systemPromptOverlay != nil
+		m.systemPromptOverlay != nil || m.mcpOverlay != nil || m.toolsOverlay != nil
 }
 
 // maxVisibleSuggestions caps the inline suggestion list height.
@@ -286,6 +304,14 @@ func (m *model) updateOverlay(msg tea.Msg) (tea.Model, tea.Cmd) {
 			o := m.systemPromptOverlay.SetSize(msg.Width, msg.Height)
 			m.systemPromptOverlay = &o
 		}
+		if m.mcpOverlay != nil {
+			o := m.mcpOverlay.SetSize(msg.Width, msg.Height)
+			m.mcpOverlay = &o
+		}
+		if m.toolsOverlay != nil {
+			o := m.toolsOverlay.SetSize(msg.Width, msg.Height)
+			m.toolsOverlay = &o
+		}
 		return m, nil
 	case streamEventMsg:
 		return m.handleStream(msg.event)
@@ -353,6 +379,34 @@ func (m *model) updateOverlay(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	if m.mcpOverlay != nil {
+		next, cmd := m.mcpOverlay.Update(msg)
+		if next.Done() {
+			openTools := next.OpenTools()
+			m.closeOverlay(next.Status())
+			if openTools {
+				m.openDialog(ui.DialogTools)
+			}
+			return m, cmd
+		}
+		m.mcpOverlay = &next
+		return m, cmd
+	}
+
+	if m.toolsOverlay != nil {
+		next, cmd := m.toolsOverlay.Update(msg)
+		if next.Done() {
+			openServers := next.OpenServers()
+			m.closeOverlay(next.Status())
+			if openServers {
+				m.openDialog(ui.DialogMCP)
+			}
+			return m, cmd
+		}
+		m.toolsOverlay = &next
+		return m, cmd
+	}
+
 	return m, nil
 }
 
@@ -365,6 +419,8 @@ func (m *model) closeOverlay(status string) {
 	m.modelPickOverlay = nil
 	m.modesOverlay = nil
 	m.systemPromptOverlay = nil
+	m.mcpOverlay = nil
+	m.toolsOverlay = nil
 	if status != "" {
 		m.addBlock(roleInfo, status)
 	}
@@ -446,6 +502,26 @@ func (m *model) openDialog(kind ui.DialogKind) {
 		o = o.SetTheme(m.th)
 		o = o.SetSize(m.width, m.height)
 		m.systemPromptOverlay = &o
+	case ui.DialogMCP:
+		host, ok := m.app.(mcpDialogHost)
+		if !ok {
+			m.addBlock(roleInfo, "MCP server wizard is unavailable in this session.")
+			return
+		}
+		o := mcpdialog.New(ctx, host.MCPDialogDeps())
+		o = o.SetTheme(m.th)
+		o = o.SetSize(m.width, m.height)
+		m.mcpOverlay = &o
+	case ui.DialogTools:
+		host, ok := m.app.(toolsDialogHost)
+		if !ok {
+			m.addBlock(roleInfo, "Tool inventory is unavailable in this session.")
+			return
+		}
+		o := toolsdialog.New(ctx, host.ToolsDialogDeps())
+		o = o.SetTheme(m.th)
+		o = o.SetSize(m.width, m.height)
+		m.toolsOverlay = &o
 	}
 }
 
@@ -470,6 +546,12 @@ func (m *model) View() string {
 	}
 	if m.systemPromptOverlay != nil {
 		return m.systemPromptOverlay.View()
+	}
+	if m.mcpOverlay != nil {
+		return m.mcpOverlay.View()
+	}
+	if m.toolsOverlay != nil {
+		return m.toolsOverlay.View()
 	}
 	header := renderHeader(m.opts, m.th, m.width)
 	footer := renderFooter(m.statusWithMetrics(), m.th, m.width)
@@ -1007,9 +1089,16 @@ func renderHeader(opts ui.Options, th theme.Theme, width int) string {
 	return th.Title.Width(max(width, 1)).Render(line)
 }
 
-// statusWithMetrics augments the footer's right side with live context usage
-// (and a compact token total on wide terminals) when the app exposes metrics
-// and a context limit is known. It never mutates the stored status.
+// statusWithMetrics augments the footer with live token usage and optional cost.
+//
+// Footer line 1 (Right): last-turn "↑{in} ↓{out}" + optional " ${cost}" when
+// OpenRouter cost is known, + optional "  {pct}% context" when a limit exists.
+// Footer line 2 (Detail): existing system-prompt preset label + "  Σ {in}/{out}"
+// session total + optional " ${cost}" when known. The detail line is always shown
+// even when no context limit is available (e.g. Gemini).
+//
+// On narrow terminals (< 80 cols) the session-total and cost parts are dropped to
+// keep the footer readable.
 func (m *model) statusWithMetrics() ui.StatusBar {
 	status := m.status
 	mp, ok := m.app.(ui.MetricsProvider)
@@ -1017,21 +1106,54 @@ func (m *model) statusWithMetrics() ui.StatusBar {
 		return status
 	}
 	stats := mp.SessionMetrics()
-	pct := stats.ContextPercent()
-	if pct < 0 {
-		return status
+	wide := m.width >= 80
+
+	// ── Line 1: per-turn usage + optional context% ────────────────────────────
+	var right string
+	if stats.LastInputTokens > 0 || stats.LastOutputTokens > 0 {
+		right = fmt.Sprintf("↑%s ↓%s",
+			compactCount(stats.LastInputTokens),
+			compactCount(stats.LastOutputTokens))
+		if wide && stats.LastCostKnown {
+			right += "  " + formatCostUSD(stats.LastCostUSD)
+		}
 	}
-	usage := fmt.Sprintf("%d%% context", pct)
-	// Include a compact token total only when the terminal is wide enough.
-	if m.width >= 80 && stats.OutputTokens > 0 {
-		usage = fmt.Sprintf("%s · %s out", usage, compactCount(stats.OutputTokens))
+	if pct := stats.ContextPercent(); pct >= 0 {
+		ctxStr := fmt.Sprintf("%d%% ctx", pct)
+		if right != "" {
+			right = right + "  ·  " + ctxStr
+		} else {
+			right = ctxStr
+		}
 	}
-	if status.Right != "" {
-		status.Right = status.Right + "  ·  " + usage
-	} else {
-		status.Right = usage
+	if status.Right != "" && right != "" {
+		status.Right = status.Right + "  ·  " + right
+	} else if right != "" {
+		status.Right = right
 	}
+
+	// ── Line 2: system-prompt label + session totals ──────────────────────────
+	if wide && (stats.InputTokens > 0 || stats.OutputTokens > 0) {
+		sessionStr := fmt.Sprintf("Σ %s/%s",
+			compactCount(stats.InputTokens),
+			compactCount(stats.OutputTokens))
+		if stats.SessionCostKnown {
+			sessionStr += "  " + formatCostUSD(stats.SessionCostUSD)
+		}
+		if status.Detail != "" {
+			status.Detail = status.Detail + "  ·  " + sessionStr
+		} else {
+			status.Detail = sessionStr
+		}
+	}
+
 	return status
+}
+
+// formatCostUSD renders a USD cost value to 4 significant decimal places
+// (e.g. $0.0021, $1.2345).
+func formatCostUSD(usd float64) string {
+	return fmt.Sprintf("$%.4f", usd)
 }
 
 // compactCount formats a token count compactly (e.g. 1234 -> "1.2k").

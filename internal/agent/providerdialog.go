@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -31,6 +32,10 @@ func mapDialogKind(kind slash.DialogKind) ui.DialogKind {
 		return ui.DialogModes
 	case slash.DialogSystemPrompt:
 		return ui.DialogSystemPrompt
+	case slash.DialogMCP:
+		return ui.DialogMCP
+	case slash.DialogTools:
+		return ui.DialogTools
 	default:
 		return ""
 	}
@@ -57,10 +62,12 @@ func (d *providerDialogDeps) ListProviders() []providersdialog.ProviderEntry {
 	if s != nil {
 		active = s.ActiveProvider()
 	}
-	var out []providersdialog.ProviderEntry
+
+	// Built-ins first, sorted by display name.
+	builtins := make([]providersdialog.ProviderEntry, 0, len(config.BuiltInProviders))
 	for id, def := range config.BuiltInProviders {
 		canonical := string(id)
-		out = append(out, providersdialog.ProviderEntry{
+		builtins = append(builtins, providersdialog.ProviderEntry{
 			ID:          canonical,
 			DisplayID:   config.ProviderDisplayID(canonical),
 			DisplayName: def.DisplayName,
@@ -69,6 +76,12 @@ func (d *providerDialogDeps) ListProviders() []providersdialog.ProviderEntry {
 			Model:       d.modelFor(canonical),
 		})
 	}
+	sort.Slice(builtins, func(i, j int) bool {
+		return builtins[i].DisplayName < builtins[j].DisplayName
+	})
+
+	// Customs after built-ins, sorted alphabetically by display name.
+	customs := make([]providersdialog.ProviderEntry, 0)
 	if s != nil && s.Providers != nil {
 		for id, custom := range s.Providers.Custom {
 			name := custom.DisplayName
@@ -79,7 +92,7 @@ func (d *providerDialogDeps) ListProviders() []providersdialog.ProviderEntry {
 			if wf == "" {
 				wf = config.WireFormatOpenAIChat
 			}
-			out = append(out, providersdialog.ProviderEntry{
+			customs = append(customs, providersdialog.ProviderEntry{
 				ID:          id,
 				DisplayID:   id,
 				DisplayName: name,
@@ -90,7 +103,11 @@ func (d *providerDialogDeps) ListProviders() []providersdialog.ProviderEntry {
 			})
 		}
 	}
-	return out
+	sort.Slice(customs, func(i, j int) bool {
+		return customs[i].DisplayName < customs[j].DisplayName
+	})
+
+	return append(builtins, customs...)
 }
 
 func (d *providerDialogDeps) modelFor(id string) string {
@@ -148,14 +165,49 @@ func (d *providerDialogDeps) AddCustomProvider(ctx context.Context, id string, d
 	return nil
 }
 
-func (d *providerDialogDeps) RemoveCustomProvider(_ context.Context, id string) error {
+func (d *providerDialogDeps) RemoveCustomProvider(ctx context.Context, id string) error {
 	if d.loader() == nil || d.settings() == nil {
 		return fmt.Errorf("settings not loaded")
 	}
+	wasActive := d.ActiveProviderID() == config.NormalizeProviderID(id)
 	if err := provider.RemoveCustomProvider(d.settings(), id); err != nil {
 		return err
 	}
-	return d.loader().Save(d.settings())
+	// Best-effort credential cleanup; ignore errors (key may not be stored).
+	_ = credentials.DeleteProviderAPIKey(ctx, id)
+
+	if !wasActive {
+		return d.loader().Save(d.settings())
+	}
+
+	// RemoveCustomProvider blanked providers.active. Promote another activated
+	// model so the rebuilt runner targets a valid provider instead of failing
+	// with "no active provider configured" (leaving the live generator pointed
+	// at the deleted provider). SelectCurrentModel persists settings itself.
+	fallback, ok := firstActivatedModel(d.settings())
+	if !ok {
+		// No provider left to fall back to; persist the cleared active state.
+		// The stale generator is unavoidable until a new provider is added.
+		return d.loader().Save(d.settings())
+	}
+	if err := provider.SelectCurrentModel(d.loader(), d.settings(), fallback.ProviderID, fallback.Model); err != nil {
+		return fmt.Errorf("removed provider but selecting a fallback model failed: %w", err)
+	}
+	if _, _, err := d.app.deps.Hooks.RebuildRunner(ctx); err != nil {
+		return fmt.Errorf("removed provider but rebuilding with fallback %s failed: %w",
+			config.ProviderDisplayID(fallback.ProviderID), err)
+	}
+	return nil
+}
+
+// firstActivatedModel returns the first activated (provider, model) pair, used
+// to promote a new active provider when the current one is deleted.
+func firstActivatedModel(settings *config.Settings) (provider.ProviderModelPair, bool) {
+	pairs := provider.AllActiveModels(settings)
+	if len(pairs) == 0 {
+		return provider.ProviderModelPair{}, false
+	}
+	return pairs[0], true
 }
 
 func (d *providerDialogDeps) DiscoverModels(ctx context.Context, id string) ([]string, error) {
@@ -280,6 +332,26 @@ func (d *providerDialogDeps) UpdateCustomDefinition(ctx context.Context, id, fie
 	if d.loader() == nil || d.settings() == nil {
 		return fmt.Errorf("settings not loaded")
 	}
+	// Virtual fields: decompose/recompose the stored baseUrl.
+	if field == "hostOrURL" || field == "port" {
+		existing := ""
+		if s := d.settings(); s != nil && s.Providers != nil {
+			if custom, ok := s.Providers.Custom[id]; ok {
+				existing = custom.BaseURL
+			}
+		}
+		h, p, _ := provider.ParseCustomProviderEndpoint(existing)
+		if field == "hostOrURL" {
+			h = value
+		} else {
+			p = value
+		}
+		composed, err := provider.ComposeCustomProviderBaseURL(h, p)
+		if err != nil {
+			return fmt.Errorf("compose URL: %w", err)
+		}
+		field, value = "baseUrl", composed
+	}
 	if err := provider.UpdateCustomProviderDefinition(d.settings(), id, field, value); err != nil {
 		return err
 	}
@@ -299,9 +371,21 @@ func (d *providerDialogDeps) ProviderSettings(id string) map[string]string {
 				values["wireFormat"] = string(custom.WireFormat)
 			}
 			values["apiKeyEnvVar"] = custom.APIKeyEnvVar
+			// Virtual decomposed URL fields for the edit sheet.
+			if custom.BaseURL != "" {
+				h, p, _ := provider.ParseCustomProviderEndpoint(custom.BaseURL)
+				values["hostOrURL"] = h
+				values["port"] = p
+			}
 		}
 	}
 	return values
+}
+
+// GenerateProviderID returns a collision-free provider id auto-derived from
+// the given base URL using the stored custom provider registry.
+func (d *providerDialogDeps) GenerateProviderID(baseURL string) string {
+	return provider.ClaimCustomProviderID(d.settings(), baseURL)
 }
 
 func (d *providerDialogDeps) ValidSettingKeys(id string) []string {

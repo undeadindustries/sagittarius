@@ -15,6 +15,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/session"
 	"github.com/undeadindustries/sagittarius/internal/skills"
 	"github.com/undeadindustries/sagittarius/internal/slash"
+	"github.com/undeadindustries/sagittarius/internal/tools"
 )
 
 type mockHooks struct {
@@ -61,6 +62,21 @@ func (m *mockHooks) ReloadAgents(context.Context) (agents.ReloadSummary, error) 
 }
 
 func (m *mockHooks) MCPStates() []mcp.ServerState { return nil }
+
+func (m *mockHooks) MCPToolInventory(context.Context) []mcp.ServerToolInventory {
+	return []mcp.ServerToolInventory{
+		{Server: "demo", Status: mcp.ServerConnected, Tools: []mcp.ToolInfo{
+			{Name: "echo", WireName: "mcp_demo_echo", Description: "echo back", Enabled: true},
+			{Name: "danger", WireName: "mcp_demo_danger", Description: "risky", Enabled: false},
+		}},
+	}
+}
+
+func (m *mockHooks) BuiltinTools() []tools.ToolEntry {
+	return []tools.ToolEntry{
+		{Name: "read_file", Description: "read a file", Source: tools.SourceBuiltin, ReadOnly: true},
+	}
+}
 
 func (m *mockHooks) SkillList() []skills.Definition { return nil }
 
@@ -162,6 +178,61 @@ func TestProvidersOpensDialog(t *testing.T) {
 	}
 	if result.OpenDialog != slash.DialogProviders {
 		t.Fatalf("OpenDialog = %q, want %q", result.OpenDialog, slash.DialogProviders)
+	}
+}
+
+func TestMCPOpensDialog(t *testing.T) {
+	t.Parallel()
+	deps, _, _ := testDeps(t, nil)
+	p := slash.NewProcessor()
+
+	result := p.Process(context.Background(), "/mcp", deps)
+	if !result.Handled {
+		t.Fatal("expected handled")
+	}
+	if result.OpenDialog != slash.DialogMCP {
+		t.Fatalf("OpenDialog = %q, want %q", result.OpenDialog, slash.DialogMCP)
+	}
+}
+
+func TestToolsOpensDialog(t *testing.T) {
+	t.Parallel()
+	deps, _, _ := testDeps(t, nil)
+	p := slash.NewProcessor()
+
+	result := p.Process(context.Background(), "/tools", deps)
+	if !result.Handled {
+		t.Fatal("expected handled")
+	}
+	if result.OpenDialog != slash.DialogTools {
+		t.Fatalf("OpenDialog = %q, want %q", result.OpenDialog, slash.DialogTools)
+	}
+}
+
+func TestToolsListAndDescOutput(t *testing.T) {
+	t.Parallel()
+	deps, _, _ := testDeps(t, nil)
+	p := slash.NewProcessor()
+
+	list := p.Process(context.Background(), "/tools list", deps)
+	if !list.Handled || list.Err != nil {
+		t.Fatalf("/tools list result = %+v", list)
+	}
+	joined := strings.Join(list.Messages, "\n")
+	for _, want := range []string{"Built-in tools", "read_file", "demo", "echo [on]", "danger [off]"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("/tools list missing %q\n%s", want, joined)
+		}
+	}
+	// list omits descriptions; desc includes them.
+	if strings.Contains(joined, "echo back") {
+		t.Errorf("/tools list should not include descriptions\n%s", joined)
+	}
+
+	desc := p.Process(context.Background(), "/tools desc", deps)
+	joinedDesc := strings.Join(desc.Messages, "\n")
+	if !strings.Contains(joinedDesc, "echo back") || !strings.Contains(joinedDesc, "read a file") {
+		t.Errorf("/tools desc should include descriptions\n%s", joinedDesc)
 	}
 }
 

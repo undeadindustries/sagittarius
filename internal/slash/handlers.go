@@ -195,7 +195,7 @@ func skillsCommand() Command {
 func mcpCommand() Command {
 	return Command{
 		Name:        "mcp",
-		Description: "Manage MCP servers (list, reload)",
+		Description: "Manage MCP servers (add, edit, remove, reload) — opens an interactive wizard",
 		SubCommands: []Command{
 			{
 				Name:        "list",
@@ -208,8 +208,90 @@ func mcpCommand() Command {
 				Handler:     handleMCPReload,
 			},
 		},
-		Handler: handleMCPList,
+		Handler: handleMCP,
 	}
+}
+
+// handleMCP opens the MCP server wizard, or lists servers as text in headless mode.
+func handleMCP(_ *Context) Result {
+	return DialogResult(DialogMCP)
+}
+
+func toolsCommand() Command {
+	return Command{
+		Name:        "tools",
+		Description: "Browse the effective tool inventory (built-ins + MCP) — opens an interactive view",
+		SubCommands: []Command{
+			{
+				Name:        "list",
+				Description: "List built-in and MCP tools as text",
+				Handler:     handleToolsList,
+			},
+			{
+				Name:        "desc",
+				Description: "List tools with descriptions",
+				Handler:     handleToolsDesc,
+			},
+		},
+		Handler: handleTools,
+	}
+}
+
+// handleTools opens the tool inventory overlay.
+func handleTools(_ *Context) Result {
+	return DialogResult(DialogTools)
+}
+
+func handleToolsList(ctx *Context) Result {
+	return toolsTextResult(ctx, false)
+}
+
+func handleToolsDesc(ctx *Context) Result {
+	return toolsTextResult(ctx, true)
+}
+
+func toolsTextResult(ctx *Context, withDesc bool) Result {
+	if ctx.Deps.Hooks == nil {
+		return InfoResult("Tools unavailable.")
+	}
+	lines := []string{"Built-in tools (not editable):"}
+	for _, tool := range ctx.Deps.Hooks.BuiltinTools() {
+		lines = append(lines, "  "+formatToolLine(tool.Name, tool.Description, withDesc))
+	}
+
+	inventory := ctx.Deps.Hooks.MCPToolInventory(ctx.Ctx)
+	if len(inventory) == 0 {
+		lines = append(lines, "", "No MCP servers configured.")
+		return InfoResult(strings.Join(lines, "\n"))
+	}
+	for _, group := range inventory {
+		header := fmt.Sprintf("%s (%s)", group.Server, group.Status)
+		lines = append(lines, "", header+":")
+		if group.Err != "" {
+			lines = append(lines, "  error: "+group.Err)
+			continue
+		}
+		if len(group.Tools) == 0 {
+			lines = append(lines, "  (no tools)")
+			continue
+		}
+		for _, tool := range group.Tools {
+			state := "on"
+			if !tool.Enabled {
+				state = "off"
+			}
+			label := fmt.Sprintf("%s [%s]", tool.Name, state)
+			lines = append(lines, "  "+formatToolLine(label, tool.Description, withDesc))
+		}
+	}
+	return InfoResult(strings.Join(lines, "\n"))
+}
+
+func formatToolLine(name, description string, withDesc bool) string {
+	if withDesc && strings.TrimSpace(description) != "" {
+		return fmt.Sprintf("%s — %s", name, description)
+	}
+	return name
 }
 
 func agentsCommand() Command {

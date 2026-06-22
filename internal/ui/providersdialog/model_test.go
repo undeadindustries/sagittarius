@@ -138,6 +138,7 @@ func (f *fakeDeps) ResetSettings(_ context.Context, id string) error {
 	f.resetIDs = append(f.resetIDs, id)
 	return nil
 }
+func (f *fakeDeps) GenerateProviderID(_ string) string { return "auto-id" }
 
 func key(s string) tea.KeyMsg {
 	switch s {
@@ -206,25 +207,51 @@ func TestAddFlowDiscoversAndPicksModel(t *testing.T) {
 	if m.screen != screenAdd {
 		t.Fatalf("screen = %d, want add", m.screen)
 	}
+	if m.add.fieldIdx != addFieldName {
+		t.Fatalf("first field = %d, want addFieldName", m.add.fieldIdx)
+	}
 
-	// id
-	m.input.SetValue("local-vllm")
+	// Step 1: display name (required)
+	m.input.SetValue("Local vLLM")
 	m, _ = send(m, key("enter"))
-	// displayName
-	m.input.SetValue("Local")
+	if m.add.fieldIdx != addFieldHostOrURL {
+		t.Fatalf("after name, fieldIdx = %d, want addFieldHostOrURL", m.add.fieldIdx)
+	}
+
+	// Step 2: URL with port (port step is skipped)
+	m.input.SetValue("http://127.0.0.1:8000")
 	m, _ = send(m, key("enter"))
-	// baseUrl
-	m.input.SetValue("http://127.0.0.1:8000/v1/chat/completions")
+	if m.add.fieldIdx != addFieldWire {
+		t.Fatalf("after URL-with-port, fieldIdx = %d, want addFieldWire (port skipped)", m.add.fieldIdx)
+	}
+
+	// Step 3: wireFormat toggle → Enter advances to envVar
 	m, _ = send(m, key("enter"))
-	// wireFormat toggle step → Enter advances
+	if m.add.fieldIdx != addFieldEnvVar {
+		t.Fatalf("after wire, fieldIdx = %d, want addFieldEnvVar", m.add.fieldIdx)
+	}
+
+	// Step 4: envVar (optional, blank)
 	m, _ = send(m, key("enter"))
-	// envVar (optional, leave blank)
+	if m.add.fieldIdx != addFieldAPIKey {
+		t.Fatalf("after envVar, fieldIdx = %d, want addFieldAPIKey", m.add.fieldIdx)
+	}
+
+	// Step 5: apiKey (optional, blank) → advances to id override
 	m, _ = send(m, key("enter"))
-	// apiKey (optional, blank) → submit
+	if m.add.fieldIdx != addFieldIdOverride {
+		t.Fatalf("after apiKey, fieldIdx = %d, want addFieldIdOverride", m.add.fieldIdx)
+	}
+	// The field is pre-filled with GenerateProviderID result ("auto-id").
+	if m.add.idOverride != "auto-id" {
+		t.Fatalf("idOverride = %q, want auto-id", m.add.idOverride)
+	}
+
+	// Step 6: accept the suggested id → submit
 	m, cmd := send(m, key("enter"))
 
-	if deps.added != "local-vllm" {
-		t.Fatalf("added = %q, want local-vllm", deps.added)
+	if deps.added != "auto-id" {
+		t.Fatalf("added = %q, want auto-id", deps.added)
 	}
 	if m.screen != screenAddModels {
 		t.Fatalf("screen = %d, want addModels", m.screen)
@@ -243,11 +270,11 @@ func TestAddFlowDiscoversAndPicksModel(t *testing.T) {
 	}
 	// Pick the first model.
 	m, _ = send(m, key("enter"))
-	if deps.setModel["local-vllm"] != "qwen3" {
-		t.Fatalf("setModel = %v, want qwen3", deps.setModel)
+	if deps.setModel["auto-id"] != "qwen3" {
+		t.Fatalf("setModel = %v, want qwen3 for auto-id", deps.setModel)
 	}
-	if deps.switched != "local-vllm" {
-		t.Fatalf("switched = %q, want local-vllm", deps.switched)
+	if deps.switched != "auto-id" {
+		t.Fatalf("switched = %q, want auto-id", deps.switched)
 	}
 }
 
@@ -588,14 +615,56 @@ func TestRemoveCustomProvider(t *testing.T) {
 	if m.screen != screenEditPick {
 		t.Fatalf("screen = %d, want editPick", m.screen)
 	}
-	// Press 'x' to remove the selected custom provider (my-vllm).
+	// Press 'x' to begin removal — should navigate to confirmation, not remove yet.
 	m, _ = send(m, key("x"))
-	if deps.removed != "my-vllm" {
-		t.Fatalf("removed = %q, want my-vllm", deps.removed)
+	if m.screen != screenRemove {
+		t.Fatalf("screen = %d, want screenRemove (confirmation)", m.screen)
 	}
-	// Should remain at the provider list.
+	if m.removeTarget != "my-vllm" {
+		t.Fatalf("removeTarget = %q, want my-vllm", m.removeTarget)
+	}
+	if deps.removed != "" {
+		t.Fatalf("provider was removed before confirmation: %q", deps.removed)
+	}
+	// Confirm removal with 'y'.
+	m, _ = send(m, key("y"))
+	if deps.removed != "my-vllm" {
+		t.Fatalf("removed = %q, want my-vllm after confirmation", deps.removed)
+	}
+	// Should return to provider list.
 	if m.screen != screenEditPick {
-		t.Fatalf("screen = %d, want editPick after remove", m.screen)
+		t.Fatalf("screen = %d, want editPick after confirmed remove", m.screen)
+	}
+}
+
+func TestRemoveCustomProviderCancelledByEsc(t *testing.T) {
+	deps := newFakeDeps()
+	m := New(context.Background(), deps)
+	// Navigate to my-vllm (index 2).
+	m, _ = send(m, key("down"), key("down"), key("x"))
+	if m.screen != screenRemove {
+		t.Fatalf("screen = %d, want screenRemove", m.screen)
+	}
+	// Cancel with Esc — no removal.
+	m, _ = send(m, key("esc"))
+	if deps.removed != "" {
+		t.Fatalf("provider was removed on cancel: %q", deps.removed)
+	}
+	if m.screen != screenEditPick {
+		t.Fatalf("screen = %d, want editPick after cancel", m.screen)
+	}
+}
+
+func TestRemoveBuiltInShowsError(t *testing.T) {
+	deps := newFakeDeps()
+	m := New(context.Background(), deps)
+	// Press 'x' on gemini (index 0, not custom) — should show error, not navigate.
+	m, _ = send(m, key("x"))
+	if m.screen != screenEditPick {
+		t.Fatalf("screen = %d, want editPick (built-in rejected)", m.screen)
+	}
+	if m.errMsg == "" {
+		t.Fatal("expected errMsg for built-in remove attempt")
 	}
 }
 
@@ -713,5 +782,93 @@ func TestResetSystemPromptWithRClearsBothKeys(t *testing.T) {
 	joined := strings.Join(deps.cleared, ",")
 	if !strings.Contains(joined, "openai.personality") || !strings.Contains(joined, "openai.promptMode") {
 		t.Fatalf("cleared = %v, want both personality and promptMode", deps.cleared)
+	}
+}
+
+func TestAddWizardBareHostShowsPortStep(t *testing.T) {
+	deps := newFakeDeps()
+	m := New(context.Background(), deps)
+
+	m, _ = send(m, key("a"))
+	m.input.SetValue("My Local Model")
+	m, _ = send(m, key("enter")) // name → hostOrURL
+
+	// Enter a bare host (no scheme/port) → port step should appear.
+	m.input.SetValue("127.0.0.1")
+	m, _ = send(m, key("enter"))
+	if m.add.fieldIdx != addFieldPort {
+		t.Fatalf("after bare host, fieldIdx = %d, want addFieldPort", m.add.fieldIdx)
+	}
+
+	// Enter a port → should advance to wire.
+	m.input.SetValue("11434")
+	m, _ = send(m, key("enter"))
+	if m.add.fieldIdx != addFieldWire {
+		t.Fatalf("after port, fieldIdx = %d, want addFieldWire", m.add.fieldIdx)
+	}
+	if m.add.port != "11434" {
+		t.Fatalf("port = %q, want 11434", m.add.port)
+	}
+}
+
+func TestAddWizardURLWithPortSkipsPortStep(t *testing.T) {
+	deps := newFakeDeps()
+	m := New(context.Background(), deps)
+
+	m, _ = send(m, key("a"))
+	m.input.SetValue("My Model")
+	m, _ = send(m, key("enter")) // name → hostOrURL
+
+	// URL already has a port → port step should be skipped.
+	m.input.SetValue("http://localhost:8080/v1")
+	m, _ = send(m, key("enter"))
+	if m.add.fieldIdx != addFieldWire {
+		t.Fatalf("URL-with-port should skip port step, got fieldIdx = %d", m.add.fieldIdx)
+	}
+}
+
+func TestAddWizardRequiresName(t *testing.T) {
+	deps := newFakeDeps()
+	m := New(context.Background(), deps)
+	m, _ = send(m, key("a"))
+	// Press enter without entering a name.
+	m, _ = send(m, key("enter"))
+	if m.errMsg == "" {
+		t.Fatal("expected error when name is empty")
+	}
+	if m.add.fieldIdx != addFieldName {
+		t.Fatalf("should stay on addFieldName after empty-name error, got %d", m.add.fieldIdx)
+	}
+}
+
+func TestCustomEditSheetHasDecomposedURLRows(t *testing.T) {
+	deps := newFakeDeps()
+	m := New(context.Background(), deps)
+	// Navigate to my-vllm (index 2, custom) and enter its edit sheet.
+	m, _ = send(m, key("down"), key("down"), key("enter"))
+	if m.screen != screenEdit {
+		t.Fatalf("screen = %d, want edit", m.screen)
+	}
+	hasHostOrURL := false
+	hasPort := false
+	hasBaseURL := false
+	for _, it := range m.editItems {
+		switch it.key {
+		case "hostOrURL":
+			hasHostOrURL = true
+		case "port":
+			hasPort = true
+		case "baseUrl":
+			hasBaseURL = true
+		}
+	}
+	if !hasHostOrURL {
+		t.Error("custom edit sheet missing hostOrURL row")
+	}
+	if !hasPort {
+		t.Error("custom edit sheet missing port row")
+	}
+	if hasBaseURL {
+		t.Error("custom edit sheet should not have a raw baseUrl row")
 	}
 }

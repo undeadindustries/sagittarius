@@ -735,7 +735,12 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 	}
 	// Build the context manager after the runner so its summarizer reads the
 	// runner's live (mode-resolved) model rather than the startup default.
-	runner.SetContextManager(agent.NewContextManager(settings, gen, runner.CompressionModel, sessID, runner.RecordUsage))
+	runner.SetContextManager(agent.NewContextManager(settings, gen,
+		runner.CompressionModel,
+		runner.ActiveProviderID,
+		func() string { return runner.InteractionMode().String() },
+		sessID,
+		runner.RecordUsage))
 	if reg := runtime.Registry(); reg != nil {
 		runner.SetRegistry(reg)
 	}

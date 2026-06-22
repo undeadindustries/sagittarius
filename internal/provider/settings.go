@@ -599,6 +599,9 @@ func UpdateCustomProviderDefinition(settings *config.Settings, id, field, value 
 		if value == "" {
 			return fmt.Errorf("update custom provider: baseUrl is required")
 		}
+		if err := ValidateCustomProviderBaseURL(value); err != nil {
+			return fmt.Errorf("update custom provider: %w", err)
+		}
 		def.BaseURL = value
 	case "wireFormat":
 		wf := config.WireFormat(value)
@@ -659,6 +662,9 @@ func AddCustomProvider(settings *config.Settings, id string, def config.CustomPr
 	if strings.TrimSpace(def.BaseURL) == "" {
 		return fmt.Errorf("add custom provider: baseUrl is required")
 	}
+	if err := ValidateCustomProviderBaseURL(def.BaseURL); err != nil {
+		return fmt.Errorf("add custom provider: %w", err)
+	}
 	if settings == nil {
 		return fmt.Errorf("add custom provider: settings are required")
 	}
@@ -684,7 +690,8 @@ func AddCustomProvider(settings *config.Settings, id string, def config.CustomPr
 	return nil
 }
 
-// RemoveCustomProvider deletes a custom provider entry.
+// RemoveCustomProvider deletes a custom provider entry and any orphan instance
+// overrides block that may exist under providers.Extra[id].
 func RemoveCustomProvider(settings *config.Settings, id string) error {
 	id = strings.TrimSpace(id)
 	if id == "" {
@@ -697,6 +704,9 @@ func RemoveCustomProvider(settings *config.Settings, id string) error {
 		return fmt.Errorf("remove custom provider: %q not found", id)
 	}
 	delete(settings.Providers.Custom, id)
+	if settings.Providers.Extra != nil {
+		delete(settings.Providers.Extra, id)
+	}
 	if settings.Providers.Active == id {
 		settings.Providers.Active = ""
 	}

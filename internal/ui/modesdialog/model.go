@@ -133,7 +133,9 @@ func (m Model) openPicker() (Model, tea.Cmd) {
 		return m, nil
 	}
 	m.targetMode = m.modes[m.modeCursor].Mode
-	m.models = m.deps.AllActiveModels()
+	// Prepend the sentinel so users can always get back to "no override".
+	active := m.deps.AllActiveModels()
+	m.models = append([]ModelEntry{{IsClear: true}}, active...)
 	m.pickCursor = m.currentPickIndex()
 	m.screen = screenPicker
 	m.errMsg = ""
@@ -143,8 +145,11 @@ func (m Model) openPicker() (Model, tea.Cmd) {
 
 func (m Model) currentPickIndex() int {
 	cur := m.modes[m.modeCursor]
+	if cur.Model == "" {
+		return 0 // no override → pre-select the "(use default)" sentinel
+	}
 	for i, e := range m.models {
-		if e.ProviderID == cur.Provider && e.Model == cur.Model {
+		if !e.IsClear && e.ProviderID == cur.Provider && e.Model == cur.Model {
 			return i
 		}
 	}
@@ -156,6 +161,9 @@ func (m Model) applyOverride() (Model, tea.Cmd) {
 		return m, nil
 	}
 	e := m.models[m.pickCursor]
+	if e.IsClear {
+		return m.clearCurrentOverride()
+	}
 	if err := m.deps.SetModeOverride(m.ctx, m.targetMode, e.ProviderID, e.Model); err != nil {
 		m.errMsg = err.Error()
 		return m, nil

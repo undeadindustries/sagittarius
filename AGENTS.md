@@ -69,8 +69,13 @@ in this file (see [Keeping this file current](#keeping-this-file-current)).
 - **Model-first UX:** Selecting a `{Provider}/{Model}` pair atomically drives the
   active provider (internal pointer) as a derived side effect — the user never
   picks a provider as "active" explicitly.
-  - `/providers` — opens directly at the provider list; edit connections, API key,
-    and activate models per provider. No "switch active provider" surface.
+  - `/providers` — opens directly at the provider list (built-ins first, customs
+    alphabetically). Add custom providers via `a` (name → URL/host → conditional
+    port → wire → env → key → id); `x` on a custom row shows a delete confirmation
+    that cleans up definition, instance overrides, and stored API key. Edit sheet
+    for custom providers shows decomposed `URL / host` + `Port` rows instead of a
+    raw `baseUrl` field. URL validation and auto-generated IDs (via
+    `provider.ClaimCustomProviderID`) on all add paths.
   - `/model` — global `{Provider}/{Model}` picker (menu + autocomplete); selecting
     any entry calls `SelectCurrentModel` which does switch+set-model atomically.
   - `/models` — per-model settings editor: select `{Provider}/{Model}`, then edit
@@ -106,10 +111,21 @@ in this file (see [Keeping this file current](#keeping-this-file-current)).
 - **Context management:** local-context defenses (masking, compression, budget)
   in `internal/contextmgmt`, gated to the `openai-chat` path only.
 - **TUI:** Bubble Tea behind the `internal/ui.UI` interface; semantic themes
-  (default purple + greyscale/`NO_COLOR`), basic markdown, footer telemetry, exit
-  summary per-model token counts. Overlay dialogs: providers wizard, global model
-  picker (`modelpickdialog`), per-model settings editor (`modelsdialog`), mode-override
-  editor (`modesdialog`), project system-prompt picker (`systempromptdialog`).
+  (default purple + greyscale/`NO_COLOR`), basic markdown, footer telemetry (per-turn
+  `↑in ↓out` + optional OpenRouter cost; session totals on detail line), exit summary
+  per-model/per-mode token breakdown with cost column when OpenRouter cost is known.
+  Overlay dialogs: providers wizard, global model picker (`modelpickdialog`), per-model
+  settings editor (`modelsdialog`), mode-override editor (`modesdialog`), project
+  system-prompt picker (`systempromptdialog`), MCP server wizard (`mcpdialog`),
+  tool inventory (`toolsdialog`).
+- **MCP & tools management:** `/mcp` is a menu-first wizard (add/edit/enable/
+  disable/remove/reload); settings-owned servers are editable, extension-owned
+  servers are read-only. Bearer tokens route to the credentials layer, never
+  `settings.json`. `/tools` lists built-in tools (read-only, labeled) and MCP
+  tools grouped by server; toggling an MCP tool persists the server's
+  `includeTools`/`excludeTools` filter. Config writes go through
+  `config.SetMCPServer`/`RemoveMCPServer`/`SetMCPServerToolFilter`; inventory
+  comes from `mcp.Manager.ToolInventory` + `tools.Registry.ListEntries`.
 - **Headless:** `-p`/`--prompt`, `--output-format text|json|stream-json`
   (stream-json emits `text`/`tool_start`/`tool_result`/`info`/`error` lines), and
   `--slash` for a single slash command without a TTY.
@@ -119,9 +135,10 @@ in this file (see [Keeping this file current](#keeping-this-file-current)).
 `/help`, `/quit`, `/providers` (wizard; also holds API-key entry — no `/auth`),
 `/model` (global picker + autocomplete), `/models` (per-model settings editor),
 `/system-prompt` (project personality preset), `/modes` (mode-override editor; alias `/mode settings`), `/mode`, `/reasoning`,
-`/memory reload`, `/mcp` (list/reload), `/skills` (list/reload),
-`/agents` (list/reload), `/diff`, `/undo`. Naming rule: singular sets current
-one (`/model`, `/mode`), plural manages settings (`/models`, `/modes`).
+`/memory reload`, `/mcp` (wizard; list/reload), `/tools` (inventory; list/desc),
+`/skills` (list/reload), `/agents` (list/reload), `/diff`, `/undo`. Naming rule:
+singular sets current one (`/model`, `/mode`), plural manages settings
+(`/models`, `/modes`).
 User commands must appear in `/help` with a description (no hidden commands).
 
 ---
@@ -162,7 +179,7 @@ internal/storage/         # global home + project slug registry
 internal/mcp/ skills/ agents/ extensions/   # MCP + skills (full); agents/extensions partial
 internal/ui/              # ui.UI interface (primitives only)
 internal/ui/bubbletea/    # Bubble Tea implementation (only charm importer)
-internal/ui/theme/ providersdialog/ modelsdialog/ modelpickdialog/ modesdialog/ systempromptdialog/  # TUI leaves
+internal/ui/theme/ providersdialog/ modelsdialog/ modelpickdialog/ modesdialog/ systempromptdialog/ mcpdialog/ toolsdialog/  # TUI leaves
 internal/version/ internal/log/
 tests/parity/             # comparison harness (gated by SAGITTARIUS_PARITY_FORK)
 tests/e2e/                # subprocess E2E: live (SAGITTARIUS_E2E_LIVE) + mock (SAGITTARIUS_E2E_MOCK)
@@ -222,7 +239,30 @@ and `docs/reference/commands.md` for details.
 
 ## Recent decisions
 
+- **2026-06-22 — Gemini thought signatures round-trip (AD-036):** Gemini 3
+  rejects replayed model `functionCall` parts that drop their
+  `thoughtSignature` (400 INVALID_ARGUMENT) during multi-step tool loops.
+  `provider.Part` now carries an optional `ThoughtSignature []byte` and
+  `StreamResponse` carries optional `ModelParts []Part` (set once on the final
+  Gemini chunk). `gemini.go` accumulates the full model turn from candidate
+  parts; `partsToGenai`/`GenaiPartsToParts` round-trip the signature; the runner
+  stores `ModelParts` verbatim when present (OpenAI-family paths leave it nil and
+  fall back to text+tool-call reconstruction). The `write_file` ejection rewrite
+  copies the signature forward. Signatures are not yet persisted to session JSONL
+  (resume mid-tool-turn remains a follow-up).
+
 - **2026-06-22 — Five Bugbot fixes:** (1) `buildRunner` now resolves `initialMode` and applies any provider override *before* `ResolveEndpointConfig`/`NewContentGenerator`, returning `baseProviderID` to seed `App`; (2) `SetInteractionMode` rewritten deterministically — target = mode's provider OR base, removing the fragile `needProviderRevert` branch; `SelectCurrentModel` sets `baseProviderID` on explicit picks; (3) `ApplySystemPromptPreset` now calls `LookupPreset` and writes canonical `personality` + `promptMode` separately (was storing raw preset id into personality); (4) `fetchGeminiModels` parses the base URL once and uses `q.Set("pageToken", …)` each iteration (was appending, accumulating duplicates from page 3 on); (5) `ResolveContextManagement` takes a `liveModel string` parameter so per-model context-limit lookup uses the mode-resolved live model, not the endpoint's persisted default.
+
+- **2026-06-22 — Provider-reported token usage + OpenRouter cost (AD-035):**
+  `provider.StreamResponse` now carries an optional `*provider.Usage` (InputTokens,
+  OutputTokens, CostUSD, CostKnown). All three providers emit it before `Done`:
+  OpenAI-chat captures the final usage frame (including OpenRouter's `"cost"` field);
+  Gemini emits `UsageMetadata`; Responses API maps `responsesSseUsage`. The runner
+  consumes real counts (heuristic fallback when nil) and attributes them keyed by
+  `(provider, model, mode)`. `sessionMetrics` is rekeyed accordingly and tracks
+  last-turn and session totals separately. Footer shows `↑in ↓out` (+optional cost)
+  per turn on line 1, and `Σ session/total` (+optional cost) on line 2. Exit screen
+  groups by model → mode and shows a Cost column only when any row has `CostKnown=true`.
 
 ---
 

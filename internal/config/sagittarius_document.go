@@ -43,6 +43,10 @@ func unmarshalModeConfig(raw json.RawMessage) (*SagittariusModeConfig, error) {
 			if err := json.Unmarshal(val, &cfg.Model); err != nil {
 				return nil, err
 			}
+		case "provider":
+			if err := json.Unmarshal(val, &cfg.Provider); err != nil {
+				return nil, err
+			}
 		case "systemPromptSuffix":
 			if err := json.Unmarshal(val, &cfg.SystemPromptSuffix); err != nil {
 				return nil, err
@@ -74,6 +78,9 @@ func marshalModeConfig(cfg *SagittariusModeConfig) (json.RawMessage, error) {
 		return nil
 	}
 	if err := add("model", cfg.Model); err != nil {
+		return nil, err
+	}
+	if err := add("provider", cfg.Provider); err != nil {
 		return nil, err
 	}
 	if err := add("systemPromptSuffix", cfg.SystemPromptSuffix); err != nil {

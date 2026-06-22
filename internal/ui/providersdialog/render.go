@@ -58,7 +58,12 @@ func (m Model) footerHint() string {
 		if m.add.fieldIdx == addFieldWire {
 			return "←/→ toggle • Enter next • Esc cancel"
 		}
+		if m.add.fieldIdx == addFieldIdOverride {
+			return "Edit id or Enter to accept • Esc cancel"
+		}
 		return "Enter next field • Esc cancel"
+	case screenRemove:
+		return "y / Enter confirm • Esc cancel"
 	case screenAddModels:
 		return "↑/↓ select • Enter choose • Esc back"
 	case screenModels:
@@ -194,7 +199,7 @@ func (m Model) renderAdd() string {
 	b.WriteString("Add custom provider\n\n")
 	b.WriteString(m.th.Dim.Render(m.addSummary()) + "\n\n")
 	if m.add.fieldIdx == addFieldWire {
-		b.WriteString("wireFormat: " + m.renderWireToggle(m.add.wire))
+		b.WriteString("Wire format: " + m.renderWireToggle(m.add.wire))
 		return b.String()
 	}
 	b.WriteString(addFieldLabel(m.add.fieldIdx) + "\n" + m.input.View())
@@ -203,14 +208,15 @@ func (m Model) renderAdd() string {
 
 func (m Model) addSummary() string {
 	parts := []string{}
-	if m.add.id != "" {
-		parts = append(parts, "id="+m.add.id)
-	}
 	if m.add.displayName != "" {
 		parts = append(parts, "name="+m.add.displayName)
 	}
-	if m.add.baseURL != "" {
-		parts = append(parts, "url="+m.add.baseURL)
+	if m.add.hostOrURL != "" {
+		url := m.add.hostOrURL
+		if m.add.port != "" {
+			url += ":" + m.add.port
+		}
+		parts = append(parts, "url="+url)
 	}
 	if m.add.fieldIdx >= addFieldEnvVar {
 		parts = append(parts, "wire="+string(m.add.wire))
@@ -301,17 +307,18 @@ func (m Model) renderScrollableRows(labels []string, checked []bool) string {
 }
 
 func (m Model) renderRemove() string {
-	customs := m.customProviders()
+	name := m.removeTarget
+	if p, ok := m.findProvider(m.removeTarget); ok {
+		name = p.DisplayName
+		if name == "" {
+			name = p.ID
+		}
+	}
 	var b strings.Builder
-	b.WriteString("Remove a custom provider\n\n")
-	if len(customs) == 0 {
-		b.WriteString(m.th.Dim.Render("No custom providers to remove."))
-		return b.String()
-	}
-	for i, p := range customs {
-		b.WriteString(m.renderRow(fmt.Sprintf("%s (%s)", p.DisplayID, p.DisplayName), i == m.cursor) + "\n")
-	}
-	return strings.TrimRight(b.String(), "\n")
+	b.WriteString("Remove provider\n\n")
+	b.WriteString(fmt.Sprintf("Provider: %s\n\n", name))
+	b.WriteString(m.th.Dim.Render("This removes the provider definition, its instance settings, and its stored API key."))
+	return b.String()
 }
 
 func (m Model) renderRow(label string, selected bool) string {
@@ -338,16 +345,18 @@ func (m Model) renderWireToggle(wire config.WireFormat) string {
 
 func addFieldLabel(idx int) string {
 	switch idx {
-	case addFieldID:
-		return "Provider id"
 	case addFieldName:
-		return "Display name"
-	case addFieldBaseURL:
-		return "Base URL"
+		return "Provider name"
+	case addFieldHostOrURL:
+		return "URL or host  (e.g. http://127.0.0.1:8000  or  127.0.0.1)"
+	case addFieldPort:
+		return "Port  (default: 8000)"
 	case addFieldEnvVar:
-		return "API key env var (optional)"
+		return "API key env var  (optional)"
 	case addFieldAPIKey:
-		return "API key (optional)"
+		return "API key  (optional)"
+	case addFieldIdOverride:
+		return "Provider id  (auto-generated — edit to override)"
 	}
 	return ""
 }
