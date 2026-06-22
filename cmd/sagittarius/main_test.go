@@ -12,6 +12,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/agent"
 	"github.com/undeadindustries/sagittarius/internal/credentials"
 	"github.com/undeadindustries/sagittarius/internal/provider"
+	"github.com/undeadindustries/sagittarius/internal/session"
 )
 
 func withoutEnv(t *testing.T, key string) {
@@ -103,7 +104,7 @@ func TestBuildRunnerAllowsMissingProviderWhenInteractive(t *testing.T) {
 	t.Setenv("SAGITTARIUS_HOME", home)
 	withEmptyCredentials(t)
 
-	runner, _, settings, runtime, err := buildRunner(context.Background(), "", true, "")
+	runner, _, settings, runtime, sessID, err := buildRunner(context.Background(), "", true, "")
 	if err != nil {
 		t.Fatalf("buildRunner: %v", err)
 	}
@@ -114,6 +115,41 @@ func TestBuildRunnerAllowsMissingProviderWhenInteractive(t *testing.T) {
 	}
 	if runner.Model() != agent.PlaceholderModel() {
 		t.Fatalf("model = %q, want placeholder %q", runner.Model(), agent.PlaceholderModel())
+	}
+	if sessID == "" {
+		t.Fatal("expected non-empty session ID")
+	}
+}
+
+func TestBuildRunnerResumeUsesResumedSessionID(t *testing.T) {
+	home := t.TempDir()
+	project := t.TempDir()
+	if err := os.Chdir(project); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	t.Setenv("SAGITTARIUS_HOME", home)
+	withoutEnv(t, "SAGITTARIUS_SESSION_ID")
+	withEmptyCredentials(t)
+
+	resumedID := "resumed-session-abc12345"
+	chatsDir, err := session.ChatsDir(project)
+	if err != nil {
+		t.Fatalf("ChatsDir: %v", err)
+	}
+	rec := session.NewRecorder(chatsDir, resumedID, session.ProjectHash(project))
+	rec.RecordUserMessage("hello from prior session")
+
+	runner, _, _, runtime, sessID, err := buildRunner(context.Background(), "", true, session.ResumeLatest)
+	if err != nil {
+		t.Fatalf("buildRunner: %v", err)
+	}
+	defer func() { _ = runtime.Close() }()
+
+	if sessID != resumedID {
+		t.Fatalf("session ID = %q, want resumed %q", sessID, resumedID)
+	}
+	if !runner.SnapshotEnabled() {
+		t.Fatal("expected snapshots enabled for resumed session")
 	}
 }
 
