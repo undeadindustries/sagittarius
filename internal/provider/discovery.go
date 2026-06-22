@@ -118,50 +118,77 @@ func fetchGeminiModels(ctx context.Context, listURL string, client *http.Client)
 		client = &http.Client{Timeout: defaultDiscoveryTimeout}
 	}
 
-	reqCtx, cancel := context.WithTimeout(ctx, defaultDiscoveryTimeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, listURL, nil)
+	// Parse the base URL once so we can Set (not append) pageToken on each
+	// iteration. Appending caused duplicate pageToken params from page 3 on.
+	base, err := url.Parse(listURL)
 	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("list Gemini models: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read Gemini models response: %w", err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("list Gemini models: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		return nil, fmt.Errorf("parse Gemini models URL: %w", err)
 	}
 
-	var payload geminiModelsResponse
-	if err := json.Unmarshal(stripBOM(raw), &payload); err != nil {
-		return nil, fmt.Errorf("decode Gemini models: %w", err)
-	}
-
-	out := make([]ModelInfo, 0, len(payload.Models))
-	for _, entry := range payload.Models {
-		if !geminiSupportsGenerateContent(entry.SupportedGenerationMethods) {
-			continue
+	var all []ModelInfo
+	token := ""
+	for {
+		// Build the page URL by cloning the base and setting the token cleanly.
+		u := *base
+		q := u.Query()
+		if token != "" {
+			q.Set("pageToken", token)
+		} else {
+			q.Del("pageToken")
 		}
-		id := geminiModelID(entry.Name)
-		if id == "" {
-			continue
+		u.RawQuery = q.Encode()
+		pageURL := u.String()
+
+		reqCtx, cancel := context.WithTimeout(ctx, defaultDiscoveryTimeout)
+		req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, pageURL, nil)
+		if err != nil {
+			cancel()
+			return nil, err
 		}
-		out = append(out, ModelInfo{ID: id, ContextLimit: entry.InputTokenLimit})
+		req.Header.Set("Accept", "application/json")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			cancel()
+			return nil, fmt.Errorf("list Gemini models: %w", err)
+		}
+		raw, readErr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		cancel()
+		if readErr != nil {
+			return nil, fmt.Errorf("read Gemini models response: %w", readErr)
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return nil, fmt.Errorf("list Gemini models: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(raw)))
+		}
+
+		var payload geminiModelsResponse
+		if err := json.Unmarshal(stripBOM(raw), &payload); err != nil {
+			return nil, fmt.Errorf("decode Gemini models: %w", err)
+		}
+
+		for _, entry := range payload.Models {
+			if !geminiSupportsGenerateContent(entry.SupportedGenerationMethods) {
+				continue
+			}
+			id := geminiModelID(entry.Name)
+			if id == "" || !strings.HasPrefix(id, "gemini-") {
+				continue
+			}
+			all = append(all, ModelInfo{ID: id, ContextLimit: entry.InputTokenLimit})
+		}
+
+		if payload.NextPageToken == "" {
+			break
+		}
+		token = payload.NextPageToken
 	}
-	if len(out) == 0 {
+
+	if len(all) == 0 {
 		return nil, fmt.Errorf("no generateContent models returned by Gemini API")
 	}
-	sortModelInfos(out)
-	return out, nil
+	sortModelInfos(all)
+	return all, nil
 }
 
 // SortModelIDs sorts model ids lexicographically in place.

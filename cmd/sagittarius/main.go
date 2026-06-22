@@ -56,6 +56,13 @@ func run(args []string) int {
 	debug := fs.Bool("debug", false, "enable debug logging")
 	debugShort := fs.Bool("d", false, "shorthand for --debug")
 
+	// Approval policy (fork-aligned) and Sagittarius interaction mode overrides.
+	approvalModeFlag := fs.String("approval-mode", "", "tool approval policy: default|autoEdit|yolo")
+	yoloFlag := fs.Bool("yolo", false, "auto-approve all tools (shorthand for --approval-mode=yolo)")
+	yoloShort := fs.Bool("y", false, "shorthand for --yolo")
+	modeFlag := fs.String("mode", "", "interaction mode for this run: agent|plan|ask|debug")
+	slashFlag := fs.String("slash", "", "run a single slash command headlessly (e.g. \"/mode show\", \"/diff\") and exit")
+
 	// Phase 13: session management flags.
 	resumeFlag := fs.String("resume", "", "resume a session by id, index, or 'latest' (omit value for latest)")
 	resumeShort := fs.String("r", "", "shorthand for --resume")
@@ -122,6 +129,37 @@ func run(args []string) int {
 		resume = strings.TrimSpace(*resumeShort)
 	}
 
+	// Resolve approval policy: --yolo/-y is shorthand for --approval-mode=yolo and
+	// the two cannot be combined (matches fork config validation).
+	yolo := *yoloFlag || *yoloShort
+	approvalMode := agent.ApprovalDefault
+	if yolo && strings.TrimSpace(*approvalModeFlag) != "" {
+		fmt.Fprintln(os.Stderr, "sagittarius: cannot use both --yolo and --approval-mode together (use --approval-mode=yolo)")
+		return 2
+	}
+	if yolo {
+		approvalMode = agent.ApprovalYolo
+	} else if raw := strings.TrimSpace(*approvalModeFlag); raw != "" {
+		parsed, err := agent.ParseApprovalMode(raw)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "sagittarius:", err)
+			return 2
+		}
+		approvalMode = parsed
+	}
+
+	// Resolve optional interaction-mode override. When unset, buildRunner falls
+	// back to sagittarius.defaultMode (then agent).
+	var modeOverride *modes.Mode
+	if raw := strings.TrimSpace(*modeFlag); raw != "" {
+		parsed, err := modes.ParseMode(raw)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "sagittarius:", err)
+			return 2
+		}
+		modeOverride = &parsed
+	}
+
 	// Normalise output format.
 	fmt_ := outputFormat(strings.ToLower(strings.TrimSpace(*outputFmt)))
 	if fmt_ == "" {
@@ -134,13 +172,33 @@ func run(args []string) int {
 		return 2
 	}
 
+	opts := runnerOptions{
+		modelOverride: modelOverride,
+		resume:        resume,
+		approvalMode:  approvalMode,
+		modeOverride:  modeOverride,
+	}
+
+	// --slash: run a single slash command headlessly and exit. Mutually
+	// exclusive with a prompt (the two are different headless entry points).
+	if slashCmd := strings.TrimSpace(*slashFlag); slashCmd != "" {
+		if query != "" {
+			fmt.Fprintln(os.Stderr, "sagittarius: --slash cannot be combined with a prompt (-p)")
+			return 2
+		}
+		opts.interactive = false
+		return runSlash(slashCmd, opts)
+	}
+
 	if query != "" {
-		return runHeadless(query, modelOverride, resume, fmt_)
+		opts.interactive = false
+		return runHeadless(query, opts, fmt_)
 	}
 
 	// With --resume but no prompt: open interactive mode on the resumed session.
 	if shouldRunInteractive(fs) {
-		return runInteractive(*screenReader, modelOverride, resume)
+		opts.interactive = true
+		return runInteractive(*screenReader, opts)
 	}
 
 	fmt.Fprintln(os.Stderr, "sagittarius: interactive mode requires a terminal (stdin and stdout must be TTYs)")
@@ -277,11 +335,11 @@ func runWorktreeStub(name string) int {
 	return 1
 }
 
-func runHeadless(prompt, modelOverride, resume string, fmt_ outputFormat) int {
+func runHeadless(prompt string, opts runnerOptions, fmt_ outputFormat) int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	runner, _, _, runtime, _, err := buildRunner(ctx, modelOverride, false, resume)
+	runner, _, _, runtime, _, _, err := buildRunner(ctx, opts)
 	if err != nil {
 		writeStartupError(err)
 		return 1
@@ -303,6 +361,71 @@ func runHeadless(prompt, modelOverride, resume string, fmt_ outputFormat) int {
 		}
 		return 0
 	}
+}
+
+// runSlash executes a single slash command headlessly and exits. StreamInfo
+// (and any text) output goes to stdout; handler errors go to stderr. Slash
+// commands that open an interactive TUI dialog (e.g. bare /providers, /models)
+// cannot run without a terminal: they print a clear message and exit 2.
+func runSlash(command string, opts runnerOptions) int {
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+
+	if !strings.HasPrefix(command, "/") {
+		command = "/" + command
+	}
+
+	runner, loader, settings, runtime, sessID, baseProviderID, err := buildRunner(ctx, opts)
+	if err != nil {
+		writeStartupError(err)
+		return 1
+	}
+	defer func() { _ = runtime.Close() }()
+
+	providerLabel := "ready"
+	if endpoint, epErr := provider.ResolveEndpointConfig(settings); epErr == nil {
+		providerLabel = endpoint.ProviderID
+		if def, ok := config.LookupBuiltInProvider(endpoint.ProviderID); ok {
+			providerLabel = def.DisplayName
+		}
+	}
+
+	app := agent.NewApp(agent.AppConfig{
+		Runner:         runner,
+		Runtime:        runtime,
+		ProviderLabel:  providerLabel,
+		Model:          runner.Model(),
+		Loader:         loader,
+		Settings:       settings,
+		SessionID:      sessID,
+		BaseProviderID: baseProviderID,
+	})
+
+	events, err := app.HandleInput(ctx, command)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "sagittarius:", err)
+		return 1
+	}
+
+	exit := 0
+	for ev := range events {
+		switch ev.Type {
+		case ui.StreamInfo, ui.StreamTextDelta:
+			fmt.Print(ev.Text)
+		case ui.StreamError:
+			switch {
+			case ev.Err != nil:
+				fmt.Fprintln(os.Stderr, "sagittarius:", ev.Err.Error())
+			case ev.Text != "":
+				fmt.Fprintln(os.Stderr, "sagittarius:", ev.Text)
+			}
+			exit = 1
+		case ui.StreamOpenDialog:
+			fmt.Fprintf(os.Stderr, "sagittarius: %q requires an interactive TUI and cannot run headlessly\n", command)
+			exit = 2
+		}
+	}
+	return exit
 }
 
 // runHeadlessJSON emits events as JSON. streaming=true writes one JSON object
@@ -329,6 +452,18 @@ func runHeadlessJSON(ctx context.Context, runner *agent.Runner, prompt string, s
 				emitJSONLine(map[string]string{"type": "text", "text": ev.Text})
 			} else {
 				textBuf.WriteString(ev.Text)
+			}
+		case ui.StreamToolStart:
+			if streaming {
+				emitJSONLine(map[string]string{"type": "tool_start", "tool": ev.ToolName})
+			}
+		case ui.StreamToolResult:
+			if streaming {
+				emitJSONLine(map[string]string{"type": "tool_result", "tool": ev.ToolName, "text": ev.Text})
+			}
+		case ui.StreamInfo:
+			if streaming {
+				emitJSONLine(map[string]string{"type": "info", "text": ev.Text})
 			}
 		case ui.StreamError:
 			if ev.Err != nil {
@@ -366,11 +501,11 @@ func writeJSONError(err error, streaming bool) {
 	emitJSONLine(map[string]string{"type": "error", "error": msg})
 }
 
-func runInteractive(screenReader bool, modelOverride, resume string) int {
+func runInteractive(screenReader bool, opts runnerOptions) int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	runner, loader, settings, runtime, sessID, err := buildRunner(ctx, modelOverride, true, resume)
+	runner, loader, settings, runtime, sessID, baseProviderID, err := buildRunner(ctx, opts)
 	if err != nil {
 		writeStartupError(err)
 		return 1
@@ -398,13 +533,14 @@ func runInteractive(screenReader bool, modelOverride, resume string) int {
 	}
 
 	app := agent.NewApp(agent.AppConfig{
-		Runner:        runner,
-		Runtime:       runtime,
-		ProviderLabel: providerLabel,
-		Model:         runner.Model(),
-		Loader:        loader,
-		Settings:      settings,
-		SessionID:     sessID,
+		Runner:         runner,
+		Runtime:        runtime,
+		ProviderLabel:  providerLabel,
+		Model:          runner.Model(),
+		Loader:         loader,
+		Settings:       settings,
+		SessionID:      sessID,
+		BaseProviderID: baseProviderID,
 	})
 
 	var notice string
@@ -438,22 +574,61 @@ func runInteractive(screenReader bool, modelOverride, resume string) int {
 	return 0
 }
 
+// runnerOptions carries the resolved CLI inputs buildRunner needs. Zero values
+// are valid: empty modelOverride/resume disable those features, approvalMode
+// defaults to ApprovalDefault, and a nil modeOverride falls back to the settings
+// default mode.
+type runnerOptions struct {
+	modelOverride string
+	interactive   bool
+	resume        string
+	approvalMode  agent.ApprovalMode
+	modeOverride  *modes.Mode
+}
+
 // buildRunner constructs a Runner, optionally loading a resumed session.
 // The returned session ID keys snapshots, context-manager state, and UI telemetry.
-func buildRunner(ctx context.Context, modelOverride string, interactive bool, resume string) (*agent.Runner, *config.Loader, *config.Settings, *agent.Runtime, string, error) {
+// baseProviderID is the canonical provider id that was active before any mode-driven
+// startup override; callers should seed App.BaseProviderID with it.
+func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *config.Loader, *config.Settings, *agent.Runtime, string, string, error) {
+	modelOverride := opts.modelOverride
+	interactive := opts.interactive
+	resume := opts.resume
+
 	settings, loader, err := loadSettings()
 	if err != nil {
-		return nil, nil, nil, nil, "", err
+		return nil, nil, nil, nil, "", "", err
 	}
 
 	needsSetup := interactive && agent.NeedsProviderSetup(ctx, settings)
+
+	// Resolve the initial mode early — before endpoint/generator — so that a
+	// provider-qualified mode override drives the endpoint and generator build
+	// from the start. This fixes the startup-routing gap where headless and
+	// fresh interactive launches would use the wrong backend when a mode with
+	// a provider override was selected.
+	initialMode := modes.DefaultFromSettings(settings)
+	if opts.modeOverride != nil {
+		initialMode = *opts.modeOverride
+	}
+	baseProviderID := config.NormalizeProviderID(settings.ActiveProvider())
+	if !needsSetup {
+		if modeProvider, _ := modes.ResolveModeOverride(initialMode, settings.Sagittarius); modeProvider != "" {
+			modeProvider = config.NormalizeProviderID(modeProvider)
+			if modeProvider != baseProviderID {
+				// Switch in-memory only (never persisted) so endpoint + generator
+				// reflect the mode's provider at startup without touching settings.json.
+				_ = provider.SetActiveProvider(settings, modeProvider)
+			}
+		}
+	}
 
 	var endpoint provider.EndpointConfig
 	var endpointErr error
 	if !needsSetup {
 		endpoint, endpointErr = provider.ResolveEndpointConfig(settings)
 		if endpointErr != nil {
-			return nil, nil, nil, nil, "", endpointErr
+			return nil, nil, nil, nil, "", "", endpointErr
 		}
 	}
 
@@ -469,7 +644,7 @@ func buildRunner(ctx context.Context, modelOverride string, interactive bool, re
 	gen, genErr := provider.NewContentGenerator(ctx, settings)
 	if genErr != nil {
 		if !needsSetup && (!interactive || !errors.Is(genErr, credentials.ErrAPIKeyMissing)) {
-			return nil, nil, nil, nil, "", genErr
+			return nil, nil, nil, nil, "", "", genErr
 		}
 	}
 
@@ -482,7 +657,7 @@ func buildRunner(ctx context.Context, modelOverride string, interactive bool, re
 		Trusted:       true,
 	})
 	if err != nil {
-		return nil, nil, nil, nil, "", err
+		return nil, nil, nil, nil, "", "", err
 	}
 
 	// Resolve session (resume or fresh).
@@ -496,20 +671,20 @@ func buildRunner(ctx context.Context, modelOverride string, interactive bool, re
 		// request. Otherwise it only disables recording, which we log and skip.
 		if resume != "" {
 			_ = runtime.Close()
-			return nil, nil, nil, nil, "", fmt.Errorf("resume session: resolve working directory: %w", wdErr)
+			return nil, nil, nil, nil, "", "", fmt.Errorf("resume session: resolve working directory: %w", wdErr)
 		}
 		slog.Warn("session recording disabled: cannot determine working directory", "err", wdErr)
 	} else if resume != "" {
 		chatsDir, cdErr := session.ChatsDir(projectRoot)
 		if cdErr != nil {
 			_ = runtime.Close()
-			return nil, nil, nil, nil, "", fmt.Errorf("resume session: %w", cdErr)
+			return nil, nil, nil, nil, "", "", fmt.Errorf("resume session: %w", cdErr)
 		}
 		sel := session.NewSelector(chatsDir, sessID)
 		result, selErr := sel.ResolveSession(resume)
 		if selErr != nil {
 			_ = runtime.Close()
-			return nil, nil, nil, nil, "", fmt.Errorf("resume session: %w", selErr)
+			return nil, nil, nil, nil, "", "", fmt.Errorf("resume session: %w", selErr)
 		}
 		if id := strings.TrimSpace(result.Record.SessionID); id != "" {
 			sessID = id
@@ -540,28 +715,29 @@ func buildRunner(ctx context.Context, modelOverride string, interactive bool, re
 		Generator:       gen,
 		Model:           model,
 		Interactive:     interactive,
+		ApprovalMode:    opts.approvalMode,
 		SessionRecorder: sessRecorder,
 		InitialHistory:  initialHistory,
 		Settings:        settings,
-		InitialMode:     modes.DefaultFromSettings(settings),
+		InitialMode:     initialMode,
 		ModelPinned:     modelPinned,
 		ProjectBoundary: boundary,
 		Snapshotter:     snapMgr,
 	})
 	if err != nil {
 		_ = runtime.Close()
-		return nil, nil, nil, nil, "", err
+		return nil, nil, nil, nil, "", "", err
 	}
 	// Build the context manager after the runner so its summarizer reads the
 	// runner's live (mode-resolved) model rather than the startup default.
-	runner.SetContextManager(agent.NewContextManager(settings, gen, runner.CompressionModel, sessID))
+	runner.SetContextManager(agent.NewContextManager(settings, gen, runner.CompressionModel, sessID, runner.RecordUsage))
 	if reg := runtime.Registry(); reg != nil {
 		runner.SetRegistry(reg)
 	}
 	if genErr != nil {
 		runner.SetGeneratorError(genErr)
 	}
-	return runner, loader, settings, runtime, sessID, nil
+	return runner, loader, settings, runtime, sessID, baseProviderID, nil
 }
 
 // resolveBoundaryAndSnapshots merges the project settings.json over the global
@@ -597,7 +773,14 @@ func resolveBoundaryAndSnapshots(global *config.Settings, projectRoot, sessID st
 
 // persistentSessionID returns a stable per-process identifier.
 // It is reused for context-manager state, session file naming, and offload dirs.
+// persistentSessionID returns the session id used for recording and snapshots.
+// SAGITTARIUS_SESSION_ID pins it across separate invocations so a headless write
+// and a later `--slash /diff` or `--slash /undo` (or a resumed session) share the
+// same snapshot index. When unset it defaults to a per-process id.
 func persistentSessionID() string {
+	if id := strings.TrimSpace(os.Getenv("SAGITTARIUS_SESSION_ID")); id != "" {
+		return id
+	}
 	return fmt.Sprintf("sagittarius-%d", os.Getpid())
 }
 

@@ -13,6 +13,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/credentials"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 	"github.com/undeadindustries/sagittarius/internal/session"
+	"github.com/undeadindustries/sagittarius/internal/tools"
 )
 
 func withoutEnv(t *testing.T, key string) {
@@ -95,6 +96,86 @@ func TestNormalizeResumeArgs(t *testing.T) {
 	}
 }
 
+func TestRunRejectsYoloWithApprovalMode(t *testing.T) {
+	t.Setenv("SAGITTARIUS_HOME", t.TempDir())
+	stderr := captureStderr(t, func() {
+		if code := run([]string{"--yolo", "--approval-mode=default", "-p", "hi"}); code != 2 {
+			t.Fatalf("run = %d, want 2", code)
+		}
+	})
+	if !strings.Contains(stderr, "cannot use both --yolo and --approval-mode") {
+		t.Fatalf("stderr = %q, want yolo/approval-mode conflict message", stderr)
+	}
+}
+
+func TestRunRejectsApprovalModePlan(t *testing.T) {
+	t.Setenv("SAGITTARIUS_HOME", t.TempDir())
+	stderr := captureStderr(t, func() {
+		if code := run([]string{"--approval-mode=plan", "-p", "hi"}); code != 2 {
+			t.Fatalf("run = %d, want 2", code)
+		}
+	})
+	if !strings.Contains(stderr, "--mode plan") {
+		t.Fatalf("stderr = %q, want pointer to --mode plan", stderr)
+	}
+}
+
+func TestRunRejectsUnknownMode(t *testing.T) {
+	t.Setenv("SAGITTARIUS_HOME", t.TempDir())
+	stderr := captureStderr(t, func() {
+		if code := run([]string{"--mode=bogus", "-p", "hi"}); code != 2 {
+			t.Fatalf("run = %d, want 2", code)
+		}
+	})
+	if !strings.Contains(stderr, "unknown interaction mode") {
+		t.Fatalf("stderr = %q, want unknown mode message", stderr)
+	}
+}
+
+func TestRunSlashHelp(t *testing.T) {
+	t.Setenv("SAGITTARIUS_HOME", t.TempDir())
+	t.Setenv("GEMINI_PROVIDER", "gemini-apikey")
+	t.Setenv("GEMINI_API_KEY", "test-key")
+	withEmptyCredentials(t)
+
+	out := captureStdout(t, func() {
+		if code := runSlash("/help", runnerOptions{}); code != 0 {
+			t.Fatalf("runSlash(/help) = %d, want 0", code)
+		}
+	})
+	if !strings.Contains(out, "/help") {
+		t.Fatalf("/help output missing command list:\n%s", out)
+	}
+}
+
+func TestRunSlashModeShow(t *testing.T) {
+	t.Setenv("SAGITTARIUS_HOME", t.TempDir())
+	t.Setenv("GEMINI_PROVIDER", "gemini-apikey")
+	t.Setenv("GEMINI_API_KEY", "test-key")
+	withEmptyCredentials(t)
+
+	out := captureStdout(t, func() {
+		if code := runSlash("/mode show", runnerOptions{}); code != 0 {
+			t.Fatalf("runSlash(/mode show) = %d, want 0", code)
+		}
+	})
+	if !strings.Contains(strings.ToLower(out), "agent") {
+		t.Fatalf("/mode show output missing mode:\n%s", out)
+	}
+}
+
+func TestRunRejectsSlashWithPrompt(t *testing.T) {
+	t.Setenv("SAGITTARIUS_HOME", t.TempDir())
+	stderr := captureStderr(t, func() {
+		if code := run([]string{"--slash", "/help", "-p", "hi"}); code != 2 {
+			t.Fatalf("run = %d, want 2", code)
+		}
+	})
+	if !strings.Contains(stderr, "--slash cannot be combined with a prompt") {
+		t.Fatalf("stderr = %q, want slash/prompt conflict message", stderr)
+	}
+}
+
 func TestBuildRunnerAllowsMissingProviderWhenInteractive(t *testing.T) {
 	home := t.TempDir()
 	sagDir := filepath.Join(home, ".sagittarius")
@@ -104,7 +185,7 @@ func TestBuildRunnerAllowsMissingProviderWhenInteractive(t *testing.T) {
 	t.Setenv("SAGITTARIUS_HOME", home)
 	withEmptyCredentials(t)
 
-	runner, _, settings, runtime, sessID, err := buildRunner(context.Background(), "", true, "")
+	runner, _, settings, runtime, sessID, _, err := buildRunner(context.Background(), runnerOptions{interactive: true})
 	if err != nil {
 		t.Fatalf("buildRunner: %v", err)
 	}
@@ -139,7 +220,10 @@ func TestBuildRunnerResumeUsesResumedSessionID(t *testing.T) {
 	rec := session.NewRecorder(chatsDir, resumedID, session.ProjectHash(project))
 	rec.RecordUserMessage("hello from prior session")
 
-	runner, _, _, runtime, sessID, err := buildRunner(context.Background(), "", true, session.ResumeLatest)
+	runner, _, _, runtime, sessID, _, err := buildRunner(context.Background(), runnerOptions{
+		interactive: true,
+		resume:      session.ResumeLatest,
+	})
 	if err != nil {
 		t.Fatalf("buildRunner: %v", err)
 	}
@@ -224,14 +308,24 @@ func (f *headlessFakeGenerator) GenerateContentStream(_ context.Context, _ *prov
 
 func captureStderr(t *testing.T, fn func()) string {
 	t.Helper()
-	old := os.Stderr
+	return captureFD(t, &os.Stderr, fn)
+}
+
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	return captureFD(t, &os.Stdout, fn)
+}
+
+func captureFD(t *testing.T, fd **os.File, fn func()) string {
+	t.Helper()
+	old := *fd
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("Pipe: %v", err)
 	}
-	os.Stderr = w
+	*fd = w
 	t.Cleanup(func() {
-		os.Stderr = old
+		*fd = old
 	})
 
 	done := make(chan struct{})
@@ -246,4 +340,67 @@ func captureStderr(t *testing.T, fn func()) string {
 	_ = w.Close()
 	<-done
 	return buf.String()
+}
+
+// stubGenerator returns canned StreamResponse batches, one per generate call.
+type stubGenerator struct {
+	batches [][]provider.StreamResponse
+	call    int
+}
+
+func (g *stubGenerator) GenerateContentStream(_ context.Context, _ *provider.GenerateRequest) (<-chan provider.StreamResponse, error) {
+	ch := make(chan provider.StreamResponse, 8)
+	batch := g.batches[g.call]
+	g.call++
+	go func() {
+		defer close(ch)
+		for _, r := range batch {
+			ch <- r
+		}
+	}()
+	return ch, nil
+}
+
+func TestRunHeadlessJSONEmitsToolEvents(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "data.txt"), []byte("payload"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	gen := &stubGenerator{batches: [][]provider.StreamResponse{
+		{
+			{ToolCalls: []provider.ToolCall{{
+				Name: tools.ReadFileToolName,
+				Args: map[string]any{tools.ParamFilePath: "data.txt"},
+			}}},
+			{Done: true},
+		},
+		{
+			{TextDelta: "read ok"},
+			{Done: true},
+		},
+	}}
+
+	runner, err := agent.NewRunner(agent.RunnerConfig{
+		Generator:    gen,
+		Model:        "test-model",
+		WorkDir:      root,
+		ApprovalMode: agent.ApprovalYolo,
+		Interactive:  false,
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	out := captureStdout(t, func() {
+		if code := runHeadlessJSON(context.Background(), runner, "read it", true); code != 0 {
+			t.Fatalf("runHeadlessJSON = %d, want 0", code)
+		}
+	})
+
+	for _, want := range []string{`"type":"tool_start"`, `"type":"tool_result"`, `"type":"text"`} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("stream-json output missing %s:\n%s", want, out)
+		}
+	}
 }

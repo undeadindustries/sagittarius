@@ -38,9 +38,11 @@ type ContextManagementConfig struct {
 
 // ResolveContextManagement resolves the context-management knobs for the active
 // provider, merging built-in defaults, custom-provider defaults, and per-instance
-// overrides. It never errors: on any resolution failure it returns a disabled,
-// default-populated config so callers degrade to a pure pass-through.
-func ResolveContextManagement(settings *config.Settings) ContextManagementConfig {
+// overrides. liveModel is the mode-resolved model id at call time; pass an empty
+// string to fall back to the endpoint's persisted default model. It never errors:
+// on any resolution failure it returns a disabled, default-populated config so
+// callers degrade to a pure pass-through.
+func ResolveContextManagement(settings *config.Settings, liveModel string) ContextManagementConfig {
 	cm := ContextManagementConfig{
 		ContextLimit:             DefaultLocalContextLimit,
 		MaskingEnabled:           true,
@@ -56,22 +58,39 @@ func ResolveContextManagement(settings *config.Settings) ContextManagementConfig
 	cm.Enabled = endpoint.WireFormat == config.WireFormatOpenAIChat
 
 	providerID := endpoint.ProviderID
-	cm.ContextLimit = resolveContextLimit(settings, providerID, cm.ContextLimit)
+	// Use the caller-supplied live model for per-model lookup; fall back to the
+	// endpoint's persisted default when the caller passes "".
+	modelForLookup := liveModel
+	if modelForLookup == "" {
+		modelForLookup = endpoint.Model
+	}
+	cm.ContextLimit = resolveContextLimit(settings, providerID, modelForLookup, cm.ContextLimit)
 	applyInstanceContextKnobs(&cm, providerInstance(settings, providerID))
 	if !cm.CompressionThresholdUserSet {
 		// Seed an unpinned threshold from the system-prompt variant so lite
 		// presets compress earlier. UserSet stays false so adaptive tightening
 		// still applies on top of this base.
-		variant := config.ResolveVariant(settings, providerID, endpoint.Model)
+		variant := config.ResolveVariant(settings, providerID, modelForLookup)
 		cm.CompressionThreshold = config.VariantCompressionThreshold(variant)
 	}
 	return cm
 }
 
-func resolveContextLimit(settings *config.Settings, providerID string, fallback int) int {
+func resolveContextLimit(settings *config.Settings, providerID, model string, fallback int) int {
 	inst := providerInstance(settings, providerID)
-	if inst != nil && inst.ContextLimit != nil && *inst.ContextLimit > 0 {
-		return *inst.ContextLimit
+	if inst != nil {
+		// Per-model override wins (set via /models settings editor). Use the
+		// caller-supplied model (live, mode-resolved) rather than re-resolving
+		// the endpoint's persisted default, which may differ when a mode
+		// override is active.
+		if model != "" {
+			if mc, ok := config.LookupModelConfig(inst, model); ok && mc.ContextLimit != nil && *mc.ContextLimit > 0 {
+				return *mc.ContextLimit
+			}
+		}
+		if inst.ContextLimit != nil && *inst.ContextLimit > 0 {
+			return *inst.ContextLimit
+		}
 	}
 	if settings.Providers != nil {
 		if custom, ok := settings.Providers.Custom[providerID]; ok {

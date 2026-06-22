@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strconv"
 	"strings"
 
@@ -12,7 +11,9 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/provider"
 	"github.com/undeadindustries/sagittarius/internal/slash"
 	"github.com/undeadindustries/sagittarius/internal/ui"
+	"github.com/undeadindustries/sagittarius/internal/ui/modelpickdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/modelsdialog"
+	"github.com/undeadindustries/sagittarius/internal/ui/modesdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/providersdialog"
 )
 
@@ -23,6 +24,10 @@ func mapDialogKind(kind slash.DialogKind) ui.DialogKind {
 		return ui.DialogProviders
 	case slash.DialogModels:
 		return ui.DialogModels
+	case slash.DialogModelPick:
+		return ui.DialogModelPick
+	case slash.DialogModes:
+		return ui.DialogModes
 	default:
 		return ""
 	}
@@ -443,15 +448,13 @@ func (d *providerDialogDeps) rebuildIfActive(ctx context.Context, id string) err
 	return nil
 }
 
-// ModelsDialogDeps returns the side-effect adapter the /models picker uses.
+// ModelsDialogDeps returns the side-effect adapter the /models per-model settings editor uses.
 func (a *App) ModelsDialogDeps() modelsdialog.Deps {
 	return &modelsDialogDeps{app: a}
 }
 
-// modelsDialogDeps implements modelsdialog.Deps over the App's runner, loader,
-// and settings. The /models picker is global: it lists every activated model
-// across all configured providers and selecting one switches the active
-// provider and its live model in a single step.
+// modelsDialogDeps implements modelsdialog.Deps: the per-model settings editor
+// lists all active (provider, model) pairs globally and edits per-model overrides.
 type modelsDialogDeps struct {
 	app *App
 }
@@ -459,15 +462,145 @@ type modelsDialogDeps struct {
 func (d *modelsDialogDeps) settings() *config.Settings { return d.app.deps.Settings }
 func (d *modelsDialogDeps) loader() *config.Loader     { return d.app.deps.Loader }
 
-func (d *modelsDialogDeps) ActiveProviderID() string {
+func (d *modelsDialogDeps) ListAllActiveModels() []modelsdialog.ModelEntry {
+	s := d.settings()
+	if s == nil {
+		return nil
+	}
+	pairs := provider.AllActiveModels(s)
+	entries := make([]modelsdialog.ModelEntry, 0, len(pairs))
+	for _, p := range pairs {
+		entries = append(entries, modelsdialog.ModelEntry{
+			ProviderID:    p.ProviderID,
+			ProviderLabel: p.DisplayID,
+			Model:         p.Model,
+		})
+	}
+	return entries
+}
+
+func (d *modelsDialogDeps) GetModelSettings(providerID, model string) map[string]string {
+	if d.settings() == nil {
+		return nil
+	}
+	return provider.ModelConfigValues(d.settings(), providerID, model)
+}
+
+func (d *modelsDialogDeps) SetModelSetting(ctx context.Context, providerID, model, key, value string) error {
+	if d.loader() == nil || d.settings() == nil {
+		return fmt.Errorf("settings not loaded")
+	}
+	if err := provider.SetModelConfig(d.settings(), providerID, model, key, value); err != nil {
+		return err
+	}
+	if err := d.loader().Save(d.settings()); err != nil {
+		return err
+	}
+	return d.rebuildIfActive(ctx, providerID)
+}
+
+func (d *modelsDialogDeps) ClearModelSetting(ctx context.Context, providerID, model, key string) error {
+	if d.loader() == nil || d.settings() == nil {
+		return fmt.Errorf("settings not loaded")
+	}
+	if err := provider.ClearModelConfig(d.settings(), providerID, model, key); err != nil {
+		return err
+	}
+	if err := d.loader().Save(d.settings()); err != nil {
+		return err
+	}
+	return d.rebuildIfActive(ctx, providerID)
+}
+
+func (d *modelsDialogDeps) SystemPromptPresetID(providerID, model string) string {
+	if d.settings() == nil {
+		return ""
+	}
+	vals := provider.ModelConfigValues(d.settings(), providerID, model)
+	// Reconstruct the preset id from stored personality + promptMode so the
+	// picker pre-selects the correct row (e.g. "programmer-lite", not just
+	// "programmer").
+	if p, ok := config.PresetForPersonalityVariant(vals["personality"], vals["promptMode"]); ok {
+		return p.ID
+	}
+	return ""
+}
+
+func (d *modelsDialogDeps) ApplySystemPromptPreset(ctx context.Context, providerID, model, presetID string) (string, error) {
+	if d.loader() == nil || d.settings() == nil {
+		return "", fmt.Errorf("settings not loaded")
+	}
+	// Look up the preset so we write canonical personality + promptMode (not
+	// the raw preset id). Storing the variant id directly avoids validation
+	// errors for compound ids like "programmer-lite".
+	preset, ok := config.LookupPreset(presetID)
+	if !ok {
+		return "", fmt.Errorf("unknown system prompt preset %q", presetID)
+	}
+	if err := provider.SetModelConfig(d.settings(), providerID, model, "personality", preset.Personality); err != nil {
+		return "", err
+	}
+	if err := provider.SetModelConfig(d.settings(), providerID, model, "promptMode", preset.Variant); err != nil {
+		return "", err
+	}
+	if err := d.loader().Save(d.settings()); err != nil {
+		return "", err
+	}
+	if err := d.rebuildIfActive(ctx, providerID); err != nil {
+		return "", err
+	}
+	return "System prompt preset → " + preset.Label, nil
+}
+
+func (d *modelsDialogDeps) rebuildIfActive(ctx context.Context, providerID string) error {
+	if d.settings() == nil {
+		return nil
+	}
+	if config.NormalizeProviderID(d.settings().ActiveProvider()) == config.NormalizeProviderID(providerID) {
+		_, _, err := d.app.deps.Hooks.RebuildRunner(ctx)
+		return err
+	}
+	return nil
+}
+
+// ModelPickDialogDeps returns the side-effect adapter the /model global picker uses.
+func (a *App) ModelPickDialogDeps() modelpickdialog.Deps {
+	return &modelPickDialogDeps{app: a}
+}
+
+type modelPickDialogDeps struct {
+	app *App
+}
+
+func (d *modelPickDialogDeps) settings() *config.Settings { return d.app.deps.Settings }
+
+func (d *modelPickDialogDeps) AllActiveModels() []modelpickdialog.ModelEntry {
+	s := d.settings()
+	if s == nil {
+		return nil
+	}
+	pairs := provider.AllActiveModels(s)
+	entries := make([]modelpickdialog.ModelEntry, 0, len(pairs))
+	for _, p := range pairs {
+		entries = append(entries, modelpickdialog.ModelEntry{
+			ProviderID:  p.ProviderID,
+			DisplayID:   p.DisplayID,
+			DisplayName: p.DisplayName,
+			Model:       p.Model,
+		})
+	}
+	return entries
+}
+
+func (d *modelPickDialogDeps) CurrentProviderID() string {
 	if d.settings() == nil {
 		return ""
 	}
 	return d.settings().ActiveProvider()
 }
 
-func (d *modelsDialogDeps) CurrentModel() string {
-	id := d.ActiveProviderID()
+func (d *modelPickDialogDeps) CurrentModel() string {
+	id := d.CurrentProviderID()
 	if id == "" {
 		return ""
 	}
@@ -478,75 +611,182 @@ func (d *modelsDialogDeps) CurrentModel() string {
 	return endpoint.Model
 }
 
-// ListActiveModels returns every activated (curated) model across all built-in
-// and custom providers, plus the active provider's current model so the picker
-// is never empty when something is in use.
-func (d *modelsDialogDeps) ListActiveModels() []modelsdialog.ModelEntry {
+func (d *modelPickDialogDeps) SelectCurrentModel(ctx context.Context, providerID, model string) error {
+	if d.app.deps.Loader == nil || d.settings() == nil {
+		return fmt.Errorf("settings not loaded")
+	}
+	_, err := d.app.deps.Hooks.SelectCurrentModel(ctx, providerID, model)
+	return err
+}
+
+// ModesDialogDeps returns the side-effect adapter the /modes editor uses.
+func (a *App) ModesDialogDeps() modesdialog.Deps {
+	return &modesDialogDeps{app: a}
+}
+
+type modesDialogDeps struct {
+	app *App
+}
+
+func (d *modesDialogDeps) settings() *config.Settings { return d.app.deps.Settings }
+
+func (d *modesDialogDeps) ListModes() []modesdialog.ModeEntry {
+	s := d.settings()
+	var modes *config.SagittariusModes
+	if s != nil && s.Sagittarius != nil {
+		modes = s.Sagittarius.Modes
+	}
+	modeNames := []string{"agent", "plan", "ask", "debug"}
+	entries := make([]modesdialog.ModeEntry, 0, len(modeNames))
+	for _, name := range modeNames {
+		prov, model := modeModeConfigValues(modes, name)
+		entries = append(entries, modesdialog.ModeEntry{
+			Mode:     name,
+			Provider: prov,
+			Model:    model,
+		})
+	}
+	return entries
+}
+
+func modeModeConfigValues(modes *config.SagittariusModes, modeName string) (prov, model string) {
+	if modes == nil {
+		return "", ""
+	}
+	var mc *config.SagittariusModeConfig
+	switch modeName {
+	case "agent":
+		mc = modes.Agent
+	case "plan":
+		mc = modes.Plan
+	case "ask":
+		mc = modes.Ask
+	case "debug":
+		mc = modes.Debug
+	}
+	if mc == nil {
+		return "", ""
+	}
+	return mc.Provider, mc.Model
+}
+
+func (d *modesDialogDeps) AllActiveModels() []modesdialog.ModelEntry {
 	s := d.settings()
 	if s == nil {
 		return nil
 	}
-	var entries []modelsdialog.ModelEntry
-	seen := map[string]bool{}
-	add := func(id, model string) {
-		model = strings.TrimSpace(model)
-		if id == "" || model == "" {
-			return
-		}
-		key := id + "\x00" + model
-		if seen[key] {
-			return
-		}
-		seen[key] = true
-		entries = append(entries, modelsdialog.ModelEntry{
-			ProviderID:    id,
-			ProviderLabel: config.ProviderDisplayID(id),
-			Model:         model,
+	pairs := provider.AllActiveModels(s)
+	entries := make([]modesdialog.ModelEntry, 0, len(pairs))
+	for _, p := range pairs {
+		entries = append(entries, modesdialog.ModelEntry{
+			ProviderID: p.ProviderID,
+			DisplayID:  p.DisplayID,
+			Model:      p.Model,
 		})
 	}
-	addProvider := func(id string) {
-		for _, model := range provider.CuratedActiveModels(s, id) {
-			add(id, model)
-		}
-	}
-	for id := range config.BuiltInProviders {
-		addProvider(string(id))
-	}
-	if s.Providers != nil {
-		for id := range s.Providers.Custom {
-			addProvider(id)
-		}
-	}
-	if active := config.NormalizeProviderID(s.ActiveProvider()); active != "" {
-		add(active, d.CurrentModel())
-	}
-	sort.Slice(entries, func(i, j int) bool {
-		if entries[i].ProviderLabel != entries[j].ProviderLabel {
-			return entries[i].ProviderLabel < entries[j].ProviderLabel
-		}
-		return entries[i].Model < entries[j].Model
-	})
 	return entries
 }
 
-// SelectModel switches to providerID (if it differs from the active provider)
-// and sets its live model, then rebuilds the runner.
-func (d *modelsDialogDeps) SelectModel(ctx context.Context, id, model string) error {
-	if d.loader() == nil || d.settings() == nil {
+func (d *modesDialogDeps) SetModeOverride(_ context.Context, modeName, providerID, model string) error {
+	if d.app.deps.Loader == nil || d.settings() == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	id = config.NormalizeProviderID(id)
-	if err := provider.SetProviderModel(d.settings(), id, model); err != nil {
-		return err
+	s := d.settings()
+	if s.Sagittarius == nil {
+		s.Sagittarius = &config.SagittariusSettings{}
 	}
-	applyDiscoveredContextLimit(ctx, d.settings(), id, model)
-	if d.ActiveProviderID() != id {
-		if err := provider.SaveActiveProvider(d.loader(), d.settings(), id); err != nil {
-			return err
+	if s.Sagittarius.Modes == nil {
+		s.Sagittarius.Modes = &config.SagittariusModes{}
+	}
+	mc := &config.SagittariusModeConfig{
+		Provider: config.NormalizeProviderID(providerID),
+		Model:    model,
+	}
+	switch modeName {
+	case "agent":
+		if s.Sagittarius.Modes.Agent != nil {
+			mc.SystemPromptSuffix = s.Sagittarius.Modes.Agent.SystemPromptSuffix
+			mc.Extra = s.Sagittarius.Modes.Agent.Extra
 		}
-	} else if err := d.loader().Save(d.settings()); err != nil {
-		return err
+		s.Sagittarius.Modes.Agent = mc
+	case "plan":
+		if s.Sagittarius.Modes.Plan != nil {
+			mc.SystemPromptSuffix = s.Sagittarius.Modes.Plan.SystemPromptSuffix
+			mc.Extra = s.Sagittarius.Modes.Plan.Extra
+		}
+		s.Sagittarius.Modes.Plan = mc
+	case "ask":
+		if s.Sagittarius.Modes.Ask != nil {
+			mc.SystemPromptSuffix = s.Sagittarius.Modes.Ask.SystemPromptSuffix
+			mc.Extra = s.Sagittarius.Modes.Ask.Extra
+		}
+		s.Sagittarius.Modes.Ask = mc
+	case "debug":
+		if s.Sagittarius.Modes.Debug != nil {
+			mc.SystemPromptSuffix = s.Sagittarius.Modes.Debug.SystemPromptSuffix
+			mc.Extra = s.Sagittarius.Modes.Debug.Extra
+		}
+		s.Sagittarius.Modes.Debug = mc
+	default:
+		return fmt.Errorf("unknown mode %q", modeName)
 	}
-	_, _, err := d.app.deps.Hooks.RebuildRunner(ctx)
-	return err
+	return d.app.deps.Loader.Save(s)
+}
+
+func (d *modesDialogDeps) ClearModeOverride(_ context.Context, modeName string) error {
+	if d.app.deps.Loader == nil || d.settings() == nil {
+		return fmt.Errorf("settings not loaded")
+	}
+	s := d.settings()
+	if s.Sagittarius == nil || s.Sagittarius.Modes == nil {
+		return nil
+	}
+	clearModeConfigOverride(s.Sagittarius.Modes, modeName)
+	return d.app.deps.Loader.Save(s)
+}
+
+func clearModeConfigOverride(modes *config.SagittariusModes, modeName string) {
+	switch modeName {
+	case "agent":
+		if modes.Agent != nil {
+			modes.Agent.Provider = ""
+			modes.Agent.Model = ""
+			if modes.Agent.SystemPromptSuffix == "" && modes.Agent.Extra == nil {
+				modes.Agent = nil
+			}
+		}
+	case "plan":
+		if modes.Plan != nil {
+			modes.Plan.Provider = ""
+			modes.Plan.Model = ""
+			if modes.Plan.SystemPromptSuffix == "" && modes.Plan.Extra == nil {
+				modes.Plan = nil
+			}
+		}
+	case "ask":
+		if modes.Ask != nil {
+			modes.Ask.Provider = ""
+			modes.Ask.Model = ""
+			if modes.Ask.SystemPromptSuffix == "" && modes.Ask.Extra == nil {
+				modes.Ask = nil
+			}
+		}
+	case "debug":
+		if modes.Debug != nil {
+			modes.Debug.Provider = ""
+			modes.Debug.Model = ""
+			if modes.Debug.SystemPromptSuffix == "" && modes.Debug.Extra == nil {
+				modes.Debug = nil
+			}
+		}
+	}
+}
+
+func containsStr(ss []string, s string) bool {
+	for _, v := range ss {
+		if v == s {
+			return true
+		}
+	}
+	return false
 }

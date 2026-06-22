@@ -119,3 +119,83 @@ func modelFromReq(req *provider.GenerateRequest) string {
 	}
 	return req.Model
 }
+
+// TestBaseProviderIDSeedFromAppConfig ensures NewApp seeds app.baseProviderID
+// from AppConfig.BaseProviderID. This is the startup fix for mode-provider
+// routing: buildRunner now returns a baseProviderID that the App tracks.
+func TestBaseProviderIDSeedFromAppConfig(t *testing.T) {
+	t.Parallel()
+
+	runner, err := NewRunner(RunnerConfig{
+		Generator:   &fakeGenerator{},
+		Model:       "gpt-4o",
+		WorkDir:     t.TempDir(),
+		Interactive: false,
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	app := NewApp(AppConfig{
+		Runner:         runner,
+		BaseProviderID: "openai",
+		SessionID:      "test",
+	})
+
+	if app.baseProviderID != "openai" {
+		t.Fatalf("baseProviderID = %q, want openai", app.baseProviderID)
+	}
+}
+
+// TestBaseProviderIDSeedNormalized ensures the seeded baseProviderID is
+// normalized so whitespace variants produce consistent comparisons later.
+func TestBaseProviderIDSeedNormalized(t *testing.T) {
+	t.Parallel()
+
+	runner, err := NewRunner(RunnerConfig{
+		Generator:   &fakeGenerator{},
+		Model:       "gpt-4o",
+		WorkDir:     t.TempDir(),
+		Interactive: false,
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	app := NewApp(AppConfig{
+		Runner:         runner,
+		BaseProviderID: "  openai  ",
+		SessionID:      "test",
+	})
+
+	if app.baseProviderID != "openai" {
+		t.Fatalf("baseProviderID = %q, want normalized openai", app.baseProviderID)
+	}
+}
+
+// TestBaseProviderIDClearedWhenEmpty verifies the zero-value behavior: an App
+// with no BaseProviderID starts with an empty baseProviderID so the first mode
+// switch that has no provider override is a no-op on the provider.
+func TestBaseProviderIDClearedWhenEmpty(t *testing.T) {
+	t.Parallel()
+
+	runner, err := NewRunner(RunnerConfig{
+		Generator:   &fakeGenerator{},
+		Model:       "gpt-4o",
+		WorkDir:     t.TempDir(),
+		Interactive: false,
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	app := NewApp(AppConfig{
+		Runner:    runner,
+		SessionID: "test",
+		// BaseProviderID intentionally omitted.
+	})
+
+	if app.baseProviderID != "" {
+		t.Fatalf("baseProviderID = %q, want empty when not seeded", app.baseProviderID)
+	}
+}

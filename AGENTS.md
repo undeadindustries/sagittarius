@@ -16,1039 +16,221 @@ You are a **Senior Golang AI Engineer at Google** with decades of deep systems a
 
 ### Project Sagittarius
 
-Sagittarius is a **1:1 Go port** of our frozen, customized `gemini-cli` fork
-(`gemini-custom-cli` at `/home/rob/src/gemini-cli`). That folder is **static** —
-no further updates. What exists there today is the parity target.
-
-The fork orchestrates requests across:
-
-- Google Gemini (native wire format, API key)
-- OpenAI-compatible endpoints (OpenAI, OpenRouter, local vLLM — same adapter)
-- OpenAI Responses API (GPT-5 / reasoning)
+Sagittarius started as a 1:1 Go port of gemini-cli. Gemini-cli was discontinued
+and Antigravity is...not ideal... This has been updated to support Gemini API
+key, OpenRouter, OpenAI and custom/local AI providers. You can set specific
+models for different modes (agent, plan, ask). You can set different system
+prompts (programmer, system admin, personal assistant, creative assistant).
+Where supported, you can customize temperature and other settings.
 
 ### Picture of Success
 
-End users cannot tell Sagittarius apart from the fork for in-scope behavior:
+A bug free, safe alternative to Gemini-cli, Agy, and Opencode to build large
+projects, admin your system or be your assistant.
 
-- **Command parity:** slash commands, flags, settings reload
-- **Streaming & TUI parity:** interactive loop, prompt behavior, stream rendering
-- **Performance:** faster startup, lower memory, compile-time safety
-
-**Public product:** This will be a widely used open-source CLI. Write code,
-tests, security docs, and commit messages accordingly.
+This is a public, open-source CLI: write code, tests, security docs, and commit
+messages accordingly.
 
 ---
 
-## Current Project Status
+## Current State (2026-06-22)
+
+Feature-complete and stable. `go build ./...`, `go vet ./...`, and `go test ./...`
+are green; `-race` is clean on actively-touched packages. The codebase is no
+longer organized around "phases" — it is a maintained product. Detailed change
+history lives in git; record significant **new** architectural decisions briefly
+in this file (see [Keeping this file current](#keeping-this-file-current)).
+
+### Project facts
 
 | Field | Value |
 |-------|-------|
-| **Overall** | Phase 16 complete — TUI presentation parity |
-| **Active phase** | — (post-parity enhancements) |
-| **Go toolchain** | **1.26.4** at `/home/rob/local/go1.26.4`, symlinked system-wide via `/usr/local/bin/go`. apt Go 1.22 removed. |
-| **Binary name** | `sagittarius` |
-| **Module** | `github.com/undeadindustries/sagittarius` |
-| **Config** | Dedicated `~/.sagittarius/settings.json` (fresh start; no `~/.gemini` reads — AD-029) |
-| **Plan docs** | `docs/plans/` — **gitignored**, local agent context only |
+| Module | `github.com/undeadindustries/sagittarius` |
+| Binary | `sagittarius` |
+| Go toolchain | 1.26.4 (pinned in `go.mod` and the `Makefile`) |
+| Global home | `~/.sagittarius/` (dedicated; `~/.gemini` is never read or migrated) |
+| Config | `~/.sagittarius/settings.json`; project overrides in `<repo>/.sagittarius/settings.json` (resolution-only, never persisted) |
+| Secrets | Never in `settings.json`: env var → OS keychain → encrypted file fallback |
 
-### Phase Progress
+### What works today
 
-| Phase | Name | Status |
-|-------|------|--------|
-| 01 | Foundation & public repo | Complete |
-| 02 | Config & settings bridge | Complete |
-| 03 | Secure credentials | Complete |
-| 04 | TUI shell (swappable) | Complete |
-| 05 | Gemini provider (API key) | Complete |
-| 06 | OpenAI-compat providers | Complete |
-| 07 | Agent loop & headless `-p` | Complete |
-| 08 | Core tools | Complete |
-| 09 | Slash commands | Complete |
-| 10 | OpenAI Responses API | Complete |
-| 11 | Context management | Complete |
-| 12 | MCP, skills, extensions | Complete |
-| 13 | Sessions & advanced CLI | Complete |
-| 14 | Parity validation | Complete |
-| 15 | Interaction modes (post-parity) | Complete |
-| 16 | TUI presentation parity (post-parity) | Complete |
+- **Providers (one set of adapters):**
+  - Gemini native (API key) via `google.golang.org/genai`.
+  - OpenAI Chat Completions — the single `openai-chat` adapter also serves
+    OpenRouter, custom endpoints, and local vLLM (difference is `baseUrl` +
+    credentials, not architecture).
+  - OpenAI Responses API (GPT-5 / reasoning), with `reasoning.effort` and
+    optional response chaining.
+- **Interaction modes:** `agent`, `plan`, `ask`, `debug`. Per-mode model routing;
+  `plan`/`ask` enforce read-only tool gates in the scheduler (`plan` allows
+  writes only under `docs/plans/`). `/mode`, Ctrl+Shift+M, or `--mode`. Mode
+  overrides are **provider-qualified** (`provider + model`): entering a mode
+  can rebuild the generator for a different provider; leaving reverts to the base.
+- **Model-first UX:** Selecting a `{Provider}/{Model}` pair atomically drives the
+  active provider (internal pointer) as a derived side effect — the user never
+  picks a provider as "active" explicitly.
+  - `/providers` — opens directly at the provider list; edit connections, API key,
+    and activate models per provider. No "switch active provider" surface.
+  - `/model` — global `{Provider}/{Model}` picker (menu + autocomplete); selecting
+    any entry calls `SelectCurrentModel` which does switch+set-model atomically.
+  - `/models` — per-model settings editor: select `{Provider}/{Model}`, then edit
+    system prompt, temperature, contextLimit, reasoningEffort in a submenu.
+  - `/modes` / `/mode settings` — mode-override editor: assign a `{Provider}/{Model}`
+    override to any mode or clear to default.
+  - `Ctrl+/` — cycles globally across all activated models (all providers).
+  - `initChecked` pre-selects only the configured default model on uncurated providers.
+  - Gemini discovery paginates via `nextPageToken` and filters to `gemini-*` ids only.
+  - `PruneModeOverrides` is called on `SetActiveModels`/`RemoveCustomProvider` to
+    keep mode overrides consistent with available `(provider, model)` pairs.
+- **System prompts:** personalities (`programmer`, `sysadmin`,
+  `personal-assistant`, `creative-assistant`) × variants (`full`/`lite`),
+  selected via presets. Per-turn temperature + sampling defaults; context-window
+  auto-detection. Resolution order: per-model → provider → global → built-in.
+- **Tools:** `read_file`, `write_file`, `list_directory`, `run_shell_command`,
+  `grep_search`, plus `activate_skill` and MCP tools. Approval policy
+  `default`/`autoEdit`/`yolo` (`--approval-mode`, `--yolo`/`-y`). Workspace path
+  validation; a project-boundary option blocks out-of-root mutations (file writes
+  + a heuristic shell scan).
+- **Local snapshots:** `write_file` changes are captured for `/diff` and `/undo`
+  (content snapshots, not shadow git). Session JSONL index under
+  `~/.sagittarius/tmp/<slug>/snapshots/`; replays across processes when the
+  session id is reused.
+- **Sessions:** JSONL persistence; `--resume`/`-r`, `--list-sessions`,
+  `--delete-session`, `/resume` (text list), `/clear`.
+- **MCP / skills / extensions:** MCP client (stdio + HTTP + SSE) with qualified
+  tool names; `SKILL.md` discovery + `activate_skill`. Agent/extension registries
+  are partial stubs (discovery + reload; execution/marketplace deferred).
+- **Context management:** local-context defenses (masking, compression, budget)
+  in `internal/contextmgmt`, gated to the `openai-chat` path only.
+- **TUI:** Bubble Tea behind the `internal/ui.UI` interface; semantic themes
+  (default purple + greyscale/`NO_COLOR`), basic markdown, footer telemetry, exit
+  summary per-model token counts. Overlay dialogs: providers wizard, global model
+  picker (`modelpickdialog`), per-model settings editor (`modelsdialog`), mode-override
+  editor (`modesdialog`).
+- **Headless:** `-p`/`--prompt`, `--output-format text|json|stream-json`
+  (stream-json emits `text`/`tool_start`/`tool_result`/`info`/`error` lines), and
+  `--slash` for a single slash command without a TTY.
 
-**MVP milestone (Phases 01–05 + 04):** scaffolding, basic TUI, Gemini API key
-auth with secure storage, first streamed Gemini response.
+### Slash commands
 
-**Provider priority:** Gemini (`gemini-apikey`) first, then OpenAI-compat
-(`openai` + custom/OpenRouter). Local vLLM deferred until Spark capacity frees —
-same Phase 06 code path, different `baseUrl`.
+`/help`, `/quit`, `/providers` (wizard; also holds API-key entry — no `/auth`),
+`/model` (global picker + autocomplete), `/models` (per-model settings editor),
+`/modes` (mode-override editor; alias `/mode settings`), `/mode`, `/reasoning`,
+`/memory reload`, `/mcp` (list/reload), `/skills` (list/reload),
+`/agents` (list/reload), `/diff`, `/undo`. Naming rule: singular sets current
+one (`/model`, `/mode`), plural manages settings (`/models`, `/modes`).
+User commands must appear in `/help` with a description (no hidden commands).
 
 ---
 
-## Architectural Decisions (Log)
-
-Decisions are append-only context for future agents. Do not delete; strike through if reversed.
-
-### AD-001 — Parity target is the fork only (2026-06-20)
-
-Match `/home/rob/src/gemini-cli` as frozen at baseline
-`0.42.0-nightly.20260428.g59b2dea0e`. No upstream sync. Out-of-scope surfaces
-listed under **Deferred Surface Areas**.
-
-### AD-002 — Gemini requires API key (2026-06-20)
-
-No free-tier / consumer OAuth requirement. Users must supply `GOOGLE_API_KEY` or
-store a key via secure credential flow. OAuth and Vertex deferred unless pulled
-forward in a phase plan.
-
-### AD-003 — URL-based providers are one adapter (2026-06-20)
-
-OpenAI Chat Completions adapter serves OpenAI, OpenRouter, and local vLLM.
-Difference is `baseUrl`, credentials, and settings — not separate architectures.
-`wireFormat: openai-chat` triggers openai-chat path; local-only context layers
-(Phase 11) key off that wire format (fork `isLocalMode()` semantics).
-
-### AD-004 — TUI behind interface (2026-06-20)
-
-`internal/ui.UI` interface; first implementation Bubble Tea. Agent/core packages
-must not import Bubble Tea directly so the TUI library can be swapped.
-
-### AD-005 — Secrets never in settings.json (2026-06-20)
-
-Match fork: env var wins, then OS keychain entry `gemini-cli-provider-<id>`,
-encrypted file fallback when keychain unavailable (`GEMINI_FORCE_FILE_STORAGE`).
-
-### AD-006 — Plan files stay out of git (2026-06-20)
-
-Phased plans live in `docs/plans/` (see `.gitignore`). Only `AGENTS.md` and
-committed user docs track status for the public repo.
-
-### AD-007 — Post-parity Sagittarius features (2026-06-20)
-
-After Phase 14 parity: plan/ask/debug **interaction modes** with per-mode default
-models, plus subagent model overrides with defaults. Settings under
-`sagittarius.*` namespace. See `docs/plans/phase-15-interaction-modes.md`.
-
-### AD-008 — Encrypted credentials file path (2026-06-20)
-
-File fallback stores AES-256-GCM encrypted credentials at
-`~/.gemini/gemini-credentials.json` (or `$GEMINI_CLI_HOME/.gemini/…`), matching
-fork FileKeychain layout and encryption for cross-tool compatibility.
-
-### AD-009 — Gemini SDK via google.golang.org/genai (2026-06-20)
-
-Phase 05 uses `google.golang.org/genai` v1.61.0 with `BackendGeminiAPI` and
-`GenerateContentStream` (Go 1.23+ `iter.Seq2`). Provider package exposes
-domain types + `ContentGenerator`; TUI mapping to `ui.StreamEvent` deferred to
-Phase 07 agent loop.
-
-### AD-010 — Unified OpenAI-chat adapter (2026-06-20)
-
-Phase 06 implements `OpenAIChatGenerator` for all `wireFormat: openai-chat`
-endpoints (built-in `openai`, `providers.custom.*`, local vLLM). URL
-normalization via `ChatCompletionsURL` / `ExtractServerRoot`; optional Bearer
-for local auth; XML tool-call fallback (`ParseXMLToolCalls`); model discovery
-via `DiscoverModels`; `IsOpenAIChatMode` hook for Phase 11 context layers.
-
-### AD-011 — Agent loop owns stream mapping (2026-06-20)
-
-Phase 07 `internal/agent` owns the turn loop, `provider.StreamResponse` →
-`ui.StreamEvent` mapping, GEMINI.md/AGENTS.md discovery, and headless `-p`.
-Tool calls emit `StreamToolStart` only (execution Phase 08). Approval mode stub
-is `default` only. Agent packages must not import Bubble Tea.
-
-### AD-012 — Core tools in internal/tools (2026-06-20)
-
-Phase 08 `internal/tools` owns built-in wire tools (`read_file`, `write_file`,
-`list_directory`, `run_shell_command`, `grep_search`), workspace path validation,
-shell safety subset, registry + scheduler, and approval policy subset
-(`default`, `autoEdit`, `yolo`). Runner registers tool declarations on every
-generate request and loops up to `MaxToolRounds` (10) after function responses.
-Interactive TUI confirms destructive tools via `StreamToolConfirm`; headless
-auto-denies confirmations in `default`/`autoEdit` unless `yolo`.
-
-### AD-013 — Slash commands in internal/slash (2026-06-20)
-
-Phase 09 `internal/slash` owns command registry, parser, processor, and built-ins
-(`/help`, `/quit`, `/provider`, `/model`, `/auth`, `/memory reload`, `/skills reload`
-stub). `agent.App` intercepts `/` input before the runner; slash output uses
-`ui.StreamInfo`, quit uses `ui.StreamQuit`. Injectable `slash.Deps` + `Hooks` for
-tests. Fork rule: Gemini keys via `/auth`, not `/provider set … key`. Reference:
-`docs/reference/commands.md`.
-
-### AD-014 — OpenAI Responses adapter separate from chat (2026-06-20)
-
-Phase 10 implements `OpenAIResponsesGenerator` as a sibling of
-`OpenAIChatGenerator` (not merged). `wireFormat: openai-responses` uses
-`POST /v1/responses`, SSE `response.*` events, flat tool declarations,
-`reasoning.effort`, optional `previous_response_id` chaining, and built-in
-`openai-responses` (default model `gpt-5-codex`). Session reasoning override
-lives in `provider` session state; `/reasoning` slash commands persist via
-`providers.<id>.reasoningEffort`. `IsOpenAIResponsesMode` hook returns true
-for responses wire format; `IsOpenAIChatMode` stays false on this path (no
-Phase 11 client-side local masking).
-
-### AD-015 — Local-context defenses in internal/contextmgmt, openai-chat only (2026-06-20)
-
-Phase 11 ports the fork's local-context defenses into a new package
-`internal/contextmgmt` (named to avoid colliding with stdlib `context`). Every
-defense is gated on `provider.IsOpenAIChatMode` (the fork's `isLocalMode`): the
-agent builds a `*contextmgmt.Manager` only for `wireFormat: openai-chat`, and a
-nil/disabled manager is a pure pass-through. **Gemini-native and
-openai-responses paths are never masked or compressed client-side** (consistent
-with AD-014).
-
-`Manager.PrepareTurn` runs at the top of every tool round (so it is both the
-pre-turn and post-tool hook) and applies, in order: (1) **write-file ejection**
-(Layer 3 only — fork TODOs #1–#4 deferred), (2) **tool-output masking** (fork
-`toolOutputMaskingService` "Hybrid Backward-Scanned FIFO", with
-`localMaskingDefaults` scaled to the resolved context limit and floored by
-`minProtectionTokens`/`minPrunableTokens`), and (3) **pre-turn budget** +
-**adaptive threshold** + **chat compression** (`chatCompressionService`:
-`<state_snapshot>` summarize → verify, split-point on `preserveFraction`,
-oversized-tool-response truncation with disk offload). The pre-turn budget layer
-only *forces* early compression; the normal threshold check still runs when the
-budget does not trigger.
-
-**Active model only:** compression/summarization uses the active provider model
-via an injected `Summarizer` adapter (`agent.newProviderSummarizer`) — no
-secondary/per-utility model routing (fork open TODO deferred). Loop-detection /
-next-speaker model selection: the Go port has no separate loop-detector yet, so
-there is no secondary model to redirect; the active-model rule is satisfied by
-construction and noted as a follow-up for Phase 12+.
-
-**Token counting:** stdlib-only deterministic heuristic in `tokens.go`
-(`charsPerToken = 4`, with a higher divisor for ASCII-heavy text and a JSON
-structural surcharge for function-call/response parts) — no tokenizer
-dependency. Documented as an approximation; budget math consumes it the same way
-the fork consumes its tokenizer counts.
-
-**Adaptive state** is per-session and thread-safe (`AdaptiveTracker` with
-`sync.Mutex` + ring buffer), not the fork's package-level mutable state.
-
-**Settings** (per-provider under `providers.<id>.*`, fork-compatible leaf names):
-`contextLimit`, `compressionThreshold`, `preserveFraction`,
-`toolOutputMaskingEnabled`, `toolOutputMaskingProtectionFraction`,
-`toolOutputMaskingPrunableFraction`, `toolOutputMaskingProtectLatestTurn`.
-Budget/ejection/adaptive run on built-in defaults (not yet user-exposed —
-deferred). Per-provider placement (vs. the fork's single global `local.*` block)
-follows AD-003.
-
-### AD-016 — MCP, skills, extensions architecture (2026-06-21)
-
-Phase 12 adds four packages wired through `agent.Runtime` and `agent.Catalog`:
-
-| Package | Role |
-|---------|------|
-| `internal/mcp` | MCP client + manager; stdio (`CommandTransport`), Streamable HTTP, SSE via official `github.com/modelcontextprotocol/go-sdk` v1.6.1; qualified tool names `mcp_<server>_<tool>` |
-| `internal/skills` | `SKILL.md` discovery (`~/.gemini/skills`, `~/.agents/skills`, workspace mirrors); session activate tracking |
-| `internal/agents` | Stub registry — discovers `.md` agent definitions from user/project/extension paths; execution deferred |
-| `internal/extensions` | Stub loader — `~/.gemini/extensions/*/gemini-extension.json`, settings `extensions` passthrough; merges extension MCP servers + skills |
-
-**Tool catalog:** `agent.Catalog` assembles `tools.NewBuiltinRegistry` + `activate_skill` + MCP tools; `Runner.SetRegistry` on reload. Slash hooks: `/mcp reload`, `/skills reload`, `/agents reload`.
-
-**Credentials:** MCP bearer tokens use `credentials.MCPServerServiceName` → `gemini-cli-mcp-<server>` (env → keychain → encrypted file). Header `${ENV}` expansion in `mcp.ExpandEnvVars`. **OAuth MCP flows deferred** (fork `MCPOAuthProvider` not ported).
-
-**Stubbed vs full:** Extension marketplace, policy/rules/checkers, MCP prompts/resources, OAuth, built-in fork skills, agent execution/subagents, filesystem watcher (manual reload only).
-
-**Dependency:** One added dependency — official MCP Go SDK (documented here; stdlib JSON-RPC deemed higher correctness risk for stdio+HTTP).
-
-### AD-017 — Sandbox stub deferral (2026-06-21)
-
-Phase 13 decision: `sandbox.ts` (fork's Seatbelt/landlock sandbox wrapper for tool execution) is **not ported**. Rationale: the sandbox is platform-specific (macOS Seatbelt, Linux landlock), requires native syscall bindings, and is an execution environment safety feature orthogonal to session persistence. Deferred post-parity. CLI accepts no sandbox-related flags. Document in Phase 14 parity checklist.
-
-### AD-018 — Checkpointing deferred (2026-06-21)
-
-Fork checkpointing (`/restore`) requires a shadow git repository at `~/.gemini/history/<project_hash>` and a checkpoint record format in `~/.gemini/tmp/<hash>/checkpoints/`. The JSONL loader fully supports `$rewindTo` records (written by the recorder when rewinding). However, the shadow-git creation + `/restore` command are **deferred**: they require `os/exec` git subprocess management and a new slash command with significant surface area. Deferred to a follow-up phase. Note `$rewindTo` is read correctly by the session loader now so sessions checkpointed by the fork can be loaded.
-
-### AD-019 — Simplified /resume UI (2026-06-21)
-
-The fork's `/resume` opens an interactive TUI session browser (Bubble Tea list component with search, preview, delete). Phase 13 implements a **text-list** variant instead: `/resume` and `/resume list` print the session list as plain text (same output as `--list-sessions`). The full TUI session browser is deferred to Phase 15 (interaction modes). This is intentionally simpler but fully functional for text-only workflows.
-
-### AD-020 — Git worktrees stub (2026-06-21)
-
-`--worktree` / `-w` flag is accepted and validated against `experimental.worktrees: true` in settings, but git worktree creation (`git worktree add .gemini/worktrees/<name>`) is **not executed**. A clear error message with manual instructions is printed instead. Full implementation requires subprocess management + worktree lifecycle tracking. Deferred to a dedicated worktrees phase post-parity (fork docs: `docs/cli/git-worktrees.md`).
-
-### AD-021 — Parity harness design + fork runnability (2026-06-21)
-
-Phase 14 parity harness lives in `tests/parity/` (package `parity_test`). Mock-server tests run by default via `go test ./...`; live-fork comparison tests are gated by `SAGITTARIUS_PARITY_FORK=1`. Key decisions:
-
-1. **No build tag** — env var gating is simpler and composable with `go test` filters.
-2. **Fork invocation:** `npm start -- <args>` from `defaultForkDir = /home/rob/src/gemini-cli`. Noise-stripping regex removes all `> ...`, `Checking build status...`, `npm notice/warn`, and tsx source-rebuild lines.
-3. **Mock server:** `net/http/httptest` streaming SSE chunks for OpenAI-chat path. Gemini binary-level mock deferred — SDK uses non-HTTP transport; provider-level tests cover it.
-4. **Fork mock comparison:** The fork's `-p hello` against the mock OpenAI server produces only preamble (no AI response) in this environment — the fork's provider code validates credentials or network before reaching the endpoint. Noted as "PARTIAL" in test output; not a failure. Sagittarius correctly returns the mock response.
-5. **Performance baseline:** Sagittarius cold-start **7ms**; fork source-run cold-start **~3.6s** (483× speedup). Fork's production bundle broken in this env — source-run is the only option here.
-6. **Help parity:** Fork slash commands are not accessible via headless mode; parity is verified via static `forkInScopeCommands` table (extracted from fork TypeScript) + Sagittarius registry comparison.
-
-### AD-022 — Interaction modes vs fork approval modes (2026-06-21)
-
-Phase 15 adds Sagittarius **interaction modes** (`agent`, `plan`, `ask`, `debug`) under
-`settings.json` → `sagittarius.*`. They control **model selection** and optional
-`systemPromptSuffix` per mode; they do **not** change tool policy.
-
-| Concern | Fork | Sagittarius |
-|---------|------|-------------|
-| Read-only planning | `--approval-mode plan` (tool policy) | Unchanged — still `ApprovalMode` / tools policy |
-| Model routing | Fork auto plan→flash routing in `general.plan.modelRouting` | `/mode` + `sagittarius.modes.*.model` |
-
-**Settings namespace:** `sagittarius.defaultModel`, `sagittarius.defaultMode`,
-`sagittarius.modes.{plan,ask,debug,agent}.*`, `sagittarius.subagents.{default,<name>}.*`.
-Unknown `sagittarius` sub-keys round-trip via `Extra` maps.
-
-**Default mode when unset:** `agent` (provider default model unless `defaultModel` set).
-
-**Debug mode (Phase 15 MVP):** extra structured logging on model resolution when mode
-is `debug`; **does not** port `wireLogger.ts` or disable tool execution (deferred).
-
-**Resolution:** `internal/modes` (`ResolveModel`, `ResolveSubagentModel`); runner
-refreshes model before each generate round; `-m` pins model and skips mode routing.
-Subagent helper: `agents.ResolveSubagentModel` (execution still stubbed). UX: `/mode`,
-TUI **Ctrl+Shift+M** cycles modes. Docs: `docs/interaction-modes.md`.
-
-### AD-023 — Slash autocompletion via ui.Completer seam (2026-06-21)
-
-Inline slash-command autocompletion in the TUI is routed through a new optional
-`ui.Completer` interface (`Complete(input string) ui.Completions`) so the Bubble
-Tea layer never imports `internal/slash` directly (keeps AD-004 swap boundary).
-`agent.App` implements `ui.Completer` by delegating to `slash.Registry.Complete`,
-mapping `slash.Suggestion` → `ui.Suggestion`.
-
-`slash.Registry.Complete(input, deps)` is read-only and non-blocking (UI thread,
-every keystroke — **no network**): it walks the command tree, returning
-command/subcommand candidates, or argument candidates when a leaf command defines
-`Command.ArgComplete func(deps, prefix) []string`. Wired arg completers: `/provider
-use` (built-in + custom ids) and `/provider remove` (custom only). Model-name
-completion is intentionally **not** wired (would require a network `DiscoverModels`
-call). `/mode` and `/reasoning` values are already subcommands, so they complete
-via the command path.
-
-TUI behaviour (`internal/ui/bubbletea`): suggestions appear under the input when
-the line starts with `/`; Up/Down navigate with wrap-around (no auto-highlight —
-the user can keep typing); Tab accepts the highlight (or best match); Enter
-accepts a highlighted parent (appends a space, reveals subcommands/args) or
-submits a terminal command; Esc dismisses. List capped at 8 rows + "… N more".
-
-### AD-024 — Per-model-per-provider settings (design only) (2026-06-21)
-
-Future enhancement, **not implemented** this phase. A provider instance block will
-gain an optional `models` map so individual models can override provider-level
-defaults (e.g. reasoning effort, temperature):
-
-```json
-"providers": {
-  "openai": {
-    "model": "gpt-4o-mini",
-    "models": {
-      "gpt-4o-mini": { "temperature": 0.2 },
-      "gpt-5-codex":  { "reasoningEffort": "high" }
-    }
-  }
-}
-```
-
-Resolution order: `models[activeModel].*` → provider instance defaults → registry
-defaults. Mode routing (`sagittarius.modes.*.provider`) layers on top later. The
-providers wizard edit sheet would gain a per-model sub-screen. Deferred.
-
-### AD-025 — Providers TUI wizard, `/providers` rename, `/auth` removal (2026-06-21)
-
-The fork's `/provider` command is renamed to `/providers` (plural, no alias) and
-the fork's separate `/auth` command is **removed** — API-key entry now lives in
-the providers wizard. Both are intentional divergences from the fork, documented
-in `docs/PARITY_CHECKLIST.md`.
-
-| Surface | Behaviour |
-|---------|-----------|
-| `/providers` (no args, TTY) | Opens an interactive Bubble Tea wizard overlay |
-| `/providers list\|use\|show\|set\|add\|remove` | Text subcommands retained for scripting (headless never processes slash; these run in the TUI) |
-| API keys | Wizard "Set API key" screen, or `/providers set <id> key <api-key>` |
-
-**New package `internal/ui/providersdialog`** (bubbletea-only overlay): a screen
-state machine — menu, switch, editPick, edit, editField, setKey, add, addModels,
-remove, models. Side effects go through a `providersdialog.Deps` interface
-implemented in the agent layer (`agent.App.ProviderDialogDeps`), so the TUI never
-imports the agent/slash packages (preserves AD-004 in the other direction).
-
-**Seams:** `slash.Result.OpenDialog DialogKind` (set by the bare `/providers`
-handler) → `agent.handleSlash` emits `ui.StreamOpenDialog{Dialog: DialogProviders}`
-→ bubbletea opens the overlay via the `providerDialogHost` capability interface.
-While the overlay is active the model still routes stream events (e.g. the
-terminating `StreamDone`) and window resizes to the host; keys and async
-`modelsLoadedMsg` go to the overlay.
-
-**Wire-format field allowlists** (fork `providerRegistry.ts` parity):
-`config.ValidSettingKeys(wf)` / `ValidSettingKeysForProvider(id, custom)` —
-`gemini` exposes none; `openai-chat` exposes the OpenAI-compat keys plus the
-per-provider tool-output masking knobs (AD-015); `openai-responses` swaps
-`toolCallParsing` for `reasoningEffort` + `useResponseChaining`.
-`provider.ApplyProviderSetting` validates against this allowlist and parses typed
-values; `provider.UpdateCustomProviderDefinition` edits definition fields;
-`provider.ResolveEndpointForProvider` resolves any provider's endpoint (for model
-discovery) without changing the active provider.
-
-**Add flow:** after a custom provider is saved, the wizard immediately calls
-`DiscoverModels` and lets the user pick a default model, then auto-switches to the
-new provider (matches the user's "immediately connect" requirement).
-
-Tests: `config` ValidSettingKeys per wire format; `provider` ApplyProviderSetting
-typed/rejection + UpdateCustomProviderDefinition + ResolveEndpointForProvider;
-`providersdialog` table-driven screen transitions with a fake Deps; `bubbletea`
-overlay open/close/StreamDone routing. `go test ./...` green, `-race` clean on
-touched packages.
-
-### AD-026 — Providers/models command split, menu-first, activeModels (2026-06-21)
-
-Supersedes AD-025's "keep subcommands for scripting". A **provider** is an
-endpoint; a **model** is one model that endpoint exposes. The two concerns are
-split into two **menu-first, single-surface** slash commands — neither has a
-typed subcommand tree (headless never processes slash anyway, and the dual
-surface — autocomplete advertising `list/use/set/...` while the bare command
-opened a different menu — was confusing):
-
-| Command | Scope | Menu actions |
-|---------|-------|--------------|
-| `/providers` (`slash.DialogProviders` → `ui.DialogProviders`) | provider level | switch / edit (key + wire-format-gated defaults) / set key / add (discovers models) / remove / **Manage models** (activate/deactivate) |
-| `/models` (`slash.DialogModels` → `ui.DialogModels`) | active provider only | list activated models → select sets the live model + rebuilds runner |
-
-**Active-models curation:** `ProviderInstanceConfig.ActiveModels []string`
-(`json:"activeModels,omitempty"`, registered in `config/document.go`
-marshal/unmarshal field maps; `isEmptyValue` gains a `[]string` case so an empty
-set is omitted). `provider.SetActiveModels` (trim/dedupe/clear),
-`provider.CuratedActiveModels` (raw saved set, no fallback — used to pre-check
-the activation boxes), `provider.ActiveModelsFor` (resolved, falls back to the
-configured default model when uncurated — used by `/models`). Activation browses
-the endpoint live (`DiscoverModels`) with **every model checked by default**
-("active by default"); the checked subset is saved. Gemini / no-discovery
-providers skip activation (clear message; model set on the edit sheet).
-
-**UI:** `providersdialog` `screenModels` repurposed from read-only browse to a
-checkbox activation screen (Space toggles, Enter saves via `Deps.SetActiveModels`;
-`Deps` gains `ActiveModels`/`SetActiveModels`). The edit sheet's model row is now
-a typed field for all wire formats (no longer routes to the browse screen). New
-package `internal/ui/modelsdialog` (bubbletea-only, same overlay contract):
-lists the active provider's active models, Enter selects. `bubbletea/model.go`
-holds two mutually-exclusive overlay fields (`overlay`, `modelsOverlay`);
-`openDialog` switches on `ui.DialogKind`; `modelsDialogHost` mirrors
-`providerDialogHost`. Agent layer: `providerDialogDeps` gains
-`ActiveModels` (raw) + `SetActiveModels`; new `modelsDialogDeps` +
-`App.ModelsDialogDeps()`; `mapDialogKind` maps `slash.DialogModels`.
-
-**Removals:** `/providers` and `/model` subcommand handlers
-(`handleProviderList/Use/Show/Set/Add/Remove`, `parseProviderSetArgs`,
-`handleModelSet/List`, `providerExists`, `formatProviderLine`,
-`providerSettingsForID`) and the provider arg completers (`arg_completers.go`
-deleted). `provider.ApplyProviderSetting`/`ValidSettingKeys*` retained (edit
-sheet). The generic `Command.ArgComplete` seam (AD-023) is kept but no longer
-wired to any command.
-
-**Deferred:** per-model typed settings persistence/resolution (AD-024, still
-design-only); global/cross-provider `/models`.
-
-Tests: `config` activeModels round-trip + omit-when-empty; `provider`
-SetActiveModels/ActiveModelsFor/curated-vs-fallback; `slash` `/providers` &
-`/models` DialogResult + help has no subcommand tree + no `/model`; `slash`
-completion (top-level has `models` not `model`, both terminal); `providersdialog`
-activation toggle+save + gemini no-discovery; `modelsdialog` select-sets-model +
-esc + no-active-provider; `bubbletea` `DialogModels` overlay open/close/no-host;
-`tests/parity` tables updated (menu-first, subcommands retired). `go test ./...`
-green, `go vet` clean, `-race` clean on touched packages.
-
-### AD-027 — Model default resolution + activation coherence (2026-06-21)
-
-Reworks how the live model is resolved so the per-mode override always wins and
-the legacy global default can no longer clobber the active provider's configured
-model.
-
-**New setting:** `sagittarius.defaultModels` (`map[string]string`, provider id →
-model). Typed field on `SagittariusSettings`; registered in
-`reservedSagittariusKeys` + marshal/unmarshal; `isEmptyValue` gains a
-`map[string]string` case so an empty map is omitted. Lookup tolerates the short
-`gemini` alias via `config.NormalizeProviderID`.
-
-**Resolution chain** (`internal/modes.ResolveModel(mode, cfg, providerID,
-providerDefault)`, first non-empty wins):
-
-1. `sagittarius.modes.<mode>.model` — per-mode override, always wins
-2. `sagittarius.defaultModels[providerID]` — provider-scoped default
-3. `providerDefault` — provider instance / built-in default
-4. `sagittarius.defaultModel` — legacy single global default (last resort)
-
-Previously the legacy `defaultModel` sat at tier 2 and overrode the provider
-default, so switching to Gemini while `defaultModel: gpt-4o` was set sent OpenAI
-model ids to Gemini. `ResolveSubagentModel` mirrors the chain after its
-named/default subagent keys. Both signatures gained a `providerID` argument; the
-runner passes `settings.ActiveProvider()` (new `Runner.activeProviderID`), and
-`agents.ResolveSubagentModel` derives it from settings. `LogModeSelection` now
-logs `provider_id`.
-
-**Activation coherence (auto-first):** deactivating the active provider's live
-model on the `/providers` → Manage models screen auto-switches the live model to
-the first still-checked model (`providersdialog.Deps.CurrentModel` +
-`saveActivation` guard; agent adapter resolves via `ResolveEndpointForProvider`).
-Centrally, `provider.CoerceModelToCurated` runs in `agent.appHooks.RebuildRunner`
-(covers provider switch and any rebuild): when a provider has a curated
-`activeModels` set and its resolved model is not a member, the model is set to
-`activeModels[0]` and persisted. Uncurated providers are untouched.
-
-**Deferred:** settings UI for `defaultModel`/`defaultModels` (JSON-only for now);
-AD-024 per-model typed settings; hard-rejecting edit-sheet models outside the
-curated set.
-
-Tests: `config` defaultModels round-trip + omit-when-empty; `modes`
-TestModeOverrideBeatsAllDefaults / TestDefaultModelsPerProvider (incl. gemini
-alias) / TestGlobalDefaultFallbackWhenProviderUnset + rewritten existing cases;
-`provider` CoerceModelToCurated switch/noop; `providersdialog`
-activation-switches-live-model + keeps-when-checked. `go test ./...` green.
-
-### AD-028 — TUI presentation parity: semantic theme + launch/exit chrome (2026-06-21)
-
-Phase 16 closes the TUI **presentation** gap with the fork's Ink UI without
-touching the AD-004 agent/UI seam. All color lives in a new leaf package
-`internal/ui/theme` (the agent layer never imports it); the bubbletea renderer
-and the two dialog overlays consume it.
-
-**Theme system (`internal/ui/theme`):** a `Theme` struct of pre-built lipgloss
-styles (Title/Primary/Secondary/Accent/Response/Link/Code/Dim, Error/Warning/
-Success, Selected) plus border colors (BorderColor/FocusBorderColor). Two
-built-ins: `Default` (purple-leaning — accents `#9B7EDE`/`#D7AFFF`, focus
-`#9B7EDE`) and `Greyscale` (bold/faint/reverse/underline only, `lipgloss.NoColor`
-borders — emits **zero** color codes). `Resolve(name, noColor)`: `NO_COLOR`
-(any non-empty) → greyscale; `ui.theme` aliases (`greyscale`/`grayscale`/`mono`/
-…) → greyscale; else default. Wired via new `ui.Options.ThemeName`/`NoColor`
-(primitives, so `ui` does not import `theme`); `cmd/sagittarius` reads
-`config.Settings.UI()` (new typed passthrough reader for `ui.theme`/`hideBanner`/
-`hideTips`) and `NO_COLOR`. Dialogs gained `SetTheme`; their package-level style
-vars and free `renderRow`/`renderWireToggle` became theme-driven methods; box
-borders use `FocusBorderColor` in color mode.
-
-**Structured scrollback (16b):** the monolithic `output strings.Builder` became
-`[]scrollBlock{role,text}` with `openResponseIdx` accumulating streamed assistant
-deltas into one block. Roles → prefix+style: user `>`, assistant `✦`, info `ℹ`,
-error `✕`, tool-start `⚙`, tool-result `↳`, confirm `?`. Wrapping runs on plain
-text **before** styling so ANSI never corrupts wrap math. A pending tool confirm
-also renders a focused (purple-bordered) **band** above the input (`renderConfirmBand`,
-+3 reserved body rows) so the y/n prompt is not buried; y/n is still the
-intentional divergence from the fork's radio dialog.
-
-**Launch (16c):** new `welcome.go` — original compact ASCII banner (arrow motif +
-spaced wordmark, per-line purple gradient), version line, active provider/model,
-tips block. Gated by `ui.hideBanner` (logo → one-line title) and `ui.hideTips`.
-
-**Telemetry + footer (16d):** new `internal/agent/metrics.go` `sessionMetrics`
-(mutex-guarded turns/tool-calls/failures + heuristic input/output/context tokens
-via `contextmgmt.EstimateTokens`). Runner hooks: `recordTurn` (RunTurn),
-`recordRequest` (per generate request — also sets live context-token estimate),
-`recordOutput` (post-stream), `recordTools` (post-execute, failures = responses
-with an `"error"` key). `Runner.Stats()` → new UI-facing `ui.SessionStats`
-(carries no provider types; `ContextPercent()` returns -1 when no limit).
-`contextmgmt.Manager` gained `Enabled()`/`ContextLimit()`. `App` implements new
-`ui.MetricsProvider`; footer appends `% context` (+ compact token total ≥80 cols)
-when a limit is known.
-
-**Exit (16e):** `beginQuit` centralizes every quit path (StreamQuit, Ctrl+C,
-QuitMsg), captures a goodbye summary, and `Terminal.Run` prints it to the
-restored screen **after** alt-screen teardown (so it persists; `View()` returns
-"" while quitting for a clean teardown). Summary: title, session/provider/model,
-turns, tool calls (% ok), duration, in/out tokens, and `sagittarius --resume
-<sessionId>`.
-
-**Markdown (16f):** `markdown.go` — minimal in-house renderer for assistant
-`roleResponse` blocks only (headings, `-/*/+` bullets → `•`, fenced code with a
-`│` left bar, inline `**bold**`/`*italic*`/`` `code` ``). Inline styling is
-applied per already-wrapped line (a marker straddling a wrap boundary degrades to
-literal text — acceptable for "basic"). User lines stay verbatim. New theme
-`Code` style (teal in default, faint in greyscale).
-
-**Deferred (16g):** `/theme` command + picker, rich confirm dialogs (radio/diff),
-full footer column config (`ui.footer.items`), extended screen-reader prefixes.
-
-**Intentional divergences kept:** y/n confirms, purple accent (vs fork green
-focus), `sagittarius --resume`.
-
-Docs: `docs/tui-themes.md` (new), `docs/PARITY_CHECKLIST.md` (TUI presentation
-section). Tests: `theme` greyscale-no-color/default-color/resolve; `config` UI()
-parse; `bubbletea` scrollback roles + response accumulation + confirm band +
-welcome (logo/hide/greyscale) + exit summary (stats/resume/greyscale/clean-quit)
-+ markdown (headings/bullets/code/inline/greyscale); `agent` session-metrics
-accumulate. `go test ./...` green, `go vet` clean, `-race` clean on
-ui/agent/config/contextmgmt.
-
-### AD-029 — Dedicated `~/.sagittarius` home, fresh start, AGENTS.md-only (2026-06-21)
-
-Sagittarius moves off the shared `~/.gemini` tenancy into a dedicated global home
-`~/.sagittarius`. **Fresh start:** `~/.gemini` is never read or migrated. This is
-an intentional divergence — cross-tool session/credential sharing with the fork
-is dropped in exchange for a clean, independently-branded namespace.
-
-**Path resolution** (`internal/config/paths.go`): `SagittariusDir = ".sagittarius"`;
-`SAGITTARIUS_HOME` replaces `GEMINI_CLI_HOME`; helpers renamed
-`ResolveSagittariusDir`/`ResolveSettingsPath`/`ResolveGlobalAgentsPath` +
-`ProjectSagittariusDir(workDir)`. System paths: `/etc/sagittarius/settings.json`
-(+ `SAGITTARIUS_SYSTEM_SETTINGS_PATH`/`_DEFAULTS_PATH`).
-
-**First-run bootstrap** (new `internal/storage`): `EnsureGlobalHome()` creates
-`~/.sagittarius` (0700) — called at the top of `cmd/sagittarius` `run()`
-(best-effort; logs a warning on failure, even before `--version`). A faithful
-port of the fork `ProjectRegistry` (`registry.go`) assigns a stable slug per
-absolute project root, persisting `projects.json` and `tmp/<slug>/.project_root`
-+ `history/<slug>/.project_root` ownership markers (slugify + `-N` collision
-counter; O_EXCL lock file with stale-break + graceful timeout fallback).
-Everything else stays lazy (fork parity).
-
-**Sessions** (`internal/session`): `ChatsDir` now resolves
-`~/.sagittarius/tmp/<slug>/chats/` via `storage.ProjectTmpDir` (was SHA256
-`tmp/<hash>/`); local `geminiHome()` deleted. `ProjectHash` is retained only as
-the metadata `projectHash` content field, not for the directory layout.
-
-**Memory** (`internal/agent/memory.go`): **AGENTS.md only**, no `GEMINI.md`.
-Global `~/.sagittarius/AGENTS.md`; project walk collects `AGENTS.md` up to the
-`~/.sagittarius` boundary.
-
-**Project dir:** `<repo>/.sagittarius/` for skills/agents/settings/worktrees
-(was `.gemini`). `~/.agents/skills` sibling alias retained.
-
-**Credentials rebrand** (`internal/credentials`): file
-`sagittarius-credentials.json`; scrypt salt/password `sagittarius*` (encryption
-format matches fork FileKeychain but the file is **not** interchangeable);
-keychain services `sagittarius-provider-*` / `sagittarius-mcp-*`; env
-`SAGITTARIUS_FORCE_FILE_STORAGE`.
-
-**Deferred (unchanged):** shadow-git `/restore` under `history/<slug>/.git`
-(AD-018); `trustedFolders.json`, `installation_id`, OAuth account files;
-auto-seeding a default provider into `settings.json`.
-
-Docs: `docs/home-directory.md` (new), `SECURITY.md` updated. Tests: `storage`
-EnsureGlobalHome/idempotent + slug create-markers/stable/collision; `config`
-ResolveSagittariusDir + `SAGITTARIUS_HOME`; `agent` AGENTS.md injection;
-`credentials` service-name; parity harness writes both layouts + sets both home
-env vars. `go test ./...` green, `go vet` clean.
-
-### AD-030 — Personality system prompts (programmer base, full/lite variants) (2026-06-21)
-
-Sagittarius previously sent **only** `AGENTS.md` memory (+ mode suffix) as the
-system instruction — the fork's coding "brain" was never ported. AD-030 ports it
-behind a **personality** abstraction.
-
-**New leaf package `internal/prompt`** (imports only `config` + `tools`; nothing
-imports it back). `Personality` (`programmer` default; `sysadmin`/`assistant`
-**stubs** that fall back to programmer with a `// TODO`), `Variant`
-(`full` default | `lite`), `Identity{Model, ProviderName}`,
-`Options{Personality, Variant, Identity, ToolNames, Interactive, IsGitRepo,
-SandboxEnabled}`, `Build(Options) string`.
-
-- `programmerLite` — faithful port of the fork `snippets.local.ts`
-  `buildCorePrompt` (identity + tool usage + workflow + edit rules + shell safety
-  + git + sandbox), tool names mapped to Sagittarius's real tools.
-- `programmerFull` — **adapted** composition of `snippets.ts` (preamble, core
-  mandates, primary workflow, operational guidelines, git, sandbox, available
-  tools). References only real tools (`read_file`, `write_file`,
-  `list_directory`, `run_shell_command`, `grep_search`); drops
-  write_todos/plan-mode/tracker/sub-agents/hierarchical-memory.
-- **Identity** (`renderIdentity`, ported): names the model+provider when known;
-  when unknown (empty or `local-model`) **forbids** a false "I'm Google Gemini"
-  claim.
-
-**Resolution** (`internal/prompt/resolve.go`, first non-empty wins):
-per-model `providers.<id>.models.<model>.{personality,promptMode}` ->
-provider `providers.<id>.{personality,promptMode}` ->
-global `sagittarius.systemPrompt.{personality,variant}` -> built-in
-(`programmer`/`full`).
-
-**Config:** new `sagittarius.systemPrompt` block
-(`SagittariusSystemPromptConfig{Personality, Variant}`, reserved key +
-marshal/unmarshal + variant validation); `ProviderInstanceConfig` gains
-`Personality string` and `Models map[string]ProviderModelConfig`
-(`ProviderModelConfig{Personality, PromptMode}` with custom JSON for
-Extra round-trip — minimal AD-024 slice); registered in `document.go` field maps
-(+ `isEmptyValue` `map[string]ProviderModelConfig` case) and the openai-chat /
-openai-responses editable key lists (`registry.go`). Canonical personality set +
-`KnownPersonality` live in `config` (shared leaf) because `tools` imports
-`provider`, so `provider` must not import `prompt`.
-
-**Provider:** `ApplyProviderSetting` accepts `personality` (validated against
-`config.KnownPersonality`, normalized) for openai-chat/responses; gemini still
-exposes none.
-
-**Runner wiring** (`runner.go`): split state into `memory` (AGENTS.md) +
-`systemBase` (personality prompt + memory) + `system` (base + mode suffix), all
-guarded by `modelMu`. New `rebuildBasePrompt()` (resolves personality/variant,
-builds with live `Identity{model, providerDisplayName}` + tool decl names + git
-detection; sandbox false per AD-017) and `rebuildSystem()` (= rebuild base +
-apply mode suffix). Called from `NewRunner`, `refreshModelFromMode` (so model/
-mode/provider changes flip per-model overrides), and the model/settings setters.
-`app.go` `ReloadSystemInstruction` re-reads memory then `rebuildSystem`;
-`RebuildRunner` rebuilds the base via the existing `SetProviderDefaultModel` /
-`RefreshModelFromMode` calls. Provider display name resolved in-runner from
-settings (`config.LookupBuiltInProvider` + custom `DisplayName`).
-
-**Deferred:** real `sysadmin`/`assistant` content; `/personality` slash command +
-wizard UI (config/JSON-driven for now); full AD-024 per-model typed settings
-beyond personality/promptMode; fork plan-mode/tracker/sub-agent sections.
-
-Docs: `docs/system-prompts.md` (new). Tests: `prompt` full/lite anchors +
-identity known/unknown + unported-token safety + stub fallback + known
-personality/variant; `prompt` resolver precedence + builtin fallback; `config`
-systemPrompt + provider personality/models round-trip + omit-when-empty + bad
-variant; `provider` ApplyProviderSetting personality; `agent` runner
-system-instruction composition (full default + lite via provider promptMode,
-both include AGENTS.md memory + model identity). `go test ./...` green, `go vet`
-clean, `-race` clean on prompt/config/agent.
-
-### AD-031 — Provider settings UX: system-prompt presets, sampling defaults, context auto-detect (2026-06-22)
-
-Builds on AD-030. Collapses the two confusing personality/promptMode text rows
-into one **System prompt** picker, wires the previously-dead `temperature` knob
-on the openai-chat path, gives every personality/variant a sensible sampling
-default, and auto-detects context windows.
-
-**System-prompt presets** (new `config/systemprompt.go`): 8 presets pairing the
-four personalities × {full, lite}. `SystemPromptPresets`, `LookupPreset`,
-`PresetForPersonalityVariant`, and the canonical `ResolvePersonality` /
-`ResolveVariant` (tier order: per-model → provider → global → built-in) now live
-in `config` (a leaf package) so both `prompt` and `provider` can import them
-without a cycle; `prompt.Resolve*` delegate. Personalities expanded
-(`config/sagittarius.go`): `programmer`, `sysadmin`, `personal-assistant`,
-`creative-assistant`; legacy `assistant` is a read alias for `personal-assistant`
-via `config.CanonicalPersonality`. Stub personalities (`prompt/personas.go`) each
-emit a **distinct** role preamble over the shared lite core (no longer silent
-programmer copies).
-
-**Sampling defaults** (new `config/sampling.go`): `ModelTemperatureRule`
-(model-family omit/force rules — omit `gemini-3*`/`gemini-2.5*`,
-`gpt-5*`/`o3*`/`o4*`, Anthropic Opus 4.7+; force `1.0` for Qwen3-Coder),
-`PersonalityDefaultTemperature` (programmer 0.35 / sysadmin 0.25 / personal 0.55 /
-creative 0.85), `VariantCompressionThreshold` (full 0.45 / lite 0.38), and
-`ResolveEffectiveTemperature` (user pin → model-family → personality default →
-omit). Temperature is **not persisted by presets**; it resolves per turn.
-Wiring fix: `OpenAIChatConfig.Temperature` → generator → `BuildOpenAIChatRequest`
-(new `defaultTemperature` arg, used when `req.Temperature` is nil);
-`runner.buildGenerateRequest` sets `req.Temperature` from
-`config.ResolveEffectiveTemperature` each turn; `endpoint.go`/`factory.go` pass it
-through. `contextmgmt_config.go` seeds the compression threshold from the variant
-default when unpinned.
-
-**Context auto-detect** (`provider/discovery.go`): `ModelInfo.ContextLimit`;
-parse `context_length`/`max_model_len` (openai-compat) and `inputTokenLimit`
-(Gemini) plus a static table (`StaticContextLimit`/`ContextLimitForModel`) for
-OpenAI-direct ids. `provider.MaybeSetContextLimit` writes
-`providers.<id>.contextLimit` only when not pinned (new
-`ProviderInstanceConfig.ContextLimitUserSet`, registered in `document.go`); the
-agent dialog applies it on model set/select.
-
-**Preset/reset operations** (new `provider/preset.go`):
-`ApplySystemPromptPreset` (writes personality+variant, reports resolved sampling
-defaults + pin flags via `PresetApplyResult`), `CurrentSystemPromptPreset`,
-`ClearProviderSetting` (single key), `ResetProviderInstanceOverrides` (clears
-behavioral overrides; preserves model/baseUrl/wireFormat/activeModels/API key).
-
-**Dialog UX** (`providersdialog`): new `screenEditPicker` + edit kinds
-(`editPreset`, `editEnum`, `editToggleBool`, `editResetAll`); the edit sheet hides
-`personality`/`promptMode`, shows a System prompt row, an in-place `enableTools`
-toggle, a `toolCallParsing` picker, effective-value annotations (`(default: …)`
-when unset, `= …` when overridden), a per-row `r` reset, and a "Reset all
-settings" row. New `Deps` methods (`EffectiveProviderSettings`,
-`SystemPromptPresetID`, `ApplySystemPromptPreset`, `ClearSetting`,
-`ResetSettings`) implemented in `agent/providerdialog.go`.
-
-**Deferred:** authoring full sysadmin/assistant prompt bodies; `top_p`/`top_k`
-tuning (temperature only this pass); `/personality` slash command; hiding the
-advanced masking knobs.
-
-Docs: `docs/system-prompts.md` (presets, sampling defaults, context auto-detect,
-resets). Tests: `config` sampling (model-family + effective temperature),
-systemprompt round-trip; `provider` preset apply/current/clear/reset,
-discovery context parsing + pin respect, openai-chat temperature mapping;
-`providersdialog` preset picker / enableTools toggle / reset-all / `r` reset /
-collapsed rows. `go build ./...` clean; touched-package tests green.
-
-### AD-032 — Interaction-mode read-only tool gates (plan / ask) (2026-06-22)
-
-Plan and ask interaction modes now enforce read-only tool policy in the scheduler
-(hard gate before execution) and when building provider tool declarations.
-
-| Mode | Allowed | Blocked |
-|------|---------|---------|
-| **ask** | `read_file`, `grep_search`, `list_directory`, `activate_skill` | `write_file`, `run_shell_command`, MCP tools |
-| **plan** | ask tools + `write_file` under `docs/plans/` only | shell, writes outside plans dir, MCP tools |
-| **agent / debug** | full registry | — |
-
-Plan path validation ports fork `resolveAndValidatePlanPath` semantics
-(`internal/tools/plan_path.go`); relative write paths resolve under `docs/plans/`.
-Built-in system-prompt suffixes in `modes.SystemPromptSuffix` reinforce restrictions;
-custom `sagittarius.modes.*.systemPromptSuffix` appends after the built-in text.
-Orthogonal to fork `--approval-mode` confirmation policy (AD-022).
-
-Docs: `docs/interaction-modes.md`. Tests: `tools` interaction_mode + plan_path +
-scheduler gate; `agent`/`modes` unchanged pass.
-
-### AD-033 — Local snapshots (/diff, /undo) + project boundary enforcement (2026-06-22)
-
-Adds OpenCode-style **local file snapshots** (review with `/diff`, revert with
-`/undo`) plus a global/per-project **project boundary** that blocks file
-mutations outside the workspace root, including a heuristic shell scan.
-
-**Snapshot mechanism — content snapshots, not shadow git (deliberate deviation
-from the plan's shadow-git design).** The plan specified a shadow git repo under
-`~/.sagittarius/history/<slug>/.git`. We instead capture the before/after
-*content* of each `write_file` directly (new package `internal/snapshot`:
-`Manager.CaptureWrite`/`CommitWrite`/`Diff`/`Undo`, in-house LCS unified diff in
-`diff.go`). Rationale: the plan's own hardening notes cite OpenCode's shadow-git
-data-loss bugs (silent `git add` failures, multi-GB diffs); content snapshots
-avoid that class entirely, need no git (work in non-git projects), are
-session-scoped by construction (only Sagittarius `write_file` is tracked, never
-worktree drift), and compute diffs in process. Per-file content is capped at
-`sagittarius.snapshots.maxFileBytes` (default 2 MiB) → oversized files are
-metadata-only (diff shows a note, undo refused). The external contract the plan
-asked for is preserved: `/diff`, `/undo`, storage under `.sagittarius`, a
-per-session JSONL index (`~/.sagittarius/tmp/<slug>/snapshots/<sessionId>.jsonl`),
-size caps, and fail-soft (in-memory stack still powers /diff+/undo if the index
-write fails). The in-repo read-only diff mirror was dropped (not needed without
-shadow git), so the only protected path is `<repo>/.sagittarius/snapshots/`
-(always blocked for agent writes via `tools.IsProtectedWritePath`).
-
-**Config:** new top-level typed `security` section
-(`SecuritySettings.ProjectBoundary.Enforce *bool`, `internal/config/security.go`
-+ `security_document.go`, wired into `decodeSettingsDocument`/`encode`) and
-`sagittarius.snapshots` (`SagittariusSnapshotConfig{Enabled, MaxFileBytes}`,
-reserved key + marshal/unmarshal). Resolution helpers `ProjectBoundaryEnforced`
-/ `SnapshotsEnabled` / `SnapshotMaxFileBytes` take `(global, project)` — **project
-wins when set**. Boundary default `false` (backward compatible); snapshots
-default `true`.
-
-**Project settings merge (prerequisite, previously docs-only):**
-`config.ResolveProjectSettingsPath(workDir)` + `config.LoadProjectSettings(workDir)`
-read `<repo>/.sagittarius/settings.json`. The merge is resolution-only and never
-persisted (a `Loader.Save` cannot leak project settings into the global file);
-only `security` + `sagittarius.snapshots` are consumed today.
-
-**Tool wiring:** `tools.Scheduler` gained variadic `SchedulerOption`s
-(`WithProjectBoundary(enforce)`, `WithSnapshotter(Snapshotter)`) so existing
-call sites are unchanged. `executeOne` runs `ProjectBoundaryAllow` **before** the
-interaction-mode gate (applies in every mode), then fires the snapshot hook
-around `write_file` (`CaptureWrite` before, `CommitWrite` after success). The
-shell heuristic (`shell_boundary.go` `ShellMutatesOutsideRoot`) scans
-redirections (`>`,`>>`,`2>`,`&>`,`>|`,`tee`) and mutators (`rm`/`mv`/`cp`/
-`install`/`truncate`/`chmod`/`chown`/`mkdir`/`dd`/`ln`/`touch`/`sed -i`) for
-out-of-root targets (absolute, `../`, `~`). Documented as defense-in-depth, not a
-sandbox (obfuscation/`cd`/`eval` bypasses noted in SECURITY.md).
-
-**Runner/CLI:** `RunnerConfig` gained `ProjectBoundary bool` + `Snapshotter
-*snapshot.Manager`; runner exposes `SnapshotDiff`/`SnapshotUndo`/`SnapshotEnabled`
-and passes `schedulerOptions()` to every scheduler it builds (nil manager → nil
-interface, no typed-nil trap). `cmd/sagittarius` `resolveBoundaryAndSnapshots`
-loads project settings, resolves the policy, and builds the manager (best-effort;
-disabled when working dir unknown or snapshots off).
-
-**Slash:** new `/diff [path]` and `/undo [n]` (`slash.Hooks.SnapshotDiff`/
-`SnapshotUndo`, implemented by `appHooks` → runner; output via `ui.StreamInfo`).
-Headless never processes slash — document inspecting the JSONL index or git.
-
-**Deferred (explicit follow-ups):** `/review` LLM command, TUI fullscreen diff
-overlay, `/restore` with conversation rewind (AD-018 full), `run_shell_command`
-snapshotting, MCP write boundary, footer "N unsaved changes" hint.
-
-Docs: `docs/snapshots-and-undo.md` (new), `SECURITY.md` (project boundary +
-heuristic limits), `docs/home-directory.md` (snapshot paths + project merge),
-`docs/reference/commands.md` (`/diff`, `/undo`). Tests: `snapshot`
-track/diff/undo/oversize/filter (9); `tools` boundary + shell heuristic +
-protected path + scheduler block/hook (5 funcs); `config` boundary/snapshot
-resolution + round-trip + project load (5); `slash` /diff empty + /undo bad arg +
-registered (3); parity in-scope table adds `diff`/`undo`. `go build ./...` clean,
-`go vet` clean, `-race` clean on snapshot/tools/config/slash/agent.
-
----
-
-## Workspace Layout
-
-| Path | Purpose |
-|------|---------|
-| `/home/rob/src/sagittarius` | This repo (Go port) |
-| `/home/rob/src/gemini-cli` | Frozen reference fork (read-only) |
-| `docs/plans/` | Local phase plans (gitignored) |
-| `AGENTS.md` | **This file** — status, decisions, agent rules |
-
-### Before Implementing Anything
-
-1. Read the relevant **single** phase file in `docs/plans/`.
-2. Read the listed Node reference files in the fork.
-3. Implement exit criteria + tests for that phase only.
-4. Update **this file** phase table and any new AD-* decisions.
-
----
-
-## Porting Guidelines (Go)
-
-1. **Async → goroutines/channels/`select`**, protect shared state with mutexes.
-2. **`context.Context`** on all I/O and long-running loops; clean cancel.
-3. **Typed structs** at boundaries; explicit wire-format translation layers.
-4. **Errors:** wrap with `%w`, never swallow; fix deprecations and vet findings.
-5. **Go version:** verify latest stable at [go.dev/dl](https://go.dev/dl/) each
-   session; currently **1.26.4**.
-6. **Tooling:** `gofmt`, `go vet`, `go test -race`, `golangci-lint`, `govulncheck`.
-
-### Target Package Layout (Phase 01)
+## Architecture
+
+Key seams to preserve:
+
+- **UI is swappable.** Agent/core packages must not import Bubble Tea; only
+  `internal/ui/bubbletea` imports the charm libraries. Everything crosses the
+  `internal/ui.UI` interface (and optional `ui.Completer`/`ui.MetricsProvider`).
+- **One openai-chat adapter** for all URL-based providers; Gemini-native and
+  OpenAI-Responses are separate wire paths. Client-side context management is
+  gated to `openai-chat` only — Gemini and Responses are never masked/compressed
+  client-side.
+- **Memory is `AGENTS.md` only** (no `GEMINI.md`): the global
+  `~/.sagittarius/AGENTS.md` plus a project walk up to the home boundary.
+- **`internal/prompt` is a leaf** (imports only `config` + `tools`); nothing
+  imports it back. Canonical personality/preset/sampling logic lives in `config`
+  so `provider` and `prompt` can share it without an import cycle.
+
+### Package layout
 
 ```
-cmd/sagittarius/
-internal/config/
-internal/credentials/
-internal/provider/
-internal/agent/
-internal/tools/
-internal/ui/              # ui.UI interface
-internal/ui/bubbletea/    # Bubble Tea implementation (only place that imports charm)
-internal/ui/demo/         # Phase 04 echo App (replaced in Phase 07)
-internal/slash/
-internal/modes/             # Phase 15 interaction modes + model routing
-internal/mcp/
-internal/skills/
-internal/agents/
-internal/extensions/
-internal/session/          # Phase 13 session persistence (JSONL, resume, list)
-internal/storage/          # Global home (~/.sagittarius) + project slug registry (AD-029)
-internal/version/
-internal/log/
+cmd/sagittarius/          # CLI entry, flags, headless + interactive dispatch
+internal/config/          # settings.json (typed + unknown-key passthrough), presets, sampling, paths
+internal/credentials/     # API key resolution: env → keychain → encrypted file
+internal/provider/        # ContentGenerator + gemini / openai-chat / openai-responses adapters
+internal/agent/           # turn loop, App (ui adapter), approval, metrics, runtime/catalog
+internal/tools/           # built-in tools, path validation, scheduler, project boundary
+internal/contextmgmt/     # local-context defenses (openai-chat only)
+internal/modes/           # interaction modes + model routing
+internal/prompt/          # personality system prompts (leaf)
+internal/slash/           # slash command registry/parser/processor
+internal/snapshot/        # local file snapshots (/diff, /undo)
+internal/session/         # JSONL session persistence, resume/list
+internal/storage/         # global home + project slug registry
+internal/mcp/ skills/ agents/ extensions/   # MCP + skills (full); agents/extensions partial
+internal/ui/              # ui.UI interface (primitives only)
+internal/ui/bubbletea/    # Bubble Tea implementation (only charm importer)
+internal/ui/theme/ providersdialog/ modelsdialog/ modelpickdialog/ modesdialog/  # TUI leaves
+internal/version/ internal/log/
+tests/parity/             # comparison harness (gated by SAGITTARIUS_PARITY_FORK)
+tests/e2e/                # subprocess E2E: live (SAGITTARIUS_E2E_LIVE) + mock (SAGITTARIUS_E2E_MOCK)
 ```
 
 ---
 
-Phase 13 complete (2026-06-21): internal/session package (Recorder, LoadSession, ListSessions, DeleteSession, Selector/ResolveSession, ProjectHash/ChatsDir, ConvertToProviderHistory, FormatSessionList); CLI flags --resume/-r, --list-sessions, --delete-session, --output-format text|json|stream-json, --worktree stub (AD-020); session recording wired into agent/runner.go (user/model/tool messages); /resume and /clear slash commands; slash.Hooks extended with ListSessions/ClearHistory; Runner.ClearHistory + InitialHistory; JSONL format fork-compatible. Tests: TestSessionRoundTrip, TestResumeLatest, TestListSessionsEmpty, TestResumeByIndex, TestResumeByUUID, TestResumeInvalidIdentifier, TestProjectHash, TestConvertToProviderHistory, TestDeleteSession, TestFormatSessionList.
-Phase 15 complete (2026-06-21): internal/config sagittarius.* typed settings + round-trip; internal/modes (Mode, State, ResolveModel, ResolveSubagentModel); runner mode routing before each generate round; /mode slash + Ctrl+Shift+M TUI cycle; agents.ResolveSubagentModel; docs/interaction-modes.md; AD-022. Tests: TestModeSelectsModel, TestSubagentModelFallback, TestGlobalDefaultWhenUnset, TestModeSwitchMidSession, TestSagittariusSettingsRoundTrip.
-Phase 15 Bugbot fixes (2026-06-21): context manager now tracks the runner's live mode-resolved model — NewContextManager takes modelFn func() string (was a captured string) and the summarizer resolves it per call, so chat compression/summarization on the openai-chat path uses the same model as user turns across provider rebuilds AND mid-session /mode switches (was using endpoint.Model / provider default — AD-015 violation); main.go builds the context manager after the runner using runner.Model so startup also matches a non-default mode model; TUI footer refreshes idleStatus from app.Status() on StreamDone so /mode and Ctrl+Shift+M are reflected (was reset to the startup-captured status); ValidateSagittariusSettings no longer rejects a suffix-only mode block (ResolveModel falls back to defaultModel/provider default while the suffix applies); NewRunner no longer treats InitialMode==0 as unset (ModeAgent is the zero value — explicit ModeAgent was silently overridden by sagittarius.defaultMode; callers resolve DefaultFromSettings themselves, as main.go already does). Tests added: TestValidateSuffixOnlyModeAccepted, TestExplicitAgentModeNotOverriddenByDefault. Verified: go test ./... pass, -race clean on touched packages.
-Slash autocompletion (2026-06-21, post-Phase 15): inline TUI suggestions as you type a `/` command — Up/Down select (wrap, no auto-highlight), Tab completes, Enter accepts-or-submits, Esc dismisses. New `ui.Completer` seam (bubbletea never imports slash); `agent.App.Complete` → `slash.Registry.Complete`; `Command.ArgComplete` powers value completion for `/providers use` (all ids) and `/providers remove` (custom only). AD-023. Tests: slash completion_test.go (7), bubbletea suggestion nav/accept (6). Model-name arg completion deferred (needs network DiscoverModels). Verified: go test ./... pass, -race clean on slash/agent/bubbletea.
+## Engineering conventions
 
-Providers TUI wizard (2026-06-21, post-Phase 15): renamed `/provider` → `/providers` (no alias), removed `/auth` (API keys now in the wizard). New `internal/ui/providersdialog` overlay package (menu/switch/editPick/edit/setKey/add/addModels/remove/models) driven via `providersdialog.Deps` implemented by `agent.App.ProviderDialogDeps`. Seams: `slash.Result.OpenDialog` → `ui.StreamOpenDialog` → bubbletea overlay (`providerDialogHost`). `config.ValidSettingKeys*` wire-format allowlists; `provider.ApplyProviderSetting` (typed+validated), `UpdateCustomProviderDefinition`, `ResolveEndpointForProvider`, `InstanceSettingValues`. Add flow discovers models and prompts for a default, then auto-switches. AD-024 (per-model settings, design only), AD-025. Docs: commands.md, PARITY_CHECKLIST.md updated. Tests: config ValidSettingKeys (4), provider apply/update/resolve (6), providersdialog transitions (6), bubbletea overlay (4). Verified: go test ./... pass, vet clean, -race clean on slash/ui/agent/config.
+1. **Concurrency:** async → goroutines/channels/`select`; guard shared state with
+   mutexes. `context.Context` on all I/O and long-running loops; clean cancel.
+2. **Boundaries:** typed structs at wire boundaries; explicit wire-format
+   translation layers.
+3. **Errors:** wrap with `%w`, never swallow; fix deprecations and vet findings.
+4. **Tooling, run continuously:** `gofmt`, `go vet ./...`, `go test ./...`,
+   `go test -race` on touched packages; `golangci-lint`; `govulncheck`.
+5. **Security/hygiene:** no secrets in the repo or `settings.json`; keep
+   `SECURITY.md` accurate; document breaking changes.
+6. **Paths in this file:** use repo-relative paths (e.g. `internal/agent/`), never
+   absolute machine paths.
 
-Providers/models command split (2026-06-21, post-Phase 15, AD-026): supersedes AD-025's "keep subcommands". `/providers` and `/models` are now menu-first single-surface commands — typed subcommand trees retired (handlers + `arg_completers.go` deleted). `/model` → `/models` (`slash.DialogModels` → `ui.DialogModels`). New per-provider `ProviderInstanceConfig.ActiveModels` (`activeModels`, registered in config/document.go field maps + `isEmptyValue` []string case); `provider.SetActiveModels`/`CuratedActiveModels` (raw)/`ActiveModelsFor` (resolved fallback). `providersdialog` models screen repurposed into a checkbox activation toggle (Space/Enter, active-by-default; Gemini skips — no discovery); edit-sheet model row is now a typed field. New `internal/ui/modelsdialog` overlay (list active provider's active models → Enter sets live model). `bubbletea` holds two mutually-exclusive overlays (`overlay`/`modelsOverlay`), `openDialog` switches on kind, `modelsDialogHost` added. Agent: `providerDialogDeps` gains `ActiveModels`/`SetActiveModels`, new `modelsDialogDeps` + `App.ModelsDialogDeps()`, `mapDialogKind` maps DialogModels. `ApplyProviderSetting`/`ValidSettingKeys*` retained. Docs: commands.md, PARITY_CHECKLIST.md, AGENTS.md (AD-026). Tests: config round-trip+omit (2), provider activemodels (3), slash dialog-open+help+completion (rewritten), providersdialog activation+gemini (2), modelsdialog (3), bubbletea DialogModels (3), parity tables updated. Verified: go test ./... pass, vet clean, -race clean on slash/ui/config/agent.
+### Testing the binary headlessly
 
-Model default resolution + activation coherence (2026-06-21, post-Phase 15, AD-027): per-mode model override always wins; legacy `sagittarius.defaultModel` demoted below the provider default so it no longer clobbers the active provider's model. New `sagittarius.defaultModels` (provider id → model) tier between mode override and provider default. `modes.ResolveModel`/`ResolveSubagentModel` gained a `providerID` arg (runner passes `settings.ActiveProvider()`; `agents.ResolveSubagentModel` derives it). Activation coherence: deactivating the live model auto-switches to the first checked model (`providersdialog.Deps.CurrentModel` + `saveActivation`), centralized via `provider.CoerceModelToCurated` in `RebuildRunner`. Docs: interaction-modes.md, commands.md, AGENTS.md (AD-027). Tests: config defaultModels round-trip/omit; modes override-beats-defaults / per-provider / global-fallback; provider CoerceModelToCurated; providersdialog live-model switch/keep. Verified: go test ./... pass.
-
-Phase 16 complete (2026-06-21): TUI presentation parity (AD-028). New `internal/ui/theme` (Default purple + Greyscale, `Resolve` via `NO_COLOR`/`ui.theme`); `ui.Options.ThemeName`/`NoColor`/`HideBanner`/`HideTips`; `config.Settings.UI()` typed passthrough reader. Structured scrollback roles + purple confirm focus band; ASCII launch banner + tips (`welcome.go`); `internal/agent/metrics.go` `sessionMetrics` + `Runner.Stats()` → `ui.SessionStats` + `ui.MetricsProvider`; footer `% context` + token total; `contextmgmt.Manager.Enabled()/ContextLimit()`; exit goodbye screen (`beginQuit` + post-teardown print) with `sagittarius --resume <id>`; basic markdown for assistant output (`markdown.go`) + theme `Code` style. Dialogs (`providersdialog`/`modelsdialog`) theme-driven via `SetTheme`. Docs: `docs/tui-themes.md`, PARITY_CHECKLIST TUI section. Tests: theme (3), config UI (2), bubbletea scrollback/confirm/welcome/exit/markdown (16), agent session-metrics (1). Verified: go test ./... pass, vet clean, -race clean on ui/agent/config/contextmgmt.
-
-Dedicated `~/.sagittarius` home (2026-06-21, post-Phase 16, AD-029): moved off shared `~/.gemini` to a dedicated, fresh-start global home — `~/.gemini` never read or migrated. `internal/config/paths.go`: `SagittariusDir=".sagittarius"`, `SAGITTARIUS_HOME` (was `GEMINI_CLI_HOME`), renamed `ResolveSagittariusDir`/`ResolveGlobalAgentsPath`/`ProjectSagittariusDir`, system path `/etc/sagittarius`. New `internal/storage`: `EnsureGlobalHome()` (called top of `run()`, best-effort) + faithful `ProjectRegistry` port (`projects.json` + `tmp/<slug>/.project_root` + `history/<slug>/.project_root`, slugify + `-N` collision + O_EXCL lock). `session.ChatsDir` → `tmp/<slug>/chats/` via `storage.ProjectTmpDir` (was SHA256 hash dir); `ProjectHash` kept only for the metadata field. Memory: AGENTS.md-only (no GEMINI.md), global `~/.sagittarius/AGENTS.md`, walk to home boundary. Project dir `<repo>/.sagittarius/` (skills/agents/worktree). Credentials rebrand: `sagittarius-credentials.json`, scrypt `sagittarius*` (format-compatible, not interchangeable), keychain `sagittarius-provider-*`/`sagittarius-mcp-*`, env `SAGITTARIUS_FORCE_FILE_STORAGE`. Docs: `docs/home-directory.md` (new), SECURITY.md. Tests: storage (4), config ResolveSagittariusDir, agent AGENTS.md injection, credentials service-name, parity harness dual-layout. Verified: go test ./... pass, vet clean.
-
-Auxiliary model roles + exit-summary session id (2026-06-21, post-AD-029): (1) Exit goodbye screen now prints the full session id (`renderExitStats` uses `stats.SessionID`; removed the 8-char `shortID` that rendered `sagittarius-<pid>` as `sagittar`), matching the `--resume` hint. (2) Context compression, tool-utility calls, and subagents now **default to the live mode-resolved model**, each overridable like mode models: new `sagittarius.compression.model` / `sagittarius.tools.model` (`config.SagittariusUtilityConfig`, registered in `reservedSagittariusKeys` + marshal/unmarshal) and the existing `sagittarius.subagents.*`. New `modes.ResolveUtilityModel`/`ResolveCompressionModel`/`ResolveToolsModel`; `modes.ResolveSubagentModel` reworked to `(name, cfg, liveModel)` — drops the providerID/providerDefault chain since the live model already encodes it. `Runner.CompressionModel()`/`ToolsModel()` resolve per call; `NewContextManager` is now fed `runner.CompressionModel` (was `runner.Model`) at both call sites (app.go RebuildRunner + main.go startup). `agents.ResolveSubagentModel(name, settings, liveModel)`. `tools.model` is a reserved seam (no model-using tool consumes it yet). Docs: interaction-modes.md. Tests: modes utility-defaults+overrides + subagent-follows-live; config compression/tools round-trip. Verified: go test ./... pass, vet clean, -race clean on modes/config/agent/ui.
-Personality system prompts (2026-06-21, post-AD-029, AD-030): ported the fork's programmer "brain" into a new leaf package `internal/prompt` (Personality programmer-default + sysadmin/assistant stubs; Variant full-default/lite; identity-aware, real-tools-only adapted full + faithful lite). Resolution model > provider > global > builtin via `prompt.Resolve{Personality,Variant}`. Config: `sagittarius.systemPrompt` block + per-provider `personality` + per-model `models.<model>.{personality,promptMode}` (custom JSON round-trip); canonical personality set + `KnownPersonality` in `config` (provider can't import prompt — tools imports provider). `provider.ApplyProviderSetting` accepts `personality`. Runner: `memory`/`systemBase`/`system` split + `rebuildBasePrompt`/`rebuildSystem` composing personality prompt + AGENTS.md memory + mode suffix, re-resolved on every model/provider/mode/settings/memory change; provider display name + git detection in-runner. Docs: `docs/system-prompts.md`. Tests: prompt builder/identity/resolver, config round-trips, provider apply, runner full+lite composition. Verified: go test ./... green, vet clean, -race clean on prompt/config/agent.
-Local snapshots + project boundary (2026-06-22, post-AD-032, AD-033): OpenCode-style local file snapshots with `/diff` + `/undo`, plus a global/per-project `security.projectBoundary.enforce` flag that blocks out-of-project file mutations (file writes + heuristic shell scan). New `internal/snapshot` (content snapshots, not shadow git — deliberate deviation; in-house LCS unified diff; per-file size cap; session JSONL index under `~/.sagittarius/tmp/<slug>/snapshots/`). New typed `security` config section + `sagittarius.snapshots`; `config.LoadProjectSettings` + resolution-only project merge (never persisted). `tools.Scheduler` variadic options (`WithProjectBoundary`/`WithSnapshotter`); boundary gate runs before the mode gate; snapshot hook wraps `write_file`; `shell_boundary.go` heuristic; always-on protected `<repo>/.sagittarius/snapshots/` guard. `RunnerConfig.ProjectBoundary`/`Snapshotter`; `/diff`+`/undo` slash via `Hooks.SnapshotDiff`/`SnapshotUndo`. Docs: `docs/snapshots-and-undo.md` (new), SECURITY.md (boundary + heuristic limits), home-directory.md, commands.md. Also fixed a pre-existing shared-root parallel-subtest race in `tools` `TestWriteFileConfirmation` (per-subtest filenames). Tests: snapshot (9), tools boundary/shell/scheduler (5 funcs), config (5), slash (3), parity table. Verified: go build/vet clean; -race clean on snapshot/tools/config/slash/agent (internal/provider failures are pre-existing/env-driven — ambient stored credentials — and pass in isolation).
-Next: —
-Blockers: fork mock server comparison partial; checkpointing (/restore) deferred (AD-018); sandbox not ported (AD-017); full /resume TUI browser deferred (AD-019); git worktrees stub (AD-020); pre-existing credentials data race ./internal/provider/; TestReasoningApplicableOnResponses flake; debug-mode tool disable + wireLogger port deferred. Deferred from AD-030: real sysadmin/assistant prompts, /personality command + wizard UI, full AD-024 per-model typed settings. Deferred from AD-033: /review LLM command, TUI fullscreen diff overlay, /restore conversation rewind, run_shell_command snapshotting, MCP write boundary, footer unsaved-changes hint.
-
-Phase 14 complete (2026-06-21): tests/parity/ harness (TestParityHelpOutput, TestParityHeadlessMock, TestParityProviderList, TestParityColdStartPerf); mock OpenAI SSE server (httptest); SAGITTARIUS_PARITY_FORK=1 env gate for live-fork tests; docs/PARITY_CHECKLIST.md committed; AD-021 (parity harness design). Key results: all 4 tests pass, Sagittarius cold-start 7ms vs fork ~3.6s (483x), mock headless response verified end-to-end, all in-scope slash commands present. Known gaps documented in checklist.
-Phase 14 Bugbot fixes (2026-06-21): sagittariusBin now builds the binary on demand (go build → temp, cached via sync.Once) instead of t.Skip when bin/sagittarius is absent, so the headless/perf paths always run under `go test ./...` without `make build`; TestParityProviderList now asserts config.LookupBuiltInProvider + BuiltInProviders length instead of only logging the IDs; measureForkColdStart bases its ok return on cmd.Run() success (no bogus perf/speedup log on npm failure or timeout); all fork npm invocations (invokeFork/invokeForkLoose/measureForkColdStart) serialize on forkInvokeMu so t.Parallel tests don't race the shared tsx transpile cache; invokeSagittariusOutput returns exitCode -1 for non-ExitError failures (context deadline, unlaunchable binary) via errors.As so callers gating on code==0 don't misclassify a timed-out run as success. Verified: go test ./tests/parity/ (4 pass, builds bin itself), -race clean, SAGITTARIUS_PARITY_FORK=1 live run (serialized npm, 428x speedup logged).
-
-Next: Phase 15 complete (see handoff above) — post-parity enhancements
-Blockers: fork mock server comparison partial (fork exits before reaching mock endpoint — settings format or credential check difference); checkpointing (/restore) deferred (AD-018); sandbox not ported (AD-017); full /resume TUI browser deferred (AD-019); git worktrees stub only (AD-020); pre-existing credentials data race ./internal/provider/; TestReasoningApplicableOnResponses order-dependent flake (internal/slash).
-
-Phase 13 Bugbot fixes (2026-06-21): bare --resume/-r now resumes latest via normalizeResumeArgs (stdlib flag can't express optional-value flags); --resume is a hard error when os.Getwd fails instead of silently starting fresh; ConvertToProviderHistory no longer synthesizes placeholder tool outputs (recorder already persists real responses as the following user turn) — removes duplicate function-response turns on resume; buildProviderParts passes the recorded response map through (coerceResponseMap) instead of double-wrapping under a second "output" key; loadSessionInfo applies $rewindTo trimming so --list-sessions counts/preview match LoadSession; /clear rotates the recorder to a fresh JSONL file (Recorder.Rotate + Runner.RotateSession). Tests added: TestNormalizeResumeArgs, TestConvertToProviderHistoryToolRoundTrip, TestRecorderRotateStartsNewFile, TestListSessionsRespectsRewind.
-
-Phase 12 complete (2026-06-21): internal/mcp (SDK client, manager, DiscoveredTool, credentials bearer), internal/skills (SKILL.md loader/manager), internal/agents (stub registry), internal/extensions (stub loader), agent.Runtime/Catalog, tools.activate_skill, /mcp /skills /agents reload+list, docs/tools/mcp-server.md; tests TestMCPListToolsMock, TestSkillDiscovery, TestActivateSkillTool.
-Next: Phase 13 — Sessions & advanced CLI
-Blockers: pre-existing data race in credentials.ResetForTesting still surfaces under `go test -race ./internal/provider/`; MCP OAuth, MCP prompts/resources, full /skills enable/disable, extension marketplace deferred.
-
-Phase 11 complete (2026-06-20): internal/contextmgmt package (tokens heuristic, masking_defaults, truncation, tool_output_masking, pre_turn_budget, adaptive_threshold, write_file_ejection, compression, manager) gated by IsOpenAIChatMode; provider.ResolveContextManagement + config masking knobs (toolOutputMasking*); agent.NewContextManager + newProviderSummarizer (active model only); runner pre-turn/post-tool hook via Manager.PrepareTurn; main wiring with per-process sessionID. Tests: write_file_ejection_test (Eject* cases), compression_test (FindCompressSplitPoint + Compress* cases incl. truncation/verification/anchored), tool_output_masking_test, pre_turn_budget_test, adaptive_threshold_test, masking_defaults_test, manager_test (TestManagerMaskingAppliedOnOpenAIChat, TestManagerMaskingNotAppliedWhenDisabled, TestManagerNilIsPassThrough), provider TestResolveContextManagementGating (gemini/openai-responses not masked, openai-chat enabled).
-Next: Phase 13 — Sessions & advanced CLI
-Blockers: pre-existing data race in credentials.ResetForTesting (hybrid.go:95-98 unguarded globals) surfaces under `go test -race ./internal/provider/` via parallel test cleanups; not Phase 11 code, left untouched per scope. Fix by guarding the sharedFileStore globals with fileStoreMu. Follow-up: dedicated loop-detection/next-speaker port (active-model rule already holds — no secondary model exists yet).
-
-### Built-in fork skills not ported (Phase 12)
-
-Upstream ships one built-in skill in `packages/core/src/skills/builtin/`:
-
-| Skill | Status |
-|-------|--------|
-| `skill-creator` | **Not ported** — helper scripts (`validate_skill`, `package_skill`, `init_skill`) and full workflow deferred |
-
-User/workspace/extension `SKILL.md` discovery and `activate_skill` **are** ported.
-
-Phase 10 complete (2026-06-20): OpenAIResponsesGenerator + openai_responses_wire (SSE mapper, request translation, chaining trim), built-in openai-responses, ResponsesURL/EndpointConfig reasoning+chaining fields, factory branch, IsOpenAIResponsesMode, session reasoning override, /reasoning slash (show/clear/save/levels), docs/reference/commands.md; tests TestResponsesTextDelta, TestResponsesFunctionCall, TestReasoningEffortInRequest, TestNoLocalMaskingOnResponsesPath, TestFactorySelectsOpenAIResponses, TestReasoningNotApplicableOnGemini, TestReasoningApplicableOnResponses.
-Next: Phase 11 — Context management
-Blockers: none
-
-Phase 09 complete (2026-06-20): internal/slash (Command, Registry, Parser, Processor, Deps/Hooks), built-ins /help /quit /provider /model /auth /memory reload /skills reload stub, agent.App slash interception, ui StreamInfo/StreamQuit, provider SetProviderModel/Field/AddCustom/RemoveCustom, docs/reference/commands.md; tests TestHelpListsProviderSubcommands, TestProviderUsePersists, TestQuitExits, TestAuthStoresKey, TestProviderSetRejectedForGemini.
-
-Phase 08 complete (2026-06-20): internal/tools (Tool interface, Registry, read_file/write_file/list_directory/run_shell_command/grep_search, path validation, shell safety, Scheduler, policy default/autoEdit/yolo), Runner multi-round tool loop with declarations on GenerateRequest, ui StreamToolConfirm/StreamToolResult, bubbletea y/n confirmation; tests TestReadFileTool, TestWriteFileConfirmation, TestShellBlockedWhenDenied, TestToolSchemaOpenAICompat, TestRipgrepIntegration, TestRunnerToolRoundTrip.
-
-Phase 07 complete (2026-06-20): internal/agent Runner (idle→streaming→awaiting tools→done), ui.App adapter, DiscoverSystemInstruction (GEMINI.md/AGENTS.md + global), MapStreamResponse, headless -p/-m/-d flags, interactive TUI wired to provider stream; tests TestRunnerSingleTurnMock, TestHeadlessPromptFlag, TestCancelMidStream, TestGEMINIMDInjection.
-
-Phase 06 complete (2026-06-20): OpenAIChatGenerator (SSE streaming, XML tool-call fallback, Mistral message patches), EndpointConfig + factory wireFormat branch, DiscoverModels, IsOpenAIChatMode hook, SetActiveProvider/SaveActiveProvider; httptest tests (TestOpenAIChatStream, TestXmlToolCallFallback, TestCustomProviderLoad, TestOpenRouterAsCustom, TestModelDiscoveryEmptyOnFailure, TestFactorySelectsOpenAI).
-
-Phase 05 complete (2026-06-20): internal/provider ContentGenerator + GeminiGenerator (google.golang.org/genai v1.61.0), factory for gemini-apikey, message/tool mapping, user-facing errors, injectable streamer tests (TestGeminiStreamTextDelta, TestGeminiInvalidKey, TestFactorySelectsGeminiAPIKey, TestToolCallRoundTrip).
-
-Phase 04 complete (2026-06-20): internal/ui UI interface + Bubble Tea backend, echo demo App, interactive TTY entry in main, --screen-reader stub, stream events, TestUIRunCancelClean + TestStreamEventRender.
-
-Phase 03 complete (2026-06-20): internal/credentials resolves provider API keys (env → keychain → encrypted file fallback), fork-compatible service naming, 30s read-through cache, Set/Delete APIs, SECURITY.md threat model.
-
-Phase 02 complete (2026-06-20): internal/config loads ~/.gemini/settings.json with typed providers subset, unknown-key passthrough, secret stripping, legacy local.* migration stub, reload notifier stub, built-in gemini-apikey/openai registry.
-
-Phase 01 complete (2026-06-20): Go module, package skeleton, Makefile, CI, public docs, version embedding, TestMainVersion.
-
----
-
-## Deferred Work
-
-### Fork open TODOs (port later — do not block early phases)
-
-From fork `AGENT.md` → OPEN TODOS:
-
-- Per-utility provider/model routing (compressor, summarizer, …)
-- writeFileEjection TODOs #1–#4
-- Native Anthropic Messages adapter (`anthropic-messages`)
-- AWS Bedrock adapter (`aws-bedrock`)
-
-### Deferred Surface Areas (discuss before porting)
-
-**TODO:** Hold a design session for each before implementation:
-
-- [ ] `packages/vscode-ide-companion`
-- [ ] `packages/a2a-server`
-- [ ] `packages/sdk`
-- [ ] `evals/` and `perf-tests/`
-- [ ] Extension marketplace / npm publishing
-- [ ] `tools/gemini-cli-bot`
-
-### Slash commands deferred (incremental post-Phase 09)
-
-Track against fork `docs/reference/commands.md`. Implemented subset documented in
-`docs/reference/commands.md`.
-
-- [ ] `/about`, `/bug`, `/chat` (alias for `/resume`), `/compress`, `/copy`
-- [x] `/resume` (text list, Phase 13) — TUI session browser deferred to Phase 15 (AD-019)
-- [x] `/clear` (Phase 13)
-- [ ] `/commands`, `/directory`, `/extensions`
-- [ ] Full `/skills` enable/disable/link/consent (list + reload implemented Phase 12)
-- [ ] `/mcp auth`, `/mcp enable`/`disable` (list + reload implemented Phase 12)
-- [ ] `/agents enable`/`disable`/`config` (list + reload implemented Phase 12)
-- [x] `/providers` wizard + API-key entry (post-Phase 15, AD-025) — replaces `/provider` and `/auth`
-- [x] `/providers`/`/models` menu-first split + per-provider `activeModels` (post-Phase 15, AD-026) — subcommand trees retired, `/model` → `/models`
-- [ ] `/auth signin`/`signout` OAuth dialogs (OAuth still deferred, AD-002)
-- [ ] ACP headless command registry
-
-Implemented in Phase 12: `/mcp` (list, reload), `/skills` (list, reload), `/agents` (list, reload), `activate_skill` tool.
-
-Implemented in Phase 13: `/resume` (text list — TUI browser deferred AD-019), `/clear`.
-
-Implemented in Phase 10: `/reasoning` (show, clear, save, session levels).
-
-### Auth paths deferred
-
-- [ ] Gemini OAuth / Code Assist login
-- [ ] Vertex AI (`gemini-vertex`)
-
----
-
-## Agent Behavioral Directives
-
-- **Research first:** read fork files before writing Go.
-- **One phase per session** when possible; update this file before handoff.
-- **Compile and test continuously:** `go fmt`, `go test ./...`, `go vet`.
-- **Public repo hygiene:** no secrets, SECURITY.md matters, breaking changes documented.
-- **Slash commands:** must appear in `/help` with descriptions (fork rule); no `hidden: true` on user commands.
-
----
-
-## Subagent Handoff Template
-
-When finishing a phase, append to **Current Project Status**:
-
-```
-Phase NN complete (YYYY-MM-DD): <one-line summary>
-Next: Phase N+1 — <name>
-Blockers: <none or list>
+```bash
+sagittarius --yolo --output-format stream-json -p "create hello.txt with content hi"
+SAGITTARIUS_SESSION_ID=run1 sagittarius --slash "/diff"   # pin the session to share snapshots
+SAGITTARIUS_SESSION_ID=run1 sagittarius --slash "/undo"
+make e2e-mock        # deterministic, key-free
+make e2e             # live (needs a provider key; cheap models)
 ```
 
-Update the phase table row to **Complete** or **In progress**.
+See `docs/agent-testing.md`, `docs/interaction-modes.md`,
+`docs/system-prompts.md`, `docs/snapshots-and-undo.md`, `docs/home-directory.md`,
+and `docs/reference/commands.md` for details.
+
+---
+
+## Known limitations / deferred
+
+- **Auth:** API keys only — no Gemini OAuth / Code Assist, no Vertex AI.
+- **Sandbox:** the fork's Seatbelt/landlock tool sandbox is not ported.
+- **Checkpointing / `/restore`:** shadow-git conversation rewind is deferred
+  (session JSONL loader reads `$rewindTo`, but `/restore` is not implemented).
+- **Git worktrees:** `--worktree`/`-w` is a validated stub (prints manual
+  instructions; no worktree creation).
+- **`/resume`:** text list only; no interactive TUI session browser.
+- **System prompts:** `sysadmin`/`creative-assistant`/`personal-assistant` emit a
+  distinct role preamble over the shared lite core; full bespoke prompt bodies
+  are still to be authored. No `/personality` command yet (config/preset-driven).
+- **Snapshots:** `write_file` only (not `run_shell_command`); MCP writes are not
+  boundary-checked.
+- **Known flakes:** a pre-existing data race in `internal/provider` credential
+  globals surfaces under `-race` with ambient stored keys; tests pass in
+  isolation / without keys.
+
+---
+
+## Recent decisions
+
+- **2026-06-22 — Five Bugbot fixes:** (1) `buildRunner` now resolves `initialMode` and applies any provider override *before* `ResolveEndpointConfig`/`NewContentGenerator`, returning `baseProviderID` to seed `App`; (2) `SetInteractionMode` rewritten deterministically — target = mode's provider OR base, removing the fragile `needProviderRevert` branch; `SelectCurrentModel` sets `baseProviderID` on explicit picks; (3) `ApplySystemPromptPreset` now calls `LookupPreset` and writes canonical `personality` + `promptMode` separately (was storing raw preset id into personality); (4) `fetchGeminiModels` parses the base URL once and uses `q.Set("pageToken", …)` each iteration (was appending, accumulating duplicates from page 3 on); (5) `ResolveContextManagement` takes a `liveModel string` parameter so per-model context-limit lookup uses the mode-resolved live model, not the endpoint's persisted default.
+
+---
+
+## Keeping this file current
+
+This file is the canonical onboarding doc **and** the agent's injected memory, so
+a fresh agent must be able to start from it without asking orientation questions.
+When you make a significant change:
+
+- Update the **Current State** section so it reflects reality.
+- Record a genuinely new architectural decision as a short dated bullet under a
+  "Recent decisions" note here (1–3 lines: what changed and why). Don't paste
+  full diffs or test lists — that's what git is for.
+- Keep paths relative and never commit secrets.
