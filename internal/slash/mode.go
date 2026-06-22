@@ -37,6 +37,11 @@ func modeCommand() Command {
 				Description: "Switch to debug mode (verbose logging; optional model override)",
 				Handler:     handleModeSetDebug,
 			},
+			{
+				Name:        "settings",
+				Description: "Edit mode overrides (alias for /modes)",
+				Handler:     func(_ *Context) Result { return DialogResult(DialogModes) },
+			},
 		},
 		Handler: handleModeRoot,
 	}

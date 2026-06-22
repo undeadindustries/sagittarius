@@ -35,6 +35,17 @@ type Hooks interface {
 	// reverts the last n changes and returns the restored relative paths.
 	SnapshotDiff(pathFilter string) (string, error)
 	SnapshotUndo(n int) ([]string, error)
+	// SelectCurrentModel atomically switches to the given (provider, model) pair
+	// and rebuilds the runner. Returns the resolved live model or an error.
+	SelectCurrentModel(ctx context.Context, providerID, model string) (string, error)
+	// AllActiveModels returns every curated (provider, model) pair across all
+	// providers, for the /model picker and autocomplete.
+	AllActiveModels() []provider.ProviderModelPair
+	// ProjectSystemPromptPresetID returns the active project system-prompt preset id.
+	ProjectSystemPromptPresetID() string
+	// ApplyProjectSystemPromptPreset writes a preset to the project settings file
+	// and reloads the runner system instruction.
+	ApplyProjectSystemPromptPreset(ctx context.Context, presetID string) (string, error)
 }
 
 // Deps supplies slash command dependencies (injectable for tests).

@@ -9,6 +9,126 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/config"
 )
 
+// ProviderModelPair is a (provider, model) selection from the global active list.
+type ProviderModelPair struct {
+	ProviderID  string // canonical provider id (e.g. "gemini-apikey")
+	DisplayID   string // short display id shown to user (e.g. "gemini")
+	DisplayName string // human-readable provider name (e.g. "Gemini API Key")
+	Model       string
+}
+
+// AllActiveModels aggregates every curated (provider, model) pair across all
+// built-in and custom providers, in a stable order: built-ins first (sorted by
+// id), then custom providers (sorted by id). Within each provider the models
+// are sorted as returned by ActiveModelsFor.
+func AllActiveModels(settings *config.Settings) []ProviderModelPair {
+	var out []ProviderModelPair
+	// Built-ins first, sorted by canonical id for stability.
+	ids := make([]string, 0, len(config.BuiltInProviders))
+	for id := range config.BuiltInProviders {
+		ids = append(ids, string(id))
+	}
+	// Simple sort: iterate in deterministic order.
+	sortedIDs(ids)
+	for _, id := range ids {
+		def := config.BuiltInProviders[config.BuiltInProviderID(id)]
+		for _, m := range ActiveModelsFor(settings, id) {
+			out = append(out, ProviderModelPair{
+				ProviderID:  id,
+				DisplayID:   config.ProviderDisplayID(id),
+				DisplayName: def.DisplayName,
+				Model:       m,
+			})
+		}
+	}
+	// Custom providers, sorted by id.
+	if settings != nil && settings.Providers != nil && len(settings.Providers.Custom) > 0 {
+		cids := make([]string, 0, len(settings.Providers.Custom))
+		for id := range settings.Providers.Custom {
+			cids = append(cids, id)
+		}
+		sortedIDs(cids)
+		for _, id := range cids {
+			custom := settings.Providers.Custom[id]
+			name := custom.DisplayName
+			if name == "" {
+				name = id
+			}
+			for _, m := range ActiveModelsFor(settings, id) {
+				out = append(out, ProviderModelPair{
+					ProviderID:  id,
+					DisplayID:   id,
+					DisplayName: name,
+					Model:       m,
+				})
+			}
+		}
+	}
+	return out
+}
+
+// sortedIDs sorts ids in place lexicographically.
+func sortedIDs(ids []string) {
+	for i := 1; i < len(ids); i++ {
+		for j := i; j > 0 && ids[j] < ids[j-1]; j-- {
+			ids[j], ids[j-1] = ids[j-1], ids[j]
+		}
+	}
+}
+
+// SelectCurrentModel atomically switches the active provider to providerID and
+// sets its model override to model, then saves settings via loader.
+// It validates that model is present in providerID's active-model list (so the
+// caller cannot pick an uncurated model accidentally). The active-model check is
+// skipped when the active-model list is empty (uncurated provider).
+func SelectCurrentModel(loader *config.Loader, settings *config.Settings, providerID, model string) error {
+	providerID = config.NormalizeProviderID(providerID)
+	model = strings.TrimSpace(model)
+	if providerID == "" {
+		return fmt.Errorf("select model: provider id is required")
+	}
+	if model == "" {
+		return fmt.Errorf("select model: model is required")
+	}
+	// Validate provider exists.
+	if _, ok := config.LookupBuiltInProvider(providerID); !ok {
+		if settings == nil || settings.Providers == nil || settings.Providers.Custom == nil {
+			return fmt.Errorf("select model: unknown provider %q", providerID)
+		}
+		if _, ok := settings.Providers.Custom[providerID]; !ok {
+			return fmt.Errorf("select model: unknown provider %q", providerID)
+		}
+	}
+	// Validate model is in the active set (skip if uncurated).
+	curated := CuratedActiveModels(settings, providerID)
+	if len(curated) > 0 {
+		found := false
+		for _, m := range curated {
+			if m == model {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("select model: model %q is not in the active set for %q", model, providerID)
+		}
+	}
+	if err := SetActiveProvider(settings, providerID); err != nil {
+		return err
+	}
+	if err := SetProviderModel(settings, providerID, model); err != nil {
+		return err
+	}
+	if loader != nil {
+		if err := loader.Save(settings); err != nil {
+			return err
+		}
+	}
+	ClearLastResponseID()
+	ClearSessionReasoningOverride()
+	return nil
+}
+
 // IsOpenAIChatMode reports whether the active provider uses openai-chat wire format.
 // Phase 11 context layers key off this hook (fork isLocalMode semantics).
 func IsOpenAIChatMode(settings *config.Settings) bool {
@@ -90,6 +210,56 @@ func SetProviderModel(settings *config.Settings, providerID, model string) error
 	return setProviderInstance(settings, providerID, cfg)
 }
 
+// PruneModeOverrides clears any per-mode (provider, model) override whose model
+// is no longer present in the provider's curated active-model set, or whose
+// provider no longer exists. This keeps mode overrides consistent after a model
+// is deactivated or a provider is removed. Settings are mutated in place; the
+// caller is responsible for persisting.
+func PruneModeOverrides(settings *config.Settings) {
+	if settings == nil || settings.Sagittarius == nil || settings.Sagittarius.Modes == nil {
+		return
+	}
+	modes := settings.Sagittarius.Modes
+	for _, mc := range []*config.SagittariusModeConfig{modes.Agent, modes.Plan, modes.Ask, modes.Debug} {
+		if mc == nil || mc.Model == "" {
+			continue
+		}
+		provID := config.NormalizeProviderID(mc.Provider)
+		if provID == "" {
+			// No provider qualifier — leave the plain model string alone; it will
+			// resolve against whatever provider is active at runtime.
+			continue
+		}
+		// Check provider still exists.
+		provExists := false
+		if _, ok := config.LookupBuiltInProvider(provID); ok {
+			provExists = true
+		} else if settings.Providers != nil && settings.Providers.Custom != nil {
+			if _, ok := settings.Providers.Custom[provID]; ok {
+				provExists = true
+			}
+		}
+		if !provExists {
+			mc.Model = ""
+			mc.Provider = ""
+			continue
+		}
+		// Check model is still in the active set for that provider.
+		active := ActiveModelsFor(settings, provID)
+		found := false
+		for _, m := range active {
+			if m == mc.Model {
+				found = true
+				break
+			}
+		}
+		if !found {
+			mc.Model = ""
+			mc.Provider = ""
+		}
+	}
+}
+
 // SetActiveModels persists the curated active-model set for providerID. Values
 // are trimmed, empties dropped, and duplicates removed preserving order. An
 // empty result clears the curation (back to the uncurated fallback).
@@ -120,7 +290,11 @@ func SetActiveModels(settings *config.Settings, providerID string, models []stri
 	} else {
 		cfg.ActiveModels = cleaned
 	}
-	return setProviderInstance(settings, id, cfg)
+	if err := setProviderInstance(settings, id, cfg); err != nil {
+		return err
+	}
+	PruneModeOverrides(settings)
+	return nil
 }
 
 // CuratedActiveModels returns the explicitly-saved active-model set for
@@ -526,6 +700,7 @@ func RemoveCustomProvider(settings *config.Settings, id string) error {
 	if settings.Providers.Active == id {
 		settings.Providers.Active = ""
 	}
+	PruneModeOverrides(settings)
 	return nil
 }
 
@@ -575,6 +750,110 @@ func setProviderInstance(settings *config.Settings, providerID string, cfg *conf
 		settings.Providers.Extra[providerID] = raw
 	}
 	return nil
+}
+
+// SetModelConfig applies a per-model override key/value pair. The value is
+// validated and type-coerced for known keys; unknown keys are rejected.
+func SetModelConfig(settings *config.Settings, providerID, model, key, value string) error {
+	providerID = config.NormalizeProviderID(providerID)
+	model = strings.TrimSpace(model)
+	key = strings.TrimSpace(key)
+	value = strings.TrimSpace(value)
+	if providerID == "" || model == "" || key == "" {
+		return fmt.Errorf("set model config: provider, model, and key are required")
+	}
+	cfg, err := ensureProviderInstance(settings, providerID)
+	if err != nil {
+		return err
+	}
+	if cfg.Models == nil {
+		cfg.Models = make(map[string]config.ProviderModelConfig)
+	}
+	mc := cfg.Models[model]
+	switch key {
+	case "temperature":
+		f, err := parseFloat(key, value)
+		if err != nil {
+			return err
+		}
+		mc.Temperature = f
+	case "contextLimit":
+		n, err := parseInt(key, value)
+		if err != nil {
+			return err
+		}
+		mc.ContextLimit = n
+	case "reasoningEffort":
+		if !IsValidReasoningLevel(value) {
+			return fmt.Errorf("reasoningEffort %q is not a valid level", value)
+		}
+		mc.ReasoningEffort = value
+	default:
+		return fmt.Errorf("set model config: unsupported key %q", key)
+	}
+	cfg.Models[model] = mc
+	return setProviderInstance(settings, providerID, cfg)
+}
+
+// ClearModelConfig removes a per-model override for the given key. The model
+// entry itself is removed when all its fields are empty after the clear.
+func ClearModelConfig(settings *config.Settings, providerID, model, key string) error {
+	providerID = config.NormalizeProviderID(providerID)
+	model = strings.TrimSpace(model)
+	key = strings.TrimSpace(key)
+	inst := providerInstance(settings, providerID)
+	if inst == nil || inst.Models == nil {
+		return nil // nothing to clear
+	}
+	mc, ok := inst.Models[model]
+	if !ok {
+		return nil
+	}
+	switch key {
+	case "temperature":
+		mc.Temperature = nil
+	case "contextLimit":
+		mc.ContextLimit = nil
+	case "reasoningEffort":
+		mc.ReasoningEffort = ""
+	}
+	cfg, err := ensureProviderInstance(settings, providerID)
+	if err != nil {
+		return err
+	}
+	if cfg.Models == nil {
+		cfg.Models = make(map[string]config.ProviderModelConfig)
+	}
+	if mc.Temperature == nil && mc.ContextLimit == nil && mc.ReasoningEffort == "" &&
+		mc.Personality == "" && mc.PromptMode == "" && mc.Extra == nil {
+		delete(cfg.Models, model)
+	} else {
+		cfg.Models[model] = mc
+	}
+	return setProviderInstance(settings, providerID, cfg)
+}
+
+// ModelConfigValues returns the current per-model override values for display.
+func ModelConfigValues(settings *config.Settings, providerID, model string) map[string]string {
+	out := map[string]string{}
+	inst := providerInstance(settings, config.NormalizeProviderID(providerID))
+	if inst == nil {
+		return out
+	}
+	mc, ok := config.LookupModelConfig(inst, model)
+	if !ok {
+		return out
+	}
+	if mc.Temperature != nil {
+		out["temperature"] = strconv.FormatFloat(*mc.Temperature, 'g', -1, 64)
+	}
+	if mc.ContextLimit != nil {
+		out["contextLimit"] = strconv.Itoa(*mc.ContextLimit)
+	}
+	if mc.ReasoningEffort != "" {
+		out["reasoningEffort"] = mc.ReasoningEffort
+	}
+	return out
 }
 
 // SetProviderReasoningEffort persists reasoningEffort for providerID.

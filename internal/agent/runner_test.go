@@ -129,6 +129,74 @@ func TestSessionMetricsAccumulate(t *testing.T) {
 	}
 }
 
+func TestSessionMetricsPerModelUsage(t *testing.T) {
+	t.Parallel()
+
+	gen := &fakeGenerator{
+		batches: [][]provider.StreamResponse{{
+			{TextDelta: "Reply from the model."},
+			{Done: true},
+		}},
+	}
+	runner, err := NewRunner(RunnerConfig{
+		Generator:   gen,
+		Model:       "test-model",
+		WorkDir:     t.TempDir(),
+		Interactive: false,
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	events, err := runner.RunTurn(testContext(t), "hello")
+	if err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+	collectEvents(t, events)
+
+	stats := runner.Stats()
+	if len(stats.ModelUsage) == 0 {
+		t.Fatal("expected ModelUsage entries, got none")
+	}
+
+	var mainEntry *ui.ModelUsageStat
+	for i := range stats.ModelUsage {
+		if stats.ModelUsage[i].Kind == "main" {
+			mainEntry = &stats.ModelUsage[i]
+			break
+		}
+	}
+	if mainEntry == nil {
+		t.Fatal("expected a 'main' kind entry in ModelUsage")
+	}
+	if mainEntry.Model != "test-model" {
+		t.Errorf("Model = %q, want %q", mainEntry.Model, "test-model")
+	}
+	if mainEntry.InTokens <= 0 {
+		t.Errorf("InTokens = %d, want > 0", mainEntry.InTokens)
+	}
+	if mainEntry.OutTokens <= 0 {
+		t.Errorf("OutTokens = %d, want > 0", mainEntry.OutTokens)
+	}
+
+	// RecordUsage should aggregate into the perModel map.
+	runner.RecordUsage("compression-model", "compression", 100, 50)
+	stats2 := runner.Stats()
+	var compEntry *ui.ModelUsageStat
+	for i := range stats2.ModelUsage {
+		if stats2.ModelUsage[i].Kind == "compression" {
+			compEntry = &stats2.ModelUsage[i]
+			break
+		}
+	}
+	if compEntry == nil {
+		t.Fatal("expected a 'compression' kind entry after RecordUsage")
+	}
+	if compEntry.InTokens != 100 || compEntry.OutTokens != 50 {
+		t.Errorf("compression entry = in:%d out:%d, want in:100 out:50", compEntry.InTokens, compEntry.OutTokens)
+	}
+}
+
 func TestRunnerSingleTurnMock(t *testing.T) {
 	t.Parallel()
 
@@ -471,6 +539,67 @@ func TestRunnerToolRoundTrip(t *testing.T) {
 	}
 	if runner.State() != StateDone {
 		t.Fatalf("state = %v, want StateDone", runner.State())
+	}
+}
+
+func TestRunnerHeadlessApprovalGatesWrite(t *testing.T) {
+	t.Parallel()
+
+	writeBatch := func() [][]provider.StreamResponse {
+		return [][]provider.StreamResponse{
+			{
+				{ToolCalls: []provider.ToolCall{{
+					Name: tools.WriteFileToolName,
+					Args: map[string]any{
+						tools.ParamFilePath:          "out.txt",
+						tools.WriteFileParamContent: "hello",
+					},
+				}}},
+				{Done: true},
+			},
+			{
+				{TextDelta: "done"},
+				{Done: true},
+			},
+		}
+	}
+
+	cases := []struct {
+		name       string
+		approval   ApprovalMode
+		wantExists bool
+	}{
+		{"default denies headless write", ApprovalDefault, false},
+		{"yolo allows headless write", ApprovalYolo, true},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			runner, err := NewRunner(RunnerConfig{
+				Generator:    &fakeGenerator{batches: writeBatch()},
+				Model:        "test-model",
+				WorkDir:      root,
+				ApprovalMode: tc.approval,
+				Interactive:  false,
+			})
+			if err != nil {
+				t.Fatalf("NewRunner: %v", err)
+			}
+			events, err := runner.RunTurn(testContext(t), "write a file")
+			if err != nil {
+				t.Fatalf("RunTurn: %v", err)
+			}
+			collectEvents(t, events)
+
+			_, statErr := os.Stat(filepath.Join(root, "out.txt"))
+			exists := statErr == nil
+			if exists != tc.wantExists {
+				t.Fatalf("file exists = %v, want %v", exists, tc.wantExists)
+			}
+		})
 	}
 }
 

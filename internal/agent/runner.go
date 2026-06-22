@@ -409,7 +409,8 @@ func (r *Runner) runAgentLoop(ctx context.Context, out chan<- ui.StreamEvent) {
 		}
 		req := r.buildGenerateRequest()
 		r.storeLastRequest(req)
-		r.metrics.recordRequest(req.Messages)
+		currentModel := r.Model()
+		r.metrics.recordUsage(currentModel, "main", estimateMessageTokens(req.Messages), 0)
 
 		respCh, err := gen.GenerateContentStream(ctx, req)
 		if err != nil {
@@ -421,7 +422,10 @@ func (r *Runner) runAgentLoop(ctx context.Context, out chan<- ui.StreamEvent) {
 		if streamErr != nil {
 			return
 		}
-		r.metrics.recordOutput(modelText)
+		if modelText != "" {
+			outTok := contextmgmt.EstimateTokens([]provider.Part{{Text: modelText}})
+			r.metrics.recordUsage(currentModel, "main", 0, outTok)
+		}
 
 		r.appendModelMessage(modelText, toolCalls)
 
@@ -835,6 +839,13 @@ func countToolFailures(responses []provider.FunctionResponse) int {
 
 // Stats returns a UI-facing snapshot of session telemetry (turn/tool counts,
 // token estimates, context-window usage, and elapsed time).
+// RecordUsage records heuristic token counts for an external caller (e.g. the
+// compression summarizer) that shares the runner's session metrics. kind should
+// be "compression" for context summarization calls.
+func (r *Runner) RecordUsage(model, kind string, inTok, outTok int) {
+	r.metrics.recordUsage(model, kind, inTok, outTok)
+}
+
 func (r *Runner) Stats() ui.SessionStats {
 	turns, toolCalls, toolFailures, inTok, outTok, ctxTok, dur := r.metrics.snapshot()
 	return ui.SessionStats{
@@ -847,6 +858,7 @@ func (r *Runner) Stats() ui.SessionStats {
 		ContextTokens: ctxTok,
 		ContextLimit:  r.contextManager().ContextLimit(),
 		Duration:      dur,
+		ModelUsage:    r.metrics.usageSnapshot(),
 	}
 }
 

@@ -90,7 +90,7 @@ func NewManager(projectRoot, sessionID string, opts Options) (*Manager, error) {
 	if max <= 0 {
 		max = config.DefaultSnapshotMaxFileBytes
 	}
-	return &Manager{
+	m := &Manager{
 		root:         root,
 		indexPath:    filepath.Join(snapDir, sanitizeSessionID(sessionID)+".jsonl"),
 		maxFileBytes: max,
@@ -98,7 +98,42 @@ func NewManager(projectRoot, sessionID string, opts Options) (*Manager, error) {
 		firstBefore:  make(map[string]string),
 		firstExisted: make(map[string]bool),
 		lastAfter:    make(map[string]string),
-	}, nil
+	}
+	// Replay any existing index for this session id so /diff and /undo work
+	// across separate processes (e.g. a headless write followed by a separate
+	// `--slash /diff` or `--slash /undo` invocation, or a resumed session) when
+	// the same session id is reused via SAGITTARIUS_SESSION_ID.
+	m.loadIndex()
+	return m, nil
+}
+
+// loadIndex replays the on-disk session index into in-memory tracking. Corrupt
+// or partial lines are skipped (best-effort) so a truncated index never blocks
+// startup. Caller is the constructor, before the Manager is shared.
+func (m *Manager) loadIndex() {
+	data, err := os.ReadFile(m.indexPath)
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var c change
+		if err := json.Unmarshal([]byte(line), &c); err != nil {
+			continue
+		}
+		if _, seen := m.firstBefore[c.Rel]; !seen {
+			m.firstBefore[c.Rel] = c.Before
+			m.firstExisted[c.Rel] = c.Existed
+		}
+		m.lastAfter[c.Rel] = c.After
+		m.stack = append(m.stack, c)
+		if c.Seq > m.seq {
+			m.seq = c.Seq
+		}
+	}
 }
 
 // Enabled reports whether snapshotting is active. A nil Manager is disabled.
@@ -268,10 +303,31 @@ func (m *Manager) Undo(n int) ([]string, error) {
 		restored = append(restored, c.Rel)
 	}
 
+	if len(restored) > 0 {
+		// Persist the trimmed stack so a later process (same session id) replays
+		// the post-undo state rather than re-applying reverted changes.
+		m.rewriteIndex()
+	}
+
 	if len(failures) > 0 {
 		return restored, fmt.Errorf("could not revert: %s", strings.Join(failures, "; "))
 	}
 	return restored, nil
+}
+
+// rewriteIndex rewrites the on-disk index from the current undo stack so it
+// reflects post-undo state. Best-effort: a write failure leaves the in-memory
+// state authoritative for this process. Caller holds m.mu.
+func (m *Manager) rewriteIndex() {
+	f, err := os.OpenFile(m.indexPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	enc := json.NewEncoder(f)
+	for _, c := range m.stack {
+		_ = enc.Encode(c)
+	}
 }
 
 // restore writes a change's prior content back to disk, or removes the file

@@ -28,7 +28,7 @@ LDFLAGS := -ldflags "-X $(MODULE)/internal/version.Version=$(VERSION) \
 	-X $(MODULE)/internal/version.Commit=$(COMMIT) \
 	-X $(MODULE)/internal/version.BuildDate=$(BUILD_DATE)"
 
-.PHONY: build test vet lint race clean tools vulncheck
+.PHONY: build test vet lint race clean tools vulncheck e2e e2e-mock
 
 build: $(BINARY)
 
@@ -38,6 +38,15 @@ $(BINARY): go.mod go.sum $(GO_SOURCES)
 
 test:
 	$(GO) test ./...
+
+# e2e runs the live end-to-end suite against real providers using cheap models.
+# Requires at least one provider API key (Gemini, OpenAI). Makes billable calls.
+e2e: $(BINARY)
+	SAGITTARIUS_E2E_LIVE=1 SAGITTARIUS_BIN=$(abspath $(BINARY)) $(GO) test -count=1 ./tests/e2e/...
+
+# e2e-mock runs the same scenario table against an in-process mock; no keys.
+e2e-mock: $(BINARY)
+	SAGITTARIUS_E2E_MOCK=1 SAGITTARIUS_BIN=$(abspath $(BINARY)) $(GO) test -count=1 ./tests/e2e/...
 
 vet:
 	$(GO) vet ./...

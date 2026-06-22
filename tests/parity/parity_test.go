@@ -55,8 +55,10 @@ func TestParityHelpOutput(t *testing.T) {
 		}
 	}
 
-	// 2b. The retired provider/model subcommand trees must NOT appear (AD-026).
-	for _, gone := range []string{"/providers list", "/providers use", "/providers set", "/model "} {
+	// 2b. The retired provider subcommand trees must NOT appear (AD-026).
+	// Note: /model is a live first-class command (global model picker), so it
+	// is intentionally present; only the old structured subcommand paths are banned.
+	for _, gone := range []string{"/providers list", "/providers use", "/providers set"} {
 		if strings.Contains(helpText, gone) {
 			t.Errorf("help output should not list retired subcommand: %s", gone)
 		}

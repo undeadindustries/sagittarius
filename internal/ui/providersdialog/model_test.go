@@ -162,22 +162,13 @@ func send(m Model, msgs ...tea.Msg) (Model, tea.Cmd) {
 	return m, cmd
 }
 
-func TestMenuOpensSwitchAndSelects(t *testing.T) {
+// TestDialogOpensAtProviderList verifies the dialog opens directly at the
+// provider list (screenEditPick), not at a top-level menu.
+func TestDialogOpensAtProviderList(t *testing.T) {
 	deps := newFakeDeps()
 	m := New(context.Background(), deps)
-
-	// Enter on "Switch active provider" (cursor 0).
-	m, _ = send(m, key("enter"))
-	if m.screen != screenSwitch {
-		t.Fatalf("screen = %d, want switch", m.screen)
-	}
-	// Move to the second provider (openai) and select it.
-	m, _ = send(m, key("down"), key("enter"))
-	if deps.switched != "openai" {
-		t.Fatalf("switched = %q, want openai", deps.switched)
-	}
-	if m.screen != screenMenu {
-		t.Fatalf("screen = %d, want menu after switch", m.screen)
+	if m.screen != screenEditPick {
+		t.Fatalf("initial screen = %d, want screenEditPick", m.screen)
 	}
 }
 
@@ -185,12 +176,7 @@ func TestEditPickToEditSheet(t *testing.T) {
 	deps := newFakeDeps()
 	m := New(context.Background(), deps)
 
-	// menu cursor: 0 switch, 1 edit.
-	m, _ = send(m, key("down"), key("enter"))
-	if m.screen != screenEditPick {
-		t.Fatalf("screen = %d, want editPick", m.screen)
-	}
-	// Select openai (index 1).
+	// Provider list starts at index 0 (gemini). Move to openai (index 1) and enter.
 	m, _ = send(m, key("down"), key("enter"))
 	if m.screen != screenEdit {
 		t.Fatalf("screen = %d, want edit", m.screen)
@@ -215,8 +201,8 @@ func TestAddFlowDiscoversAndPicksModel(t *testing.T) {
 	deps.models = []string{"qwen3", "llama3"}
 	m := New(context.Background(), deps)
 
-	// Navigate menu to "Add provider" (index 3).
-	m, _ = send(m, key("down"), key("down"), key("down"), key("enter"))
+	// Press 'a' to add a new provider from the provider list.
+	m, _ = send(m, key("a"))
 	if m.screen != screenAdd {
 		t.Fatalf("screen = %d, want add", m.screen)
 	}
@@ -269,12 +255,15 @@ func TestToggleAllChecked(t *testing.T) {
 	deps := newFakeDeps()
 	deps.active = "openai"
 	deps.models = []string{"a", "b", "c"}
+	// Pre-curate so all three start checked.
+	deps.activeModels = map[string][]string{"openai": {"a", "b", "c"}}
 	m := New(context.Background(), deps)
 
-	m, cmd := send(m, key("down"), key("down"), key("down"), key("down"), key("down"), key("enter"))
+	// Use enterModels directly so the test focuses on toggle behavior, not navigation.
+	m, cmd := m.enterModels("openai")
 	m, _ = send(m, cmd())
 	if len(m.checked) != 3 || !m.checked[0] || !m.checked[1] || !m.checked[2] {
-		t.Fatalf("expected all checked by default, got %v", m.checked)
+		t.Fatalf("expected all checked (from curated set), got %v", m.checked)
 	}
 
 	m, _ = send(m, key("A"))
@@ -309,7 +298,8 @@ func TestListScrollWindow(t *testing.T) {
 	deps.models = models
 	m := New(context.Background(), deps)
 
-	m, cmd := send(m, key("down"), key("down"), key("down"), key("down"), key("down"), key("enter"))
+	// Use enterModels directly; scroll/window behavior is independent of navigation path.
+	m, cmd := m.enterModels("openai")
 	m, _ = send(m, cmd())
 	m = m.SetSize(80, 20)
 
@@ -343,7 +333,8 @@ func TestActivationViewFitsTerminal(t *testing.T) {
 	deps.models = models
 	m := New(context.Background(), deps)
 
-	m, cmd := send(m, key("down"), key("down"), key("down"), key("down"), key("down"), key("enter"))
+	// Use enterModels directly; terminal-fit behavior is independent of navigation path.
+	m, cmd := m.enterModels("openai")
 	m, _ = send(m, cmd())
 	m = m.SetSize(97, 35)
 
@@ -358,21 +349,31 @@ func TestManageModelsActivationSaves(t *testing.T) {
 	deps := newFakeDeps()
 	deps.active = "openai"
 	deps.models = []string{"qwen3", "llama3", "mistral"}
+	// Pre-curate so initChecked uses the curated set (all three checked).
+	deps.activeModels = map[string][]string{"openai": {"qwen3", "llama3", "mistral"}}
 	m := New(context.Background(), deps)
 
-	// Menu → "Manage models (activate/deactivate)" (index 5).
-	m, cmd := send(m, key("down"), key("down"), key("down"), key("down"), key("down"), key("enter"))
+	// Provider list → pick openai (index 1) → edit sheet.
+	m, _ = send(m, key("down"), key("enter"))
+	if m.screen != screenEdit || m.targetID != "openai" {
+		t.Fatalf("screen = %d target = %q, want edit/openai", m.screen, m.targetID)
+	}
+	// Move to "Manage models…" row on the edit sheet and select it.
+	if !cursorTo(&m, editModel, "") {
+		t.Fatal("Manage models row missing from edit sheet")
+	}
+	m, cmd := send(m, key("enter"))
 	if m.screen != screenModels {
-		t.Fatalf("screen = %d, want models", m.screen)
+		t.Fatalf("screen = %d, want models after selecting Manage models", m.screen)
 	}
 	if cmd == nil {
 		t.Fatal("expected discover command")
 	}
 	m, _ = send(m, cmd())
-	// Uncurated → every model checked by default.
+	// Curated → all three checked.
 	for i, c := range m.checked {
 		if !c {
-			t.Fatalf("model %d not checked by default", i)
+			t.Fatalf("model %d not checked (curated set)", i)
 		}
 	}
 	// Uncheck the second model (llama3), then save.
@@ -381,8 +382,33 @@ func TestManageModelsActivationSaves(t *testing.T) {
 	if len(got) != 2 || got[0] != "qwen3" || got[1] != "mistral" {
 		t.Fatalf("saved activeModels = %v, want [qwen3 mistral]", got)
 	}
-	if m.screen != screenMenu {
-		t.Fatalf("screen = %d, want menu after save", m.screen)
+	// After save from edit sheet flow, returns to edit sheet.
+	if m.screen != screenEdit {
+		t.Fatalf("screen = %d, want edit after save", m.screen)
+	}
+}
+
+// TestManageModelsUncuratedDefaultsToSingleModel verifies that when a provider
+// has no curated activeModels, initChecked checks only the configured default
+// model rather than every discovered model.
+func TestManageModelsUncuratedDefaultsToSingleModel(t *testing.T) {
+	deps := newFakeDeps()
+	deps.models = []string{"gemini-2.5-flash", "gemini-2.5-pro", "gemini-1.5-pro"}
+	deps.settingsByID = map[string]map[string]string{
+		"gemini-apikey": {"model": "gemini-2.5-pro"},
+	}
+	m := New(context.Background(), deps)
+
+	// Directly enter the activation screen for gemini.
+	m, cmd := m.enterModels("gemini-apikey")
+	m, _ = send(m, cmd())
+
+	// Only gemini-2.5-pro (index 1) should be checked; others unchecked.
+	want := []bool{false, true, false}
+	for i, got := range m.checked {
+		if got != want[i] {
+			t.Fatalf("checked[%d] = %v, want %v (model %q)", i, got, want[i], m.models[i])
+		}
 	}
 }
 
@@ -393,10 +419,12 @@ func TestActivationSwitchesLiveModelWhenDeactivated(t *testing.T) {
 	deps.active = "openai"
 	deps.models = []string{"qwen3", "llama3", "mistral"}
 	deps.currentModel = map[string]string{"openai": "qwen3"}
+	// Pre-curate so all three start checked.
+	deps.activeModels = map[string][]string{"openai": {"qwen3", "llama3", "mistral"}}
 	m := New(context.Background(), deps)
 
-	// Menu → "Manage models" (index 5), then load models.
-	m, cmd := send(m, key("down"), key("down"), key("down"), key("down"), key("down"), key("enter"))
+	// Directly enter the activation screen (bypasses main-menu picker for simplicity).
+	m, cmd := m.enterModels("openai")
 	m, _ = send(m, cmd())
 
 	// Uncheck the live model (qwen3, index 0), then save.
@@ -418,9 +446,12 @@ func TestActivationKeepsLiveModelWhenStillChecked(t *testing.T) {
 	deps.active = "openai"
 	deps.models = []string{"qwen3", "llama3", "mistral"}
 	deps.currentModel = map[string]string{"openai": "qwen3"}
+	// Pre-curate so all three start checked.
+	deps.activeModels = map[string][]string{"openai": {"qwen3", "llama3", "mistral"}}
 	m := New(context.Background(), deps)
 
-	m, cmd := send(m, key("down"), key("down"), key("down"), key("down"), key("down"), key("enter"))
+	// Directly enter the activation screen (bypasses main-menu picker for simplicity).
+	m, cmd := m.enterModels("openai")
 	m, _ = send(m, cmd())
 
 	// Uncheck mistral (index 2), leaving the live model qwen3 checked.
@@ -437,20 +468,20 @@ func TestActivationKeepsLiveModelWhenStillChecked(t *testing.T) {
 func TestEditModelOpensActivationAndReturns(t *testing.T) {
 	deps := newFakeDeps()
 	deps.models = []string{"gemini-2.5-pro", "gemini-2.5-flash"}
+	// Pre-curate so both start checked.
+	deps.activeModels = map[string][]string{"gemini-apikey": {"gemini-2.5-pro", "gemini-2.5-flash"}}
 	m := New(context.Background(), deps)
 
-	// menu: 0 switch, 1 edit → editPick.
-	m, _ = send(m, key("down"), key("enter"))
-	if m.screen != screenEditPick {
-		t.Fatalf("screen = %d, want editPick", m.screen)
-	}
-	// Select gemini (index 0) → edit sheet.
+	// Provider list: index 0 = gemini → edit sheet.
 	m, _ = send(m, key("enter"))
 	if m.screen != screenEdit || m.targetID != "gemini-apikey" {
 		t.Fatalf("screen = %d target = %q, want edit/gemini-apikey", m.screen, m.targetID)
 	}
-	// Edit rows: 0 Set API key, 1 Manage models. Move to Manage models, select.
-	m, cmd := send(m, key("down"), key("enter"))
+	// Move to "Manage models…" row on edit sheet and select.
+	if !cursorTo(&m, editModel, "") {
+		t.Fatal("Manage models row missing")
+	}
+	m, cmd := send(m, key("enter"))
 	if m.screen != screenModels {
 		t.Fatalf("screen = %d, want models after selecting Manage models", m.screen)
 	}
@@ -461,7 +492,7 @@ func TestEditModelOpensActivationAndReturns(t *testing.T) {
 		t.Fatal("expected discover command")
 	}
 	m, _ = send(m, cmd())
-	// Deactivate the second model, then save.
+	// Both curated → both checked. Deactivate the second model, then save.
 	m, _ = send(m, key("down"), key(" "), key("enter"))
 	got := deps.activeModels["gemini-apikey"]
 	if len(got) != 1 || got[0] != "gemini-2.5-pro" {
@@ -479,8 +510,16 @@ func TestEditModelActivationEscReturnsToEdit(t *testing.T) {
 	deps.models = []string{"gemini-2.5-pro"}
 	m := New(context.Background(), deps)
 
-	m, _ = send(m, key("down"), key("enter"), key("enter")) // edit → gemini edit sheet
-	m, cmd := send(m, key("down"), key("enter"))            // Manage models
+	// editPick → gemini edit sheet (index 0, enter).
+	m, _ = send(m, key("enter"))
+	if m.screen != screenEdit {
+		t.Fatalf("screen = %d, want edit", m.screen)
+	}
+	// Move to "Manage models…" and select.
+	if !cursorTo(&m, editModel, "") {
+		t.Fatal("Manage models row missing")
+	}
+	m, cmd := send(m, key("enter"))
 	if m.screen != screenModels {
 		t.Fatalf("screen = %d, want models", m.screen)
 	}
@@ -495,8 +534,16 @@ func TestManageModelsGeminiStartsDiscovery(t *testing.T) {
 	deps := newFakeDeps() // active is gemini-apikey (WireFormatGemini)
 	m := New(context.Background(), deps)
 
-	// Menu → "Manage models" (index 5).
-	m, cmd := send(m, key("down"), key("down"), key("down"), key("down"), key("down"), key("enter"))
+	// Provider list at index 0 = gemini; Enter → edit sheet.
+	m, _ = send(m, key("enter"))
+	if m.screen != screenEdit || m.targetID != "gemini-apikey" {
+		t.Fatalf("screen = %d target = %q, want edit/gemini-apikey", m.screen, m.targetID)
+	}
+	// Move to "Manage models…" row and select it → screenModels.
+	if !cursorTo(&m, editModel, "") {
+		t.Fatal("Manage models row missing from edit sheet")
+	}
+	m, cmd := send(m, key("enter"))
 	if m.screen != screenModels {
 		t.Fatalf("screen = %d, want models", m.screen)
 	}
@@ -536,24 +583,28 @@ func TestEscFromMenuCloses(t *testing.T) {
 func TestRemoveCustomProvider(t *testing.T) {
 	deps := newFakeDeps()
 	m := New(context.Background(), deps)
-	// menu: 0 switch,1 edit,2 setkey,3 add,4 remove
-	m, _ = send(m, key("down"), key("down"), key("down"), key("down"), key("enter"))
-	if m.screen != screenRemove {
-		t.Fatalf("screen = %d, want remove", m.screen)
+	// Provider list: 0=gemini, 1=openai, 2=my-vllm (custom). Navigate to my-vllm.
+	m, _ = send(m, key("down"), key("down"))
+	if m.screen != screenEditPick {
+		t.Fatalf("screen = %d, want editPick", m.screen)
 	}
-	// Only my-vllm is custom; select it.
-	m, _ = send(m, key("enter"))
+	// Press 'x' to remove the selected custom provider (my-vllm).
+	m, _ = send(m, key("x"))
 	if deps.removed != "my-vllm" {
 		t.Fatalf("removed = %q, want my-vllm", deps.removed)
+	}
+	// Should remain at the provider list.
+	if m.screen != screenEditPick {
+		t.Fatalf("screen = %d, want editPick after remove", m.screen)
 	}
 }
 
 // gotoOpenAIEdit drives the dialog to the openai-chat edit sheet.
+// The dialog opens directly at screenEditPick; openai is at index 1.
 func gotoOpenAIEdit(t *testing.T, deps *fakeDeps) Model {
 	t.Helper()
 	m := New(context.Background(), deps)
-	m, _ = send(m, key("down"), key("enter"))  // menu → editPick
-	m, _ = send(m, key("down"), key("enter"))  // pick openai (index 1)
+	m, _ = send(m, key("down"), key("enter")) // editPick: move to openai (index 1), enter → screenEdit
 	if m.screen != screenEdit || m.targetID != "openai" {
 		t.Fatalf("not on openai edit sheet: screen=%d target=%q", m.screen, m.targetID)
 	}

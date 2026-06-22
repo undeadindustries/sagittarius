@@ -74,7 +74,9 @@ in this file (see [Keeping this file current](#keeping-this-file-current)).
   - `/model` — global `{Provider}/{Model}` picker (menu + autocomplete); selecting
     any entry calls `SelectCurrentModel` which does switch+set-model atomically.
   - `/models` — per-model settings editor: select `{Provider}/{Model}`, then edit
-    system prompt, temperature, contextLimit, reasoningEffort in a submenu.
+    temperature, contextLimit, reasoningEffort in a submenu.
+  - `/system-prompt` — project-wide system-prompt preset picker; saves to
+    `<repo>/.sagittarius/settings.json`.
   - `/modes` / `/mode settings` — mode-override editor: assign a `{Provider}/{Model}`
     override to any mode or clear to default.
   - `Ctrl+/` — cycles globally across all activated models (all providers).
@@ -85,7 +87,8 @@ in this file (see [Keeping this file current](#keeping-this-file-current)).
 - **System prompts:** personalities (`programmer`, `sysadmin`,
   `personal-assistant`, `creative-assistant`) × variants (`full`/`lite`),
   selected via presets. Per-turn temperature + sampling defaults; context-window
-  auto-detection. Resolution order: per-model → provider → global → built-in.
+  auto-detection. Project default via `/system-prompt` (`sagittarius.systemPrompt`
+  in project settings); provider override still available in `/providers`.
 - **Tools:** `read_file`, `write_file`, `list_directory`, `run_shell_command`,
   `grep_search`, plus `activate_skill` and MCP tools. Approval policy
   `default`/`autoEdit`/`yolo` (`--approval-mode`, `--yolo`/`-y`). Workspace path
@@ -106,7 +109,7 @@ in this file (see [Keeping this file current](#keeping-this-file-current)).
   (default purple + greyscale/`NO_COLOR`), basic markdown, footer telemetry, exit
   summary per-model token counts. Overlay dialogs: providers wizard, global model
   picker (`modelpickdialog`), per-model settings editor (`modelsdialog`), mode-override
-  editor (`modesdialog`).
+  editor (`modesdialog`), project system-prompt picker (`systempromptdialog`).
 - **Headless:** `-p`/`--prompt`, `--output-format text|json|stream-json`
   (stream-json emits `text`/`tool_start`/`tool_result`/`info`/`error` lines), and
   `--slash` for a single slash command without a TTY.
@@ -115,7 +118,7 @@ in this file (see [Keeping this file current](#keeping-this-file-current)).
 
 `/help`, `/quit`, `/providers` (wizard; also holds API-key entry — no `/auth`),
 `/model` (global picker + autocomplete), `/models` (per-model settings editor),
-`/modes` (mode-override editor; alias `/mode settings`), `/mode`, `/reasoning`,
+`/system-prompt` (project personality preset), `/modes` (mode-override editor; alias `/mode settings`), `/mode`, `/reasoning`,
 `/memory reload`, `/mcp` (list/reload), `/skills` (list/reload),
 `/agents` (list/reload), `/diff`, `/undo`. Naming rule: singular sets current
 one (`/model`, `/mode`), plural manages settings (`/models`, `/modes`).
@@ -159,7 +162,7 @@ internal/storage/         # global home + project slug registry
 internal/mcp/ skills/ agents/ extensions/   # MCP + skills (full); agents/extensions partial
 internal/ui/              # ui.UI interface (primitives only)
 internal/ui/bubbletea/    # Bubble Tea implementation (only charm importer)
-internal/ui/theme/ providersdialog/ modelsdialog/ modelpickdialog/ modesdialog/  # TUI leaves
+internal/ui/theme/ providersdialog/ modelsdialog/ modelpickdialog/ modesdialog/ systempromptdialog/  # TUI leaves
 internal/version/ internal/log/
 tests/parity/             # comparison harness (gated by SAGITTARIUS_PARITY_FORK)
 tests/e2e/                # subprocess E2E: live (SAGITTARIUS_E2E_LIVE) + mock (SAGITTARIUS_E2E_MOCK)

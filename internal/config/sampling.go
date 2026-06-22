@@ -67,14 +67,22 @@ func VariantCompressionThreshold(variant string) float64 {
 }
 
 // ResolveEffectiveTemperature computes the temperature to send for a model,
-// applying the resolution order: user-pinned provider override -> model-family
-// rule -> active system-prompt preset (personality) default -> none.
+// applying the resolution order:
+//  1. per-model override (providers.<id>.models.<model>.temperature)
+//  2. provider instance override (providers.<id>.temperature)
+//  3. model-family rule (families that reject custom values return nil)
+//  4. personality preset default
 //
 // A nil result means "send no temperature" (let the server decide), which is the
 // correct behavior for families that reject custom values.
 func ResolveEffectiveTemperature(settings *Settings, providerID, model string) *float64 {
-	if inst := settings.ProviderInstance(providerID); inst != nil && inst.Temperature != nil {
-		return inst.Temperature
+	if inst := settings.ProviderInstance(providerID); inst != nil {
+		if mc, ok := lookupModelConfig(inst, model); ok && mc.Temperature != nil {
+			return mc.Temperature
+		}
+		if inst.Temperature != nil {
+			return inst.Temperature
+		}
 	}
 	if temp, omit, matched := ModelTemperatureRule(model); matched {
 		if omit {

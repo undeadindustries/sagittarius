@@ -599,6 +599,11 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 	if err != nil {
 		return nil, nil, nil, nil, "", "", err
 	}
+	if wd, wdErr := os.Getwd(); wdErr == nil {
+		if mergeErr := config.MergeProjectSystemPrompt(settings, wd); mergeErr != nil {
+			slog.Warn("could not merge project system prompt", "error", mergeErr)
+		}
+	}
 
 	needsSetup := interactive && agent.NeedsProviderSetup(ctx, settings)
 

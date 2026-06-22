@@ -73,12 +73,20 @@ type ProviderInstanceConfig struct {
 }
 
 // ProviderModelConfig holds per-model overrides under providers.<id>.models.<model>.
-// Minimal AD-024 slice: only the system-prompt knobs are modeled today. Unknown
-// keys round-trip via Extra.
+// Unknown keys round-trip via Extra.
 type ProviderModelConfig struct {
-	Personality string                     `json:"personality,omitempty"`
-	PromptMode  PromptMode                 `json:"promptMode,omitempty"`
-	Extra       map[string]json.RawMessage `json:"-"`
+	Personality string     `json:"personality,omitempty"`
+	PromptMode  PromptMode `json:"promptMode,omitempty"`
+	// Temperature overrides the provider-level temperature for this model only.
+	// A nil value inherits the provider instance override (or the model-family rule).
+	Temperature *float64 `json:"temperature,omitempty"`
+	// ContextLimit overrides the provider-level context window size for this
+	// model only. Nil inherits the provider instance value.
+	ContextLimit *int `json:"contextLimit,omitempty"`
+	// ReasoningEffort overrides the provider-level reasoning effort for this
+	// model only (openai-responses wire only; empty inherits provider value).
+	ReasoningEffort string                     `json:"reasoningEffort,omitempty"`
+	Extra           map[string]json.RawMessage `json:"-"`
 }
 
 // UnmarshalJSON decodes the known per-model fields and preserves unknown keys.
@@ -96,6 +104,22 @@ func (c *ProviderModelConfig) UnmarshalJSON(data []byte) error {
 			}
 		case "promptMode":
 			if err := json.Unmarshal(val, &c.PromptMode); err != nil {
+				return err
+			}
+		case "temperature":
+			var f float64
+			if err := json.Unmarshal(val, &f); err != nil {
+				return err
+			}
+			c.Temperature = &f
+		case "contextLimit":
+			var n int
+			if err := json.Unmarshal(val, &n); err != nil {
+				return err
+			}
+			c.ContextLimit = &n
+		case "reasoningEffort":
+			if err := json.Unmarshal(val, &c.ReasoningEffort); err != nil {
 				return err
 			}
 		default:
@@ -124,6 +148,27 @@ func (c ProviderModelConfig) MarshalJSON() ([]byte, error) {
 			return nil, err
 		}
 		obj["promptMode"] = b
+	}
+	if c.Temperature != nil {
+		b, err := json.Marshal(*c.Temperature)
+		if err != nil {
+			return nil, err
+		}
+		obj["temperature"] = b
+	}
+	if c.ContextLimit != nil {
+		b, err := json.Marshal(*c.ContextLimit)
+		if err != nil {
+			return nil, err
+		}
+		obj["contextLimit"] = b
+	}
+	if c.ReasoningEffort != "" {
+		b, err := json.Marshal(c.ReasoningEffort)
+		if err != nil {
+			return nil, err
+		}
+		obj["reasoningEffort"] = b
 	}
 	for key, val := range c.Extra {
 		obj[key] = val

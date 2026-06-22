@@ -15,6 +15,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/ui/modelsdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/modesdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/providersdialog"
+	"github.com/undeadindustries/sagittarius/internal/ui/systempromptdialog"
 )
 
 // mapDialogKind translates a slash dialog request into the UI event kind.
@@ -28,6 +29,8 @@ func mapDialogKind(kind slash.DialogKind) ui.DialogKind {
 		return ui.DialogModelPick
 	case slash.DialogModes:
 		return ui.DialogModes
+	case slash.DialogSystemPrompt:
+		return ui.DialogSystemPrompt
 	default:
 		return ""
 	}
@@ -512,44 +515,27 @@ func (d *modelsDialogDeps) ClearModelSetting(ctx context.Context, providerID, mo
 	return d.rebuildIfActive(ctx, providerID)
 }
 
-func (d *modelsDialogDeps) SystemPromptPresetID(providerID, model string) string {
-	if d.settings() == nil {
-		return ""
-	}
-	vals := provider.ModelConfigValues(d.settings(), providerID, model)
-	// Reconstruct the preset id from stored personality + promptMode so the
-	// picker pre-selects the correct row (e.g. "programmer-lite", not just
-	// "programmer").
-	if p, ok := config.PresetForPersonalityVariant(vals["personality"], vals["promptMode"]); ok {
-		return p.ID
-	}
-	return ""
+// SystemPromptDialogDeps returns the adapter for the /system-prompt picker.
+func (a *App) SystemPromptDialogDeps() systempromptdialog.Deps {
+	return &systemPromptDialogDeps{app: a}
 }
 
-func (d *modelsDialogDeps) ApplySystemPromptPreset(ctx context.Context, providerID, model, presetID string) (string, error) {
-	if d.loader() == nil || d.settings() == nil {
-		return "", fmt.Errorf("settings not loaded")
+type systemPromptDialogDeps struct {
+	app *App
+}
+
+func (d *systemPromptDialogDeps) CurrentPresetID() string {
+	if d.app == nil || d.app.deps.Settings == nil {
+		return ""
 	}
-	// Look up the preset so we write canonical personality + promptMode (not
-	// the raw preset id). Storing the variant id directly avoids validation
-	// errors for compound ids like "programmer-lite".
-	preset, ok := config.LookupPreset(presetID)
-	if !ok {
-		return "", fmt.Errorf("unknown system prompt preset %q", presetID)
+	return config.ProjectSystemPromptPresetID(d.app.deps.Settings)
+}
+
+func (d *systemPromptDialogDeps) ApplyPreset(ctx context.Context, presetID string) (string, error) {
+	if d.app == nil || d.app.deps.Hooks == nil {
+		return "", fmt.Errorf("app not available")
 	}
-	if err := provider.SetModelConfig(d.settings(), providerID, model, "personality", preset.Personality); err != nil {
-		return "", err
-	}
-	if err := provider.SetModelConfig(d.settings(), providerID, model, "promptMode", preset.Variant); err != nil {
-		return "", err
-	}
-	if err := d.loader().Save(d.settings()); err != nil {
-		return "", err
-	}
-	if err := d.rebuildIfActive(ctx, providerID); err != nil {
-		return "", err
-	}
-	return "System prompt preset → " + preset.Label, nil
+	return d.app.deps.Hooks.ApplyProjectSystemPromptPreset(ctx, presetID)
 }
 
 func (d *modelsDialogDeps) rebuildIfActive(ctx context.Context, providerID string) error {

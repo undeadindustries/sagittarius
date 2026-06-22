@@ -45,6 +45,11 @@ type Theme struct {
 	// Structural colors for borders (dialog overlays, confirm band).
 	BorderColor      lipgloss.TerminalColor // default panel border
 	FocusBorderColor lipgloss.TerminalColor // focused / awaiting-input border
+
+	// InputBg is the background color for the chat input row. Used by the TUI
+	// to set PromptStyle/TextStyle/CursorStyle on the textinput so the typing
+	// zone has a visible affordance. NoColor{} on greyscale themes.
+	InputBg lipgloss.TerminalColor
 }
 
 // Default palette: purple-leaning dark theme. Accents lean lightly purple; the
@@ -79,6 +84,7 @@ func Default() Theme {
 		Selected:         lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF")).Background(lipgloss.Color(purpleDeep)),
 		BorderColor:      lipgloss.Color(grey),
 		FocusBorderColor: lipgloss.Color(purple),
+		InputBg:          lipgloss.Color("235"),
 	}
 }
 
@@ -103,6 +109,7 @@ func Greyscale() Theme {
 		Selected:         lipgloss.NewStyle().Reverse(true),
 		BorderColor:      lipgloss.NoColor{},
 		FocusBorderColor: lipgloss.NoColor{},
+		InputBg:          lipgloss.NoColor{},
 	}
 }
 

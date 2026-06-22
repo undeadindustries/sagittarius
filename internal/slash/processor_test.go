@@ -82,6 +82,22 @@ func (m *mockHooks) SnapshotDiff(string) (string, error) { return "", nil }
 
 func (m *mockHooks) SnapshotUndo(int) ([]string, error) { return nil, nil }
 
+func (m *mockHooks) SelectCurrentModel(context.Context, string, string) (string, error) {
+	return "gpt-4o-mini", nil
+}
+
+func (m *mockHooks) AllActiveModels() []provider.ProviderModelPair { return nil }
+
+func (m *mockHooks) ProjectSystemPromptPresetID() string { return "" }
+
+func (m *mockHooks) ApplyProjectSystemPromptPreset(ctx context.Context, presetID string) (string, error) {
+	_ = ctx
+	_ = presetID
+	m.reloadCalls++
+	m.rebuildCalls++
+	return "System prompt → Programmer", nil
+}
+
 func testDeps(t *testing.T, settings *config.Settings) (slash.Deps, *config.Loader, *mockHooks) {
 	t.Helper()
 	dir := t.TempDir()
@@ -126,8 +142,9 @@ func TestHelpListsCommands(t *testing.T) {
 			t.Errorf("help missing %q\n%s", want, help)
 		}
 	}
-	// The provider/model subcommand trees were retired (menu-first commands).
-	for _, gone := range []string{"/providers list", "/providers use", "/providers set", "/model "} {
+	// The provider subcommand tree was retired (menu-first commands).
+	// /model is now a real top-level command (global model picker), not retired.
+	for _, gone := range []string{"/providers list", "/providers use", "/providers set"} {
 		if strings.Contains(help, gone) {
 			t.Errorf("help should not list retired subcommand %q\n%s", gone, help)
 		}
@@ -159,6 +176,37 @@ func TestModelsOpensDialog(t *testing.T) {
 	}
 	if result.OpenDialog != slash.DialogModels {
 		t.Fatalf("OpenDialog = %q, want %q", result.OpenDialog, slash.DialogModels)
+	}
+}
+
+func TestSystemPromptOpensDialog(t *testing.T) {
+	t.Parallel()
+	deps, _, _ := testDeps(t, nil)
+	p := slash.NewProcessor()
+
+	result := p.Process(context.Background(), "/system-prompt", deps)
+	if !result.Handled {
+		t.Fatal("expected handled")
+	}
+	if result.OpenDialog != slash.DialogSystemPrompt {
+		t.Fatalf("OpenDialog = %q, want %q", result.OpenDialog, slash.DialogSystemPrompt)
+	}
+}
+
+func TestSystemPromptAppliesPresetArg(t *testing.T) {
+	t.Parallel()
+	deps, _, hooks := testDeps(t, nil)
+	p := slash.NewProcessor()
+
+	result := p.Process(context.Background(), "/system-prompt programmer", deps)
+	if !result.Handled || result.Err != nil {
+		t.Fatalf("result = %+v", result)
+	}
+	if len(result.Messages) == 0 {
+		t.Fatal("expected info message")
+	}
+	if hooks.reloadCalls == 0 {
+		t.Fatal("expected ReloadSystemInstruction after preset apply")
 	}
 }
 

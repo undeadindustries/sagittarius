@@ -523,6 +523,42 @@ func (h *appHooks) AllActiveModels() []provider.ProviderModelPair {
 	return provider.AllActiveModels(h.app.deps.Settings)
 }
 
+func (h *appHooks) ProjectSystemPromptPresetID() string {
+	if h.app == nil || h.app.deps.Settings == nil {
+		return ""
+	}
+	return config.ProjectSystemPromptPresetID(h.app.deps.Settings)
+}
+
+func (h *appHooks) ApplyProjectSystemPromptPreset(ctx context.Context, presetID string) (string, error) {
+	if h.app == nil || h.app.runner == nil {
+		return "", fmt.Errorf("runner not available")
+	}
+	preset, ok := config.LookupPreset(presetID)
+	if !ok {
+		return "", fmt.Errorf("unknown system prompt preset %q", presetID)
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("resolve working directory: %w", err)
+	}
+	if err := config.SaveProjectSystemPrompt(wd, preset.Personality, preset.Variant); err != nil {
+		return "", err
+	}
+	if h.app.deps.Settings != nil {
+		if err := config.MergeProjectSystemPrompt(h.app.deps.Settings, wd); err != nil {
+			return "", err
+		}
+	}
+	if err := h.ReloadSystemInstruction(ctx); err != nil {
+		return "", err
+	}
+	if _, _, err := h.RebuildRunner(ctx); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("System prompt → %s (saved to .sagittarius/settings.json)", preset.Label), nil
+}
+
 // systemPromptStatusDetail returns the human-readable system-prompt preset label
 // for the footer (e.g. "Programmer (low context)").
 func systemPromptStatusDetail(runner *Runner, settings *config.Settings) string {
@@ -533,6 +569,11 @@ func systemPromptStatusDetail(runner *Runner, settings *config.Settings) string 
 	model := ""
 	if runner != nil {
 		model = runner.Model()
+	}
+	if presetID := config.ProjectSystemPromptPresetID(settings); presetID != "" {
+		if p, ok := config.LookupPreset(presetID); ok {
+			return p.Label
+		}
 	}
 	if presetID := provider.CurrentSystemPromptPreset(settings, providerID); presetID != "" {
 		if p, ok := config.LookupPreset(presetID); ok {

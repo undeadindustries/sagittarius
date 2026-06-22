@@ -1,16 +1,14 @@
 # Sagittarius
 
-Sagittarius is a **Go port** of a customized [gemini-cli](https://github.com/google-gemini/gemini-cli) fork, built for performance, compile-time safety, and parity with the Node reference implementation.
+Sagittarius started as a 1:1 Go port of gemini-cli. Gemini-cli was discontinued and Antigravity is...not ideal. This project has evolved into a bug-free, safe alternative to Gemini-cli, Agy, and Opencode to build large projects, admin your system, or be your assistant.
 
 It is an open-source terminal agent CLI that orchestrates requests across:
 
 - **Google Gemini** (native wire format, API key)
-- **OpenAI-compatible endpoints** (OpenAI, OpenRouter, local vLLM)
+- **OpenAI-compatible endpoints** (OpenAI, OpenRouter, local vLLM, custom/local AI providers)
 - **OpenAI Responses API** (GPT-5 / reasoning models)
 
-## Status
-
-Early development. Phase 01 provides the repository skeleton, build tooling, and CI. Interactive TUI, providers, and agent loop land in later phases.
+You can set specific models for different modes (agent, plan, ask), choose different system prompts (programmer, system admin, personal assistant, creative assistant), and customize temperature and other settings.
 
 ## Requirements
 
@@ -38,15 +36,31 @@ make lint    # golangci-lint
 make race    # race detector
 ```
 
-Copy `.env.example` to `.env` for local environment variables (never commit `.env`).
+## Configuration & Rules
 
-## Configuration
+Sagittarius reads its settings from `~/.sagittarius/settings.json`. API keys belong in environment variables or OS keychain — not in settings files.
 
-Sagittarius reads shared settings from `~/.gemini/settings.json` where practical (Phase 02+). API keys belong in environment variables or OS keychain — not in settings files.
+### Rules (`AGENTS.md`)
 
-## Relation to gemini-cli
+You can define custom rules and instructions that the agent must follow. These are placed in `AGENTS.md` files:
 
-Sagittarius targets behavioral parity with a **frozen fork** used as the reference implementation. It is an independent project, not an official Google product.
+- **Global rules:** Create `~/.sagittarius/AGENTS.md`. The agent will apply these rules across all projects.
+- **Project rules:** Create an `AGENTS.md` file in the root of your project. The agent will read this file when run within the project directory.
+
+### Skills (`SKILL.md`)
+
+You can extend the agent's domain knowledge and capabilities by creating skills. Skills are simply Markdown files named `SKILL.md` (or ending in `.md` inside a skill directory). 
+
+**How to create a skill:**
+1. Create a new directory for your skill.
+2. Inside that directory, create a `SKILL.md` file.
+3. Write your instructions, expert context, or playbook for the agent in that Markdown file.
+
+**Where to put skills:**
+- **Global skills:** Place them in `~/.sagittarius/skills/` (or `~/.agents/skills/`).
+- **Project skills:** Place them in `<your-project>/.sagittarius/skills/` (or `<your-project>/.agents/skills/`).
+
+The agent will automatically discover these skills and can activate them when relevant to your prompt. You can also use the `/skills` command in the CLI to manage them.
 
 ## License
 

@@ -62,10 +62,14 @@ Snapshots are on by default. Configure them in `settings.json`, either globally
 - Snapshotting covers `write_file` only. Files changed by `run_shell_command`
   are not snapshotted (use the project boundary or your own git history for
   those).
-- `/diff` and `/undo` are interactive (TUI) commands. In headless mode (`-p`),
-  inspect `~/.sagittarius/tmp/<slug>/snapshots/` or use git in your project.
-- The session undo stack is in-memory for the current process; restarting the
-  CLI starts a fresh stack (the on-disk index is kept for inspection).
+- `/diff` and `/undo` also run headlessly via `sagittarius --slash "/diff"` /
+  `--slash "/undo"` (see [agent-testing.md](agent-testing.md)). Set
+  `SAGITTARIUS_SESSION_ID` to share one snapshot history across the write and the
+  `--slash` invocations; otherwise each process uses its own per-pid session.
+- The undo stack is rebuilt from the on-disk session index on startup, so a
+  reused session id (via `SAGITTARIUS_SESSION_ID`, or a resumed session) sees and
+  can revert earlier changes. `/undo` rewrites the index so reverted changes are
+  not re-applied by a later process.
 
 ## Project boundary enforcement
 
