@@ -117,6 +117,12 @@ func lookupModelConfig(inst *ProviderInstanceConfig, model string) (ProviderMode
 	return mc, ok
 }
 
+// LookupModelConfig is the exported form of lookupModelConfig, for use by
+// packages that cannot call the unexported helper (e.g. internal/provider).
+func LookupModelConfig(inst *ProviderInstanceConfig, model string) (ProviderModelConfig, bool) {
+	return lookupModelConfig(inst, model)
+}
+
 func globalSystemPrompt(settings *Settings) *SagittariusSystemPromptConfig {
 	if settings == nil || settings.Sagittarius == nil {
 		return nil

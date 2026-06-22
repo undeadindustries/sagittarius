@@ -115,6 +115,10 @@ type SagittariusModes struct {
 // SagittariusModeConfig configures one interaction mode.
 type SagittariusModeConfig struct {
 	Model              string                     `json:"model,omitempty"`
+	// Provider, when non-empty, qualifies the model override with a specific
+	// provider id. Entering the mode will switch to this (provider, model) pair
+	// so the correct backend and wire-format are used.
+	Provider           string                     `json:"provider,omitempty"`
 	SystemPromptSuffix string                     `json:"systemPromptSuffix,omitempty"`
 	Extra              map[string]json.RawMessage `json:"-"`
 }

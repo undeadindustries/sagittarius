@@ -15,9 +15,9 @@ import (
 type screen int
 
 const (
-	screenMenu screen = iota
-	screenSwitch
-	screenEditPick
+	// screenEditPick is now the root screen: shows the provider list; Enter = edit
+	// sheet, a = add, x = remove custom, Esc = close.
+	screenEditPick screen = iota
 	screenEdit
 	screenEditField
 	screenEditPicker
@@ -135,7 +135,7 @@ type Model struct {
 	listOffset int
 
 	// modelsFrom records which screen opened the activation screen so back/save
-	// returns there: screenEdit (per-provider edit sheet) or screenMenu.
+	// returns there: screenEdit (per-provider edit sheet) or screenEditPick (root list).
 	modelsFrom screen
 }
 
@@ -149,7 +149,7 @@ func New(ctx context.Context, deps Deps) Model {
 		deps:      deps,
 		ctx:       ctx,
 		th:        theme.Default(),
-		screen:    screenMenu,
+		screen:    screenEditPick,
 		input:     ti,
 		add:       addState{wire: config.WireFormatOpenAIChat},
 		providers: deps.ListProviders(),
@@ -249,21 +249,29 @@ func (m Model) seedModels(id string) []string {
 }
 
 // initChecked seeds the activation checkboxes from the curated set. When the
-// provider has not been curated (no saved activeModels), every model is checked
-// — models are active by default.
+// provider has not yet been curated (no saved activeModels), only the provider's
+// configured default model is checked so the user opts in explicitly via
+// Space / A before saving — prevents accidental mass-activation of large catalogs.
 func (m *Model) initChecked() {
 	curated := m.deps.ActiveModels(m.targetID)
-	set := make(map[string]bool, len(curated))
-	for _, c := range curated {
-		set[c] = true
-	}
 	m.checked = make([]bool, len(m.models))
-	for i, mod := range m.models {
-		if len(curated) == 0 {
-			m.checked[i] = true
-			continue
+	if len(curated) > 0 {
+		set := make(map[string]bool, len(curated))
+		for _, c := range curated {
+			set[c] = true
 		}
-		m.checked[i] = set[mod]
+		for i, mod := range m.models {
+			m.checked[i] = set[mod]
+		}
+		return
+	}
+	// Uncurated: check only the configured default (or live) model.
+	def := currentValue(m.deps.ProviderSettings(m.targetID), "model")
+	if def == "" {
+		def = m.deps.CurrentModel(m.targetID)
+	}
+	for i, mod := range m.models {
+		m.checked[i] = def != "" && mod == def
 	}
 }
 
@@ -304,8 +312,18 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			return m, nil
 		}
 	case "a":
+		if m.screen == screenEditPick {
+			m.add = addState{wire: config.WireFormatOpenAIChat}
+			m.input = freshInput("provider id (e.g. local-vllm)")
+			m.screen = screenAdd
+			return m, nil
+		}
 		if m.screen == screenModels && !m.loading {
 			return m.enterModelsAdd(), nil
+		}
+	case "x":
+		if m.screen == screenEditPick {
+			return m.removeCurrentCustom()
 		}
 	case "r":
 		if m.screen == screenEdit {
@@ -354,15 +372,16 @@ func (m *Model) toggleChecked() {
 	m.checked[m.cursor] = !m.checked[m.cursor]
 }
 
-// back navigates one screen toward the menu, or closes from the menu.
+// back navigates one screen toward the provider list, or closes from the root.
 func (m Model) back() (Model, tea.Cmd) {
 	m.errMsg = ""
 	m.info = ""
 	switch m.screen {
-	case screenMenu:
+	case screenEditPick:
 		m.done = true
 		return m, nil
 	case screenEdit:
+		m.providers = m.deps.ListProviders()
 		m.screen = screenEditPick
 		m.cursor = 0
 	case screenEditField, screenEditPicker:
@@ -374,15 +393,17 @@ func (m Model) back() (Model, tea.Cmd) {
 		if m.modelsFrom == screenEdit {
 			return m.returnToEdit(), nil
 		}
-		m.screen = screenMenu
+		m.providers = m.deps.ListProviders()
+		m.screen = screenEditPick
 		m.cursor = 0
 	case screenAddModels:
-		// Provider already added; just return to menu.
+		// Provider already added; return to provider list.
 		m.providers = m.deps.ListProviders()
-		m.screen = screenMenu
+		m.screen = screenEditPick
 		m.cursor = 0
 	default:
-		m.screen = screenMenu
+		m.providers = m.deps.ListProviders()
+		m.screen = screenEditPick
 		m.cursor = 0
 	}
 	return m, nil
@@ -404,9 +425,7 @@ func (m Model) returnToEdit() Model {
 
 func (m Model) listLen() int {
 	switch m.screen {
-	case screenMenu:
-		return len(m.menuItems())
-	case screenSwitch, screenEditPick:
+	case screenEditPick:
 		return len(m.providers)
 	case screenEdit:
 		return len(m.editItems)
@@ -437,10 +456,6 @@ func (m Model) customProviders() []ProviderEntry {
 
 func (m Model) selectCurrent() (Model, tea.Cmd) {
 	switch m.screen {
-	case screenMenu:
-		return m.selectMenu()
-	case screenSwitch:
-		return m.selectSwitch()
 	case screenEditPick:
 		return m.selectEditPick()
 	case screenEdit:
@@ -498,7 +513,7 @@ func (m Model) saveActivation() (Model, tea.Cmd) {
 		return m.returnToEdit(), nil
 	}
 	m.providers = m.deps.ListProviders()
-	m.screen = screenMenu
+	m.screen = screenEditPick
 	m.cursor = 0
 	return m, nil
 }
@@ -510,88 +525,6 @@ func containsString(items []string, target string) bool {
 		}
 	}
 	return false
-}
-
-// ---- menu ----------------------------------------------------------------
-
-type menuItem struct {
-	label string
-	id    string
-}
-
-func (m Model) menuItems() []menuItem {
-	return []menuItem{
-		{"Switch active provider", "switch"},
-		{"Edit a provider", "edit"},
-		{"Set API key", "setkey"},
-		{"Add provider", "add"},
-		{"Remove provider", "remove"},
-		{"Manage models (activate/deactivate)", "models"},
-		{"Close", "close"},
-	}
-}
-
-func (m Model) selectMenu() (Model, tea.Cmd) {
-	items := m.menuItems()
-	if m.cursor < 0 || m.cursor >= len(items) {
-		return m, nil
-	}
-	m.errMsg = ""
-	m.info = ""
-	switch items[m.cursor].id {
-	case "switch":
-		m.screen = screenSwitch
-		m.cursor = 0
-	case "edit":
-		m.screen = screenEditPick
-		m.cursor = 0
-	case "setkey":
-		m.targetID = m.deps.ActiveProviderID()
-		if m.targetID == "" {
-			m.errMsg = "No active provider. Switch to one first."
-			return m, nil
-		}
-		return m.enterSetKey(), nil
-	case "add":
-		m.add = addState{wire: config.WireFormatOpenAIChat}
-		m.input = freshInput("provider id (e.g. local-vllm)")
-		m.screen = screenAdd
-	case "remove":
-		m.screen = screenRemove
-		m.cursor = 0
-	case "models":
-		id := m.deps.ActiveProviderID()
-		if id == "" {
-			m.errMsg = "No active provider to manage models for."
-			return m, nil
-		}
-		if p, ok := m.findProvider(id); ok {
-			m.targetWire = p.WireFormat
-		}
-		return m.enterModels(id)
-	case "close":
-		m.done = true
-	}
-	return m, nil
-}
-
-// ---- switch --------------------------------------------------------------
-
-func (m Model) selectSwitch() (Model, tea.Cmd) {
-	if m.cursor < 0 || m.cursor >= len(m.providers) {
-		return m, nil
-	}
-	id := m.providers[m.cursor].ID
-	if err := m.deps.SwitchProvider(m.ctx, id); err != nil {
-		m.errMsg = err.Error()
-		return m, nil
-	}
-	m.status = fmt.Sprintf("Active provider → %s.", config.ProviderDisplayID(id))
-	m.providers = m.deps.ListProviders()
-	m.screen = screenMenu
-	m.cursor = 0
-	m.info = m.status
-	return m, nil
 }
 
 // ---- edit ----------------------------------------------------------------
@@ -607,6 +540,28 @@ func (m Model) selectEditPick() (Model, tea.Cmd) {
 	m.editItems = m.buildEditItems(p)
 	m.screen = screenEdit
 	m.cursor = 0
+	return m, nil
+}
+
+// removeCurrentCustom removes the highlighted custom provider immediately.
+func (m Model) removeCurrentCustom() (Model, tea.Cmd) {
+	if m.cursor < 0 || m.cursor >= len(m.providers) {
+		return m, nil
+	}
+	p := m.providers[m.cursor]
+	if !p.IsCustom {
+		m.errMsg = "Only custom providers can be removed (x). Built-ins (Gemini, OpenAI, OpenRouter) cannot be deleted."
+		return m, nil
+	}
+	if err := m.deps.RemoveCustomProvider(m.ctx, p.ID); err != nil {
+		m.errMsg = err.Error()
+		return m, nil
+	}
+	m.providers = m.deps.ListProviders()
+	m.info = fmt.Sprintf("Removed %s.", config.ProviderDisplayID(p.ID))
+	if m.cursor >= len(m.providers) && m.cursor > 0 {
+		m.cursor = len(m.providers) - 1
+	}
 	return m, nil
 }
 
@@ -812,10 +767,13 @@ func (m Model) enterSetKey() Model {
 }
 
 func (m Model) enterModels(id string) (Model, tea.Cmd) {
-	if m.screen == screenEdit {
+	switch m.screen {
+	case screenEdit:
 		m.modelsFrom = screenEdit
-	} else if m.screen != screenAddModels {
-		m.modelsFrom = screenMenu
+	case screenAddModels:
+		// keep existing modelsFrom (set by caller)
+	default:
+		m.modelsFrom = screenEditPick
 	}
 	m.targetID = id
 	m.models = nil
@@ -852,7 +810,7 @@ func (m Model) handleTextEntryKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	case "esc":
 		switch m.screen {
 		case screenSetKey:
-			m.screen = screenMenu
+			m.screen = screenEdit
 		case screenModelsAdd:
 			m.screen = screenModels
 		default:
@@ -882,7 +840,7 @@ func (m Model) commitTextEntry() (Model, tea.Cmd) {
 		}
 		m.status = fmt.Sprintf("API key saved for %s.", config.ProviderDisplayID(m.targetID))
 		m.info = m.status
-		m.screen = screenMenu
+		m.screen = screenEdit
 		m.cursor = 0
 		return m, nil
 	}
@@ -1018,10 +976,10 @@ func (m Model) selectAddModel() (Model, tea.Cmd) {
 		m.errMsg = err.Error()
 		return m, nil
 	}
-	m.status = fmt.Sprintf("Added %s with model %s and switched to it.", config.ProviderDisplayID(m.targetID), model)
+	m.status = fmt.Sprintf("Added %s with model %s.", config.ProviderDisplayID(m.targetID), model)
 	m.info = m.status
 	m.providers = m.deps.ListProviders()
-	m.screen = screenMenu
+	m.screen = screenEditPick
 	m.cursor = 0
 	return m, nil
 }
@@ -1042,9 +1000,7 @@ func (m Model) selectRemove() (Model, tea.Cmd) {
 	m.info = m.status
 	m.providers = m.deps.ListProviders()
 	m.cursor = 0
-	if len(m.customProviders()) == 0 {
-		m.screen = screenMenu
-	}
+	m.screen = screenEditPick
 	return m, nil
 }
 

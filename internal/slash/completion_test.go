@@ -26,13 +26,10 @@ func TestCompleteTopLevelShowsAllCommands(t *testing.T) {
 	reg := NewRegistry()
 	got := reg.Complete("/", Deps{})
 
-	for _, want := range []string{"help", "quit", "providers", "models", "mode", "mcp"} {
+	for _, want := range []string{"help", "quit", "providers", "model", "models", "system-prompt", "modes", "mode", "mcp"} {
 		if !contains(got.Items, want) {
 			t.Errorf("top-level completion missing %q (got %v)", want, labels(got.Items))
 		}
-	}
-	if contains(got.Items, "model") {
-		t.Errorf("/model should be gone, replaced by /models (got %v)", labels(got.Items))
 	}
 	if got.ReplaceFrom != 1 {
 		t.Errorf("ReplaceFrom = %d, want 1", got.ReplaceFrom)
@@ -57,16 +54,17 @@ func TestCompletePrefixFiltersCommands(t *testing.T) {
 	}
 }
 
-func TestCompleteModelsIsTerminal(t *testing.T) {
+func TestCompleteModelAndModels(t *testing.T) {
 	t.Parallel()
 	reg := NewRegistry()
 	got := reg.Complete("/model", Deps{})
 
-	if len(got.Items) != 1 || got.Items[0].Label != "models" {
-		t.Fatalf("/model completion = %v, want [models]", labels(got.Items))
+	// Both /model and /models should appear when typing "/model".
+	if !contains(got.Items, "model") {
+		t.Errorf("/model completion missing 'model' (got %v)", labels(got.Items))
 	}
-	if got.Items[0].AppendSpace {
-		t.Error("models suggestion should not append a space (menu-first, no subcommands)")
+	if !contains(got.Items, "models") {
+		t.Errorf("/model completion missing 'models' (got %v)", labels(got.Items))
 	}
 }
 

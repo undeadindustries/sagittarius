@@ -50,6 +50,8 @@ func (m Model) footerHint() string {
 	switch m.screen {
 	case screenEditField, screenSetKey, screenModelsAdd:
 		return "Enter to save • Esc to cancel"
+	case screenEditPick:
+		return "↑/↓ move • Enter edit • a add • x remove custom • Esc close"
 	case screenEdit:
 		return "↑/↓ move • Enter select • r reset field • Esc back"
 	case screenAdd:
@@ -68,12 +70,8 @@ func (m Model) footerHint() string {
 
 func (m Model) screenBody() string {
 	switch m.screen {
-	case screenMenu:
-		return m.renderMenu()
-	case screenSwitch:
-		return m.renderProviderList("Switch active provider", m.providers)
 	case screenEditPick:
-		return m.renderProviderList("Edit which provider?", m.providers)
+		return m.renderProviderList(m.providers)
 	case screenEdit:
 		return m.renderEdit()
 	case screenEditPicker:
@@ -91,40 +89,43 @@ func (m Model) screenBody() string {
 	case screenRemove:
 		return m.renderRemove()
 	case screenModels:
-		return m.renderActivation("Activate models on " + config.ProviderDisplayID(m.targetID))
+		return m.renderActivation(m.activationHeader())
 	}
 	return ""
 }
 
-func (m Model) renderMenu() string {
-	dim := m.th.Dim
-	var b strings.Builder
-	active := m.deps.ActiveProviderID()
-	if active != "" {
-		b.WriteString(dim.Render("Active: "+config.ProviderDisplayID(active)) + "\n\n")
+// activationHeader builds a descriptive title for the model activation screen
+// that shows the provider's display name, wire type, and an OpenRouter note.
+func (m Model) activationHeader() string {
+	displayID := config.ProviderDisplayID(m.targetID)
+	wire := ""
+	switch m.targetWire {
+	case config.WireFormatGemini:
+		wire = " (Gemini native API)"
+	case config.WireFormatOpenAIChat:
+		wire = " (OpenAI-compatible)"
+	case config.WireFormatOpenAIResponses:
+		wire = " (OpenAI Responses API)"
 	}
-	for i, item := range m.menuItems() {
-		b.WriteString(m.renderRow(item.label, i == m.cursor) + "\n")
+	header := "Activate models on " + displayID + wire
+	if m.targetID == "openrouter" {
+		header += "\nNote: google/* routes here are OpenRouter endpoints, not native Gemini."
 	}
-	return strings.TrimRight(b.String(), "\n")
+	return header
 }
 
-func (m Model) renderProviderList(title string, entries []ProviderEntry) string {
+func (m Model) renderProviderList(entries []ProviderEntry) string {
 	dim := m.th.Dim
 	var b strings.Builder
-	b.WriteString(title + "\n\n")
 	if len(entries) == 0 {
-		b.WriteString(dim.Render("(none)"))
+		b.WriteString(dim.Render("No providers configured. Press a to add one."))
 		return b.String()
 	}
 	for i, p := range entries {
 		label := fmt.Sprintf("%s (%s)", p.DisplayID, p.DisplayName)
 		marker := ""
-		if p.IsActive {
-			marker = " — active"
-		}
 		if p.IsCustom {
-			marker += " [custom]"
+			marker = " [custom]"
 		}
 		b.WriteString(m.renderRow(label+dim.Render(marker), i == m.cursor) + "\n")
 	}

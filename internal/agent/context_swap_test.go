@@ -137,7 +137,7 @@ func TestNewContextManagerEjectionSkipsSmallPayloads(t *testing.T) {
 	t.Parallel()
 
 	settings := &config.Settings{Providers: &config.ProvidersSettings{Active: string(config.BuiltInOpenAI)}}
-	mgr := NewContextManager(settings, nil, func() string { return "gpt-4o" }, "sess-test")
+	mgr := NewContextManager(settings, nil, func() string { return "gpt-4o" }, "sess-test", nil)
 	if mgr == nil {
 		t.Fatal("expected a context manager for the openai-chat provider")
 	}

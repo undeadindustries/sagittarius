@@ -23,49 +23,65 @@ to later phases — see [Deferred commands](#deferred-commands).
 
 ### `/providers`
 
-- **Description:** Manage providers (built-in and custom OpenAI-compatible backends).
-- **Menu-first:** `/providers` is a single-surface, menu-first command — it has
-  no typed subcommands. Running it opens an interactive wizard:
-  - **Switch active provider** — change the active provider (persisted to `settings.json`).
-  - **Edit a provider** — pick a provider, then edit its API key, default model,
-    and wire-format-gated settings (e.g. `temperature`, `baseUrl`,
+- **Description:** Manage provider connections — edit definitions, API keys, and
+  activate models per provider.
+- **Menu-first:** `/providers` opens directly at a provider list. Select a provider
+  to open its edit sheet (API key, default model, wire-format settings). Press `a`
+  to add a custom provider; press `x` on a custom provider to delete it (built-ins
+  Gemini, OpenAI, OpenRouter cannot be deleted).
+- **Edit sheet items:**
+  - **API key** — store or update the key in secure storage.
+  - **Manage models…** — browse the provider's discovered models and toggle which
+    are **active** (Space toggles one, `A` toggles all/none). Only active models
+    appear in `/model` and `/models`. On a fresh provider only the configured
+    default model is pre-checked; opt in to more before saving. The checked subset
+    is saved to `providers.<id>.activeModels`. If you deactivate the model currently
+    in use, the live model is automatically switched to the first still-active model.
+  - **Provider-wide settings** (wire-format-gated): `temperature`, `baseUrl`,
     `contextLimit`, `toolCallParsing`, and for `openai-responses` also
-    `reasoningEffort`, `useResponseChaining`). Gemini providers expose no
-    editable instance settings (upstream owns those defaults) beyond the API key
-    and default model.
-  - **Set API key** — store an API key for the active provider in secure storage.
-    There is no separate `/auth` command.
-  - **Add provider** — register a custom OpenAI-compatible provider, then connect
-    and discover its models so you can pick a default and switch to it immediately.
-  - **Remove provider** — delete a custom provider (built-ins cannot be removed).
-  - **Manage models (activate/deactivate)** — browse the provider's discovered
-    models and toggle which ones are active (Space toggles one, `A` toggles
-    all/none). Models are active by default; the checked subset is saved to
-    `providers.<id>.activeModels`. If you deactivate the model currently in use
-    on the active provider, the live model is automatically switched to the first
-    still-active model so `/models` and the runner never point at a deactivated
-    model. Providers without a model-discovery endpoint (e.g. Gemini) still list
-    their known models for activation; the default model is set on the edit sheet.
+    `reasoningEffort`, `useResponseChaining`.
+  - **Reset all** — remove all provider-level instance overrides.
 
-There are three distinct model concerns:
+### `/model`
 
-- **Edit sheet → model**: the provider's default model (`providers.<id>.model`).
-  This is the live model unless a mode override or `-m` takes precedence.
-- **Manage models**: the curated allowlist (`providers.<id>.activeModels`) that
-  `/models` chooses from. It does not by itself change the live model, except for
-  the auto-switch described above when the live model is deactivated.
-- **`/models`**: picks the live model from the active provider's activated set.
+- **Description:** Pick the **current `{Provider}/{Model}`** from the global active list.
+- **Menu-first:** `/model` (no argument) opens an interactive list spanning all
+  providers' activated models. Each entry is displayed as `{Provider}/{Model}`.
+  Selecting one atomically switches the active provider and its live model in a
+  single step, then rebuilds the runner.
+- **Direct argument:** `/model gemini/gemini-2.5-pro` switches directly.
+- **Autocomplete:** Tab-completes `{Provider}/{Model}` pairs.
+- **`Ctrl+/`:** Cycles globally across all active models (wraps around). The status
+  bar shows the resolved model after each cycle.
 
 ### `/models`
 
-- **Description:** Pick the active model for the **active provider**, from that
-  provider's activated models.
-- **Menu-first:** `/models` is a single-surface, menu-first command with no typed
-  subcommands. It opens an interactive list of the active provider's active
-  models (curated via `/providers` → Manage models; falls back to the configured
-  default model when uncurated). Selecting one sets it as the live model and
-  rebuilds the runner. Per-model setting edits (temperature, reasoning, …) are a
-  future enhancement (AD-024) and are not yet available.
+- **Description:** Edit **per-model settings** — temperature, context limit, and
+  reasoning effort — for any active `{Provider}/{Model}` pair.
+- **Menu-first:** `/models` opens a global model list. Select a model to open its
+  settings submenu. Changes are saved to `providers.<id>.models.<model>` in
+  `settings.json` and take effect immediately for the active model.
+
+### `/system-prompt`
+
+- **Description:** Set the **project-wide** system-prompt personality (programmer,
+  sysadmin, personal assistant, creative assistant × full/lite variants).
+- **Menu-first:** `/system-prompt` opens a preset picker. Pass a preset id directly
+  for headless use (e.g. `--slash "/system-prompt programmer-lite"`).
+- **Persistence:** Saved to `<repo>/.sagittarius/settings.json` under
+  `sagittarius.systemPrompt` and merged over the global default for the current
+  workspace. Use `/providers` to set a per-provider override instead.
+
+### `/modes`
+
+- **Description:** Edit **mode overrides** — assign a `{Provider}/{Model}` to any
+  interaction mode or clear an existing override to restore default routing.
+- **Menu-first:** `/modes` (also reachable via `/mode settings`) shows each mode
+  with its current `{Provider}/{Model}` override, or "default" when none is set.
+  Selecting a mode opens a model picker; selecting "Clear override" resets it.
+- **Effect:** A provider-qualified override (`provider + model`) causes Sagittarius
+  to rebuild the generator for the new provider when the mode activates, then revert
+  when leaving that mode.
 
 ### `/memory`
 
@@ -152,6 +168,34 @@ See also: [MCP server configuration](../tools/mcp-server.md).
 - **Description:** Revert the most recent file change recorded this session (Sagittarius-specific; no fork equivalent).
 - **Usage:** `/undo` reverts the last change; `/undo <n>` reverts the last `n` (most recent first).
 - **Notes:** Restores prior file content (or removes newly created files). Disabled when `sagittarius.snapshots.enabled` is `false`.
+
+## Headless CLI flags
+
+These flags drive Sagittarius without a terminal, which is how agents (and CI)
+exercise it. See [agent-testing.md](../agent-testing.md) for end-to-end recipes.
+
+| Flag | Purpose |
+|------|---------|
+| `-p`, `--prompt <text>` | Run a single non-interactive turn and exit. |
+| `--output-format <text\|json\|stream-json>` | Headless output shape. `stream-json` emits one JSON object per line. |
+| `--approval-mode <default\|autoEdit\|yolo>` | Tool approval policy. `default` denies destructive tools headlessly; `yolo` runs all tools (path validation still applies). The fork alias `auto_edit` maps to `autoEdit`. |
+| `-y`, `--yolo` | Shorthand for `--approval-mode=yolo`. Cannot be combined with `--approval-mode`. |
+| `--mode <agent\|plan\|ask\|debug>` | Interaction mode for this run, overriding `sagittarius.defaultMode`. `ask` and `plan` enforce read-only tool policy. The fork's `--approval-mode plan` is not accepted; use `--mode plan` (AD-022). |
+| `--slash <command>` | Run a single slash command headlessly (e.g. `--slash "/mode show"`, `--slash "/diff"`, `--slash "/undo"`) and exit. Mutually exclusive with `-p`. Commands that open an interactive dialog (bare `/providers`, `/models`) print a message and exit 2. |
+
+The `stream-json` format emits these line types:
+
+| Type | Shape |
+|------|-------|
+| `text` | `{"type":"text","text":"<delta>"}` |
+| `tool_start` | `{"type":"tool_start","tool":"<name>"}` |
+| `tool_result` | `{"type":"tool_result","tool":"<name>","text":"<summary>"}` |
+| `info` | `{"type":"info","text":"<message>"}` |
+| `error` | `{"type":"error","error":"<message>"}` |
+
+`SAGITTARIUS_SESSION_ID` pins the session id across invocations so a headless
+write and a later `--slash "/diff"` or `--slash "/undo"` share the same snapshot
+history (see [snapshots-and-undo.md](../snapshots-and-undo.md)).
 
 ## Deferred commands
 

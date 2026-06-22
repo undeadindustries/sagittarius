@@ -7,75 +7,75 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
-type selected struct {
-	provider string
-	model    string
-}
-
 type fakeDeps struct {
 	entries  []ModelEntry
-	active   string
-	current  string
-	selected *selected
+	settings map[string]string // key "providerID/model/key" -> value
 }
 
-func (f *fakeDeps) ListActiveModels() []ModelEntry { return f.entries }
-func (f *fakeDeps) ActiveProviderID() string        { return f.active }
-func (f *fakeDeps) CurrentModel() string            { return f.current }
-func (f *fakeDeps) SelectModel(_ context.Context, providerID, model string) error {
-	f.selected = &selected{provider: providerID, model: model}
+func (f *fakeDeps) ListAllActiveModels() []ModelEntry { return f.entries }
+
+func (f *fakeDeps) GetModelSettings(providerID, model string) map[string]string {
+	out := map[string]string{}
+	prefix := providerID + "/" + model + "/"
+	for k, v := range f.settings {
+		if len(k) > len(prefix) && k[:len(prefix)] == prefix {
+			out[k[len(prefix):]] = v
+		}
+	}
+	return out
+}
+
+func (f *fakeDeps) SetModelSetting(_ context.Context, providerID, model, key, value string) error {
+	if f.settings == nil {
+		f.settings = map[string]string{}
+	}
+	f.settings[providerID+"/"+model+"/"+key] = value
+	return nil
+}
+
+func (f *fakeDeps) ClearModelSetting(_ context.Context, providerID, model, key string) error {
+	if f.settings != nil {
+		delete(f.settings, providerID+"/"+model+"/"+key)
+	}
 	return nil
 }
 
 func keyMsg(t tea.KeyType) tea.KeyMsg { return tea.KeyMsg{Type: t} }
 
-func TestSelectSwitchesProviderAndModel(t *testing.T) {
+// TestEscClosesFromModelList verifies Esc closes the dialog from the top-level
+// model list screen.
+func TestEscClosesFromModelList(t *testing.T) {
 	deps := &fakeDeps{
 		entries: []ModelEntry{
 			{ProviderID: "gemini-apikey", ProviderLabel: "gemini", Model: "gemini-2.5-pro"},
-			{ProviderID: "openai", ProviderLabel: "openai", Model: "gpt-4o"},
-			{ProviderID: "openrouter", ProviderLabel: "openrouter", Model: "google/gemma-3"},
 		},
-		active:  "gemini-apikey",
-		current: "gemini-2.5-pro",
-	}
-	m := New(context.Background(), deps)
-	// Cursor starts on the current entry (gemini/gemini-2.5-pro, index 0).
-	if m.cursor != 0 {
-		t.Fatalf("cursor = %d, want 0 (current entry)", m.cursor)
-	}
-	// Move to openrouter/google/gemma-3 (index 2) and select it.
-	m, _ = m.Update(keyMsg(tea.KeyDown))
-	m, _ = m.Update(keyMsg(tea.KeyDown))
-	m, _ = m.Update(keyMsg(tea.KeyEnter))
-
-	if deps.selected == nil {
-		t.Fatal("SelectModel was not called")
-	}
-	if deps.selected.provider != "openrouter" || deps.selected.model != "google/gemma-3" {
-		t.Fatalf("selected = %+v, want openrouter/google/gemma-3", deps.selected)
-	}
-	if m.curProvider != "openrouter" || m.curModel != "google/gemma-3" {
-		t.Fatalf("current = %s/%s, want openrouter/google/gemma-3", m.curProvider, m.curModel)
-	}
-	if m.Done() {
-		t.Fatal("selecting should not close the picker")
-	}
-}
-
-func TestEscCloses(t *testing.T) {
-	deps := &fakeDeps{
-		entries: []ModelEntry{{ProviderID: "openai", ProviderLabel: "openai", Model: "gpt-4o"}},
-		active:  "openai",
-		current: "gpt-4o",
 	}
 	m := New(context.Background(), deps)
 	m, _ = m.Update(keyMsg(tea.KeyEsc))
 	if !m.Done() {
-		t.Fatal("esc should close the picker")
+		t.Fatal("esc should close the settings editor from the model list")
 	}
 }
 
+// TestEnterOpensSettingsSubmenu verifies that Enter on a model entry navigates
+// to the settings submenu.
+func TestEnterOpensSettingsSubmenu(t *testing.T) {
+	deps := &fakeDeps{
+		entries: []ModelEntry{
+			{ProviderID: "gemini-apikey", ProviderLabel: "gemini", Model: "gemini-2.5-pro"},
+		},
+	}
+	m := New(context.Background(), deps)
+	if m.screen != screenList {
+		t.Fatalf("initial screen = %v, want screenList", m.screen)
+	}
+	m, _ = m.Update(keyMsg(tea.KeyEnter))
+	if m.screen != screenSetting {
+		t.Fatalf("after Enter screen = %v, want screenSetting", m.screen)
+	}
+}
+
+// TestNoActiveModels verifies the dialog renders an error when there are no models.
 func TestNoActiveModels(t *testing.T) {
 	deps := &fakeDeps{}
 	m := New(context.Background(), deps)
@@ -83,6 +83,6 @@ func TestNoActiveModels(t *testing.T) {
 		t.Fatal("expected an error message when there are no active models")
 	}
 	if m.View() == "" {
-		t.Fatal("view should render the no-models message")
+		t.Fatal("view should render even when empty")
 	}
 }

@@ -146,7 +146,7 @@ func resolveBuiltInEndpoint(
 		Timeout:              resolveTimeout(inst, defaultOpenAITimeout),
 		RequiresAPIKey:       def.RequiresAPIKey,
 		ToolCallParsing:      resolveToolCallParsing(inst),
-		ReasoningEffort:      resolveReasoningEffort(inst),
+		ReasoningEffort:      resolveReasoningEffort(inst, model),
 		UseResponseChaining:  resolveUseResponseChaining(inst),
 		Temperature:          config.ResolveEffectiveTemperature(settings, providerID, model),
 		SystemPromptOverride: resolveSystemPromptOverride(inst),
@@ -219,7 +219,7 @@ func resolveCustomEndpoint(
 		Timeout:              resolveTimeout(inst, defaultOpenAITimeout),
 		RequiresAPIKey:       requiresKey,
 		ToolCallParsing:      resolveToolCallParsing(inst),
-		ReasoningEffort:      resolveReasoningEffort(inst),
+		ReasoningEffort:      resolveReasoningEffort(inst, model),
 		UseResponseChaining:  resolveUseResponseChaining(inst),
 		Temperature:          config.ResolveEffectiveTemperature(settings, providerID, model),
 		SystemPromptOverride: resolveSystemPromptOverride(inst),
@@ -270,9 +270,13 @@ func resolveToolCallParsing(inst *config.ProviderInstanceConfig) config.ToolCall
 	return config.ToolCallParsingLenient
 }
 
-func resolveReasoningEffort(inst *config.ProviderInstanceConfig) string {
+func resolveReasoningEffort(inst *config.ProviderInstanceConfig, model string) string {
 	if inst == nil {
 		return ""
+	}
+	// Per-model override wins over provider-level setting.
+	if mc, ok := config.LookupModelConfig(inst, model); ok && mc.ReasoningEffort != "" {
+		return strings.TrimSpace(mc.ReasoningEffort)
 	}
 	return strings.TrimSpace(inst.ReasoningEffort)
 }

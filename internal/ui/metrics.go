@@ -2,6 +2,17 @@ package ui
 
 import "time"
 
+// ModelUsageStat holds heuristic token counts for one (model, process-type)
+// pair observed during the session. Counts are estimates using the same
+// EstimateTokens heuristic as the context manager (not provider-reported).
+type ModelUsageStat struct {
+	Model     string
+	Kind      string // "main" (user-turn generation) or "compression" (context summarizer)
+	Requests  int
+	InTokens  int
+	OutTokens int
+}
+
 // SessionStats is a UI-facing snapshot of session telemetry. It carries no
 // provider types so the agent/UI seam (AD-004) stays clean: the agent layer
 // fills it, the bubbletea footer and exit screen render it.
@@ -27,6 +38,10 @@ type SessionStats struct {
 
 	// Duration is the wall-clock session length.
 	Duration time.Duration
+
+	// ModelUsage breaks down token estimates by model and process type (main /
+	// compression). Empty when no generate calls have been recorded.
+	ModelUsage []ModelUsageStat
 }
 
 // ContextPercent returns the share of the context window in use (0–100), or -1

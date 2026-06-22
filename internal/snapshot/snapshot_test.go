@@ -31,6 +31,57 @@ func writeFile(t *testing.T, path, content string) {
 	}
 }
 
+func TestSnapshotReplayFromIndex(t *testing.T) {
+	root := t.TempDir()
+	home := t.TempDir()
+	t.Setenv("SAGITTARIUS_HOME", home)
+
+	// First "process": record a write.
+	mgr1, err := NewManager(root, "shared-session", Options{MaxFileBytes: 1024})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	abs := filepath.Join(root, "hello.txt")
+	mgr1.CaptureWrite(abs)
+	writeFile(t, abs, "first\n")
+	mgr1.CommitWrite(abs, "write_file")
+
+	// Second "process": a fresh Manager with the same session id replays the
+	// index and sees the change.
+	mgr2, err := NewManager(root, "shared-session", Options{MaxFileBytes: 1024})
+	if err != nil {
+		t.Fatalf("NewManager (replay): %v", err)
+	}
+	diff, err := mgr2.Diff("")
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	if !strings.Contains(diff, "hello.txt") || !strings.Contains(diff, "+first") {
+		t.Fatalf("replayed diff missing change:\n%s", diff)
+	}
+
+	// And it can undo the replayed change, removing the file.
+	restored, err := mgr2.Undo(1)
+	if err != nil {
+		t.Fatalf("Undo: %v", err)
+	}
+	if len(restored) != 1 || restored[0] != "hello.txt" {
+		t.Fatalf("Undo restored = %v, want [hello.txt]", restored)
+	}
+	if _, statErr := os.Stat(abs); !os.IsNotExist(statErr) {
+		t.Fatalf("file still exists after undo (stat err = %v)", statErr)
+	}
+
+	// A third "process" replays the post-undo (empty) index: nothing to undo.
+	mgr3, err := NewManager(root, "shared-session", Options{MaxFileBytes: 1024})
+	if err != nil {
+		t.Fatalf("NewManager (post-undo): %v", err)
+	}
+	if _, err := mgr3.Undo(1); err == nil {
+		t.Fatal("expected nothing-to-undo after replaying post-undo index")
+	}
+}
+
 func TestSnapshotTracksNewFile(t *testing.T) {
 	mgr, root := newTestManager(t)
 	abs := filepath.Join(root, "new.txt")

@@ -11,9 +11,12 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/undeadindustries/sagittarius/internal/ui"
+	"github.com/undeadindustries/sagittarius/internal/ui/modelpickdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/modelsdialog"
+	"github.com/undeadindustries/sagittarius/internal/ui/modesdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/onboardingdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/providersdialog"
+	"github.com/undeadindustries/sagittarius/internal/ui/systempromptdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/theme"
 )
 
@@ -24,10 +27,28 @@ type providerDialogHost interface {
 	ProviderDialogDeps() providersdialog.Deps
 }
 
-// modelsDialogHost is implemented by an App that can supply the models picker
-// dependencies. Same capability-interface pattern as providerDialogHost.
+// modelsDialogHost is implemented by an App that can supply the per-model settings
+// editor dependencies.
 type modelsDialogHost interface {
 	ModelsDialogDeps() modelsdialog.Deps
+}
+
+// modelPickDialogHost is implemented by an App that can supply the global model
+// picker dependencies.
+type modelPickDialogHost interface {
+	ModelPickDialogDeps() modelpickdialog.Deps
+}
+
+// modesDialogHost is implemented by an App that can supply the modes-override
+// editor dependencies.
+type modesDialogHost interface {
+	ModesDialogDeps() modesdialog.Deps
+}
+
+// systemPromptDialogHost is implemented by an App that can supply the project
+// system-prompt picker dependencies.
+type systemPromptDialogHost interface {
+	SystemPromptDialogDeps() systempromptdialog.Deps
 }
 
 // onboardingHost is implemented by an App that can supply first-run setup deps.
@@ -111,16 +132,24 @@ type model struct {
 	// overlay holds the active providers wizard. When non-nil it takes over
 	// input and rendering until it reports Done.
 	overlay *providersdialog.Model
-	// modelsOverlay holds the active models picker (mutually exclusive with
-	// overlay and onboardingOverlay).
+	// modelsOverlay holds the per-model settings editor (mutually exclusive
+	// with other overlays).
 	modelsOverlay *modelsdialog.Model
+	// modelPickOverlay holds the global {Provider}/{Model} current-model picker.
+	modelPickOverlay *modelpickdialog.Model
+	// modesOverlay holds the mode-override editor.
+	modesOverlay *modesdialog.Model
+	// systemPromptOverlay holds the project system-prompt preset picker.
+	systemPromptOverlay *systempromptdialog.Model
 	// onboardingOverlay holds the first-run provider setup wizard.
 	onboardingOverlay *onboardingdialog.Model
 }
 
 // hasOverlay reports whether any modal dialog is currently active.
 func (m *model) hasOverlay() bool {
-	return m.onboardingOverlay != nil || m.overlay != nil || m.modelsOverlay != nil
+	return m.onboardingOverlay != nil || m.overlay != nil ||
+		m.modelsOverlay != nil || m.modelPickOverlay != nil || m.modesOverlay != nil ||
+		m.systemPromptOverlay != nil
 }
 
 // maxVisibleSuggestions caps the inline suggestion list height.
@@ -133,6 +162,22 @@ func newModel(opts ui.Options, app ui.App, term *Terminal) *model {
 	ti.CharLimit = 8192
 
 	th := theme.Resolve(opts.ThemeName, opts.NoColor)
+
+	// Style the input row so it has a visible background affordance, like
+	// Gemini CLI's grey input area. On color themes use the InputBg color;
+	// on greyscale use Reverse so no color codes are emitted.
+	if th.Colored {
+		inputBg := lipgloss.NewStyle().Background(th.InputBg)
+		ti.PromptStyle = inputBg
+		ti.TextStyle = inputBg
+		ti.CursorStyle = inputBg.Reverse(true)
+		ti.PlaceholderStyle = inputBg.Faint(true)
+	} else {
+		ti.PromptStyle = lipgloss.NewStyle().Reverse(true)
+		ti.TextStyle = lipgloss.NewStyle().Reverse(true)
+		ti.CursorStyle = lipgloss.NewStyle()
+		ti.PlaceholderStyle = lipgloss.NewStyle().Reverse(true).Faint(true)
+	}
 
 	welcome := welcomeText(opts, th)
 	vp := viewport.New(80, 20)
@@ -229,6 +274,18 @@ func (m *model) updateOverlay(msg tea.Msg) (tea.Model, tea.Cmd) {
 			o := m.modelsOverlay.SetSize(msg.Width, msg.Height)
 			m.modelsOverlay = &o
 		}
+		if m.modelPickOverlay != nil {
+			o := m.modelPickOverlay.SetSize(msg.Width, msg.Height)
+			m.modelPickOverlay = &o
+		}
+		if m.modesOverlay != nil {
+			o := m.modesOverlay.SetSize(msg.Width, msg.Height)
+			m.modesOverlay = &o
+		}
+		if m.systemPromptOverlay != nil {
+			o := m.systemPromptOverlay.SetSize(msg.Width, msg.Height)
+			m.systemPromptOverlay = &o
+		}
 		return m, nil
 	case streamEventMsg:
 		return m.handleStream(msg.event)
@@ -256,13 +313,47 @@ func (m *model) updateOverlay(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
-	next, cmd := m.modelsOverlay.Update(msg)
-	if next.Done() {
-		m.closeOverlay(next.Status())
+	if m.modelsOverlay != nil {
+		next, cmd := m.modelsOverlay.Update(msg)
+		if next.Done() {
+			m.closeOverlay(next.Status())
+			return m, cmd
+		}
+		m.modelsOverlay = &next
 		return m, cmd
 	}
-	m.modelsOverlay = &next
-	return m, cmd
+
+	if m.modelPickOverlay != nil {
+		next, cmd := m.modelPickOverlay.Update(msg)
+		if next.Done() {
+			m.closeOverlay(next.Status())
+			return m, cmd
+		}
+		m.modelPickOverlay = &next
+		return m, cmd
+	}
+
+	if m.modesOverlay != nil {
+		next, cmd := m.modesOverlay.Update(msg)
+		if next.Done() {
+			m.closeOverlay(next.Status())
+			return m, cmd
+		}
+		m.modesOverlay = &next
+		return m, cmd
+	}
+
+	if m.systemPromptOverlay != nil {
+		next, cmd := m.systemPromptOverlay.Update(msg)
+		if next.Done() {
+			m.closeOverlay(next.Status())
+			return m, cmd
+		}
+		m.systemPromptOverlay = &next
+		return m, cmd
+	}
+
+	return m, nil
 }
 
 // closeOverlay removes any active dialog, surfaces its closing status, and
@@ -271,6 +362,9 @@ func (m *model) closeOverlay(status string) {
 	m.onboardingOverlay = nil
 	m.overlay = nil
 	m.modelsOverlay = nil
+	m.modelPickOverlay = nil
+	m.modesOverlay = nil
+	m.systemPromptOverlay = nil
 	if status != "" {
 		m.addBlock(roleInfo, status)
 	}
@@ -315,13 +409,43 @@ func (m *model) openDialog(kind ui.DialogKind) {
 	case ui.DialogModels:
 		host, ok := m.app.(modelsDialogHost)
 		if !ok {
-			m.addBlock(roleInfo, "Models dialog is unavailable in this session.")
+			m.addBlock(roleInfo, "Models settings dialog is unavailable in this session.")
 			return
 		}
 		o := modelsdialog.New(ctx, host.ModelsDialogDeps())
 		o = o.SetTheme(m.th)
 		o = o.SetSize(m.width, m.height)
 		m.modelsOverlay = &o
+	case ui.DialogModelPick:
+		host, ok := m.app.(modelPickDialogHost)
+		if !ok {
+			m.addBlock(roleInfo, "Model picker is unavailable in this session.")
+			return
+		}
+		o := modelpickdialog.New(ctx, host.ModelPickDialogDeps())
+		o = o.SetTheme(m.th)
+		o = o.SetSize(m.width, m.height)
+		m.modelPickOverlay = &o
+	case ui.DialogModes:
+		host, ok := m.app.(modesDialogHost)
+		if !ok {
+			m.addBlock(roleInfo, "Modes dialog is unavailable in this session.")
+			return
+		}
+		o := modesdialog.New(ctx, host.ModesDialogDeps())
+		o = o.SetTheme(m.th)
+		o = o.SetSize(m.width, m.height)
+		m.modesOverlay = &o
+	case ui.DialogSystemPrompt:
+		host, ok := m.app.(systemPromptDialogHost)
+		if !ok {
+			m.addBlock(roleInfo, "System prompt picker is unavailable in this session.")
+			return
+		}
+		o := systempromptdialog.New(ctx, host.SystemPromptDialogDeps())
+		o = o.SetTheme(m.th)
+		o = o.SetSize(m.width, m.height)
+		m.systemPromptOverlay = &o
 	}
 }
 
@@ -337,6 +461,15 @@ func (m *model) View() string {
 	}
 	if m.modelsOverlay != nil {
 		return m.modelsOverlay.View()
+	}
+	if m.modelPickOverlay != nil {
+		return m.modelPickOverlay.View()
+	}
+	if m.modesOverlay != nil {
+		return m.modesOverlay.View()
+	}
+	if m.systemPromptOverlay != nil {
+		return m.systemPromptOverlay.View()
 	}
 	header := renderHeader(m.opts, m.th, m.width)
 	footer := renderFooter(m.statusWithMetrics(), m.th, m.width)
@@ -476,6 +609,25 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.busy = true
 			m.status.Left = "mode"
+			m.stream = events
+			return m, waitStream(events)
+		}
+		return m, nil
+	case "ctrl+/":
+		if cycler, ok := m.app.(interface {
+			CycleModel(context.Context) (<-chan ui.StreamEvent, error)
+		}); ok {
+			ctx := m.ctx
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			events, err := cycler.CycleModel(ctx)
+			if err != nil {
+				_ = m.term.ShowError(err)
+				return m, nil
+			}
+			m.busy = true
+			m.status.Left = "model"
 			m.stream = events
 			return m, waitStream(events)
 		}

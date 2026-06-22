@@ -286,6 +286,18 @@ func modeModel(cfg *config.SagittariusSettings, mode Mode) string {
 	return strings.TrimSpace(mc.Model)
 }
 
+// ResolveModeOverride returns the (provider, model) pair configured for the
+// given mode, or ("", "") when the mode has no explicit override. The provider
+// may be empty even when a model is set (backwards-compatible: model-only
+// overrides apply against the active provider).
+func ResolveModeOverride(mode Mode, cfg *config.SagittariusSettings) (providerID, model string) {
+	mc := modeConfig(cfg, mode)
+	if mc == nil {
+		return "", ""
+	}
+	return strings.TrimSpace(mc.Provider), strings.TrimSpace(mc.Model)
+}
+
 func modeConfig(cfg *config.SagittariusSettings, mode Mode) *config.SagittariusModeConfig {
 	if cfg == nil || cfg.Modes == nil {
 		return nil

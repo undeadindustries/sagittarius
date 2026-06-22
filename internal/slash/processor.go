@@ -14,8 +14,14 @@ type DialogKind string
 const (
 	// DialogProviders opens the providers management wizard.
 	DialogProviders DialogKind = "providers"
-	// DialogModels opens the active-provider model picker.
+	// DialogModels opens the per-model settings editor.
 	DialogModels DialogKind = "models"
+	// DialogModelPick opens the global {Provider}/{Model} picker for /model.
+	DialogModelPick DialogKind = "model-pick"
+	// DialogModes opens the mode-override editor.
+	DialogModes DialogKind = "modes"
+	// DialogSystemPrompt opens the project system-prompt preset picker.
+	DialogSystemPrompt DialogKind = "system-prompt"
 )
 
 // Result is the outcome of processing one slash command.

@@ -88,9 +88,10 @@ A **variant** controls prompt size.
 
 Both personality and variant resolve by **first non-empty wins**:
 
-1. **Per-model override** — `providers.<id>.models.<model>.{personality,promptMode}`
-2. **Provider override** — `providers.<id>.{personality,promptMode}`
-3. **Global default** — `sagittarius.systemPrompt.{personality,variant}`
+1. **Provider override** — `providers.<id>.{personality,promptMode}`
+2. **Project default** — `sagittarius.systemPrompt` in `<repo>/.sagittarius/settings.json`
+   (set via `/system-prompt`; merged over the global `~/.sagittarius` default)
+3. **Global default** — `sagittarius.systemPrompt` in `~/.sagittarius/settings.json`
 4. **Built-in default** — `programmer` / `full`
 
 The runner re-resolves on every model, provider, mode, settings, or memory
@@ -128,18 +129,16 @@ sub-agents, hierarchical memory directives).
     "active": "openai",
     "openai": {
       "model": "gpt-4o",
-      "promptMode": "full",
-      "models": {
-        "qwen3-small": { "promptMode": "lite" }
-      }
+      "promptMode": "full"
     }
   }
 }
 ```
 
-The provider's `personality` is also editable from the providers wizard / via
-`provider.ApplyProviderSetting` (openai-chat and openai-responses wire formats;
-gemini exposes no editable keys).
+Set the project default interactively with `/system-prompt` (writes
+`<repo>/.sagittarius/settings.json`). The provider's `personality` is also editable
+from the providers wizard / via `provider.ApplyProviderSetting` (openai-chat and
+openai-responses wire formats; gemini exposes no editable keys).
 
 ## Resetting overrides
 
