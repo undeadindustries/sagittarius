@@ -281,7 +281,7 @@ func runHeadless(prompt, modelOverride, resume string, fmt_ outputFormat) int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	runner, _, _, runtime, err := buildRunner(ctx, modelOverride, false, resume)
+	runner, _, _, runtime, _, err := buildRunner(ctx, modelOverride, false, resume)
 	if err != nil {
 		writeStartupError(err)
 		return 1
@@ -370,7 +370,7 @@ func runInteractive(screenReader bool, modelOverride, resume string) int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	runner, loader, settings, runtime, err := buildRunner(ctx, modelOverride, true, resume)
+	runner, loader, settings, runtime, sessID, err := buildRunner(ctx, modelOverride, true, resume)
 	if err != nil {
 		writeStartupError(err)
 		return 1
@@ -404,7 +404,7 @@ func runInteractive(screenReader bool, modelOverride, resume string) int {
 		Model:         runner.Model(),
 		Loader:        loader,
 		Settings:      settings,
-		SessionID:     persistentSessionID(),
+		SessionID:     sessID,
 	})
 
 	var notice string
@@ -439,10 +439,11 @@ func runInteractive(screenReader bool, modelOverride, resume string) int {
 }
 
 // buildRunner constructs a Runner, optionally loading a resumed session.
-func buildRunner(ctx context.Context, modelOverride string, interactive bool, resume string) (*agent.Runner, *config.Loader, *config.Settings, *agent.Runtime, error) {
+// The returned session ID keys snapshots, context-manager state, and UI telemetry.
+func buildRunner(ctx context.Context, modelOverride string, interactive bool, resume string) (*agent.Runner, *config.Loader, *config.Settings, *agent.Runtime, string, error) {
 	settings, loader, err := loadSettings()
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, "", err
 	}
 
 	needsSetup := interactive && agent.NeedsProviderSetup(ctx, settings)
@@ -452,7 +453,7 @@ func buildRunner(ctx context.Context, modelOverride string, interactive bool, re
 	if !needsSetup {
 		endpoint, endpointErr = provider.ResolveEndpointConfig(settings)
 		if endpointErr != nil {
-			return nil, nil, nil, nil, endpointErr
+			return nil, nil, nil, nil, "", endpointErr
 		}
 	}
 
@@ -468,7 +469,7 @@ func buildRunner(ctx context.Context, modelOverride string, interactive bool, re
 	gen, genErr := provider.NewContentGenerator(ctx, settings)
 	if genErr != nil {
 		if !needsSetup && (!interactive || !errors.Is(genErr, credentials.ErrAPIKeyMissing)) {
-			return nil, nil, nil, nil, genErr
+			return nil, nil, nil, nil, "", genErr
 		}
 	}
 
@@ -481,7 +482,7 @@ func buildRunner(ctx context.Context, modelOverride string, interactive bool, re
 		Trusted:       true,
 	})
 	if err != nil {
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, "", err
 	}
 
 	// Resolve session (resume or fresh).
@@ -495,20 +496,23 @@ func buildRunner(ctx context.Context, modelOverride string, interactive bool, re
 		// request. Otherwise it only disables recording, which we log and skip.
 		if resume != "" {
 			_ = runtime.Close()
-			return nil, nil, nil, nil, fmt.Errorf("resume session: resolve working directory: %w", wdErr)
+			return nil, nil, nil, nil, "", fmt.Errorf("resume session: resolve working directory: %w", wdErr)
 		}
 		slog.Warn("session recording disabled: cannot determine working directory", "err", wdErr)
 	} else if resume != "" {
 		chatsDir, cdErr := session.ChatsDir(projectRoot)
 		if cdErr != nil {
 			_ = runtime.Close()
-			return nil, nil, nil, nil, fmt.Errorf("resume session: %w", cdErr)
+			return nil, nil, nil, nil, "", fmt.Errorf("resume session: %w", cdErr)
 		}
 		sel := session.NewSelector(chatsDir, sessID)
 		result, selErr := sel.ResolveSession(resume)
 		if selErr != nil {
 			_ = runtime.Close()
-			return nil, nil, nil, nil, fmt.Errorf("resume session: %w", selErr)
+			return nil, nil, nil, nil, "", fmt.Errorf("resume session: %w", selErr)
+		}
+		if id := strings.TrimSpace(result.Record.SessionID); id != "" {
+			sessID = id
 		}
 		slog.Info("resuming session", "info", result.DisplayInfo)
 		initialHistory = session.ConvertToProviderHistory(result.Record)
@@ -546,7 +550,7 @@ func buildRunner(ctx context.Context, modelOverride string, interactive bool, re
 	})
 	if err != nil {
 		_ = runtime.Close()
-		return nil, nil, nil, nil, err
+		return nil, nil, nil, nil, "", err
 	}
 	// Build the context manager after the runner so its summarizer reads the
 	// runner's live (mode-resolved) model rather than the startup default.
@@ -557,7 +561,7 @@ func buildRunner(ctx context.Context, modelOverride string, interactive bool, re
 	if genErr != nil {
 		runner.SetGeneratorError(genErr)
 	}
-	return runner, loader, settings, runtime, nil
+	return runner, loader, settings, runtime, sessID, nil
 }
 
 // resolveBoundaryAndSnapshots merges the project settings.json over the global
