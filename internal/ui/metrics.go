@@ -2,15 +2,17 @@ package ui
 
 import "time"
 
-// ModelUsageStat holds heuristic token counts for one (model, process-type)
-// pair observed during the session. Counts are estimates using the same
-// EstimateTokens heuristic as the context manager (not provider-reported).
+// ModelUsageStat holds token counts (and optional cost) for one
+// (provider, model, mode) triple observed during the session.
 type ModelUsageStat struct {
+	Provider  string
 	Model     string
-	Kind      string // "main" (user-turn generation) or "compression" (context summarizer)
+	Mode      string // "agent", "plan", "ask", "debug"
 	Requests  int
 	InTokens  int
 	OutTokens int
+	CostUSD   float64
+	CostKnown bool
 }
 
 // SessionStats is a UI-facing snapshot of session telemetry. It carries no
@@ -25,10 +27,25 @@ type SessionStats struct {
 	ToolCalls    int
 	ToolFailures int
 
-	// InputTokens / OutputTokens are cumulative estimates across the session
-	// (heuristic, not provider-reported usage).
+	// InputTokens / OutputTokens are cumulative session totals.
 	InputTokens  int
 	OutputTokens int
+
+	// SessionCostUSD / SessionCostKnown are the cumulative session cost.
+	// SessionCostKnown is true only when at least one request reported a cost
+	// (currently only OpenRouter).
+	SessionCostUSD   float64
+	SessionCostKnown bool
+
+	// LastInputTokens / LastOutputTokens are the token counts for the most
+	// recently completed main turn (not compression). Shown in the footer
+	// next to the model label.
+	LastInputTokens  int
+	LastOutputTokens int
+
+	// LastCostUSD / LastCostKnown are the cost for the last main turn.
+	LastCostUSD   float64
+	LastCostKnown bool
 
 	// ContextTokens is the estimated size of the current context window and
 	// ContextLimit its capacity (0 when no limit is known, e.g. off the
@@ -39,8 +56,8 @@ type SessionStats struct {
 	// Duration is the wall-clock session length.
 	Duration time.Duration
 
-	// ModelUsage breaks down token estimates by model and process type (main /
-	// compression). Empty when no generate calls have been recorded.
+	// ModelUsage breaks down token counts by provider+model+mode.
+	// Empty when no generate calls have been recorded.
 	ModelUsage []ModelUsageStat
 }
 

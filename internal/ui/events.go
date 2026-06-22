@@ -38,6 +38,10 @@ const (
 	DialogModes DialogKind = "modes"
 	// DialogSystemPrompt opens the project system-prompt preset picker.
 	DialogSystemPrompt DialogKind = "system-prompt"
+	// DialogMCP opens the MCP server management wizard.
+	DialogMCP DialogKind = "mcp"
+	// DialogTools opens the tool inventory.
+	DialogTools DialogKind = "tools"
 )
 
 // StreamEvent is a single streaming update rendered in the scrollback viewport.

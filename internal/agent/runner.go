@@ -410,7 +410,8 @@ func (r *Runner) runAgentLoop(ctx context.Context, out chan<- ui.StreamEvent) {
 		req := r.buildGenerateRequest()
 		r.storeLastRequest(req)
 		currentModel := r.Model()
-		r.metrics.recordUsage(currentModel, "main", estimateMessageTokens(req.Messages), 0)
+		currentProvider := r.activeProviderID()
+		currentMode := r.InteractionMode().String()
 
 		respCh, err := gen.GenerateContentStream(ctx, req)
 		if err != nil {
@@ -418,16 +419,33 @@ func (r *Runner) runAgentLoop(ctx context.Context, out chan<- ui.StreamEvent) {
 			return
 		}
 
-		toolCalls, modelText, streamErr := r.consumeStream(ctx, respCh, out)
+		toolCalls, modelText, modelParts, streamUsage, streamErr := r.consumeStream(ctx, respCh, out)
 		if streamErr != nil {
 			return
 		}
-		if modelText != "" {
-			outTok := contextmgmt.EstimateTokens([]provider.Part{{Text: modelText}})
-			r.metrics.recordUsage(currentModel, "main", 0, outTok)
+		// Record token usage: prefer provider-reported counts; fall back to heuristics.
+		if streamUsage != nil {
+			r.metrics.recordTurnUsage(currentProvider, currentModel, currentMode,
+				streamUsage.InputTokens, streamUsage.OutputTokens,
+				streamUsage.CostUSD, streamUsage.CostKnown)
+		} else {
+			inTok := estimateMessageTokens(req.Messages)
+			outTok := 0
+			if modelText != "" {
+				outTok = contextmgmt.EstimateTokens([]provider.Part{{Text: modelText}})
+			}
+			r.metrics.recordTurnUsage(currentProvider, currentModel, currentMode,
+				inTok, outTok, 0, false)
 		}
 
-		r.appendModelMessage(modelText, toolCalls)
+		// Prefer the provider's verbatim model parts (carries Gemini thought
+		// signatures) when supplied; otherwise reconstruct from text + tool
+		// calls (OpenAI-family path).
+		if len(modelParts) > 0 {
+			r.appendModelParts(modelParts, modelText, toolCalls)
+		} else {
+			r.appendModelMessage(modelText, toolCalls)
+		}
 
 		if len(toolCalls) == 0 {
 			r.setState(StateDone)
@@ -525,6 +543,12 @@ func (r *Runner) activeProviderID() string {
 	r.settingsMu.RLock()
 	defer r.settingsMu.RUnlock()
 	return r.settings.ActiveProvider()
+}
+
+// ActiveProviderID returns the current active provider id (exported for callers
+// outside the agent package, e.g. cmd/sagittarius when wiring NewContextManager).
+func (r *Runner) ActiveProviderID() string {
+	return r.activeProviderID()
 }
 
 func (r *Runner) RefreshModelFromMode() {
@@ -732,16 +756,18 @@ func (r *Runner) consumeStream(
 	ctx context.Context,
 	respCh <-chan provider.StreamResponse,
 	out chan<- ui.StreamEvent,
-) ([]provider.ToolCall, string, error) {
+) ([]provider.ToolCall, string, []provider.Part, *provider.Usage, error) {
 	var modelText strings.Builder
 	var toolCalls []provider.ToolCall
+	var modelParts []provider.Part
+	var usage *provider.Usage
 	streamDone := false
 
 	for !streamDone {
 		select {
 		case <-ctx.Done():
 			out <- ui.StreamEvent{Type: ui.StreamError, Err: ctx.Err()}
-			return nil, "", ctx.Err()
+			return nil, "", nil, nil, ctx.Err()
 		case resp, ok := <-respCh:
 			if !ok {
 				streamDone = true
@@ -749,10 +775,16 @@ func (r *Runner) consumeStream(
 			}
 			if resp.Error != nil {
 				out <- ui.StreamEvent{Type: ui.StreamError, Err: resp.Error}
-				return nil, "", resp.Error
+				return nil, "", nil, nil, resp.Error
 			}
 			if resp.TextDelta != "" {
 				modelText.WriteString(resp.TextDelta)
+			}
+			if resp.Usage != nil {
+				usage = resp.Usage
+			}
+			if len(resp.ModelParts) > 0 {
+				modelParts = resp.ModelParts
 			}
 			toolCalls = append(toolCalls, resp.ToolCalls...)
 
@@ -764,14 +796,14 @@ func (r *Runner) consumeStream(
 				select {
 				case <-ctx.Done():
 					out <- ui.StreamEvent{Type: ui.StreamError, Err: ctx.Err()}
-					return nil, "", ctx.Err()
+					return nil, "", nil, nil, ctx.Err()
 				case out <- ev:
 				}
 			}
 		}
 	}
 
-	return toolCalls, modelText.String(), nil
+	return toolCalls, modelText.String(), modelParts, usage, nil
 }
 
 func (r *Runner) appendModelMessage(text string, toolCalls []provider.ToolCall) {
@@ -783,6 +815,23 @@ func (r *Runner) appendModelMessage(text string, toolCalls []provider.ToolCall) 
 		callCopy := call
 		parts = append(parts, provider.Part{FunctionCall: &callCopy})
 	}
+	if len(parts) == 0 {
+		return
+	}
+	r.history = append(r.history, provider.Message{
+		Role:  provider.RoleModel,
+		Parts: parts,
+	})
+	if r.sessionRecorder != nil {
+		r.sessionRecorder.RecordModelMessage(text, toolCalls)
+	}
+}
+
+// appendModelParts stores the provider's verbatim model parts (preserving
+// Gemini thought signatures) in history. text and toolCalls are passed through
+// to the session recorder, which persists the provider-neutral projection;
+// signatures are not yet persisted across resume (tracked separately).
+func (r *Runner) appendModelParts(parts []provider.Part, text string, toolCalls []provider.ToolCall) {
 	if len(parts) == 0 {
 		return
 	}
@@ -837,28 +886,35 @@ func countToolFailures(responses []provider.FunctionResponse) int {
 	return n
 }
 
-// Stats returns a UI-facing snapshot of session telemetry (turn/tool counts,
-// token estimates, context-window usage, and elapsed time).
-// RecordUsage records heuristic token counts for an external caller (e.g. the
-// compression summarizer) that shares the runner's session metrics. kind should
-// be "compression" for context summarization calls.
-func (r *Runner) RecordUsage(model, kind string, inTok, outTok int) {
-	r.metrics.recordUsage(model, kind, inTok, outTok)
+// RecordUsage records token counts for an external caller (e.g. the compression
+// summarizer). model and mode identify the (model,mode) pair; costUSD/costKnown
+// carry the optional OpenRouter cost. Attributed as auxiliary (compression) usage
+// so it does not overwrite the last-turn footer snapshot.
+func (r *Runner) RecordUsage(prov, model, mode string, inTok, outTok int, costUSD float64, costKnown bool) {
+	r.metrics.recordAuxUsage(prov, model, mode, inTok, outTok, costUSD, costKnown)
 }
 
 func (r *Runner) Stats() ui.SessionStats {
-	turns, toolCalls, toolFailures, inTok, outTok, ctxTok, dur := r.metrics.snapshot()
+	turns, toolCalls, toolFailures, inTok, outTok, ctxTok,
+		costUSD, costKnown, dur,
+		lastIn, lastOut, lastCost, lastCostKnown := r.metrics.snapshot()
 	return ui.SessionStats{
-		Model:         r.Model(),
-		Turns:         turns,
-		ToolCalls:     toolCalls,
-		ToolFailures:  toolFailures,
-		InputTokens:   inTok,
-		OutputTokens:  outTok,
-		ContextTokens: ctxTok,
-		ContextLimit:  r.contextManager().ContextLimit(),
-		Duration:      dur,
-		ModelUsage:    r.metrics.usageSnapshot(),
+		Model:            r.Model(),
+		Turns:            turns,
+		ToolCalls:        toolCalls,
+		ToolFailures:     toolFailures,
+		InputTokens:      inTok,
+		OutputTokens:     outTok,
+		SessionCostUSD:   costUSD,
+		SessionCostKnown: costKnown,
+		LastInputTokens:  lastIn,
+		LastOutputTokens: lastOut,
+		LastCostUSD:      lastCost,
+		LastCostKnown:    lastCostKnown,
+		ContextTokens:    ctxTok,
+		ContextLimit:     r.contextManager().ContextLimit(),
+		Duration:         dur,
+		ModelUsage:       r.metrics.usageSnapshot(),
 	}
 }
 

@@ -99,9 +99,10 @@ type openAIStreamDeltaFunc struct {
 }
 
 type openAIUsage struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens     int      `json:"prompt_tokens"`
+	CompletionTokens int      `json:"completion_tokens"`
+	TotalTokens      int      `json:"total_tokens"`
+	Cost             *float64 `json:"cost,omitempty"` // OpenRouter: actual USD cost for this request
 }
 
 type openAINonStreamResponse struct {
@@ -317,6 +318,7 @@ type sseStreamState struct {
 	contentBuffer strings.Builder
 	lastFinish    string
 	lastResponse  string
+	lastUsage     *openAIUsage
 }
 
 func parseSSEStream(
@@ -342,6 +344,11 @@ func parseSSEStream(
 		var chunk openAIStreamChunk
 		if err := json.Unmarshal([]byte(line[6:]), &chunk); err != nil {
 			continue
+		}
+		// Capture usage from any chunk (OpenRouter sends a usage-only final frame
+		// with no choices; we must not skip it).
+		if chunk.Usage != nil {
+			state.lastUsage = chunk.Usage
 		}
 		if len(chunk.Choices) == 0 {
 			continue
@@ -416,6 +423,20 @@ func flushSSEState(
 	}
 	if needsNonStreamRetry {
 		return true, nil
+	}
+	// Emit provider-reported usage (and optional OpenRouter cost) before Done.
+	if state.lastUsage != nil {
+		u := &Usage{
+			InputTokens:  state.lastUsage.PromptTokens,
+			OutputTokens: state.lastUsage.CompletionTokens,
+		}
+		if state.lastUsage.Cost != nil {
+			u.CostUSD = *state.lastUsage.Cost
+			u.CostKnown = true
+		}
+		if !onChunk(StreamResponse{Usage: u}) {
+			return false, nil
+		}
 	}
 	if !onChunk(StreamResponse{Done: true}) {
 		return false, nil

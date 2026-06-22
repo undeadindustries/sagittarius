@@ -346,6 +346,13 @@ func MapResponsesSseEvent(event ResponsesSseEvent, state *ResponsesSseMapperStat
 			out = append(out, StreamResponse{ToolCalls: flushPendingToolCalls(state.PendingFunctionCalls)})
 			state.PendingFunctionCalls = map[int]*pendingResponsesFunctionCall{}
 		}
+		// Emit provider-reported token counts from the completed response.
+		if event.Response != nil && event.Response.Usage != nil {
+			out = append(out, StreamResponse{Usage: &Usage{
+				InputTokens:  event.Response.Usage.InputTokens,
+				OutputTokens: event.Response.Usage.OutputTokens,
+			}})
+		}
 		out = append(out, StreamResponse{Done: true})
 		return out, nil
 

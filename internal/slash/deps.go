@@ -10,6 +10,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/provider"
 	"github.com/undeadindustries/sagittarius/internal/session"
 	"github.com/undeadindustries/sagittarius/internal/skills"
+	"github.com/undeadindustries/sagittarius/internal/tools"
 )
 
 // Hooks performs runner and credential side effects for slash commands.
@@ -22,6 +23,11 @@ type Hooks interface {
 	ReloadSkills(ctx context.Context) (string, error)
 	ReloadAgents(ctx context.Context) (agents.ReloadSummary, error)
 	MCPStates() []mcp.ServerState
+	// MCPToolInventory returns the unfiltered per-server tool list with enabled
+	// flags, for the headless `/tools` listing.
+	MCPToolInventory(ctx context.Context) []mcp.ServerToolInventory
+	// BuiltinTools returns code-defined tools (built-in + skill) for `/tools`.
+	BuiltinTools() []tools.ToolEntry
 	SkillList() []skills.Definition
 	AgentList() []agents.Definition
 	// Session hooks — may be nil when no session manager is active.

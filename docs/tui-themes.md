@@ -85,23 +85,41 @@ missing-API-key warning). Two settings control this:
 
 ## Footer
 
-The footer shows the active provider, model, and interaction mode. When a
-context limit is known (OpenAI-compatible providers with a configured
-`contextLimit`), it also shows the percentage of the context window in use and,
-on wide terminals, a compact output-token total.
+The footer has two lines:
+
+**Line 1 (right side):** Per-turn token counts for the most recently completed
+response — `↑{in} ↓{out}` — and, when the request was routed through
+OpenRouter, a cost figure (e.g. `$0.0021`). When a context limit is known
+(OpenAI-compatible providers with a configured `contextLimit`), the context
+gauge `{pct}% ctx` is also appended.
+
+**Line 2 (detail, wide terminals ≥ 80 cols):** Running session totals — `Σ
+{in}/{out}` — followed by the cumulative session cost when OpenRouter cost is
+known. The system-prompt preset label (when set) appears on the same line before
+the token figures.
+
+Token counts come from the provider's reported usage when available (all three
+supported providers return them), falling back to the stdlib heuristic estimator
+only when the provider returns no usage data.
 
 ## Exit screen
 
 On `/quit` or `Ctrl+C`, Sagittarius prints a goodbye summary after the
 alt-screen tears down: session id, provider, model, turn and tool-call counts,
-session duration, estimated token usage, and a resume hint:
+session duration, optional session cost, a per-model/per-mode token breakdown,
+and a resume hint:
 
 ```
 To resume this session: sagittarius --resume <sessionId>
 ```
 
-Token figures are heuristic estimates (the same stdlib estimator the context
-manager uses), not provider-reported usage.
+The **Model Usage** section groups rows by model, with child rows per
+interaction mode (agent / plan / ask / debug). When any request was routed
+through OpenRouter (the only provider that returns per-request cost), a **Cost**
+column is appended to the breakdown.
+
+Non-OpenRouter providers (Gemini, direct OpenAI) report token counts but not
+cost; they appear in the table without a cost value.
 
 ## Deferred
 

@@ -8,10 +8,13 @@ package modesdialog
 import "context"
 
 // ModelEntry is one row in the global active-model picker.
+// When IsClear is true the entry represents "(use default)" and carries no
+// provider/model — selecting it clears the mode override instead of setting one.
 type ModelEntry struct {
-	ProviderID  string
-	DisplayID   string
-	Model       string
+	ProviderID string
+	DisplayID  string
+	Model      string
+	IsClear    bool
 }
 
 // ModeEntry describes one interaction mode and its current override.

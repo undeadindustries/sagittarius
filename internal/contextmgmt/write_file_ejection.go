@@ -108,7 +108,10 @@ func ejectParts(parts []Part, opts WriteFileEjectionOptions, estimate EstimateFn
 		markerTokens := estimate([]Part{{Text: marker}})
 		newArgs := copyArgs(fc.Args)
 		newArgs[WriteFileParamContent] = marker
-		newParts[i] = Part{FunctionCall: &ToolCall{ID: fc.ID, Name: fc.Name, Args: newArgs}}
+		newParts[i] = Part{
+			FunctionCall:     &ToolCall{ID: fc.ID, Name: fc.Name, Args: newArgs},
+			ThoughtSignature: parts[i].ThoughtSignature,
+		}
 		ejected++
 		saved += maxInt(0, contentTokens-markerTokens)
 	}

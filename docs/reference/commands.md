@@ -25,22 +25,34 @@ to later phases — see [Deferred commands](#deferred-commands).
 
 - **Description:** Manage provider connections — edit definitions, API keys, and
   activate models per provider.
-- **Menu-first:** `/providers` opens directly at a provider list. Select a provider
-  to open its edit sheet (API key, default model, wire-format settings). Press `a`
-  to add a custom provider; press `x` on a custom provider to delete it (built-ins
-  Gemini, OpenAI, OpenRouter cannot be deleted).
-- **Edit sheet items:**
-  - **API key** — store or update the key in secure storage.
+- **Menu-first:** `/providers` opens directly at a provider list (built-ins first,
+  then custom providers alphabetically). Select a provider to open its edit sheet.
+  Press `a` to add a custom provider; press `x` on a custom provider to open a
+  delete confirmation screen (`y` or Enter confirms, Esc cancels). Built-ins
+  (Gemini, OpenAI, OpenRouter) cannot be deleted.
+- **Adding a custom provider (`a`):**
+  1. **Provider name** — display name (required).
+  2. **URL or host** — full URL (`http://127.0.0.1:8000`) or bare host (`127.0.0.1`).
+  3. **Port** — shown only when the URL above has no port; defaults to `8000`.
+  4. **Wire format** — toggle between `openai-chat` (default) and `openai-responses`.
+  5. **API key env var** — optional environment variable name.
+  6. **API key** — optional; stored in OS keychain.
+  7. **Provider id** — auto-generated from the URL; edit to override before confirm.
+  After submission the wizard discovers available models and prompts you to pick a default.
+- **Edit sheet items (custom providers):**
+  - **Provider name**, **URL / host**, **Port** — decomposed fields that compose back to `baseUrl` on save.
+  - **Wire format** toggle.
+  - **API key** and **API key env var**.
   - **Manage models…** — browse the provider's discovered models and toggle which
     are **active** (Space toggles one, `A` toggles all/none). Only active models
     appear in `/model` and `/models`. On a fresh provider only the configured
     default model is pre-checked; opt in to more before saving. The checked subset
     is saved to `providers.<id>.activeModels`. If you deactivate the model currently
     in use, the live model is automatically switched to the first still-active model.
-  - **Provider-wide settings** (wire-format-gated): `temperature`, `baseUrl`,
-    `contextLimit`, `toolCallParsing`, and for `openai-responses` also
-    `reasoningEffort`, `useResponseChaining`.
+  - **Provider-wide settings** (wire-format-gated): `temperature`, `contextLimit`,
+    `toolCallParsing`, and for `openai-responses` also `reasoningEffort`, `useResponseChaining`.
   - **Reset all** — remove all provider-level instance overrides.
+- **Delete (`x` on custom provider):** shows a confirmation screen; press `y` or Enter to confirm removal of the definition, instance overrides, and stored API key. Press Esc to cancel.
 
 ### `/model`
 
@@ -109,17 +121,39 @@ to later phases — see [Deferred commands](#deferred-commands).
 ### `/mcp`
 
 - **Description:** Manage MCP servers configured in `settings.json` (`mcpServers`).
+  Bare `/mcp` opens an interactive wizard to add, edit, enable/disable, remove,
+  and reload servers. Extension-provided servers are shown read-only. Bearer
+  tokens entered in the wizard are stored in the credentials layer, never in
+  `settings.json`.
 
 #### Sub-commands
 
 - **`list`**
-  - **Description:** Show MCP server connection status and discovered tool counts.
-  - **Usage:** `/mcp list` or `/mcp`
+  - **Description:** Show MCP server connection status and discovered tool counts (text).
+  - **Usage:** `/mcp list`
 - **`reload`**
   - **Description:** Reconnect MCP servers and rediscover tools.
   - **Usage:** `/mcp reload`
 
 See also: [MCP server configuration](../tools/mcp-server.md).
+
+### `/tools`
+
+- **Description:** Browse the effective tool inventory. Bare `/tools` opens an
+  interactive view with two sections: built-in Sagittarius tools (read-only,
+  labeled **not editable**) and MCP tools grouped by server. For MCP tools,
+  Space toggles enable/disable, which persists each server's `includeTools` /
+  `excludeTools` filter and reloads the registry. The footer links to the `/mcp`
+  wizard for server management.
+
+#### Sub-commands
+
+- **`list`**
+  - **Description:** List built-in and MCP tools as text, with MCP tools marked `[on]`/`[off]`.
+  - **Usage:** `/tools list`
+- **`desc`**
+  - **Description:** List tools with descriptions.
+  - **Usage:** `/tools desc`
 
 ### `/agents`
 

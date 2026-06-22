@@ -44,15 +44,17 @@ const (
 // keeps the summarizer aligned with user turns across mode switches and honors a
 // sagittarius.compression.model override (AD-015 active-model rule, AD-022).
 //
-// recordFn, when non-nil, is called after each compression with the model id,
-// kind ("compression"), and heuristic token counts so the runner can track
+// recordFn, when non-nil, is called after each compression with the provider id,
+// model id, mode, token counts, and optional cost so the runner can track
 // summarizer usage in session metrics. Pass Runner.RecordUsage.
 func NewContextManager(
 	settings *config.Settings,
 	gen provider.ContentGenerator,
 	modelFn func() string,
+	provFn func() string,
+	modeFn func() string,
 	sessionID string,
-	recordFn func(model, kind string, inTok, outTok int),
+	recordFn func(prov, model, mode string, inTok, outTok int, costUSD float64, costKnown bool),
 ) *contextmgmt.Manager {
 	liveModel := ""
 	if modelFn != nil {
@@ -65,7 +67,7 @@ func NewContextManager(
 
 	var summarize contextmgmt.Summarizer
 	if gen != nil {
-		summarize = newProviderSummarizer(gen, modelFn, recordFn)
+		summarize = newProviderSummarizer(gen, modelFn, provFn, modeFn, recordFn)
 	}
 
 	return contextmgmt.NewManager(contextmgmt.ManagerConfig{
@@ -95,15 +97,17 @@ func NewContextManager(
 // newProviderSummarizer adapts a ContentGenerator into a contextmgmt.Summarizer
 // that drives one non-streaming summarization turn on the active model. It
 // drains the stream, concatenating text deltas and ignoring any tool calls.
-// modelFn is resolved per call so the summarizer follows mid-session model
-// changes (interaction-mode switches); a nil modelFn yields an empty model id,
-// letting the provider apply its own default.
-// recordFn, when non-nil, is called after the stream drains with the heuristic
-// token counts so the caller can attribute compression costs to session metrics.
+// modelFn/provFn/modeFn are resolved per call so the summarizer follows
+// mid-session changes (interaction-mode switches, provider rebuilds).
+// recordFn, when non-nil, is called after the stream drains with real token
+// counts (falling back to heuristics) so the caller can attribute compression
+// costs to session metrics.
 func newProviderSummarizer(
 	gen provider.ContentGenerator,
 	modelFn func() string,
-	recordFn func(model, kind string, inTok, outTok int),
+	provFn func() string,
+	modeFn func() string,
+	recordFn func(prov, model, mode string, inTok, outTok int, costUSD float64, costKnown bool),
 ) contextmgmt.Summarizer {
 	return func(ctx context.Context, contents []contextmgmt.Message, systemInstruction string) (string, error) {
 		var model string
@@ -121,6 +125,7 @@ func newProviderSummarizer(
 		}
 
 		var summary strings.Builder
+		var streamUsage *provider.Usage
 		for resp := range respCh {
 			if resp.Error != nil {
 				return "", fmt.Errorf("summarize: stream: %w", resp.Error)
@@ -128,12 +133,33 @@ func newProviderSummarizer(
 			if resp.TextDelta != "" {
 				summary.WriteString(resp.TextDelta)
 			}
+			if resp.Usage != nil {
+				streamUsage = resp.Usage
+			}
 		}
 
 		if recordFn != nil {
-			inTok := estimateMessageTokens(req.Messages)
-			outTok := contextmgmt.EstimateTokens([]provider.Part{{Text: summary.String()}})
-			recordFn(model, "compression", inTok, outTok)
+			prov := ""
+			if provFn != nil {
+				prov = provFn()
+			}
+			mode := "agent"
+			if modeFn != nil {
+				mode = modeFn()
+			}
+			var inTok, outTok int
+			var costUSD float64
+			var costKnown bool
+			if streamUsage != nil {
+				inTok = streamUsage.InputTokens
+				outTok = streamUsage.OutputTokens
+				costUSD = streamUsage.CostUSD
+				costKnown = streamUsage.CostKnown
+			} else {
+				inTok = estimateMessageTokens(req.Messages)
+				outTok = contextmgmt.EstimateTokens([]provider.Part{{Text: summary.String()}})
+			}
+			recordFn(prov, model, mode, inTok, outTok, costUSD, costKnown)
 		}
 
 		return summary.String(), nil

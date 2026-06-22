@@ -278,7 +278,12 @@ func (h *appHooks) RebuildRunner(ctx context.Context) (string, string, error) {
 	// sagittarius.compression.model override is configured (AD-015 active-model
 	// rule; per-utility override).
 	h.app.runner.SetContextManager(
-		NewContextManager(h.app.deps.Settings, gen, h.app.runner.CompressionModel, h.app.sessionID, h.app.runner.RecordUsage),
+		NewContextManager(h.app.deps.Settings, gen,
+			h.app.runner.CompressionModel,
+			h.app.runner.ActiveProviderID,
+			func() string { return h.app.runner.InteractionMode().String() },
+			h.app.sessionID,
+			h.app.runner.RecordUsage),
 	)
 
 	label := endpoint.ProviderID
@@ -362,6 +367,28 @@ func (h *appHooks) MCPStates() []mcp.ServerState {
 		return nil
 	}
 	return h.app.runtime.Catalog.MCPManager().States()
+}
+
+func (h *appHooks) MCPToolInventory(ctx context.Context) []mcp.ServerToolInventory {
+	if h.app == nil || h.app.runtime == nil {
+		return nil
+	}
+	return h.app.runtime.Catalog.MCPManager().ToolInventory(ctx)
+}
+
+func (h *appHooks) BuiltinTools() []tools.ToolEntry {
+	if h.app == nil || h.app.runtime == nil || h.app.runtime.Catalog == nil {
+		return nil
+	}
+	entries := h.app.runtime.Catalog.BuildRegistry().ListEntries()
+	out := make([]tools.ToolEntry, 0, len(entries))
+	for _, e := range entries {
+		if e.Source == tools.SourceMCP {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 func (h *appHooks) SkillList() []skills.Definition {

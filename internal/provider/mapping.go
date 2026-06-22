@@ -35,20 +35,30 @@ func messageToGenaiContent(msg Message) *genai.Content {
 func partsToGenai(parts []Part) []*genai.Part {
 	out := make([]*genai.Part, 0, len(parts))
 	for _, part := range parts {
+		var gp *genai.Part
 		switch {
 		case part.Text != "":
-			out = append(out, genai.NewPartFromText(part.Text))
+			gp = genai.NewPartFromText(part.Text)
 		case part.FunctionCall != nil:
-			out = append(out, genai.NewPartFromFunctionCall(
+			gp = genai.NewPartFromFunctionCall(
 				part.FunctionCall.Name,
 				part.FunctionCall.Args,
-			))
+			)
 		case part.FunctionResponse != nil:
-			out = append(out, genai.NewPartFromFunctionResponse(
+			gp = genai.NewPartFromFunctionResponse(
 				part.FunctionResponse.Name,
 				part.FunctionResponse.Response,
-			))
+			)
+		default:
+			continue
 		}
+		// Replay the Gemini thought signature verbatim. Required on model
+		// functionCall parts within the active tool-calling turn (see AD on
+		// thought signatures); harmless on text parts.
+		if len(part.ThoughtSignature) > 0 {
+			gp.ThoughtSignature = part.ThoughtSignature
+		}
+		out = append(out, gp)
 	}
 	return out
 }
@@ -83,19 +93,26 @@ func GenaiPartsToParts(parts []*genai.Part) []Part {
 		if part == nil {
 			continue
 		}
+		var p Part
 		switch {
 		case part.Text != "":
-			out = append(out, Part{Text: part.Text})
+			p = Part{Text: part.Text}
 		case part.FunctionCall != nil:
-			out = append(out, Part{FunctionCall: functionCallFromGenai(part.FunctionCall)})
+			p = Part{FunctionCall: functionCallFromGenai(part.FunctionCall)}
 		case part.FunctionResponse != nil:
-			out = append(out, Part{
+			p = Part{
 				FunctionResponse: &FunctionResponse{
 					Name:     part.FunctionResponse.Name,
 					Response: part.FunctionResponse.Response,
 				},
-			})
+			}
+		default:
+			continue
 		}
+		if len(part.ThoughtSignature) > 0 {
+			p.ThoughtSignature = part.ThoughtSignature
+		}
+		out = append(out, p)
 	}
 	return out
 }

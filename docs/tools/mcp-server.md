@@ -1,13 +1,15 @@
 # MCP servers with Sagittarius
 
 Sagittarius connects to Model Context Protocol (MCP) servers configured in
-`~/.gemini/settings.json` under `mcpServers`. Discovered tools are registered
-with the `mcp_<server>_<tool>` naming convention and appear alongside built-in
-tools on every generate request.
+`~/.sagittarius/settings.json` under `mcpServers`. Discovered tools are
+registered with the `mcp_<server>_<tool>` naming convention and appear alongside
+built-in tools on every generate request.
 
 ## Configuration
 
-Add servers to `settings.json`:
+The `/mcp` wizard adds, edits, enables/disables, and removes servers for you, so
+you rarely need to hand-edit JSON. If you prefer, you can still add servers
+directly to `settings.json`:
 
 ```json
 {
@@ -51,14 +53,24 @@ Add servers to `settings.json`:
 
 | Command | Description |
 |---------|-------------|
-| `/mcp list` | Show configured servers and connection status |
+| `/mcp` | Open the server wizard: add, edit, enable/disable, remove, reload |
+| `/mcp list` | Show configured servers and connection status (text) |
 | `/mcp reload` | Reconnect servers and rediscover tools |
+| `/tools` | Browse the effective tool inventory and toggle MCP tools |
+| `/tools list` | List built-in and MCP tools as text |
+| `/tools desc` | List tools with descriptions |
+
+In the `/mcp` wizard, bearer tokens entered for an HTTP/SSE server are stored in
+the credentials layer (never written to `settings.json`). Per-tool enable and
+disable lives in `/tools`, which persists each server's `includeTools` /
+`excludeTools` filter.
 
 ## Extensions
 
-Extensions installed under `~/.gemini/extensions/` can declare additional MCP
-servers and skills in `gemini-extension.json`. Extension MCP servers are merged
-into the active server set at reload time.
+Extensions installed under `~/.sagittarius/extensions/` can declare additional
+MCP servers and skills in their extension manifest. Extension MCP servers are
+merged into the active server set at reload time and appear in `/mcp` as
+read-only entries (view and reload, but not edit or remove here).
 
 ## Related
 

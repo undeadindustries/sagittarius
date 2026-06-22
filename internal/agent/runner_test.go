@@ -161,13 +161,13 @@ func TestSessionMetricsPerModelUsage(t *testing.T) {
 
 	var mainEntry *ui.ModelUsageStat
 	for i := range stats.ModelUsage {
-		if stats.ModelUsage[i].Kind == "main" {
+		if stats.ModelUsage[i].Model == "test-model" {
 			mainEntry = &stats.ModelUsage[i]
 			break
 		}
 	}
 	if mainEntry == nil {
-		t.Fatal("expected a 'main' kind entry in ModelUsage")
+		t.Fatal("expected a 'test-model' entry in ModelUsage")
 	}
 	if mainEntry.Model != "test-model" {
 		t.Errorf("Model = %q, want %q", mainEntry.Model, "test-model")
@@ -179,18 +179,19 @@ func TestSessionMetricsPerModelUsage(t *testing.T) {
 		t.Errorf("OutTokens = %d, want > 0", mainEntry.OutTokens)
 	}
 
-	// RecordUsage should aggregate into the perModel map.
-	runner.RecordUsage("compression-model", "compression", 100, 50)
+	// RecordUsage (auxiliary/compression) should aggregate into the perKey map
+	// under a different model entry.
+	runner.RecordUsage("openai", "compression-model", "agent", 100, 50, 0, false)
 	stats2 := runner.Stats()
 	var compEntry *ui.ModelUsageStat
 	for i := range stats2.ModelUsage {
-		if stats2.ModelUsage[i].Kind == "compression" {
+		if stats2.ModelUsage[i].Model == "compression-model" {
 			compEntry = &stats2.ModelUsage[i]
 			break
 		}
 	}
 	if compEntry == nil {
-		t.Fatal("expected a 'compression' kind entry after RecordUsage")
+		t.Fatal("expected a 'compression-model' entry after RecordUsage")
 	}
 	if compEntry.InTokens != 100 || compEntry.OutTokens != 50 {
 		t.Errorf("compression entry = in:%d out:%d, want in:100 out:50", compEntry.InTokens, compEntry.OutTokens)

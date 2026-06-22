@@ -76,4 +76,7 @@ type Deps interface {
 	// ResetSettings clears all behavioral instance overrides for a provider,
 	// preserving model/baseUrl/wireFormat and the curated active-model set.
 	ResetSettings(ctx context.Context, id string) error
+	// GenerateProviderID returns a collision-free provider id auto-derived from
+	// the given base URL. Used by the add wizard to suggest an id.
+	GenerateProviderID(baseURL string) string
 }

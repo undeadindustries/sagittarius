@@ -100,6 +100,7 @@ func (r *Registry) registerBuiltins() {
 		memoryCommand(),
 		skillsCommand(),
 		mcpCommand(),
+		toolsCommand(),
 		agentsCommand(),
 		reasoningCommand(),
 		modeCommand(),

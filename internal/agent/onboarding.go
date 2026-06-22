@@ -3,7 +3,6 @@ package agent
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"strings"
 
 	"github.com/undeadindustries/sagittarius/internal/config"
@@ -133,34 +132,5 @@ func ensureOpenRouterProvider(settings *config.Settings) error {
 }
 
 func claimCustomProviderID(settings *config.Settings, baseURL string) string {
-	preferred := customIDFromBaseURL(baseURL)
-	if settings == nil || settings.Providers == nil || len(settings.Providers.Custom) == 0 {
-		return preferred
-	}
-	if _, taken := settings.Providers.Custom[preferred]; !taken {
-		return preferred
-	}
-	for i := 1; ; i++ {
-		id := fmt.Sprintf("%s-%d", preferred, i)
-		if _, taken := settings.Providers.Custom[id]; !taken {
-			return id
-		}
-	}
-}
-
-func customIDFromBaseURL(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" {
-		return "custom"
-	}
-	host := strings.ToLower(u.Host)
-	host = strings.NewReplacer(":", "-", ".", "-").Replace(host)
-	host = strings.Trim(host, "-")
-	if host == "" {
-		return "custom"
-	}
-	if len(host) > 32 {
-		host = host[:32]
-	}
-	return host
+	return provider.ClaimCustomProviderID(settings, baseURL)
 }

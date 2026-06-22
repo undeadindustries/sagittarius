@@ -185,6 +185,17 @@ func (c *Client) Close() error {
 
 // ListTools returns tools exposed by the server after include/exclude filtering.
 func (c *Client) ListTools(ctx context.Context) ([]*sdkmcp.Tool, error) {
+	all, err := c.ListAllTools(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return filterTools(all, c.cfg.IncludeTools, c.cfg.ExcludeTools), nil
+}
+
+// ListAllTools returns every tool the server exposes, without applying the
+// include/exclude filter. The tool inventory UI uses this to show all tools and
+// their enabled state.
+func (c *Client) ListAllTools(ctx context.Context) ([]*sdkmcp.Tool, error) {
 	if c.session == nil {
 		return nil, fmt.Errorf("mcp server %q not connected", c.cfg.Name)
 	}
@@ -195,8 +206,11 @@ func (c *Client) ListTools(ctx context.Context) ([]*sdkmcp.Tool, error) {
 		c.lastErr = err.Error()
 		return nil, fmt.Errorf("list tools %q: %w", c.cfg.Name, err)
 	}
-	return filterTools(result.Tools, c.cfg.IncludeTools, c.cfg.ExcludeTools), nil
+	return result.Tools, nil
 }
+
+// Config returns the server's runtime configuration.
+func (c *Client) Config() ServerConfig { return c.cfg }
 
 // CallTool invokes a tool on the server.
 func (c *Client) CallTool(ctx context.Context, toolName string, args map[string]any) (*sdkmcp.CallToolResult, error) {

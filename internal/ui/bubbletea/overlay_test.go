@@ -8,12 +8,14 @@ import (
 
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/ui"
+	"github.com/undeadindustries/sagittarius/internal/ui/mcpdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/modelsdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/providersdialog"
+	"github.com/undeadindustries/sagittarius/internal/ui/toolsdialog"
 )
 
-// dialogApp is a quitApp that can also supply providers- and models-dialog
-// dependencies.
+// dialogApp is a quitApp that can also supply providers-, models-, MCP-, and
+// tools-dialog dependencies.
 type dialogApp struct {
 	quitApp
 	deps       providersdialog.Deps
@@ -21,7 +23,27 @@ type dialogApp struct {
 }
 
 func (d dialogApp) ProviderDialogDeps() providersdialog.Deps { return d.deps }
-func (d dialogApp) ModelsDialogDeps() modelsdialog.Deps       { return d.modelsDeps }
+func (d dialogApp) ModelsDialogDeps() modelsdialog.Deps      { return d.modelsDeps }
+func (d dialogApp) MCPDialogDeps() mcpdialog.Deps            { return stubMCPDeps{} }
+func (d dialogApp) ToolsDialogDeps() toolsdialog.Deps        { return stubToolsDeps{} }
+
+type stubMCPDeps struct{}
+
+func (stubMCPDeps) ListServers() []mcpdialog.ServerEntry { return nil }
+func (stubMCPDeps) GetServer(string) (mcpdialog.ServerForm, bool) {
+	return mcpdialog.ServerForm{}, false
+}
+func (stubMCPDeps) SaveServer(context.Context, string, mcpdialog.ServerForm) error { return nil }
+func (stubMCPDeps) RemoveServer(context.Context, string) error                     { return nil }
+func (stubMCPDeps) SetDisabled(context.Context, string, bool) error                { return nil }
+func (stubMCPDeps) Reload(context.Context) (string, error)                         { return "", nil }
+
+type stubToolsDeps struct{}
+
+func (stubToolsDeps) BuiltinTools() []toolsdialog.BuiltinTool                    { return nil }
+func (stubToolsDeps) ServerTools(context.Context) []toolsdialog.ServerGroup      { return nil }
+func (stubToolsDeps) SetToolEnabled(context.Context, string, string, bool) error { return nil }
+func (stubToolsDeps) ReloadTools(context.Context) error                          { return nil }
 
 type stubModelsDeps struct{}
 
@@ -77,6 +99,7 @@ func (stubDialogDeps) ApplySystemPromptPreset(context.Context, string, string) (
 }
 func (stubDialogDeps) ClearSetting(context.Context, string, string) error { return nil }
 func (stubDialogDeps) ResetSettings(context.Context, string) error        { return nil }
+func (stubDialogDeps) GenerateProviderID(string) string                   { return "" }
 
 func newDialogModel() *model {
 	app := dialogApp{deps: stubDialogDeps{}, modelsDeps: stubModelsDeps{}}
@@ -178,5 +201,48 @@ func TestModelsDialogUnavailableWithoutHost(t *testing.T) {
 	m.handleStream(ui.StreamEvent{Type: ui.StreamOpenDialog, Dialog: ui.DialogModels})
 	if m.modelsOverlay != nil {
 		t.Fatal("models overlay must not open without a dialog host")
+	}
+}
+
+func TestOpenMCPDialogOpensOverlay(t *testing.T) {
+	t.Parallel()
+	m := newDialogModel()
+	m.handleStream(ui.StreamEvent{Type: ui.StreamOpenDialog, Dialog: ui.DialogMCP})
+	if m.mcpOverlay == nil {
+		t.Fatal("expected MCP overlay to be opened by StreamOpenDialog")
+	}
+	if m.View() == "" {
+		t.Fatal("MCP overlay view should render")
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if updated.(*model).mcpOverlay != nil {
+		t.Fatal("MCP overlay should be cleared after esc")
+	}
+}
+
+func TestOpenToolsDialogOpensOverlay(t *testing.T) {
+	t.Parallel()
+	m := newDialogModel()
+	m.handleStream(ui.StreamEvent{Type: ui.StreamOpenDialog, Dialog: ui.DialogTools})
+	if m.toolsOverlay == nil {
+		t.Fatal("expected tools overlay to be opened by StreamOpenDialog")
+	}
+	if m.View() == "" {
+		t.Fatal("tools overlay view should render")
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if updated.(*model).toolsOverlay != nil {
+		t.Fatal("tools overlay should be cleared after esc")
+	}
+}
+
+func TestMCPAndToolsDialogsUnavailableWithoutHost(t *testing.T) {
+	t.Parallel()
+	m := newModel(ui.Options{}, quitApp{}, NewTerminal(ui.Options{}))
+	m.ctx = context.Background()
+	m.handleStream(ui.StreamEvent{Type: ui.StreamOpenDialog, Dialog: ui.DialogMCP})
+	m.handleStream(ui.StreamEvent{Type: ui.StreamOpenDialog, Dialog: ui.DialogTools})
+	if m.mcpOverlay != nil || m.toolsOverlay != nil {
+		t.Fatal("MCP/tools overlays must not open without a dialog host")
 	}
 }
