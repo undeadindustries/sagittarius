@@ -58,6 +58,13 @@ func ResolveContextManagement(settings *config.Settings) ContextManagementConfig
 	providerID := endpoint.ProviderID
 	cm.ContextLimit = resolveContextLimit(settings, providerID, cm.ContextLimit)
 	applyInstanceContextKnobs(&cm, providerInstance(settings, providerID))
+	if !cm.CompressionThresholdUserSet {
+		// Seed an unpinned threshold from the system-prompt variant so lite
+		// presets compress earlier. UserSet stays false so adaptive tightening
+		// still applies on top of this base.
+		variant := config.ResolveVariant(settings, providerID, endpoint.Model)
+		cm.CompressionThreshold = config.VariantCompressionThreshold(variant)
+	}
 	return cm
 }
 

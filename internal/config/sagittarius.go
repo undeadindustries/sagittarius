@@ -10,15 +10,21 @@ import (
 // both internal/prompt and internal/provider can validate without an import
 // cycle (tools imports provider, so provider must not import prompt).
 const (
-	PersonalityProgrammer = "programmer"
-	PersonalitySysadmin   = "sysadmin"
-	PersonalityAssistant  = "assistant"
+	PersonalityProgrammer        = "programmer"
+	PersonalitySysadmin          = "sysadmin"
+	PersonalityPersonalAssistant = "personal-assistant"
+	PersonalityCreativeAssistant = "creative-assistant"
+	// PersonalityAssistant is the legacy generic id. It is accepted on read and
+	// canonicalized to personal-assistant (see CanonicalPersonality).
+	PersonalityAssistant = "assistant"
 )
 
 var knownPersonalities = map[string]struct{}{
-	PersonalityProgrammer: {},
-	PersonalitySysadmin:   {},
-	PersonalityAssistant:  {},
+	PersonalityProgrammer:        {},
+	PersonalitySysadmin:          {},
+	PersonalityPersonalAssistant: {},
+	PersonalityCreativeAssistant: {},
+	PersonalityAssistant:         {},
 }
 
 // KnownPersonality reports whether id is a recognized personality (case- and
@@ -26,6 +32,26 @@ var knownPersonalities = map[string]struct{}{
 func KnownPersonality(id string) bool {
 	_, ok := knownPersonalities[strings.ToLower(strings.TrimSpace(id))]
 	return ok
+}
+
+// CanonicalPersonality normalizes id to its canonical personality (lower-cased,
+// trimmed, legacy "assistant" -> personal-assistant). Unknown or empty ids
+// return the programmer default with ok=false.
+func CanonicalPersonality(id string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(id)) {
+	case PersonalityProgrammer:
+		return PersonalityProgrammer, true
+	case PersonalitySysadmin:
+		return PersonalitySysadmin, true
+	case PersonalityPersonalAssistant:
+		return PersonalityPersonalAssistant, true
+	case PersonalityCreativeAssistant:
+		return PersonalityCreativeAssistant, true
+	case PersonalityAssistant:
+		return PersonalityPersonalAssistant, true
+	default:
+		return PersonalityProgrammer, false
+	}
 }
 
 // SagittariusSettings holds Sagittarius-specific settings under the top-level

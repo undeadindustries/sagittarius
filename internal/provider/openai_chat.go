@@ -21,6 +21,9 @@ type OpenAIChatGenerator struct {
 	timeout         time.Duration
 	bearer          string
 	toolCallParsing config.ToolCallParsingMode
+	// temperature is the effective default sent when a request does not carry
+	// its own. Nil means "send none" (let the server decide).
+	temperature *float64
 }
 
 // OpenAIChatConfig holds runtime options for an OpenAIChatGenerator.
@@ -30,6 +33,7 @@ type OpenAIChatConfig struct {
 	Timeout         time.Duration
 	Bearer          string
 	ToolCallParsing config.ToolCallParsingMode
+	Temperature     *float64
 	HTTPClient      *http.Client
 }
 
@@ -63,6 +67,7 @@ func NewOpenAIChatGenerator(cfg OpenAIChatConfig) (*OpenAIChatGenerator, error) 
 		timeout:         cfg.Timeout,
 		bearer:          cfg.Bearer,
 		toolCallParsing: parseMode,
+		temperature:     cfg.Temperature,
 	}, nil
 }
 
@@ -83,7 +88,7 @@ func (g *OpenAIChatGenerator) GenerateContentStream(
 		model = req.Model
 	}
 
-	chatReq := BuildOpenAIChatRequest(req, model, g.toolCallParsing)
+	chatReq := BuildOpenAIChatRequest(req, model, g.toolCallParsing, g.temperature)
 	body, err := encodeChatRequestBody(chatReq)
 	if err != nil {
 		return nil, fmt.Errorf("encode openai request: %w", err)

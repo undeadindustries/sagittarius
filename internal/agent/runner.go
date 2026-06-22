@@ -84,6 +84,7 @@ type Runner struct {
 	approval   ApprovalMode
 	interactive          bool
 	workDir              string
+	workspace            *tools.Workspace
 	regMu                sync.RWMutex
 	registry             *tools.Registry
 	scheduler            *tools.Scheduler
@@ -135,7 +136,8 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 	}
 	registry := tools.NewBuiltinRegistry(ws)
 	policy := approvalToPolicy(mode)
-	scheduler := tools.NewScheduler(registry, policy, cfg.Interactive)
+	scheduler := tools.NewScheduler(registry, policy, cfg.Interactive, nil, ws)
+	// Wire interaction-mode gate after runner is constructed.
 
 	var history []provider.Message
 	if len(cfg.InitialHistory) > 0 {
@@ -153,6 +155,7 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		approval:             mode,
 		interactive:          cfg.Interactive,
 		workDir:              ws.Root(),
+		workspace:            ws,
 		registry:             registry,
 		scheduler:            scheduler,
 		ctxMgr:               cfg.ContextManager,
@@ -166,6 +169,7 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 	} else {
 		runner.rebuildSystem()
 	}
+	runner.attachInteractionModeGate()
 	return runner, nil
 }
 
@@ -480,12 +484,16 @@ func (r *Runner) buildGenerateRequest() *provider.GenerateRequest {
 	model := r.model
 	system := r.system
 	r.modelMu.RUnlock()
-	return &provider.GenerateRequest{
+	req := &provider.GenerateRequest{
 		Model:             model,
 		SystemInstruction: system,
 		Messages:          append([]provider.Message(nil), r.history...),
-		Tools:             r.toolRegistry().ListDeclarations(),
+		Tools:             r.toolRegistry().ListDeclarationsForMode(r.InteractionMode()),
 	}
+	// Resolve temperature against the live model so mid-session model changes
+	// (mode routing) apply the right sampling without rebuilding the generator.
+	req.Temperature = config.ResolveEffectiveTemperature(r.settingsSnapshot(), r.activeProviderID(), model)
+	return req
 }
 
 func (r *Runner) sagittariusSettings() *config.SagittariusSettings {
@@ -601,7 +609,7 @@ func (r *Runner) providerDisplayName(providerID string) string {
 // toolDeclarationNames lists the wire names of the registered tools for the
 // prompt's "Available Tools" section.
 func (r *Runner) toolDeclarationNames() []string {
-	decls := r.toolRegistry().ListDeclarations()
+	decls := r.toolRegistry().ListDeclarationsForMode(r.InteractionMode())
 	names := make([]string, 0, len(decls))
 	for _, d := range decls {
 		if d.Name != "" {
@@ -625,6 +633,32 @@ func isGitRepo(dir string) bool {
 		dir = parent
 	}
 	return false
+}
+
+// attachInteractionModeGate wires plan/ask read-only enforcement into the scheduler.
+func (r *Runner) attachInteractionModeGate() {
+	r.regMu.Lock()
+	defer r.regMu.Unlock()
+	if r.scheduler == nil {
+		return
+	}
+	r.scheduler = tools.NewScheduler(
+		r.registry,
+		approvalToPolicy(r.approval),
+		r.interactive,
+		r.InteractionMode,
+		r.workspace,
+	)
+}
+
+func (r *Runner) newToolScheduler(registry *tools.Registry) *tools.Scheduler {
+	return tools.NewScheduler(
+		registry,
+		approvalToPolicy(r.approval),
+		r.interactive,
+		r.InteractionMode,
+		r.workspace,
+	)
 }
 
 // toolRegistry returns the active tool registry under the registry lock.

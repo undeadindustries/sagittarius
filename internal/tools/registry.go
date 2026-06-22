@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 )
 
@@ -56,6 +57,22 @@ func (r *Registry) ListDeclarations() []provider.ToolDeclaration {
 	out := make([]provider.ToolDeclaration, 0, len(r.order))
 	for _, tool := range r.order {
 		out = append(out, tool.Declaration())
+	}
+	return out
+}
+
+// ListDeclarationsForMode returns tool schemas visible to the model for the
+// given interaction mode (plan/ask hide write and shell tools).
+func (r *Registry) ListDeclarationsForMode(mode modes.Mode) []provider.ToolDeclaration {
+	if mode == modes.ModeAgent || mode == modes.ModeDebug {
+		return r.ListDeclarations()
+	}
+	out := make([]provider.ToolDeclaration, 0, len(r.order))
+	for _, tool := range r.order {
+		name := tool.Name()
+		if ToolVisibleInMode(mode, name) {
+			out = append(out, tool.Declaration())
+		}
 	}
 	return out
 }

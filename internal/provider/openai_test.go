@@ -12,6 +12,30 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/credentials"
 )
 
+func TestBuildOpenAIChatRequestTemperature(t *testing.T) {
+	t.Parallel()
+	base := &GenerateRequest{Messages: []Message{{Role: RoleUser, Parts: []Part{{Text: "hi"}}}}}
+	dt := 0.9
+
+	// An explicit request temperature wins over the generator default.
+	reqT := *base
+	rt := 0.2
+	reqT.Temperature = &rt
+	if body := BuildOpenAIChatRequest(&reqT, "gpt-4o", config.ToolCallParsingLenient, &dt); body.Temperature == nil || *body.Temperature != 0.2 {
+		t.Fatalf("request temperature should win: %v", body.Temperature)
+	}
+
+	// No request temperature: fall back to the resolved default.
+	if body := BuildOpenAIChatRequest(base, "gpt-4o", config.ToolCallParsingLenient, &dt); body.Temperature == nil || *body.Temperature != 0.9 {
+		t.Fatalf("default temperature should apply: %v", body.Temperature)
+	}
+
+	// Omit-family models resolve to a nil default and send no temperature.
+	if body := BuildOpenAIChatRequest(base, "gemini-2.5-flash", config.ToolCallParsingLenient, nil); body.Temperature != nil {
+		t.Fatalf("temperature should be omitted: %v", body.Temperature)
+	}
+}
+
 func sseResponse(chunks ...string) string {
 	var b strings.Builder
 	for _, chunk := range chunks {

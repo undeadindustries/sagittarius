@@ -26,8 +26,13 @@ type fakeDeps struct {
 	models       []string
 	discoverErr  error
 	settingsByID map[string]map[string]string
+	effective    map[string]map[string]string
 	activeModels map[string][]string
 	currentModel map[string]string
+	presetID     map[string]string
+	appliedPwith []string // "id:presetID" for ApplySystemPromptPreset
+	cleared      []string // "id.key" for ClearSetting
+	resetIDs     []string // ids passed to ResetSettings
 }
 
 func newFakeDeps() *fakeDeps {
@@ -103,6 +108,34 @@ func (f *fakeDeps) SetActiveModels(_ context.Context, id string, models []string
 		f.activeModels = map[string][]string{}
 	}
 	f.activeModels[id] = models
+	return nil
+}
+func (f *fakeDeps) EffectiveProviderSettings(id string) map[string]string {
+	if f.effective != nil {
+		return f.effective[id]
+	}
+	return map[string]string{}
+}
+func (f *fakeDeps) SystemPromptPresetID(id string) string {
+	if f.presetID != nil {
+		return f.presetID[id]
+	}
+	return ""
+}
+func (f *fakeDeps) ApplySystemPromptPreset(_ context.Context, id, presetID string) (string, error) {
+	f.appliedPwith = append(f.appliedPwith, id+":"+presetID)
+	if f.presetID == nil {
+		f.presetID = map[string]string{}
+	}
+	f.presetID[id] = presetID
+	return "applied " + presetID, nil
+}
+func (f *fakeDeps) ClearSetting(_ context.Context, id, key string) error {
+	f.cleared = append(f.cleared, id+"."+key)
+	return nil
+}
+func (f *fakeDeps) ResetSettings(_ context.Context, id string) error {
+	f.resetIDs = append(f.resetIDs, id)
 	return nil
 }
 
@@ -512,5 +545,122 @@ func TestRemoveCustomProvider(t *testing.T) {
 	m, _ = send(m, key("enter"))
 	if deps.removed != "my-vllm" {
 		t.Fatalf("removed = %q, want my-vllm", deps.removed)
+	}
+}
+
+// gotoOpenAIEdit drives the dialog to the openai-chat edit sheet.
+func gotoOpenAIEdit(t *testing.T, deps *fakeDeps) Model {
+	t.Helper()
+	m := New(context.Background(), deps)
+	m, _ = send(m, key("down"), key("enter"))  // menu → editPick
+	m, _ = send(m, key("down"), key("enter"))  // pick openai (index 1)
+	if m.screen != screenEdit || m.targetID != "openai" {
+		t.Fatalf("not on openai edit sheet: screen=%d target=%q", m.screen, m.targetID)
+	}
+	return m
+}
+
+// cursorTo positions the edit-sheet cursor on the first row matching kind (and
+// key when non-empty), returning false when no such row exists.
+func cursorTo(m *Model, kind editKind, k string) bool {
+	for i, it := range m.editItems {
+		if it.kind == kind && (k == "" || it.key == k) {
+			m.cursor = i
+			return true
+		}
+	}
+	return false
+}
+
+func TestPersonalityRowsCollapsedIntoPicker(t *testing.T) {
+	deps := newFakeDeps()
+	m := gotoOpenAIEdit(t, deps)
+	for _, it := range m.editItems {
+		if it.key == "personality" || it.key == "promptMode" {
+			t.Fatalf("row %q should be collapsed into the System prompt picker", it.key)
+		}
+	}
+	if !cursorTo(&m, editPreset, "") {
+		t.Fatal("System prompt picker row missing")
+	}
+}
+
+func TestSystemPromptPickerAppliesPreset(t *testing.T) {
+	deps := newFakeDeps()
+	m := gotoOpenAIEdit(t, deps)
+	if !cursorTo(&m, editPreset, "") {
+		t.Fatal("System prompt row missing")
+	}
+	m, _ = send(m, key("enter"))
+	if m.screen != screenEditPicker {
+		t.Fatalf("screen = %d, want picker", m.screen)
+	}
+	if len(m.pickerOptions) != len(config.SystemPromptPresets) {
+		t.Fatalf("picker options = %d, want %d", len(m.pickerOptions), len(config.SystemPromptPresets))
+	}
+	// Move to the second preset and apply it.
+	m, _ = send(m, key("down"), key("enter"))
+	if m.screen != screenEdit {
+		t.Fatalf("screen = %d, want edit after applying preset", m.screen)
+	}
+	want := "openai:" + config.SystemPromptPresets[1].ID
+	if len(deps.appliedPwith) != 1 || deps.appliedPwith[0] != want {
+		t.Fatalf("applied preset = %v, want [%s]", deps.appliedPwith, want)
+	}
+}
+
+func TestEnableToolsTogglesInPlace(t *testing.T) {
+	deps := newFakeDeps()
+	deps.effective = map[string]map[string]string{"openai": {"enableTools": "true"}}
+	m := gotoOpenAIEdit(t, deps)
+	if !cursorTo(&m, editToggleBool, "enableTools") {
+		t.Fatal("enableTools row missing")
+	}
+	m, _ = send(m, key("enter"))
+	want := "openai.enableTools=false"
+	if len(deps.applied) == 0 || deps.applied[len(deps.applied)-1] != want {
+		t.Fatalf("applied = %v, want last %s", deps.applied, want)
+	}
+	if m.screen != screenEdit {
+		t.Fatalf("toggle should stay on edit sheet, got %d", m.screen)
+	}
+}
+
+func TestResetAllSettings(t *testing.T) {
+	deps := newFakeDeps()
+	m := gotoOpenAIEdit(t, deps)
+	if !cursorTo(&m, editResetAll, "") {
+		t.Fatal("Reset all row missing")
+	}
+	m, _ = send(m, key("enter"))
+	if len(deps.resetIDs) != 1 || deps.resetIDs[0] != "openai" {
+		t.Fatalf("resetIDs = %v, want [openai]", deps.resetIDs)
+	}
+}
+
+func TestResetFieldWithR(t *testing.T) {
+	deps := newFakeDeps()
+	m := gotoOpenAIEdit(t, deps)
+	if !cursorTo(&m, editOverride, "temperature") {
+		t.Fatal("temperature row missing")
+	}
+	m, _ = send(m, key("r"))
+	want := "openai.temperature"
+	if len(deps.cleared) == 0 || deps.cleared[len(deps.cleared)-1] != want {
+		t.Fatalf("cleared = %v, want last %s", deps.cleared, want)
+	}
+}
+
+func TestResetSystemPromptWithRClearsBothKeys(t *testing.T) {
+	deps := newFakeDeps()
+	m := gotoOpenAIEdit(t, deps)
+	if !cursorTo(&m, editPreset, "") {
+		t.Fatal("System prompt row missing")
+	}
+	m, _ = send(m, key("r"))
+	// Resetting the system prompt clears both personality and promptMode.
+	joined := strings.Join(deps.cleared, ",")
+	if !strings.Contains(joined, "openai.personality") || !strings.Contains(joined, "openai.promptMode") {
+		t.Fatalf("cleared = %v, want both personality and promptMode", deps.cleared)
 	}
 }

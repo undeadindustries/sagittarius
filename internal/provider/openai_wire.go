@@ -126,6 +126,10 @@ type openAIModelsResponse struct {
 
 type openAIModelEntry struct {
 	ID string `json:"id"`
+	// ContextLength is OpenRouter's per-model window; MaxModelLen is the
+	// vLLM/OpenAI-compat field. Either may be absent (0).
+	ContextLength int `json:"context_length"`
+	MaxModelLen   int `json:"max_model_len"`
 }
 
 const (

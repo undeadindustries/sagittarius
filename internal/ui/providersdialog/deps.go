@@ -61,4 +61,19 @@ type Deps interface {
 	ActiveModels(id string) []string
 	// SetActiveModels persists the curated active-model set for a provider.
 	SetActiveModels(ctx context.Context, id string, models []string) error
+	// EffectiveProviderSettings returns resolved display values (defaults +
+	// overrides) for the edit sheet, keyed by setting name. Keys without a
+	// computed default are omitted.
+	EffectiveProviderSettings(id string) map[string]string
+	// SystemPromptPresetID returns the preset id matching the provider's current
+	// personality + variant ("" when it matches no preset).
+	SystemPromptPresetID(id string) string
+	// ApplySystemPromptPreset sets the provider's personality + variant from a
+	// preset and returns an info line describing the suggested sampling defaults.
+	ApplySystemPromptPreset(ctx context.Context, id, presetID string) (string, error)
+	// ClearSetting removes a single instance override so it falls back to default.
+	ClearSetting(ctx context.Context, id, key string) error
+	// ResetSettings clears all behavioral instance overrides for a provider,
+	// preserving model/baseUrl/wireFormat and the curated active-model set.
+	ResetSettings(ctx context.Context, id string) error
 }

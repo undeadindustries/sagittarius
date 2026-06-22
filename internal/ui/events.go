@@ -48,7 +48,8 @@ type StreamEvent struct {
 
 // StatusBar holds footer metadata shown below the input area.
 type StatusBar struct {
-	Left   string
-	Right  string
-	Detail string
+	Left   string // provider display name (footer line 1, left)
+	Right  string // model id and usage stats (footer line 1, right)
+	Detail string // system-prompt preset label (footer line 2)
+	Mode   string // interaction mode id for the input prompt (agent, plan, ask, debug)
 }

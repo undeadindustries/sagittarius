@@ -131,7 +131,6 @@ func newModel(opts ui.Options, app ui.App, term *Terminal) *model {
 	ti.Placeholder = "Type a message"
 	ti.Focus()
 	ti.CharLimit = 8192
-	ti.Prompt = "> "
 
 	th := theme.Resolve(opts.ThemeName, opts.NoColor)
 
@@ -163,6 +162,7 @@ func newModel(opts ui.Options, app ui.App, term *Terminal) *model {
 		idleStatus:      idleStatus,
 		suggestionIdx:   -1,
 	}
+	m.syncInputPrompt(idleStatus.Mode)
 	return m
 }
 
@@ -684,6 +684,20 @@ func (m *model) refreshIdleStatus() {
 		s.Right = m.idleStatus.Right
 	}
 	m.idleStatus = s
+	m.syncInputPrompt(s.Mode)
+}
+
+// syncInputPrompt sets the input prefix to "<Mode> " (e.g. "Plan> ").
+func (m *model) syncInputPrompt(mode string) {
+	m.input.Prompt = inputPromptForMode(mode)
+}
+
+func inputPromptForMode(mode string) string {
+	mode = strings.TrimSpace(strings.ToLower(mode))
+	if mode == "" {
+		mode = "agent"
+	}
+	return strings.ToUpper(mode[:1]) + mode[1:] + "> "
 }
 
 // addBlock appends a discrete (non-streaming) scrollback block and closes any

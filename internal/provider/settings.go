@@ -318,9 +318,10 @@ func assignInstanceSetting(cfg *config.ProviderInstanceConfig, key, value string
 		cfg.SystemPromptOverride = value
 	case "personality":
 		if !config.KnownPersonality(value) {
-			return fmt.Errorf("personality %q is not recognized (want programmer, sysadmin, or assistant)", value)
+			return fmt.Errorf("personality %q is not recognized (want programmer, sysadmin, personal-assistant, or creative-assistant)", value)
 		}
-		cfg.Personality = strings.ToLower(strings.TrimSpace(value))
+		canon, _ := config.CanonicalPersonality(value)
+		cfg.Personality = canon
 	case "reasoningEffort":
 		if !IsValidReasoningLevel(value) {
 			return fmt.Errorf("reasoningEffort %q is not a valid level", value)
@@ -332,6 +333,8 @@ func assignInstanceSetting(cfg *config.ProviderInstanceConfig, key, value string
 			return err
 		}
 		cfg.ContextLimit = n
+		pinned := true
+		cfg.ContextLimitUserSet = &pinned
 	case "timeout":
 		n, err := parseInt(key, value)
 		if err != nil {

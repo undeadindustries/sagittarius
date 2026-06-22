@@ -37,6 +37,8 @@ func TestProgrammerFullAnchors(t *testing.T) {
 		"write_file",
 		"run_shell_command",
 		"grep_search",
+		"No Post-Change Summaries",
+		"git rebase -i",
 	}
 	for _, a := range wantAnchors {
 		if !strings.Contains(out, a) {
@@ -57,7 +59,7 @@ func TestProgrammerLiteAnchors(t *testing.T) {
 		IsGitRepo:   false,
 	})
 
-	for _, a := range []string{"## Tool Usage", "## Workflow", "## Editing Rules", "grep_search"} {
+	for _, a := range []string{"## Tool Usage", "## Workflow", "## Editing Rules", "grep_search", "git rebase -i", "npm init -y"} {
 		if !strings.Contains(out, a) {
 			t.Errorf("lite prompt missing anchor %q", a)
 		}
@@ -100,14 +102,48 @@ func TestIdentityUnknownForbidsFalseGeminiClaim(t *testing.T) {
 	}
 }
 
-func TestStubPersonalitiesFallBackToProgrammer(t *testing.T) {
+func TestStubPersonalitiesAreDistinct(t *testing.T) {
 	t.Parallel()
 
 	opts := Options{Variant: VariantFull, Identity: Identity{Model: "m"}}
 	programmer := Build(withPersonality(opts, PersonalityProgrammer))
-	for _, p := range []Personality{PersonalitySysadmin, PersonalityAssistant, Personality("unknown")} {
-		if got := Build(withPersonality(opts, p)); got != programmer {
-			t.Errorf("personality %q should fall back to programmer output", p)
+
+	// Each stub personality produces distinct, role-specific output.
+	stubAnchors := map[Personality]string{
+		PersonalitySysadmin:          "system administration assistant",
+		PersonalityPersonalAssistant: "personal assistant",
+		PersonalityCreativeAssistant: "creative assistant",
+	}
+	for p, anchor := range stubAnchors {
+		out := Build(withPersonality(opts, p))
+		if out == programmer {
+			t.Errorf("personality %q should not reuse programmer output verbatim", p)
+		}
+		if !strings.Contains(out, anchor) {
+			t.Errorf("personality %q missing role anchor %q", p, anchor)
+		}
+		assertNoUnported(t, out)
+	}
+
+	// Legacy "assistant" aliases to personal-assistant.
+	if Build(withPersonality(opts, PersonalityAssistant)) != Build(withPersonality(opts, PersonalityPersonalAssistant)) {
+		t.Error("legacy assistant should alias to personal-assistant output")
+	}
+
+	// Truly unknown personalities fall back to programmer.
+	if got := Build(withPersonality(opts, Personality("unknown"))); got != programmer {
+		t.Error("unknown personality should fall back to programmer output")
+	}
+}
+
+func TestStubLiteShorterThanFull(t *testing.T) {
+	t.Parallel()
+	opts := Options{Identity: Identity{Model: "m"}, IsGitRepo: true}
+	for _, p := range []Personality{PersonalitySysadmin, PersonalityPersonalAssistant, PersonalityCreativeAssistant} {
+		full := Build(withPersonality(withVariant(opts, VariantFull), p))
+		lite := Build(withPersonality(withVariant(opts, VariantLite), p))
+		if len(lite) >= len(full) {
+			t.Errorf("personality %q: lite (%d) should be shorter than full (%d)", p, len(lite), len(full))
 		}
 	}
 }
@@ -133,6 +169,11 @@ func TestKnownPersonalityAndVariant(t *testing.T) {
 
 func withPersonality(o Options, p Personality) Options {
 	o.Personality = p
+	return o
+}
+
+func withVariant(o Options, v Variant) Options {
+	o.Variant = v
 	return o
 }
 

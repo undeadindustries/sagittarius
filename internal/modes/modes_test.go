@@ -1,6 +1,7 @@
 package modes
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/undeadindustries/sagittarius/internal/config"
@@ -246,6 +247,33 @@ func TestUtilityModelsDefaultToLiveModel(t *testing.T) {
 	empty := &config.SagittariusSettings{Compression: &config.SagittariusUtilityConfig{}}
 	if got := ResolveCompressionModel(empty, live); got != live {
 		t.Fatalf("ResolveCompressionModel empty override = %q, want %q", got, live)
+	}
+}
+
+func TestSystemPromptSuffixBuiltinReadOnlyModes(t *testing.T) {
+	t.Parallel()
+
+	plan := SystemPromptSuffix(ModePlan, nil)
+	if plan == "" || !strings.Contains(plan, "CRITICAL") || !strings.Contains(plan, "docs/plans") {
+		t.Fatalf("plan suffix = %q, want CRITICAL read-only framing", plan)
+	}
+
+	ask := SystemPromptSuffix(ModeAsk, nil)
+	if ask == "" || !strings.Contains(ask, "STRICTLY FORBIDDEN") {
+		t.Fatalf("ask suffix = %q, want STRICTLY FORBIDDEN framing", ask)
+	}
+
+	if got := SystemPromptSuffix(ModeAgent, nil); got != "" {
+		t.Fatalf("agent suffix = %q, want empty", got)
+	}
+
+	custom := SystemPromptSuffix(ModePlan, &config.SagittariusSettings{
+		Modes: &config.SagittariusModes{
+			Plan: &config.SagittariusModeConfig{SystemPromptSuffix: "User custom."},
+		},
+	})
+	if !strings.Contains(custom, "CRITICAL") || !strings.Contains(custom, "User custom.") {
+		t.Fatalf("custom+plan suffix = %q", custom)
 	}
 }
 
