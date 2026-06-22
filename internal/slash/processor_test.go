@@ -78,6 +78,10 @@ func (m *mockHooks) InteractionMode() (modes.Mode, string) {
 	return modes.ModeAgent, "gpt-4o-mini"
 }
 
+func (m *mockHooks) SnapshotDiff(string) (string, error) { return "", nil }
+
+func (m *mockHooks) SnapshotUndo(int) ([]string, error) { return nil, nil }
+
 func testDeps(t *testing.T, settings *config.Settings) (slash.Deps, *config.Loader, *mockHooks) {
 	t.Helper()
 	dir := t.TempDir()

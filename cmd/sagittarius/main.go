@@ -20,6 +20,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 	"github.com/undeadindustries/sagittarius/internal/session"
+	"github.com/undeadindustries/sagittarius/internal/snapshot"
 	"github.com/undeadindustries/sagittarius/internal/storage"
 	"github.com/undeadindustries/sagittarius/internal/ui"
 	"github.com/undeadindustries/sagittarius/internal/ui/bubbletea"
@@ -527,6 +528,10 @@ func buildRunner(ctx context.Context, modelOverride string, interactive bool, re
 		}
 	}
 
+	// Resolve project-boundary + snapshot policy (project settings override
+	// global) and build the per-session snapshot manager when enabled.
+	boundary, snapMgr := resolveBoundaryAndSnapshots(settings, projectRoot, sessID)
+
 	runner, err := agent.NewRunner(agent.RunnerConfig{
 		Generator:       gen,
 		Model:           model,
@@ -536,6 +541,8 @@ func buildRunner(ctx context.Context, modelOverride string, interactive bool, re
 		Settings:        settings,
 		InitialMode:     modes.DefaultFromSettings(settings),
 		ModelPinned:     modelPinned,
+		ProjectBoundary: boundary,
+		Snapshotter:     snapMgr,
 	})
 	if err != nil {
 		_ = runtime.Close()
@@ -551,6 +558,37 @@ func buildRunner(ctx context.Context, modelOverride string, interactive bool, re
 		runner.SetGeneratorError(genErr)
 	}
 	return runner, loader, settings, runtime, nil
+}
+
+// resolveBoundaryAndSnapshots merges the project settings.json over the global
+// one for the boundary + snapshot policy and constructs the snapshot manager
+// when snapshots are enabled. projectRoot may be "" (working dir unknown), in
+// which case snapshots are disabled and the global boundary flag still applies.
+func resolveBoundaryAndSnapshots(global *config.Settings, projectRoot, sessID string) (bool, *snapshot.Manager) {
+	var projectSettings *config.Settings
+	if projectRoot != "" {
+		ps, err := config.LoadProjectSettings(projectRoot)
+		if err != nil {
+			slog.Warn("could not load project settings", "error", err)
+		} else {
+			projectSettings = ps
+		}
+	}
+
+	boundary := config.ProjectBoundaryEnforced(global, projectSettings)
+
+	if projectRoot == "" || !config.SnapshotsEnabled(global, projectSettings) {
+		return boundary, nil
+	}
+
+	mgr, err := snapshot.NewManager(projectRoot, sessID, snapshot.Options{
+		MaxFileBytes: config.SnapshotMaxFileBytes(global, projectSettings),
+	})
+	if err != nil {
+		slog.Warn("file snapshots disabled", "error", err)
+		return boundary, nil
+	}
+	return boundary, mgr
 }
 
 // persistentSessionID returns a stable per-process identifier.

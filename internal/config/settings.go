@@ -160,6 +160,7 @@ type ProvidersSettings struct {
 type Settings struct {
 	Providers   *ProvidersSettings
 	Sagittarius *SagittariusSettings
+	Security    *SecuritySettings
 	// Raw preserves untouched top-level JSON keys (ui, general, mcp, …).
 	Raw map[string]json.RawMessage
 }

@@ -114,10 +114,13 @@ func TestWriteFileConfirmation(t *testing.T) {
 					confirms++
 				}
 			}
+			// Each parallel subtest writes its own file so they cannot collide
+			// on a shared target under the shared workspace root.
+			fileName := string(tt.mode) + "-out.txt"
 			_, err := scheduler.Execute(context.Background(), []provider.ToolCall{{
 				Name: WriteFileToolName,
 				Args: map[string]any{
-					ParamFilePath:         "out.txt",
+					ParamFilePath:         fileName,
 					WriteFileParamContent: "data",
 				},
 			}}, emit)
@@ -128,7 +131,7 @@ func TestWriteFileConfirmation(t *testing.T) {
 				t.Fatalf("headless confirms = %d, want 0", confirms)
 			}
 
-			target := filepath.Join(root, "out.txt")
+			target := filepath.Join(root, fileName)
 			if fileExists(target) != tt.wantFile {
 				t.Fatalf("file exists = %v, want %v", fileExists(target), tt.wantFile)
 			}

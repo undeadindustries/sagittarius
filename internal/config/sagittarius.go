@@ -80,7 +80,10 @@ type SagittariusSettings struct {
 	// prompt. Provider and per-model overrides take precedence (see
 	// prompt.ResolvePersonality / ResolveVariant).
 	SystemPrompt *SagittariusSystemPromptConfig `json:"systemPrompt,omitempty"`
-	Extra        map[string]json.RawMessage     `json:"-"`
+	// Snapshots toggles local file snapshots (powering /diff and /undo) and
+	// bounds the per-file snapshot size.
+	Snapshots *SagittariusSnapshotConfig `json:"snapshots,omitempty"`
+	Extra     map[string]json.RawMessage `json:"-"`
 }
 
 // SagittariusSystemPromptConfig is the global default for the system-prompt

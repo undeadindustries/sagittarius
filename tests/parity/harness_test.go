@@ -429,4 +429,6 @@ var forkInScopeCommands = []forkCommandEntry{
 var inScopeTopLevelNames = []string{
 	"help", "quit", "providers", "models", "memory",
 	"skills", "mcp", "agents", "reasoning", "resume", "clear",
+	// Sagittarius-specific local-snapshot commands (no fork equivalent).
+	"diff", "undo",
 }

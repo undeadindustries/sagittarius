@@ -777,6 +777,81 @@ Orthogonal to fork `--approval-mode` confirmation policy (AD-022).
 Docs: `docs/interaction-modes.md`. Tests: `tools` interaction_mode + plan_path +
 scheduler gate; `agent`/`modes` unchanged pass.
 
+### AD-033 — Local snapshots (/diff, /undo) + project boundary enforcement (2026-06-22)
+
+Adds OpenCode-style **local file snapshots** (review with `/diff`, revert with
+`/undo`) plus a global/per-project **project boundary** that blocks file
+mutations outside the workspace root, including a heuristic shell scan.
+
+**Snapshot mechanism — content snapshots, not shadow git (deliberate deviation
+from the plan's shadow-git design).** The plan specified a shadow git repo under
+`~/.sagittarius/history/<slug>/.git`. We instead capture the before/after
+*content* of each `write_file` directly (new package `internal/snapshot`:
+`Manager.CaptureWrite`/`CommitWrite`/`Diff`/`Undo`, in-house LCS unified diff in
+`diff.go`). Rationale: the plan's own hardening notes cite OpenCode's shadow-git
+data-loss bugs (silent `git add` failures, multi-GB diffs); content snapshots
+avoid that class entirely, need no git (work in non-git projects), are
+session-scoped by construction (only Sagittarius `write_file` is tracked, never
+worktree drift), and compute diffs in process. Per-file content is capped at
+`sagittarius.snapshots.maxFileBytes` (default 2 MiB) → oversized files are
+metadata-only (diff shows a note, undo refused). The external contract the plan
+asked for is preserved: `/diff`, `/undo`, storage under `.sagittarius`, a
+per-session JSONL index (`~/.sagittarius/tmp/<slug>/snapshots/<sessionId>.jsonl`),
+size caps, and fail-soft (in-memory stack still powers /diff+/undo if the index
+write fails). The in-repo read-only diff mirror was dropped (not needed without
+shadow git), so the only protected path is `<repo>/.sagittarius/snapshots/`
+(always blocked for agent writes via `tools.IsProtectedWritePath`).
+
+**Config:** new top-level typed `security` section
+(`SecuritySettings.ProjectBoundary.Enforce *bool`, `internal/config/security.go`
++ `security_document.go`, wired into `decodeSettingsDocument`/`encode`) and
+`sagittarius.snapshots` (`SagittariusSnapshotConfig{Enabled, MaxFileBytes}`,
+reserved key + marshal/unmarshal). Resolution helpers `ProjectBoundaryEnforced`
+/ `SnapshotsEnabled` / `SnapshotMaxFileBytes` take `(global, project)` — **project
+wins when set**. Boundary default `false` (backward compatible); snapshots
+default `true`.
+
+**Project settings merge (prerequisite, previously docs-only):**
+`config.ResolveProjectSettingsPath(workDir)` + `config.LoadProjectSettings(workDir)`
+read `<repo>/.sagittarius/settings.json`. The merge is resolution-only and never
+persisted (a `Loader.Save` cannot leak project settings into the global file);
+only `security` + `sagittarius.snapshots` are consumed today.
+
+**Tool wiring:** `tools.Scheduler` gained variadic `SchedulerOption`s
+(`WithProjectBoundary(enforce)`, `WithSnapshotter(Snapshotter)`) so existing
+call sites are unchanged. `executeOne` runs `ProjectBoundaryAllow` **before** the
+interaction-mode gate (applies in every mode), then fires the snapshot hook
+around `write_file` (`CaptureWrite` before, `CommitWrite` after success). The
+shell heuristic (`shell_boundary.go` `ShellMutatesOutsideRoot`) scans
+redirections (`>`,`>>`,`2>`,`&>`,`>|`,`tee`) and mutators (`rm`/`mv`/`cp`/
+`install`/`truncate`/`chmod`/`chown`/`mkdir`/`dd`/`ln`/`touch`/`sed -i`) for
+out-of-root targets (absolute, `../`, `~`). Documented as defense-in-depth, not a
+sandbox (obfuscation/`cd`/`eval` bypasses noted in SECURITY.md).
+
+**Runner/CLI:** `RunnerConfig` gained `ProjectBoundary bool` + `Snapshotter
+*snapshot.Manager`; runner exposes `SnapshotDiff`/`SnapshotUndo`/`SnapshotEnabled`
+and passes `schedulerOptions()` to every scheduler it builds (nil manager → nil
+interface, no typed-nil trap). `cmd/sagittarius` `resolveBoundaryAndSnapshots`
+loads project settings, resolves the policy, and builds the manager (best-effort;
+disabled when working dir unknown or snapshots off).
+
+**Slash:** new `/diff [path]` and `/undo [n]` (`slash.Hooks.SnapshotDiff`/
+`SnapshotUndo`, implemented by `appHooks` → runner; output via `ui.StreamInfo`).
+Headless never processes slash — document inspecting the JSONL index or git.
+
+**Deferred (explicit follow-ups):** `/review` LLM command, TUI fullscreen diff
+overlay, `/restore` with conversation rewind (AD-018 full), `run_shell_command`
+snapshotting, MCP write boundary, footer "N unsaved changes" hint.
+
+Docs: `docs/snapshots-and-undo.md` (new), `SECURITY.md` (project boundary +
+heuristic limits), `docs/home-directory.md` (snapshot paths + project merge),
+`docs/reference/commands.md` (`/diff`, `/undo`). Tests: `snapshot`
+track/diff/undo/oversize/filter (9); `tools` boundary + shell heuristic +
+protected path + scheduler block/hook (5 funcs); `config` boundary/snapshot
+resolution + round-trip + project load (5); `slash` /diff empty + /undo bad arg +
+registered (3); parity in-scope table adds `diff`/`undo`. `go build ./...` clean,
+`go vet` clean, `-race` clean on snapshot/tools/config/slash/agent.
+
 ---
 
 ## Workspace Layout
@@ -850,8 +925,9 @@ Dedicated `~/.sagittarius` home (2026-06-21, post-Phase 16, AD-029): moved off s
 
 Auxiliary model roles + exit-summary session id (2026-06-21, post-AD-029): (1) Exit goodbye screen now prints the full session id (`renderExitStats` uses `stats.SessionID`; removed the 8-char `shortID` that rendered `sagittarius-<pid>` as `sagittar`), matching the `--resume` hint. (2) Context compression, tool-utility calls, and subagents now **default to the live mode-resolved model**, each overridable like mode models: new `sagittarius.compression.model` / `sagittarius.tools.model` (`config.SagittariusUtilityConfig`, registered in `reservedSagittariusKeys` + marshal/unmarshal) and the existing `sagittarius.subagents.*`. New `modes.ResolveUtilityModel`/`ResolveCompressionModel`/`ResolveToolsModel`; `modes.ResolveSubagentModel` reworked to `(name, cfg, liveModel)` — drops the providerID/providerDefault chain since the live model already encodes it. `Runner.CompressionModel()`/`ToolsModel()` resolve per call; `NewContextManager` is now fed `runner.CompressionModel` (was `runner.Model`) at both call sites (app.go RebuildRunner + main.go startup). `agents.ResolveSubagentModel(name, settings, liveModel)`. `tools.model` is a reserved seam (no model-using tool consumes it yet). Docs: interaction-modes.md. Tests: modes utility-defaults+overrides + subagent-follows-live; config compression/tools round-trip. Verified: go test ./... pass, vet clean, -race clean on modes/config/agent/ui.
 Personality system prompts (2026-06-21, post-AD-029, AD-030): ported the fork's programmer "brain" into a new leaf package `internal/prompt` (Personality programmer-default + sysadmin/assistant stubs; Variant full-default/lite; identity-aware, real-tools-only adapted full + faithful lite). Resolution model > provider > global > builtin via `prompt.Resolve{Personality,Variant}`. Config: `sagittarius.systemPrompt` block + per-provider `personality` + per-model `models.<model>.{personality,promptMode}` (custom JSON round-trip); canonical personality set + `KnownPersonality` in `config` (provider can't import prompt — tools imports provider). `provider.ApplyProviderSetting` accepts `personality`. Runner: `memory`/`systemBase`/`system` split + `rebuildBasePrompt`/`rebuildSystem` composing personality prompt + AGENTS.md memory + mode suffix, re-resolved on every model/provider/mode/settings/memory change; provider display name + git detection in-runner. Docs: `docs/system-prompts.md`. Tests: prompt builder/identity/resolver, config round-trips, provider apply, runner full+lite composition. Verified: go test ./... green, vet clean, -race clean on prompt/config/agent.
+Local snapshots + project boundary (2026-06-22, post-AD-032, AD-033): OpenCode-style local file snapshots with `/diff` + `/undo`, plus a global/per-project `security.projectBoundary.enforce` flag that blocks out-of-project file mutations (file writes + heuristic shell scan). New `internal/snapshot` (content snapshots, not shadow git — deliberate deviation; in-house LCS unified diff; per-file size cap; session JSONL index under `~/.sagittarius/tmp/<slug>/snapshots/`). New typed `security` config section + `sagittarius.snapshots`; `config.LoadProjectSettings` + resolution-only project merge (never persisted). `tools.Scheduler` variadic options (`WithProjectBoundary`/`WithSnapshotter`); boundary gate runs before the mode gate; snapshot hook wraps `write_file`; `shell_boundary.go` heuristic; always-on protected `<repo>/.sagittarius/snapshots/` guard. `RunnerConfig.ProjectBoundary`/`Snapshotter`; `/diff`+`/undo` slash via `Hooks.SnapshotDiff`/`SnapshotUndo`. Docs: `docs/snapshots-and-undo.md` (new), SECURITY.md (boundary + heuristic limits), home-directory.md, commands.md. Also fixed a pre-existing shared-root parallel-subtest race in `tools` `TestWriteFileConfirmation` (per-subtest filenames). Tests: snapshot (9), tools boundary/shell/scheduler (5 funcs), config (5), slash (3), parity table. Verified: go build/vet clean; -race clean on snapshot/tools/config/slash/agent (internal/provider failures are pre-existing/env-driven — ambient stored credentials — and pass in isolation).
 Next: —
-Blockers: fork mock server comparison partial; checkpointing (/restore) deferred (AD-018); sandbox not ported (AD-017); full /resume TUI browser deferred (AD-019); git worktrees stub (AD-020); pre-existing credentials data race ./internal/provider/; TestReasoningApplicableOnResponses flake; debug-mode tool disable + wireLogger port deferred. Deferred from AD-030: real sysadmin/assistant prompts, /personality command + wizard UI, full AD-024 per-model typed settings.
+Blockers: fork mock server comparison partial; checkpointing (/restore) deferred (AD-018); sandbox not ported (AD-017); full /resume TUI browser deferred (AD-019); git worktrees stub (AD-020); pre-existing credentials data race ./internal/provider/; TestReasoningApplicableOnResponses flake; debug-mode tool disable + wireLogger port deferred. Deferred from AD-030: real sysadmin/assistant prompts, /personality command + wizard UI, full AD-024 per-model typed settings. Deferred from AD-033: /review LLM command, TUI fullscreen diff overlay, /restore conversation rewind, run_shell_command snapshotting, MCP write boundary, footer unsaved-changes hint.
 
 Phase 14 complete (2026-06-21): tests/parity/ harness (TestParityHelpOutput, TestParityHeadlessMock, TestParityProviderList, TestParityColdStartPerf); mock OpenAI SSE server (httptest); SAGITTARIUS_PARITY_FORK=1 env gate for live-fork tests; docs/PARITY_CHECKLIST.md committed; AD-021 (parity harness design). Key results: all 4 tests pass, Sagittarius cold-start 7ms vs fork ~3.6s (483x), mock headless response verified end-to-end, all in-scope slash commands present. Known gaps documented in checklist.
 Phase 14 Bugbot fixes (2026-06-21): sagittariusBin now builds the binary on demand (go build → temp, cached via sync.Once) instead of t.Skip when bin/sagittarius is absent, so the headless/perf paths always run under `go test ./...` without `make build`; TestParityProviderList now asserts config.LookupBuiltInProvider + BuiltInProviders length instead of only logging the IDs; measureForkColdStart bases its ok return on cmd.Run() success (no bogus perf/speedup log on npm failure or timeout); all fork npm invocations (invokeFork/invokeForkLoose/measureForkColdStart) serialize on forkInvokeMu so t.Parallel tests don't race the shared tsx transpile cache; invokeSagittariusOutput returns exitCode -1 for non-ExitError failures (context deadline, unlaunchable binary) via errors.As so callers gating on code==0 don't misclassify a timed-out run as success. Verified: go test ./tests/parity/ (4 pass, builds bin itself), -race clean, SAGITTARIUS_PARITY_FORK=1 live run (serialized npm, 428x speedup logged).

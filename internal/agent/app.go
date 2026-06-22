@@ -361,6 +361,20 @@ func (h *appHooks) InteractionMode() (modes.Mode, string) {
 	return mode, h.app.runner.Model()
 }
 
+func (h *appHooks) SnapshotDiff(pathFilter string) (string, error) {
+	if h.app == nil || h.app.runner == nil {
+		return "", fmt.Errorf("runner not available")
+	}
+	return h.app.runner.SnapshotDiff(pathFilter)
+}
+
+func (h *appHooks) SnapshotUndo(n int) ([]string, error) {
+	if h.app == nil || h.app.runner == nil {
+		return nil, fmt.Errorf("runner not available")
+	}
+	return h.app.runner.SnapshotUndo(n)
+}
+
 // systemPromptStatusDetail returns the human-readable system-prompt preset label
 // for the footer (e.g. "Programmer (low context)").
 func systemPromptStatusDetail(runner *Runner, settings *config.Settings) string {

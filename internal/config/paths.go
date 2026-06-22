@@ -55,6 +55,12 @@ func ProjectSagittariusDir(workDir string) string {
 	return filepath.Join(workDir, SagittariusDir)
 }
 
+// ResolveProjectSettingsPath returns <workDir>/.sagittarius/settings.json, the
+// per-project settings file merged over the global one for trusted workspaces.
+func ResolveProjectSettingsPath(workDir string) string {
+	return filepath.Join(ProjectSagittariusDir(workDir), settingsFileName)
+}
+
 // ResolveSystemSettingsPath returns the system-wide settings path.
 // Override via SAGITTARIUS_SYSTEM_SETTINGS_PATH.
 func ResolveSystemSettingsPath() string {

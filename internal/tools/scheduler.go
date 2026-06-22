@@ -18,6 +18,23 @@ type Scheduler struct {
 	interactive bool
 	mode        func() modes.Mode
 	workspace   *Workspace
+	enforce     bool
+	snapshotter Snapshotter
+}
+
+// SchedulerOption configures optional Scheduler behavior.
+type SchedulerOption func(*Scheduler)
+
+// WithProjectBoundary enables out-of-project mutation blocking (file writes and
+// the shell heuristic). The protected-snapshot-path guard applies regardless.
+func WithProjectBoundary(enforce bool) SchedulerOption {
+	return func(s *Scheduler) { s.enforce = enforce }
+}
+
+// WithSnapshotter installs the snapshot hook fired around write_file. A nil
+// snapshotter leaves snapshotting disabled.
+func WithSnapshotter(snap Snapshotter) SchedulerOption {
+	return func(s *Scheduler) { s.snapshotter = snap }
 }
 
 // NewScheduler constructs a scheduler for the given registry and policy.
@@ -29,14 +46,19 @@ func NewScheduler(
 	interactive bool,
 	mode func() modes.Mode,
 	workspace *Workspace,
+	opts ...SchedulerOption,
 ) *Scheduler {
-	return &Scheduler{
+	s := &Scheduler{
 		registry:    registry,
 		policy:      policy,
 		interactive: interactive,
 		mode:        mode,
 		workspace:   workspace,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // Execute runs tool calls and returns function responses plus UI events.
@@ -71,6 +93,14 @@ func (s *Scheduler) executeOne(
 
 	emit(ui.StreamEvent{Type: ui.StreamToolStart, ToolName: name})
 
+	// Project-boundary gate runs before the interaction-mode gate so it applies
+	// in every mode (the protected-snapshot guard is always active; out-of-root
+	// blocking is gated on enforce).
+	if allowed, reason := ProjectBoundaryAllow(s.enforce, name, args, s.workspace); !allowed {
+		emit(ui.StreamEvent{Type: ui.StreamToolResult, ToolName: name, Text: reason})
+		return errorResponse(name, reason), nil
+	}
+
 	if allowed, reason := s.interactionModeAllow(name, args); !allowed {
 		emit(ui.StreamEvent{Type: ui.StreamToolResult, ToolName: name, Text: reason})
 		return errorResponse(name, reason), nil
@@ -95,6 +125,12 @@ func (s *Scheduler) executeOne(
 		}
 	}
 
+	// Snapshot the prior state of a write target before the tool mutates it.
+	snapAbs := s.snapshotTarget(name, args)
+	if snapAbs != "" {
+		s.snapshotter.CaptureWrite(snapAbs)
+	}
+
 	result, err := tool.Execute(ctx, args)
 	if err != nil {
 		errText := err.Error()
@@ -102,8 +138,33 @@ func (s *Scheduler) executeOne(
 		return errorResponse(name, errText), nil
 	}
 
+	if snapAbs != "" {
+		s.snapshotter.CommitWrite(snapAbs, canonicalToolName(name))
+	}
+
 	emit(ui.StreamEvent{Type: ui.StreamToolResult, ToolName: name, Text: "ok"})
 	return &provider.FunctionResponse{Name: name, Response: result}, nil
+}
+
+// snapshotTarget returns the resolved absolute path a write_file call will
+// mutate, or "" when snapshotting does not apply (no snapshotter, not a
+// write_file, missing/invalid path, or path outside the workspace).
+func (s *Scheduler) snapshotTarget(name string, args map[string]any) string {
+	if s.snapshotter == nil || s.workspace == nil {
+		return ""
+	}
+	if canonicalToolName(name) != WriteFileToolName {
+		return ""
+	}
+	path, err := stringArg(args, ParamFilePath)
+	if err != nil {
+		return ""
+	}
+	abs, err := s.workspace.ResolvePath(path)
+	if err != nil {
+		return ""
+	}
+	return abs
 }
 
 func (s *Scheduler) requestApproval(
