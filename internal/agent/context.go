@@ -43,20 +43,29 @@ const (
 // once, so compression tracks the live model: passing Runner.CompressionModel
 // keeps the summarizer aligned with user turns across mode switches and honors a
 // sagittarius.compression.model override (AD-015 active-model rule, AD-022).
+//
+// recordFn, when non-nil, is called after each compression with the model id,
+// kind ("compression"), and heuristic token counts so the runner can track
+// summarizer usage in session metrics. Pass Runner.RecordUsage.
 func NewContextManager(
 	settings *config.Settings,
 	gen provider.ContentGenerator,
 	modelFn func() string,
 	sessionID string,
+	recordFn func(model, kind string, inTok, outTok int),
 ) *contextmgmt.Manager {
-	cm := provider.ResolveContextManagement(settings)
+	liveModel := ""
+	if modelFn != nil {
+		liveModel = modelFn()
+	}
+	cm := provider.ResolveContextManagement(settings, liveModel)
 	if !cm.Enabled {
 		return nil
 	}
 
 	var summarize contextmgmt.Summarizer
 	if gen != nil {
-		summarize = newProviderSummarizer(gen, modelFn)
+		summarize = newProviderSummarizer(gen, modelFn, recordFn)
 	}
 
 	return contextmgmt.NewManager(contextmgmt.ManagerConfig{
@@ -89,7 +98,13 @@ func NewContextManager(
 // modelFn is resolved per call so the summarizer follows mid-session model
 // changes (interaction-mode switches); a nil modelFn yields an empty model id,
 // letting the provider apply its own default.
-func newProviderSummarizer(gen provider.ContentGenerator, modelFn func() string) contextmgmt.Summarizer {
+// recordFn, when non-nil, is called after the stream drains with the heuristic
+// token counts so the caller can attribute compression costs to session metrics.
+func newProviderSummarizer(
+	gen provider.ContentGenerator,
+	modelFn func() string,
+	recordFn func(model, kind string, inTok, outTok int),
+) contextmgmt.Summarizer {
 	return func(ctx context.Context, contents []contextmgmt.Message, systemInstruction string) (string, error) {
 		var model string
 		if modelFn != nil {
@@ -114,6 +129,13 @@ func newProviderSummarizer(gen provider.ContentGenerator, modelFn func() string)
 				summary.WriteString(resp.TextDelta)
 			}
 		}
+
+		if recordFn != nil {
+			inTok := estimateMessageTokens(req.Messages)
+			outTok := contextmgmt.EstimateTokens([]provider.Part{{Text: summary.String()}})
+			recordFn(model, "compression", inTok, outTok)
+		}
+
 		return summary.String(), nil
 	}
 }

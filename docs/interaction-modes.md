@@ -37,11 +37,12 @@ All keys live under the top-level `sagittarius` object so fork keys are never cl
     "defaultMode": "agent",
     "modes": {
       "plan": {
+        "provider": "openai",
         "model": "o3-mini",
         "systemPromptSuffix": "Focus on architecture and trade-offs before implementation."
       },
       "ask": { "model": "gpt-4o-mini" },
-      "debug": { "model": "gpt-4o" }
+      "debug": { "provider": "gemini-apikey", "model": "gemini-2.5-flash" }
     },
     "subagents": {
       "default": { "model": "gpt-4o-mini" },
@@ -50,6 +51,12 @@ All keys live under the top-level `sagittarius` object so fork keys are never cl
   }
 }
 ```
+
+Mode overrides are **provider-qualified**: a `provider` field in `modes.<mode>`
+causes Sagittarius to rebuild the generator for that provider when the mode is
+activated, and revert to the base provider when leaving the mode. Omitting
+`provider` overrides only the model string; when leaving that mode Sagittarius
+returns to the base provider (the one selected with `/model` or active at startup).
 
 `defaultModels` maps a provider id (canonical, e.g. `gemini-apikey`, or the short
 `gemini` alias) to the default model used while that provider is active. Unknown
@@ -100,10 +107,14 @@ Example:
 ```text
 /mode show
 /mode agent | plan | ask | debug
-/mode set plan
+/mode settings          # open mode-override editor (alias: /modes)
+/modes                  # open mode-override editor
 ```
 
-`/help` lists `/mode` and subcommands.
+Use `/modes` (or `/mode settings`) to assign a `{Provider}/{Model}` override to
+any mode or clear an existing override via a TUI menu.
+
+`/help` lists `/mode`, `/modes`, and all subcommands.
 
 ### TUI shortcut
 
@@ -113,6 +124,13 @@ Press **Ctrl+Shift+M** to cycle modes: agent → plan → ask → debug → agen
 
 `-m` / `--model` pins the model for the process and **disables** mode-based routing.
 Fork-compatible provider defaults apply when no `sagittarius` keys are present.
+
+`--mode <agent|plan|ask|debug>` sets the interaction mode for a single run,
+overriding `sagittarius.defaultMode`. It works in both headless (`-p`) and
+interactive launches, and applies the same read-only tool restrictions as the
+`/mode` slash command. Precedence: `--mode` flag → `sagittarius.defaultMode` →
+`agent`. The tool approval policy is a separate axis controlled by
+`--approval-mode` / `--yolo` (see [commands.md](reference/commands.md)).
 
 ## Tool restrictions (plan / ask)
 

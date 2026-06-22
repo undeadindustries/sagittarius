@@ -30,6 +30,11 @@ type AppConfig struct {
 	// SessionID keys the context manager's adaptive state and offload dirs. It
 	// is reused across provider switches so offload paths stay stable.
 	SessionID string
+	// BaseProviderID is the canonical provider id that was active at startup
+	// before any mode-driven provider override. buildRunner resolves this and
+	// passes it here; SetInteractionMode uses it to return to the right base
+	// when leaving a mode whose override is empty.
+	BaseProviderID string
 }
 
 // App implements the optional ui.Completer and ui.MetricsProvider interfaces.
@@ -46,6 +51,10 @@ type App struct {
 	processor *slash.Processor
 	deps      slash.Deps
 	sessionID string
+	// baseProviderID records the canonical provider id that was active before a
+	// mode override temporarily switched to a different provider. Empty when no
+	// provider override is active.
+	baseProviderID string
 }
 
 // NewApp wraps runner for interactive use and exposes footer metadata.
@@ -61,10 +70,11 @@ func NewApp(cfg AppConfig) *App {
 		mode = cfg.Runner.InteractionMode()
 	}
 	app := &App{
-		runner:    cfg.Runner,
-		runtime:   cfg.Runtime,
-		processor: slash.NewProcessor(),
-		sessionID: cfg.SessionID,
+		runner:         cfg.Runner,
+		runtime:        cfg.Runtime,
+		processor:      slash.NewProcessor(),
+		sessionID:      cfg.SessionID,
+		baseProviderID: config.NormalizeProviderID(cfg.BaseProviderID),
 		status: ui.StatusBar{
 			Left:   cfg.ProviderLabel,
 			Right:  cfg.Model,
@@ -132,6 +142,65 @@ func (a *App) CycleInteractionMode(ctx context.Context) (<-chan ui.StreamEvent, 
 	}
 	next := modes.CycleMode(a.runner.InteractionMode())
 	return a.handleSlash(ctx, "/mode "+next.String())
+}
+
+// CycleModel advances the global curated model list circularly across all
+// providers, updates the active provider+model, and rebuilds the runner.
+// It emits an info message showing the resolved live model.
+func (a *App) CycleModel(ctx context.Context) (<-chan ui.StreamEvent, error) {
+	if a.runner == nil || a.deps.Settings == nil || a.deps.Loader == nil {
+		return nil, fmt.Errorf("runner not available")
+	}
+	s := a.deps.Settings
+
+	// Gather every (provider, model) pair across all providers.
+	pairs := provider.AllActiveModels(s)
+	if len(pairs) == 0 {
+		return nil, fmt.Errorf("no curated models — activate some in /providers → (select provider) → Manage models…")
+	}
+
+	// Current selection: active provider + its configured model.
+	activeID := config.NormalizeProviderID(s.ActiveProvider())
+	currentModel := ""
+	if ep, err := provider.ResolveEndpointForProvider(s, activeID); err == nil {
+		currentModel = strings.TrimSpace(ep.Model)
+	}
+	idx := 0
+	for i, p := range pairs {
+		if p.ProviderID == activeID && p.Model == currentModel {
+			idx = i
+			break
+		}
+	}
+	next := pairs[(idx+1)%len(pairs)]
+
+	if err := provider.SelectCurrentModel(a.deps.Loader, s, next.ProviderID, next.Model); err != nil {
+		return nil, err
+	}
+	provLabel, resolvedModel, rebuildErr := a.deps.Hooks.RebuildRunner(ctx)
+	_ = provLabel
+
+	out := make(chan ui.StreamEvent, 4)
+	go func() {
+		defer close(out)
+		if rebuildErr != nil {
+			out <- ui.StreamEvent{Type: ui.StreamError, Err: rebuildErr}
+			out <- ui.StreamEvent{Type: ui.StreamDone}
+			return
+		}
+		label := next.DisplayID + "/" + next.Model
+		msg := fmt.Sprintf("Model → %s", label)
+		if resolvedModel != "" && resolvedModel != next.Model {
+			msg += fmt.Sprintf(" (mode override active: using %s)", resolvedModel)
+		}
+		a.status.Right = resolvedModel
+		if resolvedModel == "" {
+			a.status.Right = next.Model
+		}
+		out <- ui.StreamEvent{Type: ui.StreamInfo, Text: msg + "\n"}
+		out <- ui.StreamEvent{Type: ui.StreamDone}
+	}()
+	return out, nil
 }
 
 func (a *App) handleSlash(ctx context.Context, input string) (<-chan ui.StreamEvent, error) {
@@ -209,7 +278,7 @@ func (h *appHooks) RebuildRunner(ctx context.Context) (string, string, error) {
 	// sagittarius.compression.model override is configured (AD-015 active-model
 	// rule; per-utility override).
 	h.app.runner.SetContextManager(
-		NewContextManager(h.app.deps.Settings, gen, h.app.runner.CompressionModel, h.app.sessionID),
+		NewContextManager(h.app.deps.Settings, gen, h.app.runner.CompressionModel, h.app.sessionID, h.app.runner.RecordUsage),
 	)
 
 	label := endpoint.ProviderID
@@ -242,18 +311,13 @@ func (h *appHooks) DiscoverModels(ctx context.Context) []provider.ModelInfo {
 	if h.app == nil || h.app.deps.Settings == nil {
 		return nil
 	}
-	endpoint, err := provider.ResolveEndpointConfig(h.app.deps.Settings)
-	if err != nil || endpoint.BaseURL == "" {
+	active := h.app.deps.Settings.ActiveProvider()
+	if active == "" {
 		return nil
 	}
-	bearer := endpoint.Bearer
-	if bearer == "" && endpoint.RequiresAPIKey {
-		key, err := credentials.ResolveProviderAPIKey(ctx, endpoint.ProviderID)
-		if err == nil {
-			bearer = key
-		}
-	}
-	return provider.DiscoverModels(ctx, endpoint.BaseURL, bearer, nil)
+	// Delegate to the shared helper that routes Gemini vs OpenAI-compat correctly.
+	infos, _ := discoverModelInfos(ctx, h.app.deps.Settings, active)
+	return infos
 }
 
 func (h *appHooks) SetProviderAPIKey(ctx context.Context, providerID, apiKey string) error {
@@ -343,14 +407,69 @@ func (h *appHooks) ClearHistory() error {
 	return nil
 }
 
-func (h *appHooks) SetInteractionMode(_ context.Context, mode modes.Mode) (string, error) {
+func (h *appHooks) SetInteractionMode(ctx context.Context, mode modes.Mode) (string, error) {
 	if h.app == nil || h.app.runner == nil {
 		return "", fmt.Errorf("runner not available")
 	}
+	settings := h.app.deps.Settings
+
+	// Resolve this mode's provider override, if any.
+	modeProvider := ""
+	if settings != nil && settings.Sagittarius != nil && settings.Sagittarius.Modes != nil {
+		mc := modeConfigForMode(settings.Sagittarius.Modes, mode)
+		if mc != nil {
+			modeProvider = config.NormalizeProviderID(mc.Provider)
+		}
+	}
+	currentActive := ""
+	if settings != nil {
+		currentActive = config.NormalizeProviderID(settings.ActiveProvider())
+	}
+
+	// Deterministic target: use the mode's provider when set, otherwise fall
+	// back to the base provider the user selected (or started with). This
+	// replaces the fragile needProviderRevert branch — the logic is now a
+	// single comparison instead of two separate switch/revert conditions.
+	base := h.app.baseProviderID
+	target := modeProvider
+	if target == "" {
+		target = base
+	}
+
+	if target != "" && target != currentActive {
+		if err := provider.SetActiveProvider(settings, target); err != nil {
+			return "", fmt.Errorf("mode %s: switch provider to %q: %w", mode.String(), target, err)
+		}
+		if _, _, err := h.RebuildRunner(ctx); err != nil {
+			// Revert in-memory on failure so subsequent calls see a consistent state.
+			_ = provider.SetActiveProvider(settings, currentActive)
+			return "", fmt.Errorf("mode %s: rebuild runner: %w", mode.String(), err)
+		}
+	}
+
 	model := h.app.runner.SetInteractionMode(mode)
 	h.app.status.Right = model
 	h.app.status.Mode = mode.String()
 	return model, nil
+}
+
+// modeConfigForMode returns the SagittariusModeConfig for the given mode, or nil.
+func modeConfigForMode(m *config.SagittariusModes, mode modes.Mode) *config.SagittariusModeConfig {
+	if m == nil {
+		return nil
+	}
+	switch mode {
+	case modes.ModePlan:
+		return m.Plan
+	case modes.ModeAsk:
+		return m.Ask
+	case modes.ModeDebug:
+		return m.Debug
+	case modes.ModeAgent:
+		return m.Agent
+	default:
+		return nil
+	}
 }
 
 func (h *appHooks) InteractionMode() (modes.Mode, string) {
@@ -373,6 +492,35 @@ func (h *appHooks) SnapshotUndo(n int) ([]string, error) {
 		return nil, fmt.Errorf("runner not available")
 	}
 	return h.app.runner.SnapshotUndo(n)
+}
+
+// SelectCurrentModel switches the active (provider, model) globally and rebuilds
+// the runner. Called by /model command and the modelpick dialog.
+func (h *appHooks) SelectCurrentModel(ctx context.Context, providerID, model string) (string, error) {
+	if h.app == nil || h.app.runner == nil {
+		return "", fmt.Errorf("runner not available")
+	}
+	if err := provider.SelectCurrentModel(h.app.deps.Loader, h.app.deps.Settings, providerID, model); err != nil {
+		return "", err
+	}
+	// An explicit /model pick redefines the base. Any subsequent mode switch
+	// that has no provider override will return to this provider, not the
+	// startup-default one.
+	h.app.baseProviderID = config.NormalizeProviderID(providerID)
+	_, resolvedModel, err := h.RebuildRunner(ctx)
+	if err != nil {
+		return "", err
+	}
+	return resolvedModel, nil
+}
+
+// AllActiveModels returns every curated (provider, model) pair for the /model
+// picker and autocomplete.
+func (h *appHooks) AllActiveModels() []provider.ProviderModelPair {
+	if h.app == nil || h.app.deps.Settings == nil {
+		return nil
+	}
+	return provider.AllActiveModels(h.app.deps.Settings)
 }
 
 // systemPromptStatusDetail returns the human-readable system-prompt preset label

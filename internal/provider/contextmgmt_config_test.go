@@ -29,7 +29,7 @@ func TestResolveContextManagementGating(t *testing.T) {
 			settings := &config.Settings{
 				Providers: &config.ProvidersSettings{Active: tt.active},
 			}
-			cm := ResolveContextManagement(settings)
+			cm := ResolveContextManagement(settings, "")
 			if cm.Enabled != tt.wantEnabled {
 				t.Fatalf("Enabled = %v, want %v", cm.Enabled, tt.wantEnabled)
 			}
@@ -43,7 +43,7 @@ func TestResolveContextManagementDefaults(t *testing.T) {
 	settings := &config.Settings{
 		Providers: &config.ProvidersSettings{Active: string(config.BuiltInOpenAI)},
 	}
-	cm := ResolveContextManagement(settings)
+	cm := ResolveContextManagement(settings, "")
 
 	if cm.ContextLimit != DefaultLocalContextLimit {
 		t.Errorf("ContextLimit = %d, want %d", cm.ContextLimit, DefaultLocalContextLimit)
@@ -75,7 +75,7 @@ func TestResolveContextManagementHonorsOverrides(t *testing.T) {
 			},
 		},
 	}
-	cm := ResolveContextManagement(settings)
+	cm := ResolveContextManagement(settings, "")
 
 	if cm.ContextLimit != limit {
 		t.Errorf("ContextLimit = %d, want %d", cm.ContextLimit, limit)
