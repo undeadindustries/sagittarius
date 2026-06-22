@@ -107,7 +107,7 @@ func TestWriteFileConfirmation(t *testing.T) {
 				t.Fatalf("NeedsConfirmation = %v, want %v", policy.NeedsConfirmation(tool), tt.wantConfirm)
 			}
 
-			scheduler := NewScheduler(registry, policy, false)
+			scheduler := NewScheduler(registry, policy, false, nil, ws)
 			var confirms int
 			emit := func(ev ui.StreamEvent) {
 				if ev.Type == ui.StreamToolConfirm {
@@ -146,7 +146,7 @@ func TestShellBlockedWhenDenied(t *testing.T) {
 	}
 	registry := NewBuiltinRegistry(ws)
 	policy := Policy{Mode: ApprovalDefault}
-	scheduler := NewScheduler(registry, policy, false)
+	scheduler := NewScheduler(registry, policy, false, nil, ws)
 
 	emit := func(ui.StreamEvent) {}
 	responses, err := scheduler.Execute(context.Background(), []provider.ToolCall{{

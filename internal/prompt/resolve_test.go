@@ -16,6 +16,7 @@ func TestResolvePersonalityPrecedence(t *testing.T) {
 				Personality: config.PersonalitySysadmin,
 				PromptMode:  config.PromptModeLite,
 				Models: map[string]config.ProviderModelConfig{
+					// Legacy "assistant" id resolves to canonical personal-assistant.
 					"gpt-4o": {Personality: config.PersonalityAssistant, PromptMode: config.PromptModeFull},
 				},
 			},
@@ -35,7 +36,7 @@ func TestResolvePersonalityPrecedence(t *testing.T) {
 		wantPers  Personality
 		wantVrnt  Variant
 	}{
-		{"model override wins", "openai", "gpt-4o", PersonalityAssistant, VariantFull},
+		{"model override wins", "openai", "gpt-4o", PersonalityPersonalAssistant, VariantFull},
 		{"provider override next", "openai", "other-model", PersonalitySysadmin, VariantLite},
 		{"global default fallback", "gemini-apikey", "gemini-2.5", PersonalityProgrammer, VariantFull},
 	}

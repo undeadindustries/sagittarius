@@ -80,6 +80,7 @@ func newOpenAIChatGenerator(ctx context.Context, settings *config.Settings, endp
 		Timeout:         endpoint.Timeout,
 		Bearer:          bearer,
 		ToolCallParsing: endpoint.ToolCallParsing,
+		Temperature:     endpoint.Temperature,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create openai chat generator: %w", err)

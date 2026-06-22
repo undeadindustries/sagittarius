@@ -274,7 +274,9 @@ func messageToOpenAIMessages(msg Message, counter *int) []OpenAIMessage {
 }
 
 // BuildOpenAIChatRequest assembles an OpenAI chat completions request body.
-func BuildOpenAIChatRequest(req *GenerateRequest, model string, parseMode config.ToolCallParsingMode) openAIChatRequest {
+// defaultTemperature supplies the generator's effective temperature when the
+// request does not carry its own; either may be nil to send none.
+func BuildOpenAIChatRequest(req *GenerateRequest, model string, parseMode config.ToolCallParsingMode, defaultTemperature *float64) openAIChatRequest {
 	_ = parseMode
 	body := openAIChatRequest{
 		Model:         model,
@@ -291,6 +293,8 @@ func BuildOpenAIChatRequest(req *GenerateRequest, model string, parseMode config
 	}
 	if req.Temperature != nil {
 		body.Temperature = req.Temperature
+	} else if defaultTemperature != nil {
+		body.Temperature = defaultTemperature
 	}
 	if req.MaxOutputTokens != nil {
 		body.MaxTokens = req.MaxOutputTokens

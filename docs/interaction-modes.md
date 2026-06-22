@@ -1,22 +1,24 @@
 # Interaction Modes
 
-Sagittarius interaction modes control **model selection** and optional **system-prompt
-suffixes**. They are separate from the fork’s **approval modes** (`default`,
-`autoEdit`, `plan`, `yolo`), which only change **tool execution policy**.
+Sagittarius interaction modes control **model selection**, **tool restrictions**, and
+optional **system-prompt suffixes**. They are separate from the fork’s **approval
+modes** (`default`, `autoEdit`, `plan`, `yolo`), which only change **confirmation
+policy** for destructive tools.
 
 | Fork concept | Sagittarius equivalent |
 |--------------|------------------------|
-| `--approval-mode plan` | Tool policy (read-only tools) — unchanged |
-| Sagittarius `/mode plan` | Routes to `sagittarius.modes.plan.model` when set |
+| `--approval-mode plan` | Fork tool policy (read-only + plan writes) — **not** wired to `/mode plan` |
+| Sagittarius `/mode plan` | Read-only exploration + writes under `docs/plans/` only |
+| Sagittarius `/mode ask` | Read-only Q&A (no writes, no shell) |
 
 ## Modes
 
 | Mode | Purpose |
 |------|---------|
 | **agent** | Normal operation (default). Uses global default model, then provider default. |
-| **plan** | Planning-oriented model override when configured. |
-| **ask** | Q&A-oriented model override when configured. |
-| **debug** | Extra verbose structured logging via `slog`; optional model override. Tool execution is **not** disabled in Phase 15. |
+| **plan** | Read-only exploration plus plan writes under `docs/plans/`; shell and other writes blocked. Optional model override. |
+| **ask** | Strict read-only: `read_file`, `grep_search`, `list_directory`, `activate_skill` only; no writes or shell. Optional model override. |
+| **debug** | Extra verbose structured logging via `slog`; optional model override. Full tool access (same as agent). |
 
 When `sagittarius.defaultMode` is unset, new sessions start in **agent** mode.
 
@@ -112,11 +114,27 @@ Press **Ctrl+Shift+M** to cycle modes: agent → plan → ask → debug → agen
 `-m` / `--model` pins the model for the process and **disables** mode-based routing.
 Fork-compatible provider defaults apply when no `sagittarius` keys are present.
 
-## Debug mode scope (Phase 15)
+## Tool restrictions (plan / ask)
+
+Enforcement happens in the tool scheduler before execution and when building the
+tool list sent to the model:
+
+| Tool | agent / debug | plan | ask |
+|------|---------------|------|-----|
+| `read_file`, `grep_search`, `list_directory`, `activate_skill` | yes | yes | yes |
+| `write_file` | yes | `docs/plans/` only | no |
+| `run_shell_command` | yes | no | no |
+| MCP tools | yes | no | no |
+
+Blocked calls return an error function response so the model can retry or explain
+the restriction. Built-in system-prompt suffixes reinforce these rules; optional
+`sagittarius.modes.<mode>.systemPromptSuffix` values append after the built-in text.
+
+## Debug mode scope
 
 - Emits structured `slog` Info lines for mode/model selection when debug mode is active.
 - Does **not** port fork `wireLogger.ts`.
-- Does **not** disable tool execution (deferred post-parity if needed).
+- Does **not** restrict tools (same access as agent mode).
 
 ## Related docs
 

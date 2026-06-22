@@ -50,6 +50,8 @@ func (m Model) footerHint() string {
 	switch m.screen {
 	case screenEditField, screenSetKey, screenModelsAdd:
 		return "Enter to save • Esc to cancel"
+	case screenEdit:
+		return "↑/↓ move • Enter select • r reset field • Esc back"
 	case screenAdd:
 		if m.add.fieldIdx == addFieldWire {
 			return "←/→ toggle • Enter next • Esc cancel"
@@ -74,6 +76,8 @@ func (m Model) screenBody() string {
 		return m.renderProviderList("Edit which provider?", m.providers)
 	case screenEdit:
 		return m.renderEdit()
+	case screenEditPicker:
+		return m.renderPicker()
 	case screenEditField:
 		return m.renderTextEntry(fmt.Sprintf("Set %s for %s", m.editingKey, config.ProviderDisplayID(m.targetID)))
 	case screenSetKey:
@@ -132,15 +136,50 @@ func (m Model) renderEdit() string {
 	var b strings.Builder
 	b.WriteString(fmt.Sprintf("Editing %s (%s)\n\n", config.ProviderDisplayID(m.targetID), m.targetWire))
 	values := m.deps.ProviderSettings(m.targetID)
+	eff := m.deps.EffectiveProviderSettings(m.targetID)
 	for i, item := range m.editItems {
 		label := item.label
-		if (item.kind == editOverride || item.kind == editDefn) && values[item.key] != "" {
-			label += dim.Render("  = " + values[item.key])
-		}
-		if item.kind == editWireDefn {
+		switch item.kind {
+		case editPreset:
+			label += dim.Render("  = " + m.presetLabel())
+		case editWireDefn:
 			label += dim.Render("  = " + string(m.targetWire))
+		case editDefn:
+			if values[item.key] != "" {
+				label += dim.Render("  = " + values[item.key])
+			}
+		case editOverride, editEnum, editToggleBool:
+			if v := values[item.key]; v != "" {
+				label += dim.Render("  = " + v)
+			} else if e := eff[item.key]; e != "" {
+				label += dim.Render("  (default: " + e + ")")
+			}
 		}
 		b.WriteString(m.renderRow(label, i == m.cursor) + "\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// presetLabel returns the display label for the provider's current system prompt
+// preset, or "custom" when its personality/variant matches no preset.
+func (m Model) presetLabel() string {
+	id := m.deps.SystemPromptPresetID(m.targetID)
+	if p, ok := config.LookupPreset(id); ok {
+		return p.Label
+	}
+	return "custom"
+}
+
+func (m Model) renderPicker() string {
+	dim := m.th.Dim
+	var b strings.Builder
+	b.WriteString(m.pickerTitle + "\n\n")
+	if len(m.pickerOptions) == 0 {
+		b.WriteString(dim.Render("(no options)"))
+		return b.String()
+	}
+	for i, opt := range m.pickerOptions {
+		b.WriteString(m.renderRow(opt.label, i == m.cursor) + "\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

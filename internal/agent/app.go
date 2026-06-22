@@ -56,6 +56,10 @@ func NewApp(cfg AppConfig) *App {
 	if cfg.Model == "" && cfg.Runner != nil {
 		cfg.Model = cfg.Runner.Model()
 	}
+	mode := modes.ModeAgent
+	if cfg.Runner != nil {
+		mode = cfg.Runner.InteractionMode()
+	}
 	app := &App{
 		runner:    cfg.Runner,
 		runtime:   cfg.Runtime,
@@ -64,7 +68,8 @@ func NewApp(cfg AppConfig) *App {
 		status: ui.StatusBar{
 			Left:   cfg.ProviderLabel,
 			Right:  cfg.Model,
-			Detail: modeStatusDetail(cfg.Runner),
+			Detail: systemPromptStatusDetail(cfg.Runner, cfg.Settings),
+			Mode:   mode.String(),
 		},
 		deps: slash.Deps{
 			Loader:   cfg.Loader,
@@ -219,7 +224,8 @@ func (h *appHooks) RebuildRunner(ctx context.Context) (string, string, error) {
 	h.app.status = ui.StatusBar{
 		Left:   label,
 		Right:  resolvedModel,
-		Detail: "mode: " + h.app.runner.InteractionMode().String(),
+		Detail: systemPromptStatusDetail(h.app.runner, h.app.deps.Settings),
+		Mode:   h.app.runner.InteractionMode().String(),
 	}
 	return label, resolvedModel, nil
 }
@@ -343,7 +349,7 @@ func (h *appHooks) SetInteractionMode(_ context.Context, mode modes.Mode) (strin
 	}
 	model := h.app.runner.SetInteractionMode(mode)
 	h.app.status.Right = model
-	h.app.status.Detail = "mode: " + mode.String()
+	h.app.status.Mode = mode.String()
 	return model, nil
 }
 
@@ -355,11 +361,28 @@ func (h *appHooks) InteractionMode() (modes.Mode, string) {
 	return mode, h.app.runner.Model()
 }
 
-func modeStatusDetail(runner *Runner) string {
-	if runner == nil {
-		return "mode: agent"
+// systemPromptStatusDetail returns the human-readable system-prompt preset label
+// for the footer (e.g. "Programmer (low context)").
+func systemPromptStatusDetail(runner *Runner, settings *config.Settings) string {
+	if settings == nil {
+		return "Programmer"
 	}
-	return "mode: " + runner.InteractionMode().String()
+	providerID := settings.ActiveProvider()
+	model := ""
+	if runner != nil {
+		model = runner.Model()
+	}
+	if presetID := provider.CurrentSystemPromptPreset(settings, providerID); presetID != "" {
+		if p, ok := config.LookupPreset(presetID); ok {
+			return p.Label
+		}
+	}
+	personality := config.ResolvePersonality(settings, providerID, model)
+	variant := config.ResolveVariant(settings, providerID, model)
+	if p, ok := config.PresetForPersonalityVariant(personality, variant); ok {
+		return p.Label
+	}
+	return "Programmer"
 }
 
 func skillNames(items []skills.Definition) map[string]struct{} {
@@ -442,7 +465,7 @@ func (r *Runner) SetRegistry(registry *tools.Registry) {
 	if registry == nil {
 		return
 	}
-	scheduler := tools.NewScheduler(registry, approvalToPolicy(r.approval), r.interactive)
+	scheduler := r.newToolScheduler(registry)
 	r.regMu.Lock()
 	r.registry = registry
 	r.scheduler = scheduler

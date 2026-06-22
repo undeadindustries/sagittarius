@@ -20,6 +20,7 @@ const (
 	screenEditPick
 	screenEdit
 	screenEditField
+	screenEditPicker
 	screenSetKey
 	screenAdd
 	screenAddModels
@@ -32,18 +33,28 @@ const (
 type editKind int
 
 const (
-	editAPIKey   editKind = iota // opens Set API key entry
-	editModel                    // opens model picker (or text for gemini)
-	editOverride                 // providers.<id>.<key> instance override
-	editDefn                     // custom definition field
-	editWireDefn                 // custom definition wireFormat toggle
+	editAPIKey     editKind = iota // opens Set API key entry
+	editModel                      // opens model activation screen
+	editOverride                   // providers.<id>.<key> instance override (text)
+	editDefn                       // custom definition field
+	editWireDefn                   // custom definition wireFormat toggle
+	editPreset                     // system-prompt preset picker
+	editEnum                       // fixed-choice override picker (toolCallParsing)
+	editToggleBool                 // boolean override toggled in place (enableTools)
+	editResetAll                   // reset all instance overrides
 	editBack
 )
 
 type editItem struct {
 	label string
 	kind  editKind
-	key   string // setting/definition key for override/defn kinds
+	key   string // setting/definition key for override/defn/enum/toggle kinds
+}
+
+// pickerOption is one choice on the generic enum picker screen.
+type pickerOption struct {
+	id    string
+	label string
 }
 
 // addState holds the multi-field add-provider wizard buffers.
@@ -102,6 +113,11 @@ type Model struct {
 	editItems   []editItem
 	editingKey  string
 	editingKind editKind
+
+	// picker holds the generic enum-picker state (system prompt / toolCallParsing).
+	pickerKey     string // "systemPrompt" or a setting key
+	pickerTitle   string
+	pickerOptions []pickerOption
 
 	input textinput.Model
 
@@ -291,9 +307,42 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		if m.screen == screenModels && !m.loading {
 			return m.enterModelsAdd(), nil
 		}
+	case "r":
+		if m.screen == screenEdit {
+			return m.resetHighlightedField()
+		}
 	case "enter":
 		return m.selectCurrent()
 	}
+	return m, nil
+}
+
+// resetHighlightedField clears the override under the cursor on the edit sheet.
+func (m Model) resetHighlightedField() (Model, tea.Cmd) {
+	if m.cursor < 0 || m.cursor >= len(m.editItems) {
+		return m, nil
+	}
+	item := m.editItems[m.cursor]
+	m.errMsg = ""
+	m.info = ""
+	switch item.kind {
+	case editPreset:
+		_ = m.deps.ClearSetting(m.ctx, m.targetID, "promptMode")
+		if err := m.deps.ClearSetting(m.ctx, m.targetID, "personality"); err != nil {
+			m.errMsg = err.Error()
+			return m, nil
+		}
+		m.info = "System prompt reset to default."
+	case editOverride, editEnum, editToggleBool:
+		if err := m.deps.ClearSetting(m.ctx, m.targetID, item.key); err != nil {
+			m.errMsg = err.Error()
+			return m, nil
+		}
+		m.info = item.key + " reset to default."
+	default:
+		return m, nil
+	}
+	m.refreshEditItems()
 	return m, nil
 }
 
@@ -316,7 +365,7 @@ func (m Model) back() (Model, tea.Cmd) {
 	case screenEdit:
 		m.screen = screenEditPick
 		m.cursor = 0
-	case screenEditField:
+	case screenEditField, screenEditPicker:
 		m.screen = screenEdit
 	case screenModelsAdd:
 		m.screen = screenModels
@@ -361,6 +410,8 @@ func (m Model) listLen() int {
 		return len(m.providers)
 	case screenEdit:
 		return len(m.editItems)
+	case screenEditPicker:
+		return len(m.pickerOptions)
 	case screenRemove:
 		return len(m.customProviders())
 	case screenAddModels, screenModels:
@@ -394,6 +445,8 @@ func (m Model) selectCurrent() (Model, tea.Cmd) {
 		return m.selectEditPick()
 	case screenEdit:
 		return m.selectEdit()
+	case screenEditPicker:
+		return m.selectPicker()
 	case screenRemove:
 		return m.selectRemove()
 	case screenAddModels:
@@ -570,15 +623,32 @@ func (m Model) buildEditItems(p ProviderEntry) []editItem {
 		)
 	}
 
-	for _, key := range m.deps.ValidSettingKeys(p.ID) {
-		if key == "model" {
-			continue // handled by the model picker row above
+	keys := m.deps.ValidSettingKeys(p.ID)
+	// System prompt is a single picker that replaces the personality + promptMode
+	// rows; only offer it when the provider exposes the personality knob.
+	if containsString(keys, "personality") {
+		items = append(items, editItem{label: "System prompt", kind: editPreset, key: "systemPrompt"})
+	}
+	for _, key := range keys {
+		switch key {
+		case "model":
+			continue // handled by the model activation row above
+		case "personality", "promptMode":
+			continue // collapsed into the System prompt picker
 		}
 		if p.IsCustom && key == "baseUrl" {
 			continue // edited via the definition row above
 		}
-		items = append(items, editItem{label: key, kind: editOverride, key: key})
+		switch key {
+		case "enableTools":
+			items = append(items, editItem{label: key, kind: editToggleBool, key: key})
+		case "toolCallParsing":
+			items = append(items, editItem{label: key, kind: editEnum, key: key})
+		default:
+			items = append(items, editItem{label: key, kind: editOverride, key: key})
+		}
 	}
+	items = append(items, editItem{label: "Reset all settings to defaults", kind: editResetAll})
 	items = append(items, editItem{label: "Back", kind: editBack})
 	return items
 }
@@ -621,6 +691,33 @@ func (m Model) selectEdit() (Model, tea.Cmd) {
 		}
 		m.info = "wireFormat → " + string(next)
 		return m, nil
+	case editToggleBool:
+		// Toggle enableTools in place against the effective current value.
+		next := "false"
+		if currentBool(m.deps.EffectiveProviderSettings(m.targetID), item.key, true) {
+			next = "false"
+		} else {
+			next = "true"
+		}
+		if err := m.deps.ApplySetting(m.ctx, m.targetID, item.key, next); err != nil {
+			m.errMsg = err.Error()
+			return m, nil
+		}
+		m.refreshEditItems()
+		m.info = fmt.Sprintf("%s → %s", item.key, next)
+		return m, nil
+	case editPreset:
+		return m.enterPreset(), nil
+	case editEnum:
+		return m.enterEnum(item.key), nil
+	case editResetAll:
+		if err := m.deps.ResetSettings(m.ctx, m.targetID); err != nil {
+			m.errMsg = err.Error()
+			return m, nil
+		}
+		m.refreshEditItems()
+		m.info = "Provider settings reset to defaults (model and API key kept)."
+		return m, nil
 	case editDefn, editOverride:
 		m.editingKey = item.key
 		m.editingKind = item.kind
@@ -628,6 +725,82 @@ func (m Model) selectEdit() (Model, tea.Cmd) {
 		m.input.SetValue(currentValue(m.deps.ProviderSettings(m.targetID), item.key))
 		m.screen = screenEditField
 	}
+	return m, nil
+}
+
+// refreshEditItems re-reads providers and rebuilds the edit sheet rows in place.
+func (m *Model) refreshEditItems() {
+	m.providers = m.deps.ListProviders()
+	if p, ok := m.findProvider(m.targetID); ok {
+		m.editItems = m.buildEditItems(p)
+	}
+}
+
+// enterPreset opens the system-prompt preset picker.
+func (m Model) enterPreset() Model {
+	opts := make([]pickerOption, 0, len(config.SystemPromptPresets))
+	current := m.deps.SystemPromptPresetID(m.targetID)
+	m.cursor = 0
+	for i, p := range config.SystemPromptPresets {
+		opts = append(opts, pickerOption{id: p.ID, label: p.Label})
+		if p.ID == current {
+			m.cursor = i
+		}
+	}
+	m.pickerKey = "systemPrompt"
+	m.pickerTitle = "System prompt for " + config.ProviderDisplayID(m.targetID)
+	m.pickerOptions = opts
+	m.screen = screenEditPicker
+	return m
+}
+
+// enterEnum opens a fixed-choice picker for a setting key (e.g. toolCallParsing).
+func (m Model) enterEnum(key string) Model {
+	var opts []pickerOption
+	switch key {
+	case "toolCallParsing":
+		opts = []pickerOption{
+			{id: string(config.ToolCallParsingStrict), label: "strict"},
+			{id: string(config.ToolCallParsingLenient), label: "lenient"},
+			{id: string(config.ToolCallParsingLoose), label: "loose"},
+		}
+	}
+	current := currentValue(m.deps.EffectiveProviderSettings(m.targetID), key)
+	m.cursor = 0
+	for i, o := range opts {
+		if o.id == current {
+			m.cursor = i
+		}
+	}
+	m.pickerKey = key
+	m.pickerTitle = key + " for " + config.ProviderDisplayID(m.targetID)
+	m.pickerOptions = opts
+	m.screen = screenEditPicker
+	return m
+}
+
+// selectPicker applies the highlighted picker choice and returns to the edit sheet.
+func (m Model) selectPicker() (Model, tea.Cmd) {
+	if m.cursor < 0 || m.cursor >= len(m.pickerOptions) {
+		return m, nil
+	}
+	choice := m.pickerOptions[m.cursor]
+	if m.pickerKey == "systemPrompt" {
+		info, err := m.deps.ApplySystemPromptPreset(m.ctx, m.targetID, choice.id)
+		if err != nil {
+			m.errMsg = err.Error()
+			return m, nil
+		}
+		m.info = info
+	} else {
+		if err := m.deps.ApplySetting(m.ctx, m.targetID, m.pickerKey, choice.id); err != nil {
+			m.errMsg = err.Error()
+			return m, nil
+		}
+		m.info = fmt.Sprintf("%s → %s", m.pickerKey, choice.label)
+	}
+	m.refreshEditItems()
+	m.screen = screenEdit
 	return m, nil
 }
 
@@ -931,6 +1104,14 @@ func currentValue(settings map[string]string, key string) string {
 		return ""
 	}
 	return settings[key]
+}
+
+func currentBool(settings map[string]string, key string, def bool) bool {
+	v, ok := settings[key]
+	if !ok {
+		return def
+	}
+	return v == "true"
 }
 
 func wrapInc(i, n int) int {

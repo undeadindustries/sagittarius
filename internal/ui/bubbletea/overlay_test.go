@@ -66,6 +66,15 @@ func (stubDialogDeps) ActiveModels(string) []string { return nil }
 func (stubDialogDeps) SetActiveModels(context.Context, string, []string) error {
 	return nil
 }
+func (stubDialogDeps) EffectiveProviderSettings(string) map[string]string {
+	return map[string]string{}
+}
+func (stubDialogDeps) SystemPromptPresetID(string) string { return "" }
+func (stubDialogDeps) ApplySystemPromptPreset(context.Context, string, string) (string, error) {
+	return "", nil
+}
+func (stubDialogDeps) ClearSetting(context.Context, string, string) error { return nil }
+func (stubDialogDeps) ResetSettings(context.Context, string) error        { return nil }
 
 func newDialogModel() *model {
 	app := dialogApp{deps: stubDialogDeps{}, modelsDeps: stubModelsDeps{}}

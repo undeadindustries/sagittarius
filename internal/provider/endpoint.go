@@ -148,7 +148,7 @@ func resolveBuiltInEndpoint(
 		ToolCallParsing:      resolveToolCallParsing(inst),
 		ReasoningEffort:      resolveReasoningEffort(inst),
 		UseResponseChaining:  resolveUseResponseChaining(inst),
-		Temperature:          resolveTemperature(inst),
+		Temperature:          config.ResolveEffectiveTemperature(settings, providerID, model),
 		SystemPromptOverride: resolveSystemPromptOverride(inst),
 		ToolsEnabled:         resolveToolsEnabled(inst),
 	}, nil
@@ -221,7 +221,7 @@ func resolveCustomEndpoint(
 		ToolCallParsing:      resolveToolCallParsing(inst),
 		ReasoningEffort:      resolveReasoningEffort(inst),
 		UseResponseChaining:  resolveUseResponseChaining(inst),
-		Temperature:          resolveTemperature(inst),
+		Temperature:          config.ResolveEffectiveTemperature(settings, providerID, model),
 		SystemPromptOverride: resolveSystemPromptOverride(inst),
 		ToolsEnabled:         resolveToolsEnabled(inst),
 	}, nil
@@ -282,13 +282,6 @@ func resolveUseResponseChaining(inst *config.ProviderInstanceConfig) bool {
 		return false
 	}
 	return *inst.UseResponseChaining
-}
-
-func resolveTemperature(inst *config.ProviderInstanceConfig) *float64 {
-	if inst == nil {
-		return nil
-	}
-	return inst.Temperature
 }
 
 func resolveSystemPromptOverride(inst *config.ProviderInstanceConfig) string {

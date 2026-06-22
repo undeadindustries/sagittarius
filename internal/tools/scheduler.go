@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 	"github.com/undeadindustries/sagittarius/internal/ui"
 )
@@ -15,15 +16,26 @@ type Scheduler struct {
 	registry    *Registry
 	policy      Policy
 	interactive bool
+	mode        func() modes.Mode
+	workspace   *Workspace
 }
 
 // NewScheduler constructs a scheduler for the given registry and policy.
 // When interactive is false (headless), confirmations are auto-approved or denied per policy.
-func NewScheduler(registry *Registry, policy Policy, interactive bool) *Scheduler {
+// mode and workspace enable interaction-mode tool restrictions (plan/ask read-only gates).
+func NewScheduler(
+	registry *Registry,
+	policy Policy,
+	interactive bool,
+	mode func() modes.Mode,
+	workspace *Workspace,
+) *Scheduler {
 	return &Scheduler{
 		registry:    registry,
 		policy:      policy,
 		interactive: interactive,
+		mode:        mode,
+		workspace:   workspace,
 	}
 }
 
@@ -58,6 +70,11 @@ func (s *Scheduler) executeOne(
 	}
 
 	emit(ui.StreamEvent{Type: ui.StreamToolStart, ToolName: name})
+
+	if allowed, reason := s.interactionModeAllow(name, args); !allowed {
+		emit(ui.StreamEvent{Type: ui.StreamToolResult, ToolName: name, Text: reason})
+		return errorResponse(name, reason), nil
+	}
 
 	tool, ok := s.registry.Lookup(name)
 	if !ok {
@@ -127,6 +144,13 @@ func errorResponse(name, message string) *provider.FunctionResponse {
 			"error": message,
 		},
 	}
+}
+
+func (s *Scheduler) interactionModeAllow(toolName string, args map[string]any) (bool, string) {
+	if s.mode == nil {
+		return true, ""
+	}
+	return InteractionModeAllow(s.mode(), toolName, args, s.workspace)
 }
 
 func formatConfirmSummary(toolName string, args map[string]any) string {

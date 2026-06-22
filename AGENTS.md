@@ -690,6 +690,93 @@ system-instruction composition (full default + lite via provider promptMode,
 both include AGENTS.md memory + model identity). `go test ./...` green, `go vet`
 clean, `-race` clean on prompt/config/agent.
 
+### AD-031 — Provider settings UX: system-prompt presets, sampling defaults, context auto-detect (2026-06-22)
+
+Builds on AD-030. Collapses the two confusing personality/promptMode text rows
+into one **System prompt** picker, wires the previously-dead `temperature` knob
+on the openai-chat path, gives every personality/variant a sensible sampling
+default, and auto-detects context windows.
+
+**System-prompt presets** (new `config/systemprompt.go`): 8 presets pairing the
+four personalities × {full, lite}. `SystemPromptPresets`, `LookupPreset`,
+`PresetForPersonalityVariant`, and the canonical `ResolvePersonality` /
+`ResolveVariant` (tier order: per-model → provider → global → built-in) now live
+in `config` (a leaf package) so both `prompt` and `provider` can import them
+without a cycle; `prompt.Resolve*` delegate. Personalities expanded
+(`config/sagittarius.go`): `programmer`, `sysadmin`, `personal-assistant`,
+`creative-assistant`; legacy `assistant` is a read alias for `personal-assistant`
+via `config.CanonicalPersonality`. Stub personalities (`prompt/personas.go`) each
+emit a **distinct** role preamble over the shared lite core (no longer silent
+programmer copies).
+
+**Sampling defaults** (new `config/sampling.go`): `ModelTemperatureRule`
+(model-family omit/force rules — omit `gemini-3*`/`gemini-2.5*`,
+`gpt-5*`/`o3*`/`o4*`, Anthropic Opus 4.7+; force `1.0` for Qwen3-Coder),
+`PersonalityDefaultTemperature` (programmer 0.35 / sysadmin 0.25 / personal 0.55 /
+creative 0.85), `VariantCompressionThreshold` (full 0.45 / lite 0.38), and
+`ResolveEffectiveTemperature` (user pin → model-family → personality default →
+omit). Temperature is **not persisted by presets**; it resolves per turn.
+Wiring fix: `OpenAIChatConfig.Temperature` → generator → `BuildOpenAIChatRequest`
+(new `defaultTemperature` arg, used when `req.Temperature` is nil);
+`runner.buildGenerateRequest` sets `req.Temperature` from
+`config.ResolveEffectiveTemperature` each turn; `endpoint.go`/`factory.go` pass it
+through. `contextmgmt_config.go` seeds the compression threshold from the variant
+default when unpinned.
+
+**Context auto-detect** (`provider/discovery.go`): `ModelInfo.ContextLimit`;
+parse `context_length`/`max_model_len` (openai-compat) and `inputTokenLimit`
+(Gemini) plus a static table (`StaticContextLimit`/`ContextLimitForModel`) for
+OpenAI-direct ids. `provider.MaybeSetContextLimit` writes
+`providers.<id>.contextLimit` only when not pinned (new
+`ProviderInstanceConfig.ContextLimitUserSet`, registered in `document.go`); the
+agent dialog applies it on model set/select.
+
+**Preset/reset operations** (new `provider/preset.go`):
+`ApplySystemPromptPreset` (writes personality+variant, reports resolved sampling
+defaults + pin flags via `PresetApplyResult`), `CurrentSystemPromptPreset`,
+`ClearProviderSetting` (single key), `ResetProviderInstanceOverrides` (clears
+behavioral overrides; preserves model/baseUrl/wireFormat/activeModels/API key).
+
+**Dialog UX** (`providersdialog`): new `screenEditPicker` + edit kinds
+(`editPreset`, `editEnum`, `editToggleBool`, `editResetAll`); the edit sheet hides
+`personality`/`promptMode`, shows a System prompt row, an in-place `enableTools`
+toggle, a `toolCallParsing` picker, effective-value annotations (`(default: …)`
+when unset, `= …` when overridden), a per-row `r` reset, and a "Reset all
+settings" row. New `Deps` methods (`EffectiveProviderSettings`,
+`SystemPromptPresetID`, `ApplySystemPromptPreset`, `ClearSetting`,
+`ResetSettings`) implemented in `agent/providerdialog.go`.
+
+**Deferred:** authoring full sysadmin/assistant prompt bodies; `top_p`/`top_k`
+tuning (temperature only this pass); `/personality` slash command; hiding the
+advanced masking knobs.
+
+Docs: `docs/system-prompts.md` (presets, sampling defaults, context auto-detect,
+resets). Tests: `config` sampling (model-family + effective temperature),
+systemprompt round-trip; `provider` preset apply/current/clear/reset,
+discovery context parsing + pin respect, openai-chat temperature mapping;
+`providersdialog` preset picker / enableTools toggle / reset-all / `r` reset /
+collapsed rows. `go build ./...` clean; touched-package tests green.
+
+### AD-032 — Interaction-mode read-only tool gates (plan / ask) (2026-06-22)
+
+Plan and ask interaction modes now enforce read-only tool policy in the scheduler
+(hard gate before execution) and when building provider tool declarations.
+
+| Mode | Allowed | Blocked |
+|------|---------|---------|
+| **ask** | `read_file`, `grep_search`, `list_directory`, `activate_skill` | `write_file`, `run_shell_command`, MCP tools |
+| **plan** | ask tools + `write_file` under `docs/plans/` only | shell, writes outside plans dir, MCP tools |
+| **agent / debug** | full registry | — |
+
+Plan path validation ports fork `resolveAndValidatePlanPath` semantics
+(`internal/tools/plan_path.go`); relative write paths resolve under `docs/plans/`.
+Built-in system-prompt suffixes in `modes.SystemPromptSuffix` reinforce restrictions;
+custom `sagittarius.modes.*.systemPromptSuffix` appends after the built-in text.
+Orthogonal to fork `--approval-mode` confirmation policy (AD-022).
+
+Docs: `docs/interaction-modes.md`. Tests: `tools` interaction_mode + plan_path +
+scheduler gate; `agent`/`modes` unchanged pass.
+
 ---
 
 ## Workspace Layout

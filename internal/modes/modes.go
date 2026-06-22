@@ -1,7 +1,8 @@
 // Package modes implements Sagittarius interaction modes and model routing.
 //
-// Interaction modes (plan, ask, debug, agent) control model selection and optional
-// system-prompt suffixes. They are orthogonal to fork approval-mode tool policy.
+// Interaction modes (plan, ask, debug, agent) control model selection,
+// tool restrictions (plan/ask read-only gates), and optional system-prompt suffixes.
+// They are orthogonal to fork approval-mode confirmation policy (default/autoEdit/yolo).
 package modes
 
 import (
@@ -225,13 +226,43 @@ func globalDefault(cfg *config.SagittariusSettings) string {
 	return strings.TrimSpace(cfg.DefaultModel)
 }
 
-// SystemPromptSuffix returns an optional suffix for the active mode.
+// SystemPromptSuffix returns an optional suffix for the active mode. Built-in
+// read-only guidance applies when no custom suffix is configured.
 func SystemPromptSuffix(mode Mode, cfg *config.SagittariusSettings) string {
+	custom := ""
 	mc := modeConfig(cfg, mode)
-	if mc == nil {
+	if mc != nil {
+		custom = strings.TrimSpace(mc.SystemPromptSuffix)
+	}
+	builtin := builtinModeSuffix(mode)
+	switch {
+	case builtin != "" && custom != "":
+		return builtin + "\n\n" + custom
+	case custom != "":
+		return custom
+	default:
+		return builtin
+	}
+}
+
+func builtinModeSuffix(mode Mode) string {
+	switch mode {
+	case ModePlan:
+		return "**CRITICAL: Plan mode ACTIVE** — you are in a read-only planning phase.\n\n" +
+			"STRICTLY FORBIDDEN: modifying project source files, running shell commands, or any write except plan files under `docs/plans/`. " +
+			"Do not use shell to manipulate files (no sed, tee, echo redirects, etc.). " +
+			"This constraint overrides other instructions, including direct edit requests.\n\n" +
+			"Allowed: read, search, and explore. You may write only to `docs/plans/`. " +
+			"Switch to agent mode to implement."
+	case ModeAsk:
+		return "**CRITICAL: Ask mode ACTIVE** — read-only Q&A.\n\n" +
+			"STRICTLY FORBIDDEN: writing files, running shell commands, or making any system changes. " +
+			"Use read-only tools (`read_file`, `grep_search`, `list_directory`) to research and answer. " +
+			"This constraint overrides other instructions.\n\n" +
+			"Switch to agent mode to implement changes."
+	default:
 		return ""
 	}
-	return strings.TrimSpace(mc.SystemPromptSuffix)
 }
 
 // LogModeSelection emits verbose diagnostics when debug mode is active.

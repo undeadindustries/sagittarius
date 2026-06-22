@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/undeadindustries/sagittarius/internal/config"
@@ -154,36 +155,71 @@ func (d *providerDialogDeps) DiscoverModels(ctx context.Context, id string) ([]s
 	if err != nil {
 		return nil, err
 	}
-
 	if endpoint.WireFormat == config.WireFormatGemini {
-		apiKey := endpoint.Bearer
-		if apiKey == "" && endpoint.RequiresAPIKey {
-			if key, kerr := credentials.ResolveProviderAPIKey(ctx, endpoint.ProviderID); kerr == nil {
-				apiKey = key
-			}
-		}
-		infos, err := provider.DiscoverGeminiModels(ctx, apiKey, nil)
+		infos, err := discoverModelInfos(ctx, d.settings(), id)
 		if err != nil {
 			return nil, err
 		}
 		return modelIDsFromInfos(infos), nil
 	}
-
 	if endpoint.BaseURL == "" {
 		return nil, fmt.Errorf("provider %q has no endpoint URL to query", config.ProviderDisplayID(id))
 	}
-	bearer := endpoint.Bearer
-	if bearer == "" && endpoint.RequiresAPIKey {
-		if key, kerr := credentials.ResolveProviderAPIKey(ctx, endpoint.ProviderID); kerr == nil {
-			bearer = key
-		}
+	infos, err := discoverModelInfos(ctx, d.settings(), id)
+	if err != nil {
+		return nil, err
 	}
-	infos := provider.DiscoverModels(ctx, endpoint.BaseURL, bearer, nil)
 	models := modelIDsFromInfos(infos)
 	if len(models) == 0 {
 		return nil, fmt.Errorf("no models returned from %s (check base URL and API key)", config.ProviderDisplayID(id))
 	}
 	return models, nil
+}
+
+// discoverModelInfos resolves a provider's endpoint and queries it for the model
+// list (including context limits). It is best-effort for the non-Gemini path and
+// surfaces the Gemini error so callers can report a missing key.
+func discoverModelInfos(ctx context.Context, settings *config.Settings, id string) ([]provider.ModelInfo, error) {
+	endpoint, err := provider.ResolveEndpointForProvider(settings, id)
+	if err != nil {
+		return nil, err
+	}
+	resolveBearer := func() string {
+		if endpoint.Bearer != "" {
+			return endpoint.Bearer
+		}
+		if endpoint.RequiresAPIKey {
+			if key, kerr := credentials.ResolveProviderAPIKey(ctx, endpoint.ProviderID); kerr == nil {
+				return key
+			}
+		}
+		return ""
+	}
+	if endpoint.WireFormat == config.WireFormatGemini {
+		return provider.DiscoverGeminiModels(ctx, resolveBearer(), nil)
+	}
+	if endpoint.BaseURL == "" {
+		return nil, nil
+	}
+	return provider.DiscoverModels(ctx, endpoint.BaseURL, resolveBearer(), nil), nil
+}
+
+// applyDiscoveredContextLimit best-effort sets a provider's contextLimit to the
+// model's reported window when the user has not pinned it. It does not persist;
+// the caller's Save flushes the mutation. Failures are ignored so a switch never
+// blocks on discovery.
+func applyDiscoveredContextLimit(ctx context.Context, settings *config.Settings, providerID, model string) {
+	if settings == nil || strings.TrimSpace(model) == "" {
+		return
+	}
+	limit := provider.StaticContextLimit(model)
+	if limit == 0 {
+		infos, _ := discoverModelInfos(ctx, settings, providerID)
+		limit = provider.ContextLimitForModel(infos, model)
+	}
+	if limit > 0 {
+		_, _ = provider.MaybeSetContextLimit(settings, providerID, limit)
+	}
 }
 
 func modelIDsFromInfos(infos []provider.ModelInfo) []string {
@@ -202,6 +238,7 @@ func (d *providerDialogDeps) SetModel(ctx context.Context, id, model string) err
 	if err := provider.SetProviderModel(d.settings(), config.NormalizeProviderID(id), model); err != nil {
 		return err
 	}
+	applyDiscoveredContextLimit(ctx, d.settings(), id, model)
 	if err := d.loader().Save(d.settings()); err != nil {
 		return err
 	}
@@ -285,6 +322,117 @@ func (d *providerDialogDeps) SetActiveModels(_ context.Context, id string, model
 		return err
 	}
 	return d.loader().Save(d.settings())
+}
+
+// EffectiveProviderSettings returns resolved display strings (overrides plus
+// computed defaults) for the keys the edit sheet annotates.
+func (d *providerDialogDeps) EffectiveProviderSettings(id string) map[string]string {
+	out := map[string]string{}
+	s := d.settings()
+	if s == nil {
+		return out
+	}
+	canonical := config.NormalizeProviderID(id)
+	model := d.modelFor(id)
+	inst := s.ProviderInstance(canonical)
+
+	if t := config.ResolveEffectiveTemperature(s, canonical, model); t != nil {
+		out["temperature"] = strconv.FormatFloat(*t, 'g', -1, 64)
+	} else {
+		out["temperature"] = "model decides"
+	}
+
+	variant := config.ResolveVariant(s, canonical, model)
+	if inst != nil && inst.CompressionThreshold != nil {
+		out["compressionThreshold"] = strconv.FormatFloat(*inst.CompressionThreshold, 'g', -1, 64)
+	} else {
+		out["compressionThreshold"] = strconv.FormatFloat(config.VariantCompressionThreshold(variant), 'g', -1, 64)
+	}
+
+	if inst != nil && inst.ContextLimit != nil {
+		out["contextLimit"] = strconv.Itoa(*inst.ContextLimit)
+	}
+
+	enabled := "true"
+	if inst != nil && inst.EnableTools != nil {
+		enabled = strconv.FormatBool(*inst.EnableTools)
+	}
+	out["enableTools"] = enabled
+
+	parsing := string(config.ToolCallParsingLenient)
+	if inst != nil && inst.ToolCallParsing != "" {
+		parsing = string(inst.ToolCallParsing)
+	}
+	out["toolCallParsing"] = parsing
+
+	return out
+}
+
+// SystemPromptPresetID returns the preset id matching the provider's current
+// personality + variant.
+func (d *providerDialogDeps) SystemPromptPresetID(id string) string {
+	return provider.CurrentSystemPromptPreset(d.settings(), id)
+}
+
+// ApplySystemPromptPreset writes the preset's personality/variant and returns an
+// info line describing the suggested sampling knobs (and which were kept pinned).
+func (d *providerDialogDeps) ApplySystemPromptPreset(ctx context.Context, id, presetID string) (string, error) {
+	if d.loader() == nil || d.settings() == nil {
+		return "", fmt.Errorf("settings not loaded")
+	}
+	res, err := provider.ApplySystemPromptPreset(d.settings(), id, presetID)
+	if err != nil {
+		return "", err
+	}
+	if err := d.loader().Save(d.settings()); err != nil {
+		return "", err
+	}
+	if rerr := d.rebuildIfActive(ctx, id); rerr != nil {
+		return "", rerr
+	}
+	return formatPresetInfo(res), nil
+}
+
+func formatPresetInfo(res provider.PresetApplyResult) string {
+	temp := "left to the model"
+	if res.DefaultTemperature != nil {
+		temp = strconv.FormatFloat(*res.DefaultTemperature, 'g', -1, 64)
+		if res.TemperaturePinned {
+			temp += " (kept at your custom value)"
+		}
+	}
+	comp := strconv.FormatFloat(res.CompressionThreshold, 'g', -1, 64)
+	if res.CompressionPinned {
+		comp += " (kept at your custom value)"
+	}
+	return fmt.Sprintf("System prompt → %s. Suggested temperature %s and compression threshold %s for generic models.",
+		res.Label, temp, comp)
+}
+
+func (d *providerDialogDeps) ClearSetting(ctx context.Context, id, key string) error {
+	if d.loader() == nil || d.settings() == nil {
+		return fmt.Errorf("settings not loaded")
+	}
+	if err := provider.ClearProviderSetting(d.settings(), id, key); err != nil {
+		return err
+	}
+	if err := d.loader().Save(d.settings()); err != nil {
+		return err
+	}
+	return d.rebuildIfActive(ctx, id)
+}
+
+func (d *providerDialogDeps) ResetSettings(ctx context.Context, id string) error {
+	if d.loader() == nil || d.settings() == nil {
+		return fmt.Errorf("settings not loaded")
+	}
+	if err := provider.ResetProviderInstanceOverrides(d.settings(), id); err != nil {
+		return err
+	}
+	if err := d.loader().Save(d.settings()); err != nil {
+		return err
+	}
+	return d.rebuildIfActive(ctx, id)
 }
 
 func (d *providerDialogDeps) rebuildIfActive(ctx context.Context, id string) error {
@@ -391,6 +539,7 @@ func (d *modelsDialogDeps) SelectModel(ctx context.Context, id, model string) er
 	if err := provider.SetProviderModel(d.settings(), id, model); err != nil {
 		return err
 	}
+	applyDiscoveredContextLimit(ctx, d.settings(), id, model)
 	if d.ActiveProviderID() != id {
 		if err := provider.SaveActiveProvider(d.loader(), d.settings(), id); err != nil {
 			return err

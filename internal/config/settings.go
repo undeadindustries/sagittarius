@@ -29,6 +29,10 @@ type ProviderInstanceConfig struct {
 	Model                string              `json:"model,omitempty"`
 	BaseURL              string              `json:"baseUrl,omitempty"`
 	ContextLimit         *int                `json:"contextLimit,omitempty"`
+	// ContextLimitUserSet marks contextLimit as an explicit user pin so the
+	// model-switch auto-discovery (provider.MaybeSetContextLimit) leaves it
+	// alone. Auto-discovered limits set ContextLimit without this flag.
+	ContextLimitUserSet *bool `json:"contextLimitUserSet,omitempty"`
 	CompressionThreshold *float64            `json:"compressionThreshold,omitempty"`
 	PreserveFraction     *float64            `json:"preserveFraction,omitempty"`
 	PromptMode           PromptMode          `json:"promptMode,omitempty"`

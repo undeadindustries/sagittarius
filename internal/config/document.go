@@ -27,7 +27,8 @@ func unmarshalProviderInstance(raw json.RawMessage) (*ProviderInstanceConfig, er
 	known := map[string]func(json.RawMessage) error{
 		"model":        func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.Model) },
 		"baseUrl":      func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.BaseURL) },
-		"contextLimit": func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.ContextLimit) },
+		"contextLimit":        func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.ContextLimit) },
+		"contextLimitUserSet": func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.ContextLimitUserSet) },
 		"compressionThreshold": func(b json.RawMessage) error {
 			return json.Unmarshal(b, &cfg.CompressionThreshold)
 		},
@@ -97,6 +98,7 @@ func marshalProviderInstance(cfg *ProviderInstanceConfig) (json.RawMessage, erro
 		{"model", cfg.Model},
 		{"baseUrl", cfg.BaseURL},
 		{"contextLimit", cfg.ContextLimit},
+		{"contextLimitUserSet", cfg.ContextLimitUserSet},
 		{"compressionThreshold", cfg.CompressionThreshold},
 		{"preserveFraction", cfg.PreserveFraction},
 		{"promptMode", cfg.PromptMode},

@@ -21,6 +21,10 @@ const geminiModelsAPIRoot = "https://generativelanguage.googleapis.com"
 // ModelInfo describes one model returned from GET /v1/models.
 type ModelInfo struct {
 	ID string
+	// ContextLimit is the model's context window in tokens, when the provider
+	// reports it (OpenRouter context_length, vLLM max_model_len, Gemini
+	// inputTokenLimit). 0 means unknown.
+	ContextLimit int
 }
 
 // DiscoverModels queries GET {baseUrl}/v1/models best-effort.
@@ -72,7 +76,11 @@ func DiscoverModels(
 		if id == "" || !isChatModel(id) {
 			continue
 		}
-		out = append(out, ModelInfo{ID: id})
+		limit := entry.ContextLength
+		if limit <= 0 {
+			limit = entry.MaxModelLen
+		}
+		out = append(out, ModelInfo{ID: id, ContextLimit: limit})
 	}
 	sortModelInfos(out)
 	return out
@@ -86,6 +94,7 @@ type geminiModelsResponse struct {
 type geminiModelEntry struct {
 	Name                       string   `json:"name"`
 	SupportedGenerationMethods []string `json:"supportedGenerationMethods"`
+	InputTokenLimit            int      `json:"inputTokenLimit"`
 }
 
 // DiscoverGeminiModels lists chat-capable models via the Gemini API models.list
@@ -146,7 +155,7 @@ func fetchGeminiModels(ctx context.Context, listURL string, client *http.Client)
 		if id == "" {
 			continue
 		}
-		out = append(out, ModelInfo{ID: id})
+		out = append(out, ModelInfo{ID: id, ContextLimit: entry.InputTokenLimit})
 	}
 	if len(out) == 0 {
 		return nil, fmt.Errorf("no generateContent models returned by Gemini API")
@@ -184,6 +193,73 @@ func geminiModelID(name string) string {
 // ModelsURL returns the discovery URL for a provider base URL.
 func ModelsURL(baseURL string) string {
 	return ExtractServerRoot(baseURL) + "/v1/models"
+}
+
+// staticModelContextLimits covers common OpenAI-direct ids whose /v1/models
+// response omits a context field. Keys are matched exact-first, then by the
+// ordered prefix list below for versioned ids (e.g. gpt-4o-2024-08-06).
+var staticModelContextLimits = map[string]int{
+	"gpt-4o":        128_000,
+	"gpt-4o-mini":   128_000,
+	"gpt-4.1":       1_047_576,
+	"gpt-4.1-mini":  1_047_576,
+	"gpt-4-turbo":   128_000,
+	"gpt-4":         8_192,
+	"gpt-3.5-turbo": 16_385,
+	"gpt-5":         400_000,
+	"gpt-5-codex":   400_000,
+	"o1":            200_000,
+	"o3":            200_000,
+	"o3-mini":       200_000,
+	"o4-mini":       200_000,
+}
+
+// staticContextPrefixes is the deterministic prefix fallback for versioned ids.
+// Longer prefixes come first so gpt-4o-mini wins over gpt-4o.
+var staticContextPrefixes = []struct {
+	prefix string
+	limit  int
+}{
+	{"gpt-4o-mini", 128_000},
+	{"gpt-4o", 128_000},
+	{"gpt-4.1-mini", 1_047_576},
+	{"gpt-4.1", 1_047_576},
+	{"gpt-4-turbo", 128_000},
+	{"gpt-5", 400_000},
+	{"o4-mini", 200_000},
+	{"o3-mini", 200_000},
+	{"o3", 200_000},
+}
+
+// StaticContextLimit returns a known context window for an OpenAI-direct model
+// id, or 0 when unknown. Provider-prefixed ids ("openai/gpt-4o") are normalized.
+func StaticContextLimit(modelID string) int {
+	m := strings.ToLower(strings.TrimSpace(modelID))
+	if i := strings.LastIndex(m, "/"); i >= 0 {
+		m = m[i+1:]
+	}
+	if v, ok := staticModelContextLimits[m]; ok {
+		return v
+	}
+	for _, p := range staticContextPrefixes {
+		if strings.HasPrefix(m, p.prefix) {
+			return p.limit
+		}
+	}
+	return 0
+}
+
+// ContextLimitForModel returns the context window for modelID: the discovered
+// value from the models list when present, otherwise the static OpenAI table.
+// 0 means unknown.
+func ContextLimitForModel(models []ModelInfo, modelID string) int {
+	modelID = strings.TrimSpace(modelID)
+	for _, m := range models {
+		if m.ID == modelID && m.ContextLimit > 0 {
+			return m.ContextLimit
+		}
+	}
+	return StaticContextLimit(modelID)
 }
 
 func isChatModel(id string) bool {
