@@ -345,6 +345,12 @@ func decodeSettingsDocument(raw []byte) (*Settings, error) {
 				return nil, err
 			}
 			s.Sagittarius = sag
+		case "security":
+			sec, err := unmarshalSecurity(val)
+			if err != nil {
+				return nil, err
+			}
+			s.Security = sec
 		default:
 			s.Raw[key] = val
 		}
@@ -373,6 +379,13 @@ func encodeSettingsDocument(s *Settings) ([]byte, error) {
 			return nil, err
 		}
 		top["sagittarius"] = b
+	}
+	if s.Security != nil {
+		b, err := marshalSecurity(s.Security)
+		if err != nil {
+			return nil, err
+		}
+		top["security"] = b
 	}
 	out, err := json.MarshalIndent(top, "", "  ")
 	if err != nil {

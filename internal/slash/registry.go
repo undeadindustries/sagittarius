@@ -90,6 +90,8 @@ func (r *Registry) registerBuiltins() {
 		quitCommand(),
 		resumeCommand(),
 		clearCommand(),
+		diffCommand(),
+		undoCommand(),
 		providerCommand(),
 		modelsCommand(),
 		memoryCommand(),

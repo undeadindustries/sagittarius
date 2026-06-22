@@ -141,6 +141,18 @@ See also: [MCP server configuration](../tools/mcp-server.md).
 
 - Only applies when the active provider uses `openai-responses`. Other wire formats return an actionable “not applicable” message.
 
+### `/diff`
+
+- **Description:** Show the net unified diff of files Sagittarius changed this session (Sagittarius-specific; no fork equivalent).
+- **Usage:** `/diff` for all changed files, or `/diff <path>` to filter by a path substring.
+- **Notes:** Tracks `write_file` changes only. See [snapshots-and-undo.md](../snapshots-and-undo.md).
+
+### `/undo`
+
+- **Description:** Revert the most recent file change recorded this session (Sagittarius-specific; no fork equivalent).
+- **Usage:** `/undo` reverts the last change; `/undo <n>` reverts the last `n` (most recent first).
+- **Notes:** Restores prior file content (or removes newly created files). Disabled when `sagittarius.snapshots.enabled` is `false`.
+
 ## Deferred commands
 
 The following fork commands are **not** implemented yet. They will be added

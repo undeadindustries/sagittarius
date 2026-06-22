@@ -16,6 +16,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/prompt"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 	"github.com/undeadindustries/sagittarius/internal/session"
+	"github.com/undeadindustries/sagittarius/internal/snapshot"
 	"github.com/undeadindustries/sagittarius/internal/tools"
 	"github.com/undeadindustries/sagittarius/internal/ui"
 )
@@ -52,6 +53,12 @@ type RunnerConfig struct {
 	InitialHistory []provider.Message
 	// Settings enables interaction-mode model routing. Nil disables mode overrides.
 	Settings *config.Settings
+	// ProjectBoundary blocks out-of-project file mutations (file writes and a
+	// shell heuristic) when true. Default false (backward compatible).
+	ProjectBoundary bool
+	// Snapshotter records write_file mutations for /diff and /undo. Nil disables
+	// snapshotting.
+	Snapshotter *snapshot.Manager
 	// InitialMode seeds the session interaction mode. The zero value
 	// (modes.ModeAgent) is authoritative, not "unset": callers that want the
 	// settings default must resolve it via modes.DefaultFromSettings and pass
@@ -98,6 +105,8 @@ type Runner struct {
 	lastRequestMu        sync.RWMutex
 	sessionRecorder      *session.Recorder
 	metrics              *sessionMetrics
+	projectBoundary      bool
+	snap                 *snapshot.Manager
 }
 
 // NewRunner constructs a Runner and discovers project memory for the system prompt.
@@ -137,7 +146,8 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 	registry := tools.NewBuiltinRegistry(ws)
 	policy := approvalToPolicy(mode)
 	scheduler := tools.NewScheduler(registry, policy, cfg.Interactive, nil, ws)
-	// Wire interaction-mode gate after runner is constructed.
+	// Wire interaction-mode gate, project boundary, and snapshot hook after the
+	// runner is constructed (attachInteractionModeGate rebuilds the scheduler).
 
 	var history []provider.Message
 	if len(cfg.InitialHistory) > 0 {
@@ -163,6 +173,8 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		sessionRecorder:      cfg.SessionRecorder,
 		history:              history,
 		metrics:              newSessionMetrics(),
+		projectBoundary:      cfg.ProjectBoundary,
+		snap:                 cfg.Snapshotter,
 	}
 	if !cfg.ModelPinned {
 		runner.refreshModelFromMode()
@@ -648,6 +660,7 @@ func (r *Runner) attachInteractionModeGate() {
 		r.interactive,
 		r.InteractionMode,
 		r.workspace,
+		r.schedulerOptions()...,
 	)
 }
 
@@ -658,7 +671,43 @@ func (r *Runner) newToolScheduler(registry *tools.Registry) *tools.Scheduler {
 		r.interactive,
 		r.InteractionMode,
 		r.workspace,
+		r.schedulerOptions()...,
 	)
+}
+
+// schedulerOptions returns the project-boundary and snapshot options shared by
+// every scheduler the runner builds. A nil snapshot manager is passed as a nil
+// Snapshotter interface (not a typed-nil) so the scheduler's nil check works.
+func (r *Runner) schedulerOptions() []tools.SchedulerOption {
+	opts := []tools.SchedulerOption{tools.WithProjectBoundary(r.projectBoundary)}
+	if r.snap != nil {
+		opts = append(opts, tools.WithSnapshotter(r.snap))
+	}
+	return opts
+}
+
+// SnapshotDiff renders the net unified diff of files changed this session,
+// optionally filtered by a path substring. Returns "" when snapshots are
+// disabled or nothing changed.
+func (r *Runner) SnapshotDiff(pathFilter string) (string, error) {
+	if r.snap == nil {
+		return "", nil
+	}
+	return r.snap.Diff(pathFilter)
+}
+
+// SnapshotUndo reverts the last n recorded file changes and returns the
+// restored relative paths.
+func (r *Runner) SnapshotUndo(n int) ([]string, error) {
+	if r.snap == nil {
+		return nil, fmt.Errorf("snapshots are disabled")
+	}
+	return r.snap.Undo(n)
+}
+
+// SnapshotEnabled reports whether file snapshots are active for this session.
+func (r *Runner) SnapshotEnabled() bool {
+	return r.snap != nil
 }
 
 // toolRegistry returns the active tool registry under the registry lock.

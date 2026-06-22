@@ -99,3 +99,59 @@ Sagittarius does not log API key values. Debug output uses redacted placeholders
 
 API keys, bearer tokens, and other secrets must not appear in
 `~/.sagittarius/settings.json`. The config loader strips and rejects such fields.
+
+---
+
+## Project boundary enforcement
+
+By default the built-in file tools confine reads and writes to the workspace
+root (the directory Sagittarius was launched in). Shell commands, however, can
+still mutate paths anywhere the user can. The optional **project boundary**
+hardens this: when enabled, Sagittarius blocks mutating operations whose target
+resolves outside the project root.
+
+Enable it globally or per project in `settings.json` (project wins):
+
+```json
+{
+  "security": {
+    "projectBoundary": {
+      "enforce": true
+    }
+  }
+}
+```
+
+When `enforce` is `true`:
+
+| Tool | Behavior |
+|------|----------|
+| `write_file` | Blocked when the resolved path is outside the project root. |
+| `read_file`, `list_directory`, `grep_search` | Unaffected — the boundary targets mutations, not reads. |
+| `run_shell_command` | Blocked when a heuristic scan finds an out-of-project write/delete. |
+
+The shell heuristic inspects the command string for output redirections
+(`>`, `>>`, `2>`, `&>`, `>|`, `tee`) and known mutators (`rm`, `rmdir`, `mv`,
+`cp`, `install`, `truncate`, `chmod`, `chown`, `mkdir`, `dd`, `ln`, `touch`,
+`sed -i`) whose path arguments resolve outside the root (absolute paths, `../`
+escapes, or `~` home references).
+
+### Heuristic limitations
+
+The scan is conservative and operates on the literal command string. It **cannot**
+catch every escape, including:
+
+- Obfuscation: `eval`, base64-decoded commands, or variable indirection
+  (`f=/etc/x; rm "$f"`).
+- A `cd` into another directory before a relative-path mutation.
+- Commands run through a subshell or interpreter (`python -c '...'`,
+  `bash -c '...'`).
+
+Treat the boundary as defense-in-depth that stops common accidental escapes,
+**not** as a sandbox. For stronger isolation run Sagittarius inside a container
+or restricted user account. The protected-path guard for Sagittarius snapshot
+metadata under `<repo>/.sagittarius/snapshots/` is always active, independent of
+this flag.
+
+A separate, related feature records local file changes for review and rollback;
+see [docs/snapshots-and-undo.md](docs/snapshots-and-undo.md).

@@ -14,6 +14,7 @@ var reservedSagittariusKeys = map[string]struct{}{
 	"compression":   {},
 	"tools":         {},
 	"systemPrompt":  {},
+	"snapshots":     {},
 }
 
 var reservedSagittariusModeKeys = map[string]struct{}{
@@ -374,6 +375,66 @@ func marshalSystemPromptConfig(cfg *SagittariusSystemPromptConfig) (json.RawMess
 	return json.Marshal(obj)
 }
 
+func unmarshalSnapshotConfig(raw json.RawMessage) (*SagittariusSnapshotConfig, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, fmt.Errorf("decode snapshots config: %w", err)
+	}
+	cfg := &SagittariusSnapshotConfig{Extra: make(map[string]json.RawMessage)}
+	for key, val := range obj {
+		switch key {
+		case "enabled":
+			if err := json.Unmarshal(val, &cfg.Enabled); err != nil {
+				return nil, err
+			}
+		case "maxFileBytes":
+			if err := json.Unmarshal(val, &cfg.MaxFileBytes); err != nil {
+				return nil, err
+			}
+		default:
+			cfg.Extra[key] = val
+		}
+	}
+	if len(cfg.Extra) == 0 {
+		cfg.Extra = nil
+	}
+	return cfg, nil
+}
+
+func marshalSnapshotConfig(cfg *SagittariusSnapshotConfig) (json.RawMessage, error) {
+	if cfg == nil {
+		return nil, nil
+	}
+	obj := make(map[string]json.RawMessage)
+	add := func(key string, v any) error {
+		if isEmptyValue(v) {
+			return nil
+		}
+		b, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		obj[key] = b
+		return nil
+	}
+	if err := add("enabled", cfg.Enabled); err != nil {
+		return nil, err
+	}
+	if err := add("maxFileBytes", cfg.MaxFileBytes); err != nil {
+		return nil, err
+	}
+	for key, val := range cfg.Extra {
+		obj[key] = val
+	}
+	if len(obj) == 0 {
+		return json.RawMessage("{}"), nil
+	}
+	return json.Marshal(obj)
+}
+
 func unmarshalSagittarius(raw json.RawMessage) (*SagittariusSettings, error) {
 	if len(raw) == 0 {
 		return nil, nil
@@ -427,6 +488,12 @@ func unmarshalSagittarius(raw json.RawMessage) (*SagittariusSettings, error) {
 				return nil, fmt.Errorf("decode sagittarius.systemPrompt: %w", err)
 			}
 			s.SystemPrompt = sp
+		case "snapshots":
+			snap, err := unmarshalSnapshotConfig(val)
+			if err != nil {
+				return nil, fmt.Errorf("decode sagittarius.snapshots: %w", err)
+			}
+			s.Snapshots = snap
 		default:
 			if _, reserved := reservedSagittariusKeys[key]; reserved {
 				continue
@@ -502,6 +569,13 @@ func marshalSagittarius(s *SagittariusSettings) (json.RawMessage, error) {
 			return nil, err
 		}
 		obj["systemPrompt"] = b
+	}
+	if s.Snapshots != nil {
+		b, err := marshalSnapshotConfig(s.Snapshots)
+		if err != nil {
+			return nil, err
+		}
+		obj["snapshots"] = b
 	}
 	for key, val := range s.Extra {
 		obj[key] = val

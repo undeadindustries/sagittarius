@@ -30,6 +30,11 @@ type Hooks interface {
 	// Interaction mode hooks (Phase 15).
 	SetInteractionMode(ctx context.Context, mode modes.Mode) (model string, err error)
 	InteractionMode() (mode modes.Mode, model string)
+	// Snapshot hooks (local diffs + undo). SnapshotDiff returns the net unified
+	// diff of this session's file changes (empty when none); SnapshotUndo
+	// reverts the last n changes and returns the restored relative paths.
+	SnapshotDiff(pathFilter string) (string, error)
+	SnapshotUndo(n int) ([]string, error)
 }
 
 // Deps supplies slash command dependencies (injectable for tests).

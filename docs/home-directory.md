@@ -44,6 +44,7 @@ a folder name, the second one gets a numeric suffix (`my-app-1`).
 | `~/.sagittarius/settings.json` | You change a setting (first-run onboarding, providers wizard, `/mode`, etc.) |
 | `~/.sagittarius/sagittarius-credentials.json` | You store an API key and no OS keychain is available |
 | `~/.sagittarius/tmp/<slug>/chats/*.jsonl` | First conversation turn (session history) |
+| `~/.sagittarius/tmp/<slug>/snapshots/<sessionId>.jsonl` | First snapshotted `write_file` (powers `/diff` and `/undo`) |
 | `~/.sagittarius/skills/` | You add a user skill |
 | `~/.sagittarius/agents/` | You add a user agent definition |
 | `~/.sagittarius/extensions/<name>/` | You install an extension |
@@ -60,6 +61,19 @@ Per-project configuration lives in `<repo>/.sagittarius/`:
 
 The sibling `<repo>/.agents/skills/` and `~/.agents/skills/` skill roots are
 still read when present.
+
+### Project settings merge
+
+At startup Sagittarius reads `<repo>/.sagittarius/settings.json` (when present)
+and merges a small, safe subset over the global `~/.sagittarius/settings.json`
+for the current session only. The merged document is never written back, so a
+project file cannot leak into the global one. Today the merge covers:
+
+- `security.projectBoundary.enforce`
+- `sagittarius.snapshots.enabled` / `sagittarius.snapshots.maxFileBytes`
+
+For each key the project value wins when set; otherwise the global value (or the
+built-in default) applies. See [snapshots-and-undo.md](snapshots-and-undo.md).
 
 ## Memory files: AGENTS.md
 
