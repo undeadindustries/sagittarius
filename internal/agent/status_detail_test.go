@@ -18,7 +18,7 @@ func TestSystemPromptStatusDetailPresetLabel(t *testing.T) {
 		},
 	}
 	got := systemPromptStatusDetail(nil, settings)
-	if got != "Programmer (low context)" {
-		t.Fatalf("got %q, want Programmer (low context)", got)
+	if got != "System Prompt: Programmer (low context)" {
+		t.Fatalf("got %q, want System Prompt: Programmer (low context)", got)
 	}
 }

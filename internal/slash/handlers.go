@@ -224,7 +224,7 @@ func handleModes(_ *Context) Result {
 func memoryCommand() Command {
 	return Command{
 		Name:        "memory",
-		Description: "Manage project memory (GEMINI.md / AGENTS.md)",
+		Description: "Manage project memory (AGENTS.md)",
 		SubCommands: []Command{
 			{
 				Name:        "reload",
@@ -425,7 +425,7 @@ func handleMemoryReload(ctx *Context) Result {
 	if err := ctx.Deps.Hooks.ReloadSystemInstruction(ctx.Ctx); err != nil {
 		return ErrorResult(fmt.Errorf("reload memory: %w", err))
 	}
-	return InfoResult("Memory reloaded from GEMINI.md / AGENTS.md.")
+	return InfoResult("Memory reloaded from AGENTS.md.")
 }
 
 func handleSkillsReload(ctx *Context) Result {

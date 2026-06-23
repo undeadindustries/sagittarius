@@ -15,7 +15,11 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/web"
 )
 
-const MaxToolRounds = 10
+// MaxToolRounds is the default maximum number of tool-call/response cycles per
+// agent turn. It can be overridden via sagittarius.maxToolRounds in
+// settings.json. 100 matches gemini-cli's default; 10 was too low for real
+// agentic tasks that write multiple files.
+const MaxToolRounds = 100
 
 // Scheduler executes tool calls from the agent loop.
 type Scheduler struct {

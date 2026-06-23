@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/undeadindustries/sagittarius/internal/provider"
@@ -66,6 +67,24 @@ func (t *shellTool) Execute(ctx context.Context, args map[string]any) (map[strin
 	cmd := exec.CommandContext(runCtx, "bash", "-c", command)
 	cmd.Dir = t.ws.Root()
 	cmd.Env = os.Environ()
+	// Put the child in its own process group so that background subprocesses
+	// spawned via `cmd &` can be killed as a group when context is canceled.
+	// Without this, the child inherits our pipe FDs and cmd.Run() blocks until
+	// the long-lived background process eventually exits.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		if cmd.Process != nil {
+			// Kill the entire process group to reap background children.
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+		if cmd.Process != nil {
+			return cmd.Process.Kill()
+		}
+		return nil
+	}
+	// After SIGKILL, wait at most 5 s for I/O goroutines to drain before
+	// forcibly closing the pipes and returning.
+	cmd.WaitDelay = 5 * time.Second
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

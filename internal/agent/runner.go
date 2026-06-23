@@ -482,77 +482,89 @@ func (r *Runner) runAgentLoop(ctx context.Context, out chan<- ui.StreamEvent) {
 	}
 
 	verifyHinted := false
-	for round := 0; round < tools.MaxToolRounds; round++ {
-		r.prepareContext(ctx)
-		if !r.modelPinned {
-			r.refreshModelFromMode()
-		}
-		req := r.buildGenerateRequest()
-		r.storeLastRequest(req)
-		currentModel := r.Model()
-		currentProvider := r.activeProviderID()
-		currentMode := r.InteractionMode().String()
+	maxRounds := config.ResolveMaxToolRounds(r.sagittariusSettings(), tools.MaxToolRounds)
 
-		respCh, err := gen.GenerateContentStream(ctx, req)
-		if err != nil {
-			out <- ui.StreamEvent{Type: ui.StreamError, Err: err}
-			return
+	emit := func(ev ui.StreamEvent) {
+		select {
+		case <-ctx.Done():
+		case out <- ev:
 		}
+	}
 
-		toolCalls, modelText, modelParts, streamUsage, streamErr := r.consumeStream(ctx, respCh, out)
-		if streamErr != nil {
-			return
-		}
-		// Record token usage: prefer provider-reported counts; fall back to heuristics.
-		if streamUsage != nil {
-			r.metrics.recordTurnUsage(currentProvider, currentModel, currentMode,
-				streamUsage.InputTokens, streamUsage.OutputTokens,
-				streamUsage.CostUSD, streamUsage.CostKnown)
-		} else {
-			inTok := estimateMessageTokens(req.Messages)
-			outTok := 0
-			if modelText != "" {
-				outTok = contextmgmt.EstimateTokens([]provider.Part{{Text: modelText}})
+	for {
+		for round := 0; round < maxRounds; round++ {
+			r.prepareContext(ctx)
+			if !r.modelPinned {
+				r.refreshModelFromMode()
 			}
-			r.metrics.recordTurnUsage(currentProvider, currentModel, currentMode,
-				inTok, outTok, 0, false)
-		}
+			req := r.buildGenerateRequest()
+			r.storeLastRequest(req)
+			currentModel := r.Model()
+			currentProvider := r.activeProviderID()
+			currentMode := r.InteractionMode().String()
 
-		// Prefer the provider's verbatim model parts (carries Gemini thought
-		// signatures) when supplied; otherwise reconstruct from text + tool
-		// calls (OpenAI-family path).
-		if len(modelParts) > 0 {
-			r.appendModelParts(modelParts, modelText, toolCalls)
-		} else {
-			r.appendModelMessage(modelText, toolCalls)
-		}
-
-		if len(toolCalls) == 0 {
-			r.setState(StateDone)
-			out <- ui.StreamEvent{Type: ui.StreamDone}
-			return
-		}
-
-		r.setState(StateAwaitingTools)
-		emit := func(ev ui.StreamEvent) {
-			select {
-			case <-ctx.Done():
-			case out <- ev:
+			respCh, err := gen.GenerateContentStream(ctx, req)
+			if err != nil {
+				out <- ui.StreamEvent{Type: ui.StreamError, Err: err}
+				return
 			}
+
+			toolCalls, modelText, modelParts, streamUsage, streamErr := r.consumeStream(ctx, respCh, out)
+			if streamErr != nil {
+				return
+			}
+			// Record token usage: prefer provider-reported counts; fall back to heuristics.
+			if streamUsage != nil {
+				r.metrics.recordTurnUsage(currentProvider, currentModel, currentMode,
+					streamUsage.InputTokens, streamUsage.OutputTokens,
+					streamUsage.CostUSD, streamUsage.CostKnown)
+			} else {
+				inTok := estimateMessageTokens(req.Messages)
+				outTok := 0
+				if modelText != "" {
+					outTok = contextmgmt.EstimateTokens([]provider.Part{{Text: modelText}})
+				}
+				r.metrics.recordTurnUsage(currentProvider, currentModel, currentMode,
+					inTok, outTok, 0, false)
+			}
+
+			// Prefer the provider's verbatim model parts (carries Gemini thought
+			// signatures) when supplied; otherwise reconstruct from text + tool
+			// calls (OpenAI-family path).
+			if len(modelParts) > 0 {
+				r.appendModelParts(modelParts, modelText, toolCalls)
+			} else {
+				r.appendModelMessage(modelText, toolCalls)
+			}
+
+			if len(toolCalls) == 0 {
+				r.setState(StateDone)
+				out <- ui.StreamEvent{Type: ui.StreamDone}
+				return
+			}
+
+			r.setState(StateAwaitingTools)
+
+			responses, err := r.toolScheduler().Execute(ctx, toolCalls, emit)
+			if err != nil {
+				out <- ui.StreamEvent{Type: ui.StreamError, Err: err}
+				return
+			}
+			r.metrics.recordTools(len(toolCalls), countToolFailures(responses))
+			r.appendFunctionResponses(responses)
+			if r.suggestVerify && !verifyHinted && containsSuccessfulWrite(responses) {
+				verifyHinted = true
+				out <- ui.StreamEvent{Type: ui.StreamInfo, Text: verifyReminder}
+			}
+			r.setState(StateStreaming)
 		}
 
-		responses, err := r.toolScheduler().Execute(ctx, toolCalls, emit)
-		if err != nil {
-			out <- ui.StreamEvent{Type: ui.StreamError, Err: err}
-			return
+		// Rounds exhausted. In interactive sessions ask the user whether to
+		// continue; headless always stops to avoid runaway loops.
+		if !r.interactive || !r.askContinueRounds(ctx, out, emit, maxRounds) {
+			break
 		}
-		r.metrics.recordTools(len(toolCalls), countToolFailures(responses))
-		r.appendFunctionResponses(responses)
-		if r.suggestVerify && !verifyHinted && containsSuccessfulWrite(responses) {
-			verifyHinted = true
-			out <- ui.StreamEvent{Type: ui.StreamInfo, Text: verifyReminder}
-		}
-		r.setState(StateStreaming)
+		// User approved another batch — loop again with the same limit.
 	}
 
 	r.setState(StateDone)
@@ -1039,6 +1051,26 @@ func (r *Runner) WorkDir() string {
 	return r.workDir
 }
 
+// askContinueRounds emits a StreamToolConfirm asking the user whether to
+// continue the agentic loop for another maxRounds cycles. It returns true when
+// the user approves (ConfirmOnce or ConfirmSession) and false on deny or
+// context cancellation.
+func (r *Runner) askContinueRounds(ctx context.Context, out chan<- ui.StreamEvent, emit func(ui.StreamEvent), maxRounds int) bool {
+	replyCh := make(chan ui.ConfirmDecision, 1)
+	emit(ui.StreamEvent{
+		Type:         ui.StreamToolConfirm,
+		ToolName:     "continue_agent",
+		Text:         fmt.Sprintf("Max tool rounds reached (%d). Continue for another %d rounds?", maxRounds, maxRounds),
+		ConfirmReply: replyCh,
+	})
+	select {
+	case <-ctx.Done():
+		return false
+	case decision := <-replyCh:
+		return decision == ui.ConfirmOnce || decision == ui.ConfirmSession
+	}
+}
+
 // countToolFailures counts function responses that carry an "error" key, the
 // convention used by the tool scheduler for failed or denied executions.
 func countToolFailures(responses []provider.FunctionResponse) int {
@@ -1137,6 +1169,17 @@ func (r *Runner) RotateSession() {
 	if r.sessionRecorder != nil {
 		r.sessionRecorder.Rotate()
 	}
+}
+
+// CurrentSessionID returns the session ID currently being recorded. After a
+// Rotate (e.g. /clear or /chat resume) the recorder issues a new UUID; this
+// always reflects that latest ID so the exit summary and resume hint stay
+// accurate.
+func (r *Runner) CurrentSessionID() string {
+	if r.sessionRecorder != nil {
+		return r.sessionRecorder.SessionID()
+	}
+	return ""
 }
 
 func (r *Runner) storeLastRequest(req *provider.GenerateRequest) {
