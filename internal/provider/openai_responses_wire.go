@@ -139,8 +139,12 @@ func BuildResponsesRequestPlan(req *GenerateRequest, toolsEnabled bool) Response
 	plan := ResponsesRequestPlan{
 		Instructions: strings.TrimSpace(req.SystemInstruction),
 	}
+
+	legacyCounter := 0
+	legacyIDs := make(map[string][]string)
+
 	for _, msg := range req.Messages {
-		plan.Input = append(plan.Input, messageToResponsesInput(msg)...)
+		plan.Input = append(plan.Input, messageToResponsesInput(msg, &legacyCounter, legacyIDs)...)
 	}
 	if toolsEnabled && len(req.Tools) > 0 {
 		plan.Tools = ToolDeclarationsToResponses(req.Tools)
@@ -148,7 +152,7 @@ func BuildResponsesRequestPlan(req *GenerateRequest, toolsEnabled bool) Response
 	return plan
 }
 
-func messageToResponsesInput(msg Message) []responsesInputItem {
+func messageToResponsesInput(msg Message, legacyCounter *int, legacyIDs map[string][]string) []responsesInputItem {
 	if len(msg.Parts) == 0 {
 		return nil
 	}
@@ -162,13 +166,19 @@ func messageToResponsesInput(msg Message) []responsesInputItem {
 
 	var items []responsesInputItem
 	var textParts []string
-	toolCallCounter := 0
 
 	for _, part := range msg.Parts {
 		switch {
 		case part.FunctionResponse != nil:
-			rawID := "call_" + part.FunctionResponse.Name + "_" + strconv.Itoa(toolCallCounter)
-			toolCallCounter++
+			rawID := part.FunctionResponse.CallID
+			if rawID == "" {
+				if q := legacyIDs[part.FunctionResponse.Name]; len(q) > 0 {
+					rawID = q[0]
+					legacyIDs[part.FunctionResponse.Name] = q[1:]
+				} else {
+					rawID = "call_" + part.FunctionResponse.Name
+				}
+			}
 			items = append(items, responsesInputItem{
 				Type:   "function_call_output",
 				CallID: safeResponsesCallID(rawID),
@@ -177,9 +187,10 @@ func messageToResponsesInput(msg Message) []responsesInputItem {
 		case part.FunctionCall != nil:
 			rawID := part.FunctionCall.ID
 			if rawID == "" {
-				rawID = "call_" + part.FunctionCall.Name + "_" + strconv.Itoa(toolCallCounter)
+				rawID = "call_" + part.FunctionCall.Name + "_" + strconv.Itoa(*legacyCounter)
+				*legacyCounter++
+				legacyIDs[part.FunctionCall.Name] = append(legacyIDs[part.FunctionCall.Name], rawID)
 			}
-			toolCallCounter++
 			args, _ := json.Marshal(part.FunctionCall.Args)
 			items = append(items, responsesInputItem{
 				Type:      "function_call",

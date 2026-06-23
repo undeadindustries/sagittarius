@@ -44,11 +44,17 @@ func partsToGenai(parts []Part) []*genai.Part {
 				part.FunctionCall.Name,
 				part.FunctionCall.Args,
 			)
+			if part.FunctionCall.ID != "" && gp.FunctionCall != nil {
+				gp.FunctionCall.ID = part.FunctionCall.ID
+			}
 		case part.FunctionResponse != nil:
 			gp = genai.NewPartFromFunctionResponse(
 				part.FunctionResponse.Name,
 				part.FunctionResponse.Response,
 			)
+			if part.FunctionResponse.CallID != "" && gp.FunctionResponse != nil {
+				gp.FunctionResponse.ID = part.FunctionResponse.CallID
+			}
 		default:
 			continue
 		}
@@ -208,10 +214,12 @@ func ToolDeclarationsToOpenAI(tools []ToolDeclaration) []openAITool {
 func MessagesToOpenAIMessages(messages []Message, modelID string) []OpenAIMessage {
 	out := make([]OpenAIMessage, 0, len(messages))
 	isMistral := IsMistralFamilyModel(modelID)
-	toolCallCounter := 0
+
+	legacyCounter := 0
+	legacyIDs := make(map[string][]string)
 
 	for _, msg := range messages {
-		mapped := messageToOpenAIMessages(msg, &toolCallCounter)
+		mapped := messageToOpenAIMessages(msg, &legacyCounter, legacyIDs)
 		for _, m := range mapped {
 			if isMistral &&
 				m.Role == OpenAIRoleUser &&
@@ -228,7 +236,7 @@ func MessagesToOpenAIMessages(messages []Message, modelID string) []OpenAIMessag
 	return patchToolUserTransitionForMistral(afterOrphan, modelID)
 }
 
-func messageToOpenAIMessages(msg Message, counter *int) []OpenAIMessage {
+func messageToOpenAIMessages(msg Message, legacyCounter *int, legacyIDs map[string][]string) []OpenAIMessage {
 	if len(msg.Parts) == 0 {
 		return nil
 	}
@@ -240,8 +248,15 @@ func messageToOpenAIMessages(msg Message, counter *int) []OpenAIMessage {
 	for _, part := range msg.Parts {
 		switch {
 		case part.FunctionResponse != nil:
-			rawID := "call_" + part.FunctionResponse.Name + "_" + strconv.Itoa(*counter)
-			*counter++
+			rawID := part.FunctionResponse.CallID
+			if rawID == "" {
+				if q := legacyIDs[part.FunctionResponse.Name]; len(q) > 0 {
+					rawID = q[0]
+					legacyIDs[part.FunctionResponse.Name] = q[1:]
+				} else {
+					rawID = "call_" + part.FunctionResponse.Name
+				}
+			}
 			content, _ := json.Marshal(part.FunctionResponse.Response)
 			s := string(content)
 			out = append(out, OpenAIMessage{
@@ -250,8 +265,12 @@ func messageToOpenAIMessages(msg Message, counter *int) []OpenAIMessage {
 				Content:    &s,
 			})
 		case part.FunctionCall != nil:
-			rawID := "call_" + part.FunctionCall.Name + "_" + strconv.Itoa(*counter)
-			*counter++
+			rawID := part.FunctionCall.ID
+			if rawID == "" {
+				rawID = "call_" + part.FunctionCall.Name + "_" + strconv.Itoa(*legacyCounter)
+				*legacyCounter++
+				legacyIDs[part.FunctionCall.Name] = append(legacyIDs[part.FunctionCall.Name], rawID)
+			}
 			args, _ := json.Marshal(part.FunctionCall.Args)
 			toolCalls = append(toolCalls, openAIToolCall{
 				ID:   MistralSafeToolCallID(rawID),

@@ -24,6 +24,7 @@ type Part struct {
 // FunctionResponse carries the result of a tool invocation back to the model.
 type FunctionResponse struct {
 	Name     string
+	CallID   string
 	Response map[string]any
 }
 
