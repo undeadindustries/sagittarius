@@ -95,10 +95,17 @@ in this file (see [Keeping this file current](#keeping-this-file-current)).
   auto-detection. Project default via `/system-prompt` (`sagittarius.systemPrompt`
   in project settings); provider override still available in `/providers`.
 - **Tools:** `read_file`, `write_file`, `list_directory`, `run_shell_command`,
-  `grep_search`, plus `activate_skill` and MCP tools. Approval policy
-  `default`/`autoEdit`/`yolo` (`--approval-mode`, `--yolo`/`-y`). Workspace path
-  validation; a project-boundary option blocks out-of-root mutations (file writes
-  + a heuristic shell scan).
+  `grep_search`, `run_project_checks`, plus `activate_skill` and MCP tools.
+  Approval policy `default`/`autoEdit`/`yolo` (`--approval-mode`, `--yolo`/`-y`).
+  Workspace path validation; a project-boundary option blocks out-of-root
+  mutations (file writes + a heuristic shell scan).
+- **Code quality / verify:** `run_project_checks` auto-detects the stack
+  (`go.mod`/`package.json`/`pyproject.toml`/`Cargo.toml`) and runs read-only
+  lint/format-check/typecheck/build checks, reporting missing tools with install
+  hints. Check-only runs are allowed in plan/ask; `fix=true` (mutating) is blocked
+  in plan/ask and gated behind `sagittarius.verify.allowFix`. A `verify-after-edit`
+  skill template + prompt hardening steer the model to verify after edits; Go
+  intelligence is available via `gopls mcp`. See `docs/code-quality.md`.
 - **Local snapshots:** `write_file` changes are captured for `/diff` and `/undo`
   (content snapshots, not shadow git). Session JSONL index under
   `~/.sagittarius/tmp/<slug>/snapshots/`; replays across processes when the
@@ -114,6 +121,11 @@ in this file (see [Keeping this file current](#keeping-this-file-current)).
   (default purple + greyscale/`NO_COLOR`), basic markdown, footer telemetry (per-turn
   `↑in ↓out` + optional OpenRouter cost; session totals on detail line), exit summary
   per-model/per-mode token breakdown with cost column when OpenRouter cost is known.
+  De-emphasized `You ›` user blocks with per-turn spacing, colorized `write_file`
+  diffs (confirm preview + result), a multi-line wrapping input (`textarea`), a
+  loaded-`AGENTS.md` banner line, an elapsed-timer working spinner, and per-turn
+  cancel (`Esc`; `Ctrl+C` cancels then quits). Tool confirmations offer
+  Allow once / Allow for this session / No.
   Overlay dialogs: providers wizard, global model picker (`modelpickdialog`), per-model
   settings editor (`modelsdialog`), mode-override editor (`modesdialog`), project
   system-prompt picker (`systempromptdialog`), MCP server wizard (`mcpdialog`),
@@ -238,6 +250,46 @@ and `docs/reference/commands.md` for details.
 ---
 
 ## Recent decisions
+
+- **2026-06-23 — TUI UX overhaul (AD-039):** (1) User scrollback blocks are
+  de-emphasized (`You ›` prefix, grey `UserBody`) with a blank line between
+  turns so assistant replies stay the focus. (2) `write_file` shows a colorized
+  unified diff at confirm time and as the result; the pure diff engine moved to
+  a leaf `internal/diff` package (snapshot keeps a thin `UnifiedDiff` wrapper) so
+  `internal/tools` can share it without coupling. (3) Tool confirmations are now
+  a 3-way decision — `ui.ConfirmDecision` (Once/Session/Deny) replaced the
+  `chan bool`; the `Scheduler` records per-tool "session" grants to skip later
+  prompts. (4) The launch banner lists loaded `AGENTS.md` files
+  (`DiscoverMemoryFiles` + `Runner.LoadedMemoryFiles`). (5) The input is now a
+  wrapping multi-line `textarea` (Enter submits, Alt/Shift+Enter newline).
+  (6) The working spinner shows an elapsed timer + cancel hint; `Esc` cancels
+  the in-flight turn and `Ctrl+C` cancels-then-quits (per-turn cancelable
+  context in the TUI model). New diff/diff-render/confirm tests cover these.
+
+- **2026-06-22 — TUI working indicator, footer layout, no default stream timeout
+  (AD-038):** (1) Added an animated Braille-dot spinner (bubbles `spinner.MiniDot`,
+  matching gemini-cli's `dots`) rendered as a working line above the input
+  (`internal/ui/bubbletea/working.go`); it only ticks while `busy` and shows
+  `Thinking…` / `Running {tool}`. The old static `"thinking…"` footer text is gone.
+  (2) Footer line 1 right side is now `{providerDisplayID} - {model}` (e.g.
+  `openrouter - qwen/qwen3.7-plus`) plus usage; `StatusBar.Left` is reserved for
+  transient states (`confirm tool`, `mode`, `model`). `App.providerDisplay` backs
+  the exit-summary Provider row. (3) `defaultOpenAITimeout` is now `0` (no
+  client-side stream deadline by default, matching the Gemini path); SIGINT still
+  cancels, and `providers.<id>.timeout` (seconds) still applies a hard cap when set.
+
+- **2026-06-22 — OpenCode-style verify + diagnostics (AD-037):** Added a thin,
+  read-only `run_project_checks` built-in tool (`internal/tools/project_checks.go`
+  + `internal/tools/checks/` detection) that orchestrates external lint/format/
+  typecheck/build CLIs per detected stack (Go, Node/TS, Python, Rust) and reports
+  `missing_tools` with install hints — no embedded linters, no native LSP client.
+  Check-only is read-only (allowed in plan/ask); `fix=true` is denied in plan/ask
+  and gated behind `sagittarius.verify.allowFix` (default off) because formatter
+  rewrites are not snapshotted. Prompts (programmer full Validate + lite Verify)
+  now teach the discovery-order + install-hint workflow; ships a `verify-after-edit`
+  skill template and `docs/code-quality.md`; optional `sagittarius.verify.suggestAfterWrite`
+  emits a one-line post-write reminder. Go LSP intelligence is documented via
+  `gopls mcp` (reuses the existing MCP client; no new subsystem).
 
 - **2026-06-22 — Gemini thought signatures round-trip (AD-036):** Gemini 3
   rejects replayed model `functionCall` parts that drop their

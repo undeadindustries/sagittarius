@@ -87,11 +87,11 @@ func TestComposeCustomProviderBaseURL(t *testing.T) {
 
 func TestParseCustomProviderEndpoint(t *testing.T) {
 	tests := []struct {
-		name       string
-		baseURL    string
-		wantHost   string
-		wantPort   string
-		wantNoErr  bool
+		name      string
+		baseURL   string
+		wantHost  string
+		wantPort  string
+		wantNoErr bool
 	}{
 		{
 			name:      "URL with port splits cleanly",

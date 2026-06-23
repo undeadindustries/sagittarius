@@ -33,6 +33,12 @@ type Theme struct {
 	Link      lipgloss.Style // URLs / commands referenced in prose
 	Code      lipgloss.Style // inline code spans and fenced code blocks
 	Dim       lipgloss.Style // faint footnotes ("… N more")
+	UserBody  lipgloss.Style // user's own prompt text in scrollback (de-emphasized)
+
+	// Diff roles (write_file / edit previews and results).
+	DiffAdd  lipgloss.Style // added lines (+)
+	DiffDel  lipgloss.Style // removed lines (-)
+	DiffMeta lipgloss.Style // hunk headers and file markers (@@, ---, +++)
 
 	// Status roles.
 	Error   lipgloss.Style
@@ -78,6 +84,10 @@ func Default() Theme {
 		Link:             lipgloss.NewStyle().Foreground(lipgloss.Color(link)),
 		Code:             lipgloss.NewStyle().Foreground(lipgloss.Color(code)),
 		Dim:              lipgloss.NewStyle().Foreground(lipgloss.Color(greyDim)).Italic(true),
+		UserBody:         lipgloss.NewStyle().Foreground(lipgloss.Color(grey)),
+		DiffAdd:          lipgloss.NewStyle().Foreground(lipgloss.Color(green)),
+		DiffDel:          lipgloss.NewStyle().Foreground(lipgloss.Color(red)),
+		DiffMeta:         lipgloss.NewStyle().Foreground(lipgloss.Color(greyDim)),
 		Error:            lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(red)),
 		Warning:          lipgloss.NewStyle().Foreground(lipgloss.Color(yellow)),
 		Success:          lipgloss.NewStyle().Foreground(lipgloss.Color(green)),
@@ -103,6 +113,10 @@ func Greyscale() Theme {
 		Link:             lipgloss.NewStyle().Underline(true),
 		Code:             lipgloss.NewStyle().Faint(true),
 		Dim:              lipgloss.NewStyle().Faint(true),
+		UserBody:         lipgloss.NewStyle().Faint(true),
+		DiffAdd:          lipgloss.NewStyle().Bold(true),
+		DiffDel:          lipgloss.NewStyle().Reverse(true),
+		DiffMeta:         lipgloss.NewStyle().Faint(true),
 		Error:            lipgloss.NewStyle().Bold(true),
 		Warning:          lipgloss.NewStyle().Bold(true),
 		Success:          lipgloss.NewStyle().Bold(true),

@@ -83,7 +83,24 @@ type SagittariusSettings struct {
 	// Snapshots toggles local file snapshots (powering /diff and /undo) and
 	// bounds the per-file snapshot size.
 	Snapshots *SagittariusSnapshotConfig `json:"snapshots,omitempty"`
-	Extra     map[string]json.RawMessage `json:"-"`
+	// Verify configures the code-quality verify workflow (run_project_checks fix
+	// gating and the optional post-write reminder).
+	Verify *SagittariusVerifyConfig   `json:"verify,omitempty"`
+	Extra  map[string]json.RawMessage `json:"-"`
+}
+
+// SagittariusVerifyConfig configures the verify-after-edit workflow. Pointers
+// distinguish "unset" from an explicit value for project-over-global
+// resolution; both default to false.
+type SagittariusVerifyConfig struct {
+	// SuggestAfterWrite, when true, makes the runner emit a one-line reminder to
+	// verify after a turn that wrote files. It never runs checks automatically.
+	SuggestAfterWrite *bool `json:"suggestAfterWrite,omitempty"`
+	// AllowFix, when true, permits run_project_checks to run mutating
+	// formatters/auto-fixers (fix=true). Default false because such rewrites are
+	// not captured by /undo.
+	AllowFix *bool                      `json:"allowFix,omitempty"`
+	Extra    map[string]json.RawMessage `json:"-"`
 }
 
 // SagittariusSystemPromptConfig is the global default for the system-prompt
@@ -114,7 +131,7 @@ type SagittariusModes struct {
 
 // SagittariusModeConfig configures one interaction mode.
 type SagittariusModeConfig struct {
-	Model              string                     `json:"model,omitempty"`
+	Model string `json:"model,omitempty"`
 	// Provider, when non-empty, qualifies the model override with a specific
 	// provider id. Entering the mode will switch to this (provider, model) pair
 	// so the correct backend and wire-format are used.

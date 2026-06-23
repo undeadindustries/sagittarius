@@ -81,6 +81,16 @@ sagittarius --yolo --output-format stream-json -p "write notes.md with a TODO li
 # {"type":"text","text":"Done."}
 ```
 
+When `sagittarius.verify.suggestAfterWrite` is enabled, a turn that writes files
+emits one extra `info` line reminding the model to verify before finishing:
+
+```bash
+# {"type":"tool_result","tool":"write_file","text":"wrote notes.md"}
+# {"type":"info","text":"Files were written. Verify the changes ..."}
+```
+
+The reminder fires at most once per turn and never runs checks automatically.
+
 ## Paired interactive workflow
 
 For the full TUI (themes, dialogs, confirm prompts) the agent does not automate

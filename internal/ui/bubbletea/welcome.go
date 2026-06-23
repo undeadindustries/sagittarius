@@ -1,6 +1,9 @@
 package bubbletea
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -49,11 +52,50 @@ func welcomeText(opts ui.Options, th theme.Theme) string {
 		sections = append(sections, renderTips(th))
 	}
 
+	if line := renderLoadedMemory(opts, th); line != "" {
+		sections = append(sections, line)
+	}
+
 	if opts.Notice != "" {
 		sections = append(sections, th.Warning.Render(opts.Notice))
 	}
 
 	return strings.Join(sections, "\n\n") + "\n\n"
+}
+
+// renderLoadedMemory reports which AGENTS.md files were loaded into the system
+// instruction (e.g. "Loaded 2 AGENTS.md files: ~/.sagittarius/AGENTS.md,
+// ./AGENTS.md"). It returns "" when none were loaded.
+func renderLoadedMemory(opts ui.Options, th theme.Theme) string {
+	if len(opts.LoadedMemoryFiles) == 0 {
+		return ""
+	}
+	shortened := make([]string, 0, len(opts.LoadedMemoryFiles))
+	for _, p := range opts.LoadedMemoryFiles {
+		shortened = append(shortened, shortenMemoryPath(p))
+	}
+	noun := "file"
+	if len(shortened) != 1 {
+		noun = "files"
+	}
+	line := fmt.Sprintf("Loaded %d AGENTS.md %s: %s",
+		len(shortened), noun, strings.Join(shortened, ", "))
+	return th.Secondary.Render(line)
+}
+
+// shortenMemoryPath renders an absolute memory path compactly: paths under the
+// current directory become "./…" and paths under the home directory become
+// "~/…"; otherwise the absolute path is returned unchanged.
+func shortenMemoryPath(p string) string {
+	if cwd, err := os.Getwd(); err == nil {
+		if rel, err := filepath.Rel(cwd, p); err == nil && !strings.HasPrefix(rel, "..") {
+			return "./" + rel
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(p, home+string(os.PathSeparator)) {
+		return "~" + p[len(home):]
+	}
+	return p
 }
 
 func renderLogo(opts ui.Options, th theme.Theme) string {

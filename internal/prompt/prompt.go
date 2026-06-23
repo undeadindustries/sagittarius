@@ -152,7 +152,7 @@ func liteWorkflow() string {
 		"1. **Understand**: Clarify ambiguous requirements before acting. Ask the user if unsure.",
 		"2. **Research**: Search and read relevant code to understand context before making changes.",
 		"3. **Implement**: Make targeted changes. Prefer small, incremental edits over large rewrites.",
-		"4. **Verify**: CRITICAL: After EVERY write — including edits to files you already wrote earlier in this session — you MUST re-run the relevant check via `"+tools.ShellToolName+"`: syntax check, linter, or build. A passing check from an earlier turn does NOT cover later edits to the same file. Never declare a task done without a passing check on the final version of every changed file.",
+		"4. **Verify**: CRITICAL: After EVERY write — including edits to files you already wrote earlier in this session — you MUST re-run the project's checks (lint, format check, type check, build, and tests) on the final version of every changed file. Use `"+tools.ProjectChecksToolName+"` when available, or `"+tools.ShellToolName+"` to run the project's own scripts (`make lint`, `npm test`). Discover the right checker from the project (scripts and config files) before falling back to language defaults. If the expected checker is not installed, tell the user once how to install it (e.g. \"run `pip install ruff` and I can lint\") rather than skipping the check. A passing check from an earlier turn does NOT cover later edits. Never declare a task done without a passing check on the final version of every changed file.",
 	)
 }
 

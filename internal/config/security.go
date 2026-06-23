@@ -102,3 +102,38 @@ func snapshotConfig(s *Settings) *SagittariusSnapshotConfig {
 	}
 	return s.Sagittarius.Snapshots
 }
+
+// VerifySuggestAfterWrite reports whether the runner should emit a one-line
+// reminder to verify after a turn that wrote files. Project wins over global;
+// the default is false.
+func VerifySuggestAfterWrite(global, project *Settings) bool {
+	if v, ok := verifyBoolValue(project, func(c *SagittariusVerifyConfig) *bool { return c.SuggestAfterWrite }); ok {
+		return v
+	}
+	if v, ok := verifyBoolValue(global, func(c *SagittariusVerifyConfig) *bool { return c.SuggestAfterWrite }); ok {
+		return v
+	}
+	return false
+}
+
+// VerifyAllowFix reports whether run_project_checks may run mutating
+// formatters/auto-fixers. Project wins over global; the default is false.
+func VerifyAllowFix(global, project *Settings) bool {
+	if v, ok := verifyBoolValue(project, func(c *SagittariusVerifyConfig) *bool { return c.AllowFix }); ok {
+		return v
+	}
+	if v, ok := verifyBoolValue(global, func(c *SagittariusVerifyConfig) *bool { return c.AllowFix }); ok {
+		return v
+	}
+	return false
+}
+
+func verifyBoolValue(s *Settings, pick func(*SagittariusVerifyConfig) *bool) (bool, bool) {
+	if s == nil || s.Sagittarius == nil || s.Sagittarius.Verify == nil {
+		return false, false
+	}
+	if v := pick(s.Sagittarius.Verify); v != nil {
+		return *v, true
+	}
+	return false, false
+}

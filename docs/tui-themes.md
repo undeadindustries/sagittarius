@@ -11,8 +11,8 @@ Two themes ship today:
 
 | Theme | When | Look |
 |-------|------|------|
-| `default` | Color terminals (the default) | Purple-leaning accents for the user prompt, focus borders, links, and the launch/exit titles. Status colors (error/warning/success) stay conventional. |
-| `greyscale` | `NO_COLOR` or `ui.theme: "greyscale"` | No color codes at all — only bold, faint, reverse, and underline attributes. The layout is identical to `default`. |
+| `default` | Color terminals (the default) | Purple-leaning accents for the user prompt, focus borders, links, and the launch/exit titles. Diff previews use green additions / red deletions. Status colors (error/warning/success) stay conventional. |
+| `greyscale` | `NO_COLOR` or `ui.theme: "greyscale"` | No color codes at all — only bold, faint, reverse, and underline attributes (diff additions show bold, deletions reversed). The layout is identical to `default`. |
 
 The theme lives entirely in the `internal/ui/theme` package; the agent layer
 never depends on it, preserving the UI-library boundary (AD-004).
@@ -47,16 +47,38 @@ tool activity are easy to scan:
 
 | Role | Prefix | Meaning |
 |------|--------|---------|
-| User | `>` | Your submitted input |
+| User | `You ›` | Your submitted input (de-emphasized grey, with a blank line separating turns) |
 | Assistant | `✦` | Model response (rendered with basic markdown) |
 | Info | `ℹ` | System/slash-command output |
 | Error | `✕` | Non-fatal errors |
-| Tool start | `⚙` | A tool invocation began |
-| Tool result | `↳` | A tool's result |
-| Confirm | `?` | A tool is awaiting your `y/n` approval |
+| Tool start | `⚙` | A tool invocation began, labeled with its target (e.g. `⚙ write_file hello.txt`) |
+| Tool result | `↳` | A tool's result; `write_file` results show a colorized diff |
+| Confirm | `?` | A tool is awaiting your approval |
+
+The user's own prompts are rendered in a muted grey so the assistant's replies
+stay the visual focus, and a blank line separates each turn.
+
+### Tool confirmations
 
 While a tool confirmation is pending, a focused (purple-bordered) band appears
-above the input with the `(y/n)` prompt so it is never lost in scrollback.
+above the input so it is never lost in scrollback. For `write_file` it shows a
+colorized unified-diff preview (green additions, red deletions) of the pending
+change, followed by a selectable list:
+
+| Choice | Keys | Effect |
+|--------|------|--------|
+| Allow once | `1` or `y` | Approve this single invocation |
+| Allow for this session | `2` | Approve this and all later calls of the same tool until you quit |
+| No | `3`, `n`, or `Esc` | Reject the invocation |
+
+Use the arrow keys plus `Enter` to pick, or press the number/letter directly.
+
+### Diffs
+
+`write_file` confirmations and results render a git-style unified diff with
+additions in green, deletions in red, and hunk/file markers dimmed. Long diffs
+are capped (with a `… N more diff lines` footer) so they never push the input
+off-screen.
 
 ## Assistant markdown
 
@@ -68,8 +90,10 @@ CommonMark renderer. User input is always shown verbatim.
 ## Launch banner and tips
 
 On startup the TUI shows an ASCII Sagittarius banner, the version line, the
-active provider/model, a short tips block, and any startup notice (e.g. a
-missing-API-key warning). Two settings control this:
+active provider/model, a short tips block, a line listing the `AGENTS.md`
+memory files that were loaded into the system instruction (e.g. `Loaded 2
+AGENTS.md files: ~/.sagittarius/AGENTS.md, ./AGENTS.md`), and any startup notice
+(e.g. a missing-API-key warning). Two settings control this:
 
 ```json
 {
@@ -82,6 +106,22 @@ missing-API-key warning). Two settings control this:
 
 - `ui.hideBanner` — when `true`, the ASCII logo is replaced by a one-line title.
 - `ui.hideTips` — when `true`, the tips block is omitted.
+
+## Input box
+
+The input is a wrapping, multi-line box that grows from one row up to six as you
+type (longer content scrolls inside it). Its prompt reflects the current
+interaction mode (`Agent>`, `Plan>`, `Ask>`, `Debug>`). `Enter` submits the
+line; `Alt+Enter` (or `Shift+Enter` / `Ctrl+J`, terminal permitting) inserts a
+newline for multi-line prompts.
+
+## Working indicator and cancel
+
+While the agent is working, a braille spinner appears directly above the input
+showing the current activity, an elapsed timer, and a cancel hint — e.g.
+`⠹ Thinking… (12s · esc to cancel)`. Press `Esc` to cancel the in-flight turn.
+`Ctrl+C` also cancels a running turn rather than quitting outright; a second
+`Ctrl+C` (when idle) exits.
 
 ## Footer
 
@@ -124,6 +164,5 @@ cost; they appear in the table without a cost value.
 ## Deferred
 
 The following fork-adjacent features are deferred (tracked in
-`docs/PARITY_CHECKLIST.md`): a `/theme` command and interactive picker, rich
-tool-confirmation dialogs (radio/diff preview), a fully configurable footer
-column registry, and extended screen-reader prefixes.
+`docs/PARITY_CHECKLIST.md`): a `/theme` command and interactive picker, a fully
+configurable footer column registry, and extended screen-reader prefixes.

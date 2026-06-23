@@ -19,7 +19,16 @@ to later phases — see [Deferred commands](#deferred-commands).
 
 - **Description:** Exit the interactive session.
 - **Usage:** `/quit`
-- **Note:** `Ctrl+C` also exits.
+- **Note:** `Ctrl+C` exits when idle. While a turn is running, `Esc` (or `Ctrl+C`)
+  cancels just that turn; a second `Ctrl+C` then exits.
+
+### Tool confirmations
+
+When a tool needs approval (e.g. `write_file`, `run_shell_command` in the
+default policy), a band above the input shows the action — with a colorized diff
+preview for `write_file` — and three choices: **Allow once** (`1`/`y`), **Allow
+for this session** (`2`, skips later prompts for that tool), and **No**
+(`3`/`n`/`Esc`). Pick with the arrow keys + `Enter` or press the key directly.
 
 ### `/providers`
 

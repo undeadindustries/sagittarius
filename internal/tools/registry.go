@@ -67,8 +67,25 @@ func (r *Registry) ListEntries() []ToolEntry {
 	return out
 }
 
+// RegistryOption configures optional built-in tool behavior.
+type RegistryOption func(*registryConfig)
+
+type registryConfig struct {
+	allowFix bool
+}
+
+// WithAllowFix permits run_project_checks to run mutating formatters/auto-fixers
+// (fix=true). When false (the default), fix requests are rejected.
+func WithAllowFix(allow bool) RegistryOption {
+	return func(c *registryConfig) { c.allowFix = allow }
+}
+
 // NewBuiltinRegistry registers all core built-in tools for a workspace.
-func NewBuiltinRegistry(ws *Workspace) *Registry {
+func NewBuiltinRegistry(ws *Workspace, opts ...RegistryOption) *Registry {
+	cfg := registryConfig{}
+	for _, opt := range opts {
+		opt(&cfg)
+	}
 	r := &Registry{
 		byName:  make(map[string]Tool),
 		aliases: copyAliases(),
@@ -79,6 +96,7 @@ func NewBuiltinRegistry(ws *Workspace) *Registry {
 		newListDirectoryTool(ws),
 		newShellTool(ws),
 		newGrepTool(ws),
+		newProjectChecksTool(ws, cfg.allowFix),
 	} {
 		r.Register(tool)
 	}
