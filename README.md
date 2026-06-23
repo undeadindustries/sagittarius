@@ -62,6 +62,16 @@ You can extend the agent's domain knowledge and capabilities by creating skills.
 
 The agent will automatically discover these skills and can activate them when relevant to your prompt. You can also use the `/skills` command in the CLI to manage them.
 
+A ready-made `verify-after-edit` skill ships in [docs/skills/verify-after-edit/SKILL.md](docs/skills/verify-after-edit/SKILL.md). Copy it into your skills directory to reinforce running lint, format, type-check, and tests after edits.
+
+## Code quality
+
+Sagittarius keeps code IDE-clean by running each project's own lint, format,
+type-check, and test tooling — it does not bundle linters. The built-in
+`run_project_checks` tool auto-detects the stack and runs its checks, and Go
+projects can opt into `gopls` code intelligence over MCP. See
+[docs/code-quality.md](docs/code-quality.md).
+
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE).

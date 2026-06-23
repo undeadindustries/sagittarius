@@ -12,6 +12,15 @@ var readOnlyBuiltinTools = map[string]bool{
 	ListDirectoryToolName: true,
 	GrepToolName:          true,
 	activateSkillToolName: true,
+	ProjectChecksToolName: true,
+}
+
+// projectChecksFixRequested reports whether a run_project_checks call asks for
+// mutating fix mode. Used to keep check-only runs read-only while denying
+// file-rewriting runs in plan/ask.
+func projectChecksFixRequested(args map[string]any) bool {
+	fix, _, err := boolArg(args, ProjectChecksParamFix)
+	return err == nil && fix
 }
 
 // InteractionModeAllow reports whether a tool call is permitted for the active
@@ -49,7 +58,9 @@ func canonicalToolName(name string) string {
 }
 
 func askModeAllow(name string, args map[string]any) (bool, string) {
-	_ = args
+	if name == ProjectChecksToolName && projectChecksFixRequested(args) {
+		return false, "ask mode: run_project_checks fix mode rewrites files and is not allowed; run check-only (fix=false) instead"
+	}
 	if readOnlyBuiltinTools[name] {
 		return true, ""
 	}
@@ -67,6 +78,9 @@ func askModeAllow(name string, args map[string]any) (bool, string) {
 }
 
 func planModeAllow(name string, args map[string]any, ws *Workspace) (bool, string) {
+	if name == ProjectChecksToolName && projectChecksFixRequested(args) {
+		return false, "plan mode: run_project_checks fix mode rewrites files and is not allowed; run check-only (fix=false) instead"
+	}
 	if readOnlyBuiltinTools[name] {
 		return true, ""
 	}

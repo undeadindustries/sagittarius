@@ -28,6 +28,8 @@ type RuntimeConfig struct {
 	ClientName    string
 	ClientVersion string
 	Trusted       bool
+	// AllowFix permits run_project_checks to run mutating formatters (fix=true).
+	AllowFix bool
 }
 
 // NewRuntime constructs and performs an initial tool catalog reload.
@@ -54,6 +56,7 @@ func NewRuntime(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 		Settings:   cfg.Settings,
 		ClientName: cfg.ClientName,
 		Version:    cfg.ClientVersion,
+		AllowFix:   cfg.AllowFix,
 	})
 	if err != nil {
 		return nil, err

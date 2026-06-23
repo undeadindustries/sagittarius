@@ -3,7 +3,12 @@ package tools
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
 
+	"github.com/undeadindustries/sagittarius/internal/diff"
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 	"github.com/undeadindustries/sagittarius/internal/ui"
@@ -20,6 +25,11 @@ type Scheduler struct {
 	workspace   *Workspace
 	enforce     bool
 	snapshotter Snapshotter
+
+	// sessionGrants records tools the user approved "for this session" so later
+	// invocations of the same tool skip confirmation. Guarded by mu.
+	mu            sync.Mutex
+	sessionGrants map[string]bool
 }
 
 // SchedulerOption configures optional Scheduler behavior.
@@ -91,7 +101,7 @@ func (s *Scheduler) executeOne(
 		args = map[string]any{}
 	}
 
-	emit(ui.StreamEvent{Type: ui.StreamToolStart, ToolName: name})
+	emit(ui.StreamEvent{Type: ui.StreamToolStart, ToolName: name, Text: formatToolSummary(name, args)})
 
 	// Project-boundary gate runs before the interaction-mode gate so it applies
 	// in every mode (the protected-snapshot guard is always active; out-of-root
@@ -113,7 +123,7 @@ func (s *Scheduler) executeOne(
 		return errorResponse(name, errText), nil
 	}
 
-	if s.policy.NeedsConfirmation(tool) {
+	if s.policy.NeedsConfirmation(tool) && !s.sessionGranted(name) {
 		approved, err := s.requestApproval(ctx, tool.Name(), args, emit)
 		if err != nil {
 			return nil, err
@@ -123,6 +133,13 @@ func (s *Scheduler) executeOne(
 			emit(ui.StreamEvent{Type: ui.StreamToolResult, ToolName: name, Text: errText})
 			return errorResponse(name, errText), nil
 		}
+	}
+
+	// Compute the write_file diff (before -> after) before the tool mutates the
+	// file so the result line can show exactly what changed.
+	writeDiff := ""
+	if canonicalToolName(name) == WriteFileToolName {
+		writeDiff = s.writeFileDiff(args)
 	}
 
 	// Snapshot the prior state of a write target before the tool mutates it.
@@ -142,7 +159,11 @@ func (s *Scheduler) executeOne(
 		s.snapshotter.CommitWrite(snapAbs, canonicalToolName(name))
 	}
 
-	emit(ui.StreamEvent{Type: ui.StreamToolResult, ToolName: name, Text: "ok"})
+	resultText := "ok"
+	if writeDiff != "" {
+		resultText = writeDiff
+	}
+	emit(ui.StreamEvent{Type: ui.StreamToolResult, ToolName: name, Text: resultText})
 	return &provider.FunctionResponse{Name: name, Response: result}, nil
 }
 
@@ -182,20 +203,73 @@ func (s *Scheduler) requestApproval(
 		return s.policy.HeadlessApprove(tool), nil
 	}
 
-	replyCh := make(chan bool, 1)
+	replyCh := make(chan ui.ConfirmDecision, 1)
 	emit(ui.StreamEvent{
 		Type:         ui.StreamToolConfirm,
 		ToolName:     toolName,
 		Text:         formatConfirmSummary(toolName, args),
+		Diff:         s.writeFileDiff(args),
 		ConfirmReply: replyCh,
 	})
 
 	select {
 	case <-ctx.Done():
 		return false, ctx.Err()
-	case approved := <-replyCh:
-		return approved, nil
+	case decision := <-replyCh:
+		switch decision {
+		case ui.ConfirmSession:
+			s.grantSession(toolName)
+			return true, nil
+		case ui.ConfirmOnce:
+			return true, nil
+		default:
+			return false, nil
+		}
 	}
+}
+
+// sessionGranted reports whether the user approved this tool "for this session".
+func (s *Scheduler) sessionGranted(toolName string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sessionGrants[canonicalToolName(toolName)]
+}
+
+// grantSession records a session-wide approval for the named tool.
+func (s *Scheduler) grantSession(toolName string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.sessionGrants == nil {
+		s.sessionGrants = make(map[string]bool)
+	}
+	s.sessionGrants[canonicalToolName(toolName)] = true
+}
+
+// writeFileDiff returns a git-style unified diff of a write_file call's pending
+// change (current on-disk content vs. the new content). It returns "" for
+// non-write_file calls, when the workspace is unavailable, or when the change
+// is a no-op.
+func (s *Scheduler) writeFileDiff(args map[string]any) string {
+	if s.workspace == nil {
+		return ""
+	}
+	path, err := stringArg(args, ParamFilePath)
+	if err != nil {
+		return ""
+	}
+	content, err := stringArg(args, WriteFileParamContent)
+	if err != nil {
+		return ""
+	}
+	abs, err := s.workspace.ResolvePath(path)
+	if err != nil {
+		return ""
+	}
+	before := ""
+	if b, readErr := os.ReadFile(abs); readErr == nil {
+		before = string(b)
+	}
+	return diff.UnifiedDiff(before, content, filepath.Base(path))
 }
 
 func errorResponse(name, message string) *provider.FunctionResponse {
@@ -212,6 +286,37 @@ func (s *Scheduler) interactionModeAllow(toolName string, args map[string]any) (
 		return true, ""
 	}
 	return InteractionModeAllow(s.mode(), toolName, args, s.workspace)
+}
+
+// formatToolSummary returns a short, single-line argument detail for a tool
+// invocation (e.g. the target path or the shell command), used to label the
+// tool-start line in the scrollback. It returns "" when there is no concise
+// detail to show.
+func formatToolSummary(toolName string, args map[string]any) string {
+	switch canonicalToolName(toolName) {
+	case WriteFileToolName:
+		if path, err := stringArg(args, ParamFilePath); err == nil {
+			return path
+		}
+	case ShellToolName:
+		if cmd, err := stringArg(args, ShellParamCommand); err == nil {
+			return truncateOneLine(cmd, 72)
+		}
+	}
+	return ""
+}
+
+// truncateOneLine collapses s to its first line and caps it at max runes,
+// appending an ellipsis when truncated.
+func truncateOneLine(s string, max int) string {
+	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
+		s = s[:i]
+	}
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "…"
 }
 
 func formatConfirmSummary(toolName string, args map[string]any) string {

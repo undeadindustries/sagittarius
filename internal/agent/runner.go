@@ -67,6 +67,13 @@ type RunnerConfig struct {
 	InitialMode modes.Mode
 	// ModelPinned skips mode-based routing when true (CLI -m override).
 	ModelPinned bool
+	// AllowFix permits run_project_checks to run mutating formatters (fix=true).
+	// Resolved from sagittarius.verify.allowFix; default false.
+	AllowFix bool
+	// SuggestVerifyAfterWrite emits a single info reminder to verify after a turn
+	// that wrote files. Resolved from sagittarius.verify.suggestAfterWrite;
+	// default false. It never runs checks automatically.
+	SuggestVerifyAfterWrite bool
 }
 
 // Runner orchestrates conversation history and provider streaming for the agent loop.
@@ -85,28 +92,40 @@ type Runner struct {
 	// systemBase + mode suffix. systemBase is the personality prompt + memory.
 	// memory is the AGENTS.md content alone (re-composed on rebuild). All three
 	// are guarded by modelMu (read alongside model in buildGenerateRequest).
-	system     string
-	systemBase string
-	memory     string
-	approval   ApprovalMode
-	interactive          bool
-	workDir              string
-	workspace            *tools.Workspace
-	regMu                sync.RWMutex
-	registry             *tools.Registry
-	scheduler            *tools.Scheduler
-	history              []provider.Message
-	ctxMgrMu             sync.RWMutex
-	ctxMgr               *contextmgmt.Manager
-	turnCounter          int
-	state                State
-	stateMu              sync.RWMutex
-	lastRequest          *provider.GenerateRequest
-	lastRequestMu        sync.RWMutex
-	sessionRecorder      *session.Recorder
-	metrics              *sessionMetrics
-	projectBoundary      bool
-	snap                 *snapshot.Manager
+	system           string
+	systemBase       string
+	memory           string
+	approval         ApprovalMode
+	interactive      bool
+	workDir          string
+	workspace        *tools.Workspace
+	regMu            sync.RWMutex
+	registry         *tools.Registry
+	scheduler        *tools.Scheduler
+	history          []provider.Message
+	ctxMgrMu         sync.RWMutex
+	ctxMgr           *contextmgmt.Manager
+	turnCounter      int
+	state            State
+	stateMu          sync.RWMutex
+	lastRequest      *provider.GenerateRequest
+	lastRequestMu    sync.RWMutex
+	sessionRecorder  *session.Recorder
+	metrics          *sessionMetrics
+	projectBoundary  bool
+	snap             *snapshot.Manager
+	suggestVerify    bool
+	goplsHintPending bool
+	// loadedMemoryFiles are the AGENTS.md paths that contributed to the system
+	// instruction, captured at construction for the welcome banner.
+	loadedMemoryFiles []string
+}
+
+// LoadedMemoryFiles returns the AGENTS.md paths that contributed to the system
+// instruction (global first, then project files). Used by the UI to show which
+// memory files were loaded.
+func (r *Runner) LoadedMemoryFiles() []string {
+	return r.loadedMemoryFiles
 }
 
 // NewRunner constructs a Runner and discovers project memory for the system prompt.
@@ -133,6 +152,10 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 	if err != nil {
 		return nil, fmt.Errorf("agent runner: %w", err)
 	}
+	memoryFiles, err := DiscoverMemoryFiles(workDir)
+	if err != nil {
+		return nil, fmt.Errorf("agent runner: %w", err)
+	}
 
 	mode := cfg.ApprovalMode
 	if mode == "" {
@@ -143,7 +166,7 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 	if err != nil {
 		return nil, fmt.Errorf("agent runner: workspace: %w", err)
 	}
-	registry := tools.NewBuiltinRegistry(ws)
+	registry := tools.NewBuiltinRegistry(ws, tools.WithAllowFix(cfg.AllowFix))
 	policy := approvalToPolicy(mode)
 	scheduler := tools.NewScheduler(registry, policy, cfg.Interactive, nil, ws)
 	// Wire interaction-mode gate, project boundary, and snapshot hook after the
@@ -175,6 +198,9 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		metrics:              newSessionMetrics(),
 		projectBoundary:      cfg.ProjectBoundary,
 		snap:                 cfg.Snapshotter,
+		suggestVerify:        cfg.SuggestVerifyAfterWrite,
+		goplsHintPending:     needsGoplsHint(cfg.Settings, ws.Root()),
+		loadedMemoryFiles:    memoryFiles,
 	}
 	if !cfg.ModelPinned {
 		runner.refreshModelFromMode()
@@ -402,6 +428,12 @@ func (r *Runner) runAgentLoop(ctx context.Context, out chan<- ui.StreamEvent) {
 
 	r.setState(StateStreaming)
 
+	if r.goplsHintPending {
+		r.goplsHintPending = false
+		out <- ui.StreamEvent{Type: ui.StreamInfo, Text: goplsHint}
+	}
+
+	verifyHinted := false
 	for round := 0; round < tools.MaxToolRounds; round++ {
 		r.prepareContext(ctx)
 		if !r.modelPinned {
@@ -468,6 +500,10 @@ func (r *Runner) runAgentLoop(ctx context.Context, out chan<- ui.StreamEvent) {
 		}
 		r.metrics.recordTools(len(toolCalls), countToolFailures(responses))
 		r.appendFunctionResponses(responses)
+		if r.suggestVerify && !verifyHinted && containsSuccessfulWrite(responses) {
+			verifyHinted = true
+			out <- ui.StreamEvent{Type: ui.StreamInfo, Text: verifyReminder}
+		}
 		r.setState(StateStreaming)
 	}
 
@@ -884,6 +920,52 @@ func countToolFailures(responses []provider.FunctionResponse) int {
 		}
 	}
 	return n
+}
+
+// verifyReminder is the one-line nudge emitted after a write when
+// sagittarius.verify.suggestAfterWrite is enabled.
+const verifyReminder = "Files were written. Verify the changes (lint, format check, type check, build, tests) " +
+	"with run_project_checks or the project's own scripts before declaring the task done."
+
+// containsSuccessfulWrite reports whether any response is a write_file call that
+// completed without an error, used to gate the post-write verify reminder.
+func containsSuccessfulWrite(responses []provider.FunctionResponse) bool {
+	for i := range responses {
+		if responses[i].Name != tools.WriteFileToolName {
+			continue
+		}
+		if _, failed := responses[i].Response["error"]; !failed {
+			return true
+		}
+	}
+	return false
+}
+
+// goplsHint is the one-time startup nudge shown for Go projects without a gopls
+// MCP server configured.
+const goplsHint = "This is a Go project. For richer diagnostics and navigation, configure the " +
+	"gopls MCP server (gopls v0.20+): add a \"gopls\" entry to mcpServers with command \"gopls\", " +
+	"args [\"mcp\"]. See docs/code-quality.md."
+
+// needsGoplsHint reports whether the workspace is a Go module (go.mod at root)
+// with no gopls MCP server configured, in which case the startup hint applies.
+func needsGoplsHint(settings *config.Settings, root string) bool {
+	if root == "" {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
+		return false
+	}
+	servers, err := settings.MCPServers()
+	if err != nil {
+		return false
+	}
+	for name, cfg := range servers {
+		if strings.EqualFold(name, "gopls") || strings.EqualFold(cfg.Command, "gopls") {
+			return false
+		}
+	}
+	return true
 }
 
 // RecordUsage records token counts for an external caller (e.g. the compression

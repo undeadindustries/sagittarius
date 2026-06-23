@@ -36,6 +36,10 @@ type Options struct {
 	// NeedsOnboarding opens the first-run provider setup overlay before the
 	// first chat turn when no provider or API key is configured.
 	NeedsOnboarding bool
+	// LoadedMemoryFiles are the AGENTS.md paths that contributed to the system
+	// instruction; shown on the welcome banner so the user knows what context
+	// was loaded. Empty omits the line.
+	LoadedMemoryFiles []string
 }
 
 // UI is the library-agnostic terminal interface. Agent code must depend on this

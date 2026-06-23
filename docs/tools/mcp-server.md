@@ -65,6 +65,32 @@ the credentials layer (never written to `settings.json`). Per-tool enable and
 disable lives in `/tools`, which persists each server's `includeTools` /
 `excludeTools` filter.
 
+## Go code intelligence (gopls)
+
+For Go projects you can add language-server intelligence (diagnostics,
+definitions, references, hover) by pointing Sagittarius at `gopls`'s built-in MCP
+server. This needs `gopls` v0.20+ on your `PATH`
+(`go install golang.org/x/tools/gopls@latest`):
+
+```json
+{
+  "mcpServers": {
+    "gopls": {
+      "command": "gopls",
+      "args": ["mcp"],
+      "cwd": ".",
+      "trust": true
+    }
+  }
+}
+```
+
+Its tools appear as `mcp_gopls_*` and, like all MCP tools, are available in
+`agent`/`debug` modes but blocked in `plan`/`ask`. Detached `gopls mcp` sees
+saved files only, so write changes before requesting diagnostics. `trust: true`
+is reasonable for read-only LSP tools; keep it `false` for write-capable servers.
+See [code-quality.md](../code-quality.md) for the broader verify workflow.
+
 ## Extensions
 
 Extensions installed under `~/.sagittarius/extensions/` can declare additional

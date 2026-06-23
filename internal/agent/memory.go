@@ -11,46 +11,81 @@ import (
 
 const agentsMDFilename = "AGENTS.md"
 
+// memoryFile is a discovered AGENTS.md path paired with its trimmed content.
+type memoryFile struct {
+	path    string
+	content string
+}
+
 // DiscoverSystemInstruction loads project and global memory files for the system prompt.
 // It walks upward from startDir collecting AGENTS.md files and prepends the global
 // ~/.sagittarius/AGENTS.md when present.
 func DiscoverSystemInstruction(startDir string) (string, error) {
+	files, err := discoverMemoryFiles(startDir)
+	if err != nil {
+		return "", err
+	}
+	sections := make([]string, 0, len(files))
+	for _, f := range files {
+		sections = append(sections, formatMemorySection(f.path, f.content))
+	}
+	return strings.Join(sections, "\n\n"), nil
+}
+
+// DiscoverMemoryFiles returns the ordered paths of the AGENTS.md files that
+// contribute to the system instruction (global first, then project files from
+// the home boundary down to startDir). Only files with non-empty content are
+// included, matching what DiscoverSystemInstruction loads. It is used to tell
+// the user which memory files were loaded.
+func DiscoverMemoryFiles(startDir string) ([]string, error) {
+	files, err := discoverMemoryFiles(startDir)
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, 0, len(files))
+	for _, f := range files {
+		paths = append(paths, f.path)
+	}
+	return paths, nil
+}
+
+func discoverMemoryFiles(startDir string) ([]memoryFile, error) {
 	if strings.TrimSpace(startDir) == "" {
 		var err error
 		startDir, err = os.Getwd()
 		if err != nil {
-			return "", fmt.Errorf("discover system instruction: %w", err)
+			return nil, fmt.Errorf("discover system instruction: %w", err)
 		}
 	}
 
 	startDir, err := filepath.Abs(startDir)
 	if err != nil {
-		return "", fmt.Errorf("discover system instruction: %w", err)
+		return nil, fmt.Errorf("discover system instruction: %w", err)
 	}
 
-	var sections []string
+	var files []memoryFile
 
 	globalPath, err := globalMemoryPath()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if content, ok := readMemoryFile(globalPath); ok {
-		sections = append(sections, formatMemorySection(globalPath, content))
+		files = append(files, memoryFile{path: globalPath, content: content})
 	}
 
 	projectPaths, err := discoverProjectMemoryPaths(startDir)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	for _, path := range projectPaths {
 		content, ok := readMemoryFile(path)
 		if !ok {
 			continue
 		}
-		sections = append(sections, formatMemorySection(path, content))
+		files = append(files, memoryFile{path: path, content: content})
 	}
 
-	return strings.Join(sections, "\n\n"), nil
+	return files, nil
 }
 
 func globalMemoryPath() (string, error) {

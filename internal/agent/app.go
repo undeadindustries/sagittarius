@@ -51,6 +51,10 @@ type App struct {
 	processor *slash.Processor
 	deps      slash.Deps
 	sessionID string
+	// providerDisplay is the current provider's display id (e.g. "openrouter",
+	// "gemini"). It backs the "{provider} - {model}" footer label and the exit
+	// summary Provider row, kept in sync on every rebuild / model / mode change.
+	providerDisplay string
 	// baseProviderID records the canonical provider id that was active before a
 	// mode override temporarily switched to a different provider. Empty when no
 	// provider override is active.
@@ -70,14 +74,14 @@ func NewApp(cfg AppConfig) *App {
 		mode = cfg.Runner.InteractionMode()
 	}
 	app := &App{
-		runner:         cfg.Runner,
-		runtime:        cfg.Runtime,
-		processor:      slash.NewProcessor(),
-		sessionID:      cfg.SessionID,
-		baseProviderID: config.NormalizeProviderID(cfg.BaseProviderID),
+		runner:          cfg.Runner,
+		runtime:         cfg.Runtime,
+		processor:       slash.NewProcessor(),
+		sessionID:       cfg.SessionID,
+		baseProviderID:  config.NormalizeProviderID(cfg.BaseProviderID),
+		providerDisplay: cfg.ProviderLabel,
 		status: ui.StatusBar{
-			Left:   cfg.ProviderLabel,
-			Right:  cfg.Model,
+			Right:  providerModelLabel(cfg.ProviderLabel, cfg.Model),
 			Detail: systemPromptStatusDetail(cfg.Runner, cfg.Settings),
 			Mode:   mode.String(),
 		},
@@ -105,16 +109,34 @@ func (a *App) Status() ui.StatusBar {
 	return a.status
 }
 
+// providerModelLabel composes the footer's primary label as "{provider} - {model}"
+// (e.g. "openrouter - qwen/qwen3.7-plus"), degrading gracefully when either part
+// is empty. Live token/context metrics are appended later by the TUI.
+func providerModelLabel(providerDisplay, model string) string {
+	providerDisplay = strings.TrimSpace(providerDisplay)
+	model = strings.TrimSpace(model)
+	switch {
+	case providerDisplay == "" && model == "":
+		return ""
+	case providerDisplay == "":
+		return model
+	case model == "":
+		return providerDisplay
+	default:
+		return providerDisplay + " - " + model
+	}
+}
+
 // SessionMetrics implements ui.MetricsProvider, exposing live session telemetry
 // for the footer and exit summary. Provider/session identifiers come from the
 // app; counts and token estimates come from the runner.
 func (a *App) SessionMetrics() ui.SessionStats {
 	if a.runner == nil {
-		return ui.SessionStats{SessionID: a.sessionID, Provider: a.status.Left}
+		return ui.SessionStats{SessionID: a.sessionID, Provider: a.providerDisplay}
 	}
 	stats := a.runner.Stats()
 	stats.SessionID = a.sessionID
-	stats.Provider = a.status.Left
+	stats.Provider = a.providerDisplay
 	return stats
 }
 
@@ -193,10 +215,11 @@ func (a *App) CycleModel(ctx context.Context) (<-chan ui.StreamEvent, error) {
 		if resolvedModel != "" && resolvedModel != next.Model {
 			msg += fmt.Sprintf(" (mode override active: using %s)", resolvedModel)
 		}
-		a.status.Right = resolvedModel
-		if resolvedModel == "" {
-			a.status.Right = next.Model
+		model := resolvedModel
+		if model == "" {
+			model = next.Model
 		}
+		a.status.Right = providerModelLabel(a.providerDisplay, model)
 		out <- ui.StreamEvent{Type: ui.StreamInfo, Text: msg + "\n"}
 		out <- ui.StreamEvent{Type: ui.StreamDone}
 	}()
@@ -286,18 +309,13 @@ func (h *appHooks) RebuildRunner(ctx context.Context) (string, string, error) {
 			h.app.runner.RecordUsage),
 	)
 
-	label := endpoint.ProviderID
-	if def, ok := config.LookupBuiltInProvider(endpoint.ProviderID); ok {
-		label = def.DisplayName
-	} else if h.app.deps.Settings.Providers != nil {
-		if custom, ok := h.app.deps.Settings.Providers.Custom[endpoint.ProviderID]; ok && custom.DisplayName != "" {
-			label = custom.DisplayName
-		}
-	}
+	// Footer uses the provider display id (e.g. "openrouter", "gemini") to match
+	// the /model picker and the user-facing "{provider} - {model}" format.
+	label := config.ProviderDisplayID(endpoint.ProviderID)
 
+	h.app.providerDisplay = label
 	h.app.status = ui.StatusBar{
-		Left:   label,
-		Right:  resolvedModel,
+		Right:  providerModelLabel(label, resolvedModel),
 		Detail: systemPromptStatusDetail(h.app.runner, h.app.deps.Settings),
 		Mode:   h.app.runner.InteractionMode().String(),
 	}
@@ -475,7 +493,7 @@ func (h *appHooks) SetInteractionMode(ctx context.Context, mode modes.Mode) (str
 	}
 
 	model := h.app.runner.SetInteractionMode(mode)
-	h.app.status.Right = model
+	h.app.status.Right = providerModelLabel(h.app.providerDisplay, model)
 	h.app.status.Mode = mode.String()
 	return model, nil
 }

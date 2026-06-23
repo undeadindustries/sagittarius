@@ -3,6 +3,7 @@ package agent
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -543,6 +544,93 @@ func TestRunnerToolRoundTrip(t *testing.T) {
 	}
 }
 
+func TestNeedsGoplsHint(t *testing.T) {
+	t.Parallel()
+
+	goRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(goRoot, "go.mod"), []byte("module x\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	nonGoRoot := t.TempDir()
+
+	withGopls := &config.Settings{Raw: map[string]json.RawMessage{
+		"mcpServers": json.RawMessage(`{"gopls":{"command":"gopls","args":["mcp"]}}`),
+	}}
+
+	if !needsGoplsHint(nil, goRoot) {
+		t.Fatal("go project without gopls server should need the hint")
+	}
+	if needsGoplsHint(withGopls, goRoot) {
+		t.Fatal("configured gopls server should suppress the hint")
+	}
+	if needsGoplsHint(nil, nonGoRoot) {
+		t.Fatal("non-Go project should not get the hint")
+	}
+}
+
+func TestRunnerSuggestVerifyAfterWrite(t *testing.T) {
+	t.Parallel()
+
+	writeThenFinish := func() [][]provider.StreamResponse {
+		return [][]provider.StreamResponse{
+			{
+				{ToolCalls: []provider.ToolCall{{
+					Name: tools.WriteFileToolName,
+					Args: map[string]any{
+						tools.ParamFilePath:         "out.txt",
+						tools.WriteFileParamContent: "hello",
+					},
+				}}},
+				{Done: true},
+			},
+			{
+				{TextDelta: "done"},
+				{Done: true},
+			},
+		}
+	}
+
+	cases := []struct {
+		name    string
+		suggest bool
+		want    bool
+	}{
+		{name: "enabled emits reminder", suggest: true, want: true},
+		{name: "disabled stays silent", suggest: false, want: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			runner, err := NewRunner(RunnerConfig{
+				Generator:               &fakeGenerator{batches: writeThenFinish()},
+				Model:                   "test-model",
+				WorkDir:                 root,
+				ApprovalMode:            ApprovalYolo,
+				Interactive:             false,
+				SuggestVerifyAfterWrite: tc.suggest,
+			})
+			if err != nil {
+				t.Fatalf("NewRunner: %v", err)
+			}
+			events, err := runner.RunTurn(testContext(t), "write a file")
+			if err != nil {
+				t.Fatalf("RunTurn: %v", err)
+			}
+			sawReminder := false
+			for _, ev := range collectEvents(t, events) {
+				if ev.Type == ui.StreamInfo && ev.Text == verifyReminder {
+					sawReminder = true
+				}
+			}
+			if sawReminder != tc.want {
+				t.Fatalf("reminder emitted = %v, want %v", sawReminder, tc.want)
+			}
+		})
+	}
+}
+
 func TestRunnerHeadlessApprovalGatesWrite(t *testing.T) {
 	t.Parallel()
 
@@ -552,7 +640,7 @@ func TestRunnerHeadlessApprovalGatesWrite(t *testing.T) {
 				{ToolCalls: []provider.ToolCall{{
 					Name: tools.WriteFileToolName,
 					Args: map[string]any{
-						tools.ParamFilePath:          "out.txt",
+						tools.ParamFilePath:         "out.txt",
 						tools.WriteFileParamContent: "hello",
 					},
 				}}},

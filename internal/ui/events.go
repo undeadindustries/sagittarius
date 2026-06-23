@@ -50,16 +50,33 @@ type StreamEvent struct {
 	Text     string
 	ToolName string
 	Err      error
-	// ConfirmReply is set for StreamToolConfirm; the TUI sends true/false when the user responds.
-	ConfirmReply chan bool
+	// Diff is set for StreamToolConfirm on write_file: a git-style unified diff
+	// previewing the pending change. The TUI colorizes it in the confirm band.
+	Diff string
+	// ConfirmReply is set for StreamToolConfirm; the TUI sends the user's
+	// decision (deny / once / session) when the user responds.
+	ConfirmReply chan ConfirmDecision
 	// Dialog is set for StreamOpenDialog and names the overlay to open.
 	Dialog DialogKind
 }
 
+// ConfirmDecision is the user's answer to a tool confirmation prompt.
+type ConfirmDecision int
+
+const (
+	// ConfirmDeny rejects the tool invocation.
+	ConfirmDeny ConfirmDecision = iota
+	// ConfirmOnce approves this single invocation.
+	ConfirmOnce
+	// ConfirmSession approves this and all future invocations of the same tool
+	// for the rest of the session.
+	ConfirmSession
+)
+
 // StatusBar holds footer metadata shown below the input area.
 type StatusBar struct {
-	Left   string // provider display name (footer line 1, left)
-	Right  string // model id and usage stats (footer line 1, right)
-	Detail string // system-prompt preset label (footer line 2)
+	Left   string // transient UI state (e.g. "confirm tool", "mode"); empty when idle
+	Right  string // "{provider} - {model}" plus usage stats (footer line 1, right)
+	Detail string // system-prompt preset label + session totals (footer line 2)
 	Mode   string // interaction mode id for the input prompt (agent, plan, ask, debug)
 }

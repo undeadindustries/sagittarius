@@ -8,8 +8,8 @@ import (
 
 func openaiSettings(inst *config.ProviderInstanceConfig) *config.Settings {
 	return &config.Settings{Providers: &config.ProvidersSettings{
-		Active:  string(config.BuiltInOpenAI),
-		OpenAI:  inst,
+		Active: string(config.BuiltInOpenAI),
+		OpenAI: inst,
 	}}
 }
 

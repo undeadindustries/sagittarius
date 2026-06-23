@@ -9,7 +9,13 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/config"
 )
 
-const defaultOpenAITimeout = 120 * time.Second
+// defaultOpenAITimeout is 0, meaning no client-side stream deadline by default:
+// long agent turns and slow local/remote models are not cut off mid-stream. The
+// session context (SIGINT / Ctrl+C) still cancels in flight. Users who want a
+// hard cap can set providers.<id>.timeout (seconds) in settings, which
+// resolveTimeout applies. This mirrors the Gemini-native path, which already
+// defaults to 0.
+const defaultOpenAITimeout = 0
 
 // EndpointConfig holds resolved connection parameters for a provider endpoint.
 type EndpointConfig struct {

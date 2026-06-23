@@ -19,6 +19,7 @@ type Catalog struct {
 	skills     *skills.Manager
 	extensions *extensions.Loader
 	settings   *config.Settings
+	allowFix   bool
 }
 
 // CatalogConfig configures tool catalog assembly.
@@ -30,6 +31,8 @@ type CatalogConfig struct {
 	Settings   *config.Settings
 	ClientName string
 	Version    string
+	// AllowFix permits run_project_checks to run mutating formatters (fix=true).
+	AllowFix bool
 }
 
 // NewCatalog constructs a tool catalog.
@@ -55,12 +58,13 @@ func NewCatalog(cfg CatalogConfig) (*Catalog, error) {
 		skills:     cfg.Skills,
 		extensions: cfg.Extensions,
 		settings:   cfg.Settings,
+		allowFix:   cfg.AllowFix,
 	}, nil
 }
 
 // BuildRegistry assembles the current registry without reconnecting MCP servers.
 func (c *Catalog) BuildRegistry() *tools.Registry {
-	reg := tools.NewBuiltinRegistry(c.ws)
+	reg := tools.NewBuiltinRegistry(c.ws, tools.WithAllowFix(c.allowFix))
 	reg.Register(tools.NewActivateSkillTool(c.skills))
 	for _, tool := range c.mcp.Tools() {
 		reg.Register(wrapMCPTool(tool))

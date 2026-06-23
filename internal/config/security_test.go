@@ -86,6 +86,51 @@ func TestSecuritySnapshotRoundTrip(t *testing.T) {
 	}
 }
 
+func TestVerifyResolution(t *testing.T) {
+	if VerifyAllowFix(nil, nil) {
+		t.Fatal("allowFix should default false")
+	}
+	if VerifySuggestAfterWrite(nil, nil) {
+		t.Fatal("suggestAfterWrite should default false")
+	}
+
+	global := &Settings{Sagittarius: &SagittariusSettings{
+		Verify: &SagittariusVerifyConfig{AllowFix: boolPtr(false), SuggestAfterWrite: boolPtr(false)},
+	}}
+	project := &Settings{Sagittarius: &SagittariusSettings{
+		Verify: &SagittariusVerifyConfig{AllowFix: boolPtr(true)},
+	}}
+	if !VerifyAllowFix(global, project) {
+		t.Fatal("project should enable allowFix over global")
+	}
+	if VerifySuggestAfterWrite(global, project) {
+		t.Fatal("suggestAfterWrite should follow global when project unset")
+	}
+}
+
+func TestVerifyConfigRoundTrip(t *testing.T) {
+	in := &Settings{
+		Sagittarius: &SagittariusSettings{
+			Verify: &SagittariusVerifyConfig{AllowFix: boolPtr(true), SuggestAfterWrite: boolPtr(true)},
+		},
+		Raw: map[string]json.RawMessage{},
+	}
+	encoded, err := encodeSettingsDocument(in)
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	decoded, err := decodeSettingsDocument(encoded)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !VerifyAllowFix(decoded, nil) {
+		t.Fatalf("allowFix lost in round-trip: %s", encoded)
+	}
+	if !VerifySuggestAfterWrite(decoded, nil) {
+		t.Fatalf("suggestAfterWrite lost in round-trip: %s", encoded)
+	}
+}
+
 func TestEmptySnapshotConfigOmitted(t *testing.T) {
 	in := &Settings{
 		Sagittarius: &SagittariusSettings{DefaultModel: "x"},

@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
-	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/spinner"
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -114,7 +117,7 @@ type model struct {
 	height int
 
 	viewport   viewport.Model
-	input      textinput.Model
+	input      textarea.Model
 	status     ui.StatusBar
 	idleStatus ui.StatusBar
 
@@ -129,14 +132,33 @@ type model struct {
 
 	busy     bool
 	quitting bool
+	// turnCancel cancels the in-flight HandleInput turn; nil when no cancelable
+	// turn is running. turnStart marks when the turn began, for the elapsed
+	// timer in the working line.
+	turnCancel context.CancelFunc
+	turnStart  time.Time
+	// spin drives the animated working/thinking indicator shown above the input
+	// while a turn is in flight. It only ticks while busy.
+	spin spinner.Model
+	// working toggles visibility of the working indicator line; workingLabel is
+	// the current activity (e.g. "Thinking…" or "Running write_file").
+	working      bool
+	workingLabel string
 	// exitSummary is captured when quitting begins so the Terminal can print the
 	// goodbye screen after the alt-screen program tears down.
 	exitSummary string
 	stream      <-chan ui.StreamEvent
 	// confirmReply is set while a tool confirmation is pending; the confirm
-	// band renders above the input until the user answers y/n.
-	confirmReply chan bool
+	// band renders above the input until the user picks a choice. The decision
+	// is once / session / deny.
+	confirmReply chan ui.ConfirmDecision
 	confirmText  string
+	// confirmDiff is an optional unified-diff preview (write_file) shown in the
+	// confirm band, colorized add/del.
+	confirmDiff string
+	// confirmChoice is the highlighted option in the confirm band
+	// (0=once, 1=session, 2=no).
+	confirmChoice int
 
 	// Slash-command autocompletion state.
 	suggestions    []ui.Suggestion
@@ -174,27 +196,36 @@ func (m *model) hasOverlay() bool {
 const maxVisibleSuggestions = 8
 
 func newModel(opts ui.Options, app ui.App, term *Terminal) *model {
-	ti := textinput.New()
+	ti := textarea.New()
 	ti.Placeholder = "Type a message"
 	ti.Focus()
 	ti.CharLimit = 8192
+	ti.ShowLineNumbers = false
+	ti.MaxHeight = maxInputRows
+	// Enter submits the line; newlines are inserted with Alt/Shift+Enter (or
+	// Ctrl+J) so multi-line prompts are still possible without losing the
+	// single-key submit affordance.
+	ti.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("alt+enter", "shift+enter", "ctrl+j"))
 
 	th := theme.Resolve(opts.ThemeName, opts.NoColor)
 
-	// Style the input row so it has a visible background affordance, like
+	// Style the input box so it has a visible background affordance, like
 	// Gemini CLI's grey input area. On color themes use the InputBg color;
 	// on greyscale use Reverse so no color codes are emitted.
 	if th.Colored {
 		inputBg := lipgloss.NewStyle().Background(th.InputBg)
-		ti.PromptStyle = inputBg
-		ti.TextStyle = inputBg
-		ti.CursorStyle = inputBg.Reverse(true)
-		ti.PlaceholderStyle = inputBg.Faint(true)
+		ti.FocusedStyle.Base = inputBg
+		ti.FocusedStyle.Text = inputBg
+		ti.FocusedStyle.CursorLine = inputBg
+		ti.FocusedStyle.Prompt = inputBg.Foreground(th.Accent.GetForeground())
+		ti.FocusedStyle.Placeholder = inputBg.Faint(true)
 	} else {
-		ti.PromptStyle = lipgloss.NewStyle().Reverse(true)
-		ti.TextStyle = lipgloss.NewStyle().Reverse(true)
-		ti.CursorStyle = lipgloss.NewStyle()
-		ti.PlaceholderStyle = lipgloss.NewStyle().Reverse(true).Faint(true)
+		rev := lipgloss.NewStyle().Reverse(true)
+		ti.FocusedStyle.Base = rev
+		ti.FocusedStyle.Text = rev
+		ti.FocusedStyle.CursorLine = rev
+		ti.FocusedStyle.Prompt = rev
+		ti.FocusedStyle.Placeholder = rev.Faint(true)
 	}
 
 	welcome := welcomeText(opts, th)
@@ -221,6 +252,7 @@ func newModel(opts ui.Options, app ui.App, term *Terminal) *model {
 		openResponseIdx: -1,
 		input:           ti,
 		viewport:        vp,
+		spin:            newWorkingSpinner(th),
 		status:          idleStatus,
 		idleStatus:      idleStatus,
 		suggestionIdx:   -1,
@@ -233,7 +265,7 @@ func (m *model) Init() tea.Cmd {
 	if m.opts.NeedsOnboarding {
 		m.openOnboarding()
 	}
-	return textinput.Blink
+	return textarea.Blink
 }
 
 // beginQuit marks the session as quitting, captures the goodbye summary (so the
@@ -263,6 +295,15 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case statusMsg:
 		m.status = msg.status
 		return m, nil
+	case spinner.TickMsg:
+		// Keep the working indicator animating for the whole busy period; the
+		// chain self-perpetuates via spinner.Update and dies once idle.
+		if !m.busy {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.spin, cmd = m.spin.Update(msg)
+		return m, cmd
 	case tea.QuitMsg:
 		return m, m.beginQuit()
 	}
@@ -561,11 +602,15 @@ func (m *model) View() string {
 	bodyHeight := m.bodyHeight()
 	m.viewport.Height = bodyHeight
 	m.viewport.Width = max(m.width-2, 1)
-	m.input.Width = max(m.width-lipgloss.Width(m.input.Prompt)-1, 1)
+	m.input.SetWidth(max(m.width-2, 1))
+	m.input.SetHeight(m.inputHeight())
 
 	sections := []string{header, m.viewport.View()}
 	if band := m.renderConfirmBand(); band != "" {
 		sections = append(sections, band)
+	}
+	if m.working {
+		sections = append(sections, renderWorkingLine(m.spin, m.workingDisplayLabel(), m.th, m.width))
 	}
 	sections = append(sections, inputLine)
 	if suggestions != "" {
@@ -575,18 +620,74 @@ func (m *model) View() string {
 	return lipgloss.JoinVertical(lipgloss.Left, sections...)
 }
 
+// confirmChoices are the selectable answers in the confirmation band, ordered
+// to match confirmChoice (0=once, 1=session, 2=no).
+var confirmChoices = []string{"Allow once", "Allow for this session", "No"}
+
+// confirmDiffMaxLines caps the diff preview height in the confirm band so a
+// large write does not push the input off-screen.
+const confirmDiffMaxLines = 20
+
+// confirmDecisionForChoice maps a highlighted band row to its decision.
+func confirmDecisionForChoice(choice int) ui.ConfirmDecision {
+	switch choice {
+	case 1:
+		return ui.ConfirmSession
+	case 2:
+		return ui.ConfirmDeny
+	default:
+		return ui.ConfirmOnce
+	}
+}
+
+// sendConfirm delivers the user's decision to the waiting scheduler and clears
+// the confirmation state, resuming the working indicator.
+func (m *model) sendConfirm(d ui.ConfirmDecision) {
+	if m.confirmReply == nil {
+		return
+	}
+	m.confirmReply <- d
+	m.confirmReply = nil
+	m.confirmText = ""
+	m.confirmDiff = ""
+	m.confirmChoice = 0
+	m.status.Left = ""
+	m.setWorking(true, "Thinking…")
+}
+
+// confirmBandLines builds the inner (un-bordered) lines of the confirmation
+// panel: a title, an optional colorized diff preview, and the choice list with
+// the current selection marked. Used by both renderConfirmBand and
+// confirmBandRows so their heights stay in sync.
+func (m *model) confirmBandLines() []string {
+	title := m.confirmText
+	if title == "" {
+		title = "Run tool?"
+	}
+	lines := []string{m.th.Accent.Render("Confirm: ") + m.th.Primary.Render(title)}
+	if m.confirmDiff != "" {
+		lines = append(lines, m.renderDiffLines(m.confirmDiff, max(m.width-4, 1), confirmDiffMaxLines)...)
+	}
+	for i, c := range confirmChoices {
+		row := fmt.Sprintf("%d %s", i+1, c)
+		if i == m.confirmChoice {
+			lines = append(lines, m.th.Selected.Render("› "+row))
+		} else {
+			lines = append(lines, "  "+m.th.Secondary.Render(row))
+		}
+	}
+	return lines
+}
+
 // renderConfirmBand draws a focused panel above the input while a tool
-// confirmation is pending, so the y/n prompt is not lost in scrollback.
+// confirmation is pending, so the prompt is not lost in scrollback. It shows a
+// diff preview (write_file) and a selectable Allow-once / Allow-for-session /
+// No list.
 func (m *model) renderConfirmBand() string {
 	if m.confirmReply == nil {
 		return ""
 	}
-	label := m.confirmText
-	if label == "" {
-		label = "Run tool?"
-	}
-	body := m.th.Accent.Render("Confirm: ") + m.th.Primary.Render(label) +
-		"  " + m.th.Accent.Render("(y/n)")
+	body := strings.Join(m.confirmBandLines(), "\n")
 	style := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		Padding(0, 1).
@@ -639,7 +740,8 @@ func (m *model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	m.height = msg.Height
 	m.viewport.Width = max(msg.Width-2, 1)
 	m.viewport.Height = m.bodyHeight()
-	m.input.Width = max(msg.Width-lipgloss.Width(m.input.Prompt)-1, 1)
+	m.input.SetWidth(max(msg.Width-2, 1))
+	m.input.SetHeight(m.inputHeight())
 	m.syncViewportContent()
 	return m, nil
 }
@@ -647,17 +749,23 @@ func (m *model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.confirmReply != nil {
 		switch msg.String() {
-		case "y", "Y":
-			m.confirmReply <- true
-			m.confirmReply = nil
-			m.confirmText = ""
-			m.status.Left = "thinking…"
+		case "up":
+			m.confirmChoice = (m.confirmChoice + 2) % 3
 			return m, nil
-		case "n", "N":
-			m.confirmReply <- false
-			m.confirmReply = nil
-			m.confirmText = ""
-			m.status.Left = "thinking…"
+		case "down":
+			m.confirmChoice = (m.confirmChoice + 1) % 3
+			return m, nil
+		case "enter":
+			m.sendConfirm(confirmDecisionForChoice(m.confirmChoice))
+			return m, nil
+		case "1", "y", "Y":
+			m.sendConfirm(ui.ConfirmOnce)
+			return m, nil
+		case "2":
+			m.sendConfirm(ui.ConfirmSession)
+			return m, nil
+		case "3", "n", "N", "esc":
+			m.sendConfirm(ui.ConfirmDeny)
 			return m, nil
 		case "ctrl+c":
 			return m, m.beginQuit()
@@ -667,7 +775,19 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	if m.busy {
 		switch msg.String() {
+		case "esc":
+			if m.turnCancel != nil {
+				m.cancelTurn()
+			}
+			return m, nil
 		case "ctrl+c":
+			// While a cancelable turn runs, Ctrl+C cancels it rather than
+			// quitting outright, so a reflexive Ctrl+C does not end the session;
+			// a second Ctrl+C (now idle) quits.
+			if m.turnCancel != nil {
+				m.cancelTurn()
+				return m, nil
+			}
 			return m, m.beginQuit()
 		}
 		return m, nil
@@ -828,6 +948,37 @@ func (m *model) acceptSuggestion(i int) {
 	m.refreshSuggestions()
 }
 
+// cancelTurn aborts the in-flight turn (the stream will close with an error /
+// done event) and notes it in the scrollback.
+func (m *model) cancelTurn() {
+	if m.turnCancel == nil {
+		return
+	}
+	m.turnCancel()
+	m.turnCancel = nil
+	m.addBlock(roleInfo, "Turn canceled.")
+}
+
+// clearTurn releases the per-turn cancel function and resets the elapsed clock
+// without emitting a cancellation notice (used on normal turn completion).
+func (m *model) clearTurn() {
+	if m.turnCancel != nil {
+		m.turnCancel()
+		m.turnCancel = nil
+	}
+	m.turnStart = time.Time{}
+}
+
+// workingDisplayLabel augments the working/thinking label with an elapsed timer
+// and a cancel hint while a cancelable turn is running.
+func (m *model) workingDisplayLabel() string {
+	if m.turnStart.IsZero() {
+		return m.workingLabel
+	}
+	secs := int(time.Since(m.turnStart).Seconds())
+	return fmt.Sprintf("%s (%ds · esc to cancel)", m.workingLabel, secs)
+}
+
 func (m *model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 	if line == "" {
 		return m, nil
@@ -835,37 +986,51 @@ func (m *model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 
 	m.addBlock(roleUser, line)
 	m.busy = true
-	m.status.Left = "thinking…"
+	m.setWorking(true, "Thinking…")
 
-	ctx := m.ctx
-	if ctx == nil {
-		ctx = context.Background()
+	base := m.ctx
+	if base == nil {
+		base = context.Background()
 	}
+	ctx, cancel := context.WithCancel(base)
+	m.turnCancel = cancel
+	m.turnStart = time.Now()
 
 	events, err := m.app.HandleInput(ctx, line)
 	if err != nil {
+		m.clearTurn()
 		m.busy = false
+		m.setWorking(false, "")
 		m.status = m.idleStatus
 		_ = m.term.ShowError(err)
 		return m, nil
 	}
 	m.stream = events
-	return m, waitStream(events)
+	return m, tea.Batch(waitStream(events), m.spin.Tick)
 }
 
 func (m *model) handleStream(ev ui.StreamEvent) (tea.Model, tea.Cmd) {
 	switch ev.Type {
 	case ui.StreamTextDelta:
+		// Hide the working line while the model is streaming visible output; the
+		// response block itself signals activity. (Cheap path: no extra sync.)
+		m.working = false
 		m.addResponseDelta(ev.Text)
 	case ui.StreamInfo:
 		m.addBlock(roleInfo, ev.Text)
 	case ui.StreamQuit:
 		m.busy = false
+		m.setWorking(false, "")
 		return m, m.beginQuit()
 	case ui.StreamOpenDialog:
 		m.openDialog(ev.Dialog)
 	case ui.StreamToolStart:
-		m.addBlock(roleToolStart, ev.ToolName)
+		label := ev.ToolName
+		if ev.Text != "" {
+			label += " " + ev.Text
+		}
+		m.addBlock(roleToolStart, label)
+		m.setWorking(true, "Running "+ev.ToolName)
 	case ui.StreamToolConfirm:
 		text := ev.ToolName
 		if ev.Text != "" {
@@ -874,6 +1039,10 @@ func (m *model) handleStream(ev ui.StreamEvent) (tea.Model, tea.Cmd) {
 		m.addBlock(roleConfirm, text)
 		m.confirmReply = ev.ConfirmReply
 		m.confirmText = text
+		m.confirmDiff = ev.Diff
+		m.confirmChoice = 0
+		// Awaiting the user; hide the spinner so the confirm band stands alone.
+		m.setWorking(false, "")
 		m.status.Left = "confirm tool"
 	case ui.StreamToolResult:
 		text := ev.ToolName
@@ -881,14 +1050,19 @@ func (m *model) handleStream(ev ui.StreamEvent) (tea.Model, tea.Cmd) {
 			text += " " + ev.Text
 		}
 		m.addBlock(roleToolResult, text)
+		// Tool finished; the model will be queried again next.
+		m.setWorking(true, "Thinking…")
 	case ui.StreamError:
 		if ev.Err != nil {
 			m.addBlock(roleError, ev.Err.Error())
 		} else if ev.Text != "" {
 			m.addBlock(roleError, ev.Text)
 		}
+		m.setWorking(false, "")
 	case ui.StreamDone:
 		m.busy = false
+		m.clearTurn()
+		m.setWorking(false, "")
 		m.closeResponse()
 		m.refreshIdleStatus()
 		m.status = m.idleStatus
@@ -958,6 +1132,17 @@ func (m *model) closeResponse() {
 	m.openResponseIdx = -1
 }
 
+// setWorking toggles the working/thinking indicator and re-syncs the viewport so
+// it stays scrolled to the bottom as the reserved row appears or disappears. The
+// label is kept when turning the indicator on.
+func (m *model) setWorking(on bool, label string) {
+	m.working = on
+	if on && label != "" {
+		m.workingLabel = label
+	}
+	m.syncViewportContent()
+}
+
 func (m *model) wrapWidth() int {
 	w := m.viewport.Width
 	if w <= 0 {
@@ -979,7 +1164,12 @@ func (m *model) renderScrollback(width int) string {
 	if m.welcome != "" {
 		lines = append(lines, strings.Split(strings.TrimRight(m.welcome, "\n"), "\n")...)
 	}
-	for _, blk := range m.blocks {
+	for i, blk := range m.blocks {
+		// Separate turns visually: a blank line before each user prompt except
+		// the first block, giving the conversation a readable rhythm.
+		if blk.role == roleUser && i > 0 {
+			lines = append(lines, "")
+		}
 		lines = append(lines, m.renderBlock(blk, width)...)
 	}
 	return strings.Join(lines, "\n")
@@ -989,7 +1179,7 @@ func (m *model) renderScrollback(width int) string {
 func (m *model) roleStyle(role scrollRole) (glyph string, prefix, body lipgloss.Style) {
 	switch role {
 	case roleUser:
-		return "> ", m.th.Accent, m.th.Primary
+		return "You › ", m.th.Accent, m.th.UserBody
 	case roleResponse:
 		return "✦ ", m.th.Accent, m.th.Response
 	case roleInfo:
@@ -1017,9 +1207,12 @@ func (m *model) renderBlock(blk scrollBlock, width int) []string {
 	indent := strings.Repeat(" ", gw)
 
 	var rendered []string
-	if blk.role == roleResponse {
+	switch {
+	case blk.role == roleResponse:
 		rendered = renderMarkdown(blk.text, max(width-gw, 1), m.th)
-	} else {
+	case (blk.role == roleToolResult || blk.role == roleConfirm) && looksLikeDiff(blk.text):
+		rendered = m.renderDiffLines(blk.text, max(width-gw, 1), diffResultMaxLines)
+	default:
 		for _, line := range strings.Split(wrapText(blk.text, max(width-gw, 1)), "\n") {
 			rendered = append(rendered, body.Render(line))
 		}
@@ -1036,8 +1229,92 @@ func (m *model) renderBlock(blk scrollBlock, width int) []string {
 	return out
 }
 
+// diffResultMaxLines caps how many lines of a write_file result diff are shown
+// in the scrollback before a "… N more" footer.
+const diffResultMaxLines = 60
+
+// looksLikeDiff reports whether text begins like a unified diff produced by
+// internal/diff (a "--- a/" file marker or an "@@" hunk header).
+func looksLikeDiff(text string) bool {
+	return strings.HasPrefix(text, "--- ") || strings.HasPrefix(text, "@@")
+}
+
+// renderDiffLines colorizes unified-diff text: additions green, deletions red,
+// hunk/file markers dim, context faint. width bounds wrapping; maxLines caps
+// the output with a "… N more" footer (0 = no cap). Marker prefixes (@@/---/+++)
+// are checked before the single +/- so they are not miscolored.
+func (m *model) renderDiffLines(text string, width, maxLines int) []string {
+	raw := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	out := make([]string, 0, len(raw))
+	truncated := 0
+	for i, ln := range raw {
+		if maxLines > 0 && len(out) >= maxLines {
+			truncated = len(raw) - i
+			break
+		}
+		var style lipgloss.Style
+		switch {
+		case strings.HasPrefix(ln, "@@"), strings.HasPrefix(ln, "+++"), strings.HasPrefix(ln, "---"):
+			style = m.th.DiffMeta
+		case strings.HasPrefix(ln, "+"):
+			style = m.th.DiffAdd
+		case strings.HasPrefix(ln, "-"):
+			style = m.th.DiffDel
+		default:
+			style = m.th.Dim
+		}
+		for _, wl := range strings.Split(wrapText(ln, max(width, 1)), "\n") {
+			out = append(out, style.Render(wl))
+		}
+	}
+	if truncated > 0 {
+		out = append(out, m.th.Dim.Render(fmt.Sprintf("… %d more diff lines", truncated)))
+	}
+	return out
+}
+
+// maxInputRows caps the visible height of the input box; longer content scrolls
+// inside it.
+const maxInputRows = 6
+
+// inputContentWidth is the wrap width for typed text inside the input box: the
+// total input width minus the per-line prompt.
+func (m *model) inputContentWidth() int {
+	w := max(m.width-2, 1) - lipgloss.Width(m.input.Prompt)
+	if w < 1 {
+		return 1
+	}
+	return w
+}
+
+// inputHeight estimates the visible rows the input box needs for its current
+// value (soft-wrapped to inputContentWidth), clamped to [1, maxInputRows]. It
+// mirrors the textarea's own wrapping so the surrounding layout reserves the
+// right number of rows.
+func (m *model) inputHeight() int {
+	w := m.inputContentWidth()
+	rows := 0
+	for _, line := range strings.Split(m.input.Value(), "\n") {
+		lw := lipgloss.Width(line)
+		r := 1
+		if w > 0 && lw > w {
+			r = (lw + w - 1) / w
+		}
+		rows += r
+	}
+	if rows < 1 {
+		rows = 1
+	}
+	if rows > maxInputRows {
+		rows = maxInputRows
+	}
+	return rows
+}
+
 func (m *model) bodyHeight() int {
-	chrome := 6 + m.suggestionRows() + m.confirmBandRows()
+	// Baseline 6 covers header, a single input row, and the two-line footer;
+	// add the extra input rows when the box has grown for a multi-line prompt.
+	chrome := 6 + m.suggestionRows() + m.confirmBandRows() + m.workingRows() + (m.inputHeight() - 1)
 	h := m.height - chrome
 	if h < 3 {
 		return 3
@@ -1045,13 +1322,23 @@ func (m *model) bodyHeight() int {
 	return h
 }
 
-// confirmBandRows is the height of the confirm panel (bordered: 3 lines) while
-// a tool confirmation is pending, else 0.
+// workingRows is the height of the working/thinking indicator line (1 while the
+// agent is working, else 0) so the viewport shrinks to make room for it.
+func (m *model) workingRows() int {
+	if m.working {
+		return 1
+	}
+	return 0
+}
+
+// confirmBandRows is the height of the confirm panel while a tool confirmation
+// is pending, else 0. It mirrors renderConfirmBand: the inner lines plus the
+// rounded border's top and bottom rows.
 func (m *model) confirmBandRows() int {
 	if m.confirmReply == nil {
 		return 0
 	}
-	return 3
+	return len(m.confirmBandLines()) + 2
 }
 
 // suggestionRows is the number of terminal lines the suggestion block occupies,

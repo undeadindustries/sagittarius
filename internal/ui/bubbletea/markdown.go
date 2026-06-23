@@ -58,7 +58,7 @@ func renderCodeLine(line string, width int, th theme.Theme) []string {
 	if lipgloss.Width(line) > avail {
 		line = truncateVisible(line, avail)
 	}
-	return []string{th.Code.Render(bar+line)}
+	return []string{th.Code.Render(bar + line)}
 }
 
 // renderProseLine handles headings, bullets, and paragraphs with inline styling.

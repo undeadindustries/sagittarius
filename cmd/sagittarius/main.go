@@ -384,10 +384,7 @@ func runSlash(command string, opts runnerOptions) int {
 
 	providerLabel := "ready"
 	if endpoint, epErr := provider.ResolveEndpointConfig(settings); epErr == nil {
-		providerLabel = endpoint.ProviderID
-		if def, ok := config.LookupBuiltInProvider(endpoint.ProviderID); ok {
-			providerLabel = def.DisplayName
-		}
+		providerLabel = config.ProviderDisplayID(endpoint.ProviderID)
 	}
 
 	app := agent.NewApp(agent.AppConfig{
@@ -526,10 +523,7 @@ func runInteractive(screenReader bool, opts runnerOptions) int {
 
 	providerLabel := "Setup required"
 	if !needsOnboarding {
-		providerLabel = endpoint.ProviderID
-		if def, ok := config.LookupBuiltInProvider(endpoint.ProviderID); ok {
-			providerLabel = def.DisplayName
-		}
+		providerLabel = config.ProviderDisplayID(endpoint.ProviderID)
 	}
 
 	app := agent.NewApp(agent.AppConfig{
@@ -552,16 +546,17 @@ func runInteractive(screenReader bool, opts runnerOptions) int {
 
 	uiCfg := settings.UI()
 	termUI := bubbletea.NewTerminal(ui.Options{
-		ScreenReader:    screenReader,
-		BannerTitle:     "Sagittarius",
-		Version:         version.String(),
-		InitialStatus:   app.Status(),
-		Notice:          notice,
-		ThemeName:       uiCfg.Theme,
-		NoColor:         noColorEnv(),
-		HideBanner:      uiCfg.HideBanner,
-		HideTips:        uiCfg.HideTips,
-		NeedsOnboarding: needsOnboarding,
+		ScreenReader:      screenReader,
+		BannerTitle:       "Sagittarius",
+		Version:           version.String(),
+		InitialStatus:     app.Status(),
+		Notice:            notice,
+		ThemeName:         uiCfg.Theme,
+		NoColor:           noColorEnv(),
+		HideBanner:        uiCfg.HideBanner,
+		HideTips:          uiCfg.HideTips,
+		NeedsOnboarding:   needsOnboarding,
+		LoadedMemoryFiles: runner.LoadedMemoryFiles(),
 	})
 
 	if err := termUI.Run(ctx, app); err != nil {
@@ -655,11 +650,14 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 
 	sessID := persistentSessionID()
 
+	allowFix, suggestVerify := resolveVerifyFlags(settings)
+
 	runtime, err := agent.NewRuntime(ctx, agent.RuntimeConfig{
 		Settings:      settings,
 		ClientName:    "sagittarius",
 		ClientVersion: version.String(),
 		Trusted:       true,
+		AllowFix:      allowFix,
 	})
 	if err != nil {
 		return nil, nil, nil, nil, "", "", err
@@ -717,17 +715,19 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 	boundary, snapMgr := resolveBoundaryAndSnapshots(settings, projectRoot, sessID)
 
 	runner, err := agent.NewRunner(agent.RunnerConfig{
-		Generator:       gen,
-		Model:           model,
-		Interactive:     interactive,
-		ApprovalMode:    opts.approvalMode,
-		SessionRecorder: sessRecorder,
-		InitialHistory:  initialHistory,
-		Settings:        settings,
-		InitialMode:     initialMode,
-		ModelPinned:     modelPinned,
-		ProjectBoundary: boundary,
-		Snapshotter:     snapMgr,
+		Generator:               gen,
+		Model:                   model,
+		Interactive:             interactive,
+		ApprovalMode:            opts.approvalMode,
+		SessionRecorder:         sessRecorder,
+		InitialHistory:          initialHistory,
+		Settings:                settings,
+		InitialMode:             initialMode,
+		ModelPinned:             modelPinned,
+		ProjectBoundary:         boundary,
+		Snapshotter:             snapMgr,
+		AllowFix:                allowFix,
+		SuggestVerifyAfterWrite: suggestVerify,
 	})
 	if err != nil {
 		_ = runtime.Close()
@@ -779,6 +779,20 @@ func resolveBoundaryAndSnapshots(global *config.Settings, projectRoot, sessID st
 		return boundary, nil
 	}
 	return boundary, mgr
+}
+
+// resolveVerifyFlags merges project settings over global for the verify-workflow
+// flags (run_project_checks fix gating and the post-write reminder). Project
+// settings are read from the working directory; both flags default to false.
+func resolveVerifyFlags(global *config.Settings) (allowFix, suggestAfterWrite bool) {
+	var projectSettings *config.Settings
+	if root, err := os.Getwd(); err == nil && root != "" {
+		if ps, psErr := config.LoadProjectSettings(root); psErr == nil {
+			projectSettings = ps
+		}
+	}
+	return config.VerifyAllowFix(global, projectSettings),
+		config.VerifySuggestAfterWrite(global, projectSettings)
 }
 
 // persistentSessionID returns a stable per-process identifier.

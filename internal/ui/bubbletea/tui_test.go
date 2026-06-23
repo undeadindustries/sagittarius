@@ -94,10 +94,11 @@ func TestModelQuitCommand(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("expected stream cmd for /quit")
 	}
-	msg := cmd()
-	evMsg, ok := msg.(streamEventMsg)
+	// handleSubmit batches the stream pump with the working-spinner tick; pull
+	// the stream event out of the batch.
+	evMsg, ok := findStreamEventMsg(cmd())
 	if !ok {
-		t.Fatalf("msg type %T", msg)
+		t.Fatalf("no streamEventMsg in submit cmd")
 	}
 	updated, quitCmd := m.handleStream(evMsg.event)
 	if quitCmd == nil {
@@ -145,7 +146,7 @@ func TestScrollbackRolesRender(t *testing.T) {
 	m.addBlock(roleError, "boom")
 
 	out := stripANSI(m.renderScrollback(80))
-	for _, want := range []string{"> hello there", "✦ Hi, how can I help?", "ℹ context reloaded", "✕ boom"} {
+	for _, want := range []string{"You › hello there", "✦ Hi, how can I help?", "ℹ context reloaded", "✕ boom"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("scrollback missing %q\n%s", want, out)
 		}
@@ -156,6 +157,25 @@ func TestScrollbackRolesRender(t *testing.T) {
 var ansiSeq = regexp.MustCompile(`\x1b\[[0-9;]*m`)
 
 func stripANSI(s string) string { return ansiSeq.ReplaceAllString(s, "") }
+
+// findStreamEventMsg resolves a (possibly batched) message to the first
+// streamEventMsg it yields, evaluating batched sub-commands as needed.
+func findStreamEventMsg(msg tea.Msg) (streamEventMsg, bool) {
+	switch v := msg.(type) {
+	case streamEventMsg:
+		return v, true
+	case tea.BatchMsg:
+		for _, c := range v {
+			if c == nil {
+				continue
+			}
+			if ev, ok := findStreamEventMsg(c()); ok {
+				return ev, true
+			}
+		}
+	}
+	return streamEventMsg{}, false
+}
 
 func TestResponseDeltasAccumulateIntoOneBlock(t *testing.T) {
 	t.Parallel()
@@ -187,17 +207,17 @@ func TestConfirmBandVisibleWhilePending(t *testing.T) {
 		t.Fatalf("confirm band should be empty when idle, got %q", band)
 	}
 
-	reply := make(chan bool, 1)
+	reply := make(chan ui.ConfirmDecision, 1)
 	m.handleStream(ui.StreamEvent{Type: ui.StreamToolConfirm, ToolName: "write_file", Text: "/tmp/x", ConfirmReply: reply})
 	band := m.renderConfirmBand()
-	if !strings.Contains(band, "write_file") || !strings.Contains(band, "(y/n)") {
+	if !strings.Contains(band, "write_file") || !strings.Contains(band, "Allow for this session") {
 		t.Fatalf("confirm band missing prompt: %q", band)
 	}
 
-	// Answering clears the band.
+	// "y" approves once and clears the band.
 	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
-	if got := <-reply; !got {
-		t.Fatal("expected y to send true")
+	if got := <-reply; got != ui.ConfirmOnce {
+		t.Fatalf("expected y to send ConfirmOnce, got %v", got)
 	}
 	if band := m.renderConfirmBand(); band != "" {
 		t.Fatalf("confirm band should clear after answer, got %q", band)

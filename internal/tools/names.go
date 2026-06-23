@@ -8,6 +8,7 @@ const (
 	ListDirectoryToolName = "list_directory"
 	ShellToolName         = "run_shell_command"
 	GrepToolName          = "grep_search"
+	ProjectChecksToolName = "run_project_checks"
 )
 
 const (
@@ -35,6 +36,9 @@ const (
 	ShellParamIsBackground = "is_background"
 
 	ListDirParamIgnore = "ignore"
+
+	ProjectChecksParamPaths = "paths"
+	ProjectChecksParamFix   = "fix"
 )
 
 // legacyAliases maps alternate tool names to canonical wire names.
