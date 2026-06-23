@@ -2,6 +2,7 @@ package slash
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -57,6 +58,11 @@ func (r *Registry) RenderHelp() string {
 	for _, cmd := range r.List() {
 		writeCommandHelp(&b, cmd, "")
 	}
+	b.WriteString("\nInput / Tools:\n\n")
+	fmt.Fprintf(&b, "  %-28s %s\n", "@path/to/file",
+		"reference a file; its contents are sent to the model (tab to autocomplete)")
+	fmt.Fprintf(&b, "  %-28s %s\n", "Web Tools",
+		"google_web_search and web_fetch are available (Gemini API key required)")
 	return strings.TrimRight(b.String(), "\n")
 }
 
@@ -87,8 +93,14 @@ func visibleSubcommands(cmd Command) []Command {
 func (r *Registry) registerBuiltins() {
 	r.commands = []Command{
 		helpCommand(),
+		aboutCommand(),
 		quitCommand(),
 		resumeCommand(),
+		chatCommand(),
+		compressCommand(),
+		copyCommand(),
+		statsCommand(),
+		initCommand(),
 		clearCommand(),
 		diffCommand(),
 		undoCommand(),
@@ -104,5 +116,22 @@ func (r *Registry) registerBuiltins() {
 		agentsCommand(),
 		reasoningCommand(),
 		modeCommand(),
+		themeCommand(),
+	}
+	r.sortCommandTree(r.commands)
+}
+
+func (r *Registry) sortCommandTree(cmds []Command) {
+	sort.Slice(cmds, func(i, j int) bool {
+		return strings.ToLower(cmds[i].Name) < strings.ToLower(cmds[j].Name)
+	})
+	for i := range cmds {
+		// Do not sort the reasoning levels (minimal -> high).
+		if cmds[i].Name == "reasoning" {
+			continue
+		}
+		if len(cmds[i].SubCommands) > 0 {
+			r.sortCommandTree(cmds[i].SubCommands)
+		}
 	}
 }

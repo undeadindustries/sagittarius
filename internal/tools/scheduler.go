@@ -12,6 +12,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 	"github.com/undeadindustries/sagittarius/internal/ui"
+	"github.com/undeadindustries/sagittarius/internal/web"
 )
 
 const MaxToolRounds = 10
@@ -329,6 +330,15 @@ func formatConfirmSummary(toolName string, args map[string]any) string {
 	case ShellToolName:
 		if cmd, ok := args[ShellParamCommand]; ok {
 			return fmt.Sprintf("run %v", cmd)
+		}
+	case WebFetchToolName:
+		if prompt, ok := args[ParamPrompt].(string); ok {
+			valid, _ := web.ParsePrompt(prompt)
+			if len(valid) > 0 {
+				return fmt.Sprintf("fetch %s", valid[0])
+			}
+		} else if u, ok := args[ParamURL].(string); ok {
+			return fmt.Sprintf("fetch %s", u)
 		}
 	}
 	return toolName

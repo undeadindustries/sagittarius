@@ -86,8 +86,28 @@ type SagittariusSettings struct {
 	// Verify configures the code-quality verify workflow (run_project_checks fix
 	// gating and the optional post-write reminder).
 	Verify *SagittariusVerifyConfig   `json:"verify,omitempty"`
-	Extra  map[string]json.RawMessage `json:"-"`
+	// Web configures the built-in google_web_search and web_fetch tools.
+	Web   *SagittariusWebConfig       `json:"web,omitempty"`
+	Extra map[string]json.RawMessage  `json:"-"`
 }
+
+// SagittariusWebConfig configures the built-in google_web_search and web_fetch tools.
+// Pointers distinguish unset from explicit values.
+type SagittariusWebConfig struct {
+	SearchEnabled    *bool  `json:"searchEnabled,omitempty"`
+	FetchEnabled     *bool  `json:"fetchEnabled,omitempty"`
+	DirectWebFetch   *bool  `json:"directWebFetch,omitempty"`
+	UtilityModel     string `json:"utilityModel,omitempty"`
+	RetryFetchErrors *bool  `json:"retryFetchErrors,omitempty"`
+	MaxFetchBytes    *int   `json:"maxFetchBytes,omitempty"`
+	Extra            map[string]json.RawMessage `json:"-"`
+}
+
+// DefaultMaxFetchBytes is 250 KiB (water-fill across URLs in one turn).
+const DefaultMaxFetchBytes = 250 * 1024
+
+// DefaultMaxExperimentalFetchBytes is 10 MiB for directWebFetch mode.
+const DefaultMaxExperimentalFetchBytes = 10 * 1024 * 1024
 
 // SagittariusVerifyConfig configures the verify-after-edit workflow. Pointers
 // distinguish "unset" from an explicit value for project-over-global
