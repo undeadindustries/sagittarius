@@ -660,6 +660,12 @@ func unmarshalSagittarius(raw json.RawMessage) (*SagittariusSettings, error) {
 				return nil, fmt.Errorf("decode sagittarius.web: %w", err)
 			}
 			s.Web = w
+		case "maxToolRounds":
+			var n int
+			if err := json.Unmarshal(val, &n); err != nil {
+				return nil, fmt.Errorf("decode sagittarius.maxToolRounds: %w", err)
+			}
+			s.MaxToolRounds = &n
 		default:
 			if _, reserved := reservedSagittariusKeys[key]; reserved {
 				continue
@@ -756,6 +762,9 @@ func marshalSagittarius(s *SagittariusSettings) (json.RawMessage, error) {
 			return nil, err
 		}
 		obj["web"] = b
+	}
+	if err := add("maxToolRounds", s.MaxToolRounds); err != nil {
+		return nil, err
 	}
 	for key, val := range s.Extra {
 		obj[key] = val

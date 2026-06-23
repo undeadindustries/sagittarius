@@ -144,9 +144,14 @@ type model struct {
 	quitting bool
 	// turnCancel cancels the in-flight HandleInput turn; nil when no cancelable
 	// turn is running. turnStart marks when the turn began, for the elapsed
-	// timer in the working line.
-	turnCancel context.CancelFunc
-	turnStart  time.Time
+	// timer in the working line. turnCanceled is true from the first Esc press
+	// until StreamDone arrives or the stream is force-abandoned.
+	// streamAbandoned is set by forceAbandonTurn so handleStream can discard
+	// stale events that were already queued in the Bubble Tea message loop.
+	turnCancel      context.CancelFunc
+	turnStart       time.Time
+	turnCanceled    bool
+	streamAbandoned bool
 	// spin drives the animated working/thinking indicator shown above the input
 	// while a turn is in flight. It only ticks while busy.
 	spin spinner.Model
@@ -830,6 +835,10 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "esc":
 			if m.turnCancel != nil {
 				m.cancelTurn()
+			} else if m.turnCanceled {
+				// Second Esc: context already canceled; force-abandon so the
+				// user is not stuck waiting for slow-to-drain tools.
+				m.forceAbandonTurn()
 			}
 			return m, nil
 		case "ctrl+c":
@@ -1045,14 +1054,40 @@ func (m *model) acceptSuggestion(i int) {
 }
 
 // cancelTurn aborts the in-flight turn (the stream will close with an error /
-// done event) and notes it in the scrollback.
+// done event) and notes it in the scrollback. The spinner keeps running with
+// a "Canceling…" label until StreamDone drains or the user force-abandons.
 func (m *model) cancelTurn() {
 	if m.turnCancel == nil {
 		return
 	}
 	m.turnCancel()
 	m.turnCancel = nil
+	m.turnCanceled = true
+	m.setWorking(true, "Canceling…")
 	m.addBlock(roleInfo, "Turn canceled.")
+}
+
+// forceAbandonTurn immediately restores the idle UI state when the user presses
+// Esc a second time while waiting for a canceled turn to drain. The stream
+// channel is detached and drained by a background goroutine so its writer
+// goroutine can unblock without leaking.
+func (m *model) forceAbandonTurn() {
+	m.busy = false
+	m.turnCanceled = false
+	m.streamAbandoned = true
+	m.turnStart = time.Time{}
+	m.setWorking(false, "")
+	m.status = m.idleStatus
+	if ch := m.stream; ch != nil {
+		m.stream = nil
+		go func() {
+			for ev := range ch {
+				if ev.Type == ui.StreamDone || ev.Type == ui.StreamError {
+					return
+				}
+			}
+		}()
+	}
 }
 
 // clearTurn releases the per-turn cancel function and resets the elapsed clock
@@ -1062,17 +1097,24 @@ func (m *model) clearTurn() {
 		m.turnCancel()
 		m.turnCancel = nil
 	}
+	m.turnCanceled = false
+	m.streamAbandoned = false
 	m.turnStart = time.Time{}
 }
 
 // workingDisplayLabel augments the working/thinking label with an elapsed timer
-// and a cancel hint while a cancelable turn is running.
+// and a contextual hint: "esc to cancel" while running, "esc to force stop"
+// while waiting for the canceled turn's goroutine to drain.
 func (m *model) workingDisplayLabel() string {
 	if m.turnStart.IsZero() {
 		return m.workingLabel
 	}
 	secs := int(time.Since(m.turnStart).Seconds())
-	return fmt.Sprintf("%s (%ds · esc to cancel)", m.workingLabel, secs)
+	hint := "esc to cancel"
+	if m.turnCanceled {
+		hint = "esc to force stop"
+	}
+	return fmt.Sprintf("%s (%ds · %s)", m.workingLabel, secs, hint)
 }
 
 func (m *model) handleSubmit(line string) (tea.Model, tea.Cmd) {
@@ -1082,6 +1124,7 @@ func (m *model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 
 	m.addBlock(roleUser, line)
 	m.busy = true
+	m.streamAbandoned = false
 	m.setWorking(true, "Thinking…")
 
 	base := m.ctx
@@ -1106,6 +1149,11 @@ func (m *model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) handleStream(ev ui.StreamEvent) (tea.Model, tea.Cmd) {
+	// If the stream was force-abandoned, discard stale events that were already
+	// queued in the Bubble Tea message loop before the abandonment.
+	if m.streamAbandoned {
+		return m, nil
+	}
 	switch ev.Type {
 	case ui.StreamTextDelta:
 		// Hide the working line while the model is streaming visible output; the

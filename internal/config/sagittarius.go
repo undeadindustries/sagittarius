@@ -87,8 +87,12 @@ type SagittariusSettings struct {
 	// gating and the optional post-write reminder).
 	Verify *SagittariusVerifyConfig   `json:"verify,omitempty"`
 	// Web configures the built-in google_web_search and web_fetch tools.
-	Web   *SagittariusWebConfig       `json:"web,omitempty"`
-	Extra map[string]json.RawMessage  `json:"-"`
+	Web *SagittariusWebConfig `json:"web,omitempty"`
+	// MaxToolRounds caps how many tool-call/response cycles the agent may
+	// execute per turn. Nil means use the compiled-in default (100).
+	// Set higher for tasks that write many files; set lower to cap runaway loops.
+	MaxToolRounds *int                     `json:"maxToolRounds,omitempty"`
+	Extra         map[string]json.RawMessage `json:"-"`
 }
 
 // SagittariusWebConfig configures the built-in google_web_search and web_fetch tools.
@@ -185,6 +189,17 @@ var validInteractionModes = map[string]struct{}{
 // Per-mode blocks need no validation: both fields are optional. A mode with only
 // systemPromptSuffix and no model is valid — ResolveModel falls back to
 // sagittarius.defaultModel or the provider default while the suffix still applies.
+// ResolveMaxToolRounds returns the effective maximum tool-call rounds per turn.
+// It falls back to the compiled-in default when the setting is nil or ≤ 0.
+// The fallback value is imported via a parameter to avoid a circular import
+// between config and tools.
+func ResolveMaxToolRounds(s *SagittariusSettings, defaultRounds int) int {
+	if s != nil && s.MaxToolRounds != nil && *s.MaxToolRounds > 0 {
+		return *s.MaxToolRounds
+	}
+	return defaultRounds
+}
+
 func ValidateSagittariusSettings(s *SagittariusSettings) error {
 	if s == nil {
 		return nil
@@ -202,6 +217,9 @@ func ValidateSagittariusSettings(s *SagittariusSettings) error {
 				return fmt.Errorf("sagittarius.systemPrompt.variant %q: want full or lite", v)
 			}
 		}
+	}
+	if s.MaxToolRounds != nil && *s.MaxToolRounds <= 0 {
+		return fmt.Errorf("sagittarius.maxToolRounds must be > 0, got %d", *s.MaxToolRounds)
 	}
 	return nil
 }

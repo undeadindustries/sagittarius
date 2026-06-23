@@ -269,8 +269,11 @@ func messageToOpenAIMessages(msg Message, legacyCounter *int, legacyIDs map[stri
 			if rawID == "" {
 				rawID = "call_" + part.FunctionCall.Name + "_" + strconv.Itoa(*legacyCounter)
 				*legacyCounter++
-				legacyIDs[part.FunctionCall.Name] = append(legacyIDs[part.FunctionCall.Name], rawID)
 			}
+			// Always register the id so that responses loaded without a CallID
+			// (e.g. old session JSONL saved before the CallID fix) can fall back
+			// to the correct id rather than producing a bogus "call_<name>" string.
+			legacyIDs[part.FunctionCall.Name] = append(legacyIDs[part.FunctionCall.Name], rawID)
 			args, _ := json.Marshal(part.FunctionCall.Args)
 			toolCalls = append(toolCalls, openAIToolCall{
 				ID:   MistralSafeToolCallID(rawID),

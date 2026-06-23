@@ -153,6 +153,7 @@ func buildProviderParts(parts []Part) []provider.Part {
 			out = append(out, provider.Part{FunctionCall: &tc})
 		case p.FunctionResponse != nil:
 			resp := provider.FunctionResponse{
+				CallID:   p.FunctionResponse.ID,
 				Name:     p.FunctionResponse.Name,
 				Response: coerceResponseMap(p.FunctionResponse.Response),
 			}
@@ -275,6 +276,7 @@ func providerPartsToParts(parts []provider.Part) []Part {
 			}})
 		case p.FunctionResponse != nil:
 			out = append(out, Part{FunctionResponse: &FuncResponsePart{
+				ID:       p.FunctionResponse.CallID,
 				Name:     p.FunctionResponse.Name,
 				Response: p.FunctionResponse.Response,
 			}})

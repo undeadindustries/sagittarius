@@ -100,6 +100,7 @@ func NewApp(cfg AppConfig) *App {
 		baseProviderID:  config.NormalizeProviderID(cfg.BaseProviderID),
 		providerDisplay: cfg.ProviderLabel,
 		status: ui.StatusBar{
+			Left:   workspaceLeft(cfg.Runner),
 			Right:  providerModelLabel(cfg.ProviderLabel, cfg.Model),
 			Detail: systemPromptStatusDetail(cfg.Runner, cfg.Settings),
 			Mode:   mode.String(),
@@ -154,7 +155,14 @@ func (a *App) SessionMetrics() ui.SessionStats {
 		return ui.SessionStats{SessionID: a.sessionID, Provider: a.providerDisplay}
 	}
 	stats := a.runner.Stats()
-	stats.SessionID = a.sessionID
+	// Prefer the recorder's live session ID: after /clear or /chat resume the
+	// recorder rotates to a new UUID, so a.sessionID (PID-based) would point
+	// at the empty starter file rather than the file that holds the turns.
+	if live := a.runner.CurrentSessionID(); live != "" {
+		stats.SessionID = live
+	} else {
+		stats.SessionID = a.sessionID
+	}
 	stats.Provider = a.providerDisplay
 	return stats
 }
@@ -378,6 +386,7 @@ func (h *appHooks) RebuildRunner(ctx context.Context) (string, string, error) {
 
 	h.app.providerDisplay = label
 	h.app.status = ui.StatusBar{
+		Left:   workspaceLeft(h.app.runner),
 		Right:  providerModelLabel(label, resolvedModel),
 		Detail: systemPromptStatusDetail(h.app.runner, h.app.deps.Settings),
 		Mode:   h.app.runner.InteractionMode().String(),
@@ -1008,6 +1017,11 @@ func (h *appHooks) ApplyProjectSystemPromptPreset(ctx context.Context, presetID 
 // systemPromptStatusDetail returns the human-readable system-prompt preset label
 // for the footer (e.g. "Programmer (low context)").
 func systemPromptStatusDetail(runner *Runner, settings *config.Settings) string {
+	label := resolveSystemPromptLabel(runner, settings)
+	return "System Prompt: " + label
+}
+
+func resolveSystemPromptLabel(runner *Runner, settings *config.Settings) string {
 	if settings == nil {
 		return "Programmer"
 	}
@@ -1032,6 +1046,29 @@ func systemPromptStatusDetail(runner *Runner, settings *config.Settings) string 
 		return p.Label
 	}
 	return "Programmer"
+}
+
+// workspaceLeft returns a tilde-shortened workspace path for the footer's
+// left column, or an empty string when the runner is unavailable.
+func workspaceLeft(runner *Runner) string {
+	if runner == nil {
+		return ""
+	}
+	dir := runner.WorkDir()
+	if dir == "" {
+		return ""
+	}
+	home, err := os.UserHomeDir()
+	if err == nil && home != "" {
+		rel, relErr := filepath.Rel(home, dir)
+		if relErr == nil && !strings.HasPrefix(rel, "..") {
+			if rel == "." {
+				return "~"
+			}
+			return "~" + string(filepath.Separator) + rel
+		}
+	}
+	return dir
 }
 
 func skillNames(items []skills.Definition) map[string]struct{} {

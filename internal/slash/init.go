@@ -8,7 +8,7 @@ import (
 
 // initAnalysisPrompt instructs the agent to explore the project with its tools
 // and write a comprehensive AGENTS.md. Adapted from gemini-cli's /init prompt
-// for Sagittarius (AGENTS.md instead of GEMINI.md).
+// for Sagittarius (AGENTS.md).
 const initAnalysisPrompt = `You are an AI coding agent. Your task is to analyze the current project directory and generate a comprehensive AGENTS.md file to be used as instructional context for future interactions.
 
 **Analysis Process:**

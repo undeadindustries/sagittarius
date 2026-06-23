@@ -154,6 +154,7 @@ func (r *Recorder) RecordFunctionResponses(responses []provider.FunctionResponse
 	parts := make([]Part, 0, len(responses))
 	for _, resp := range responses {
 		parts = append(parts, Part{FunctionResponse: &FuncResponsePart{
+			ID:       resp.CallID,
 			Name:     resp.Name,
 			Response: resp.Response,
 		}})

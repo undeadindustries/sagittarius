@@ -106,7 +106,7 @@ for this session** (`2`, skips later prompts for that tool), and **No**
 
 ### `/memory`
 
-- **Description:** Manage project memory files (`GEMINI.md`, `AGENTS.md`).
+- **Description:** Manage project memory files (`AGENTS.md`).
 
 #### Sub-commands
 
