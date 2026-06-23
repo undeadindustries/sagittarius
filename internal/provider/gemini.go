@@ -149,6 +149,7 @@ func (g *GeminiGenerator) GenerateContentStream(
 
 		stream := g.streamer.GenerateContentStream(streamCtx, model, contents, cfg)
 		var lastUsageMeta *genai.GenerateContentResponseUsageMetadata
+		var syntheticCallCounter int
 		acc := newModelPartsAccumulator()
 		for resp, err := range stream {
 			if err != nil {
@@ -157,6 +158,18 @@ func (g *GeminiGenerator) GenerateContentStream(
 			}
 			if resp == nil {
 				continue
+			}
+
+			// Assign synthetic IDs to Gemini tool calls that lack them, so that
+			// the model parts and emitted ToolCalls have matching IDs. This allows
+			// the history to be safely passed to OpenAI/Mistral providers later.
+			if len(resp.Candidates) > 0 && resp.Candidates[0] != nil && resp.Candidates[0].Content != nil {
+				for _, p := range resp.Candidates[0].Content.Parts {
+					if p != nil && p.FunctionCall != nil && p.FunctionCall.ID == "" {
+						p.FunctionCall.ID = fmt.Sprintf("call_%s_%d", p.FunctionCall.Name, syntheticCallCounter)
+						syntheticCallCounter++
+					}
+				}
 			}
 
 			if resp.UsageMetadata != nil {

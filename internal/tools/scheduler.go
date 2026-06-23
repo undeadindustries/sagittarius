@@ -108,19 +108,19 @@ func (s *Scheduler) executeOne(
 	// blocking is gated on enforce).
 	if allowed, reason := ProjectBoundaryAllow(s.enforce, name, args, s.workspace); !allowed {
 		emit(ui.StreamEvent{Type: ui.StreamToolResult, ToolName: name, Text: reason})
-		return errorResponse(name, reason), nil
+		return errorResponse(call, reason), nil
 	}
 
 	if allowed, reason := s.interactionModeAllow(name, args); !allowed {
 		emit(ui.StreamEvent{Type: ui.StreamToolResult, ToolName: name, Text: reason})
-		return errorResponse(name, reason), nil
+		return errorResponse(call, reason), nil
 	}
 
 	tool, ok := s.registry.Lookup(name)
 	if !ok {
 		errText := fmt.Sprintf("unknown tool %q", name)
 		emit(ui.StreamEvent{Type: ui.StreamToolResult, ToolName: name, Text: errText})
-		return errorResponse(name, errText), nil
+		return errorResponse(call, errText), nil
 	}
 
 	if s.policy.NeedsConfirmation(tool) && !s.sessionGranted(name) {
@@ -131,7 +131,7 @@ func (s *Scheduler) executeOne(
 		if !approved {
 			errText := "user denied tool execution"
 			emit(ui.StreamEvent{Type: ui.StreamToolResult, ToolName: name, Text: errText})
-			return errorResponse(name, errText), nil
+			return errorResponse(call, errText), nil
 		}
 	}
 
@@ -152,7 +152,7 @@ func (s *Scheduler) executeOne(
 	if err != nil {
 		errText := err.Error()
 		emit(ui.StreamEvent{Type: ui.StreamToolResult, ToolName: name, Text: errText})
-		return errorResponse(name, errText), nil
+		return errorResponse(call, errText), nil
 	}
 
 	if snapAbs != "" {
@@ -164,7 +164,7 @@ func (s *Scheduler) executeOne(
 		resultText = writeDiff
 	}
 	emit(ui.StreamEvent{Type: ui.StreamToolResult, ToolName: name, Text: resultText})
-	return &provider.FunctionResponse{Name: name, Response: result}, nil
+	return &provider.FunctionResponse{Name: name, CallID: call.ID, Response: result}, nil
 }
 
 // snapshotTarget returns the resolved absolute path a write_file call will
@@ -272,9 +272,10 @@ func (s *Scheduler) writeFileDiff(args map[string]any) string {
 	return diff.UnifiedDiff(before, content, filepath.Base(path))
 }
 
-func errorResponse(name, message string) *provider.FunctionResponse {
+func errorResponse(call provider.ToolCall, message string) *provider.FunctionResponse {
 	return &provider.FunctionResponse{
-		Name: name,
+		Name:   call.Name,
+		CallID: call.ID,
 		Response: map[string]any{
 			"error": message,
 		},
