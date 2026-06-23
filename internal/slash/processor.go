@@ -37,6 +37,46 @@ type Result struct {
 	OpenDialog DialogKind
 	Messages   []string
 	Err        error
+	// Scrollback, when non-empty, asks the interactive TUI to repaint prior
+	// conversation turns into the scrollback (used by /chat resume). Entries are
+	// emitted before Messages so a restored conversation appears above the
+	// command's confirmation line.
+	Scrollback []ScrollbackEntry
+	// ClearScrollback asks the interactive TUI to clear the existing scrollback
+	// before the Scrollback entries are repainted, so /chat resume replaces the
+	// visible conversation instead of appending the restored turns beneath it.
+	ClearScrollback bool
+	// Clipboard, when non-empty, asks the UI layer to copy this text to the
+	// system clipboard (used by /copy). The slash layer never touches the
+	// terminal itself; the consumer (TUI or headless) performs the copy.
+	Clipboard string
+	// SubmitPrompt, when non-empty, asks the agent layer to run this text as a
+	// follow-up model turn after the command's messages, merging the turn's
+	// events into the same stream. Used by /init so the agent analyzes the
+	// project and writes AGENTS.md with its tools.
+	SubmitPrompt string
+	// ThemeName, when non-empty, asks the UI to switch its active theme live
+	// ("default" or "greyscale"). Set by /theme.
+	ThemeName string
+}
+
+// ScrollRole classifies a restored scrollback entry so the TUI can apply the
+// matching user / assistant / info styling.
+type ScrollRole int
+
+const (
+	// ScrollUser is a user turn.
+	ScrollUser ScrollRole = iota
+	// ScrollAssistant is a model turn.
+	ScrollAssistant
+	// ScrollInfo is system / informational text.
+	ScrollInfo
+)
+
+// ScrollbackEntry is one restored conversation block for TUI repaint.
+type ScrollbackEntry struct {
+	Role ScrollRole
+	Text string
 }
 
 // Context carries per-invocation state for command handlers.

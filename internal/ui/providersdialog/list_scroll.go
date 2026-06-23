@@ -39,7 +39,7 @@ func (m Model) activationFixedLines() int {
 	}
 	lines := 2 // screen title block
 	if m.modelsErr != "" {
-		lines += lineCount(m.wrap("✗ "+m.modelsErr))
+		lines += lineCount(m.wrap("✗ " + m.modelsErr))
 		lines += 1 // blank after error block
 		if len(m.models) == 0 {
 			return lines + 1

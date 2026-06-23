@@ -2,6 +2,7 @@ package provider
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -144,6 +145,28 @@ func (g *OpenAIResponsesGenerator) streamOnce(ctx context.Context, body []byte, 
 		SetLastResponseID(state.ResponseID)
 	}
 	return nil
+}
+
+// DebugWireRequest implements WireRequestDebugger: it builds the Responses API
+// request body exactly as GenerateContentStream would and returns it as indented
+// JSON for /chat debug.
+func (g *OpenAIResponsesGenerator) DebugWireRequest(req *GenerateRequest) ([]byte, error) {
+	if req == nil {
+		return nil, fmt.Errorf("debug wire request: request is required")
+	}
+	model := g.model
+	if req.Model != "" {
+		model = req.Model
+	}
+	body, err := g.buildRequestBody(req, model, true)
+	if err != nil {
+		return nil, err
+	}
+	var pretty bytes.Buffer
+	if err := json.Indent(&pretty, body, "", "  "); err != nil {
+		return body, nil // fall back to compact body rather than failing debug
+	}
+	return pretty.Bytes(), nil
 }
 
 func (g *OpenAIResponsesGenerator) buildRequestBody(req *GenerateRequest, model string, stream bool) ([]byte, error) {

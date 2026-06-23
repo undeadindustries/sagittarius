@@ -17,7 +17,7 @@ func (m Model) View() string {
 	for i, p := range m.options {
 		label := p.label
 		if i == m.cursor {
-			b.WriteString(m.th.Accent.Render("> " + label) + "\n")
+			b.WriteString(m.th.Accent.Render("> "+label) + "\n")
 		} else {
 			b.WriteString("  " + label + "\n")
 		}

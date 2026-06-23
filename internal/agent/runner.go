@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/undeadindustries/sagittarius/internal/atmention"
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/contextmgmt"
 	"github.com/undeadindustries/sagittarius/internal/modes"
@@ -128,6 +130,12 @@ func (r *Runner) LoadedMemoryFiles() []string {
 	return r.loadedMemoryFiles
 }
 
+// Workspace returns the runner's trusted workspace root for path validation.
+// Used by the TUI to drive "@path" file-mention autocompletion.
+func (r *Runner) Workspace() *tools.Workspace {
+	return r.workspace
+}
+
 // NewRunner constructs a Runner and discovers project memory for the system prompt.
 //
 // A nil cfg.Generator is permitted for interactive sessions that start without a
@@ -234,6 +242,32 @@ func (r *Runner) LastGenerateRequest() *provider.GenerateRequest {
 	r.lastRequestMu.RLock()
 	defer r.lastRequestMu.RUnlock()
 	return r.lastRequest
+}
+
+// DebugRequest returns the most recent request as indented JSON for /chat debug.
+// When the active generator owns its serialization (openai-chat, openai-responses)
+// the exact wire body is returned; otherwise the provider-neutral GenerateRequest
+// is marshalled as a faithful, if not byte-exact, fallback.
+func (r *Runner) DebugRequest() ([]byte, error) {
+	req := r.LastGenerateRequest()
+	if req == nil {
+		return nil, fmt.Errorf("no provider request recorded yet — send a message first")
+	}
+	r.genMu.RLock()
+	gen := r.gen
+	r.genMu.RUnlock()
+	if dbg, ok := gen.(provider.WireRequestDebugger); ok {
+		if body, err := dbg.DebugWireRequest(req); err == nil {
+			return body, nil
+		}
+		// Fall through to the neutral request on serialization error rather than
+		// failing debug entirely.
+	}
+	data, err := json.MarshalIndent(req, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("marshal provider request: %w", err)
+	}
+	return data, nil
 }
 
 // Model returns the configured model id for this runner.
@@ -363,11 +397,25 @@ func (r *Runner) RunTurn(ctx context.Context, userInput string) (<-chan ui.Strea
 		return ch, nil
 	}
 
+	// Expand "@path" references into the message parts sent to the model. The
+	// scrollback and session history keep the raw text the user typed; only the
+	// model-bound parts gain the injected file content. A resolution failure
+	// (missing file, directory, binary, outside workspace) aborts the turn with a
+	// surfaced error rather than silently dropping context.
+	parts, err := atmention.Expand(r.workspace, userInput)
+	if err != nil {
+		ch := make(chan ui.StreamEvent, 2)
+		ch <- ui.StreamEvent{Type: ui.StreamError, Err: err}
+		ch <- ui.StreamEvent{Type: ui.StreamDone}
+		close(ch)
+		return ch, nil
+	}
+
 	r.setState(StateIdle)
 	r.metrics.recordTurn()
 	r.history = append(r.history, provider.Message{
 		Role:  provider.RoleUser,
-		Parts: []provider.Part{{Text: userInput}},
+		Parts: parts,
 	})
 	if r.sessionRecorder != nil {
 		r.sessionRecorder.RecordUserMessage(userInput)
@@ -908,6 +956,87 @@ func (r *Runner) setState(state State) {
 func (r *Runner) ClearHistory() {
 	r.history = r.history[:0]
 	r.turnCounter = 0
+}
+
+// History returns a defensive copy of the current conversation history. The
+// copy is shallow (Part slices are shared), which is sufficient for read-only
+// consumers such as /chat share and /chat debug; callers must not mutate the
+// returned messages in place. Like ClearHistory, this assumes the single-turn
+// goroutine contract — it is safe to call between turns, not during one.
+func (r *Runner) History() []provider.Message {
+	return append([]provider.Message(nil), r.history...)
+}
+
+// lastAssistantText returns the concatenated text of the most recent model
+// message in history, or "" when there is none. Tool-call and tool-response
+// parts (which carry no Text) are ignored.
+func lastAssistantText(history []provider.Message) string {
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].Role != provider.RoleModel {
+			continue
+		}
+		var b strings.Builder
+		for _, p := range history[i].Parts {
+			if p.Text != "" {
+				if b.Len() > 0 {
+					b.WriteString("\n")
+				}
+				b.WriteString(p.Text)
+			}
+		}
+		if b.Len() > 0 {
+			return b.String()
+		}
+	}
+	return ""
+}
+
+// LastAssistantText returns the text of the most recent assistant (model) turn,
+// or "" when none exists. Like History it must be called between turns.
+func (r *Runner) LastAssistantText() string {
+	return lastAssistantText(r.history)
+}
+
+// ReplaceHistory swaps the in-memory conversation history for a copy of h and
+// resets the context turn counter. It backs /chat resume, restoring a saved
+// checkpoint into the live session.
+//
+// It must only be called when no turn is in flight: like ClearHistory, the
+// runner's history field has no mutex and is owned by the turn goroutine. The
+// caller (a slash handler running between turns) satisfies this contract.
+func (r *Runner) ReplaceHistory(h []provider.Message) {
+	r.history = append([]provider.Message(nil), h...)
+	r.turnCounter = 0
+}
+
+// ContextCompressionAvailable reports whether manual /compress can run for the
+// active provider. It is false for non openai-chat providers, whose context
+// manager is nil or disabled.
+func (r *Runner) ContextCompressionAvailable() bool {
+	return r.contextManager().CompressionAvailable()
+}
+
+// ForceCompress summarizes the current conversation history immediately via the
+// context manager, replacing r.history in place, and returns the compression
+// info for UI reporting. It is a no-op (CompressionNoOp) when compression is
+// unavailable.
+//
+// Like ReplaceHistory it must be called between turns: r.history is owned by the
+// turn goroutine and has no mutex. Slash handlers satisfy this contract.
+func (r *Runner) ForceCompress(ctx context.Context) (contextmgmt.CompressionInfo, error) {
+	newHistory, info, err := r.contextManager().ForceCompress(ctx, r.history)
+	if err != nil {
+		return info, err
+	}
+	if newHistory != nil {
+		r.history = newHistory
+	}
+	return info, nil
+}
+
+// WorkDir returns the runner's resolved workspace root.
+func (r *Runner) WorkDir() string {
+	return r.workDir
 }
 
 // countToolFailures counts function responses that carry an "error" key, the

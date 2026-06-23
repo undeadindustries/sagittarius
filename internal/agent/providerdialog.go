@@ -41,6 +41,18 @@ func mapDialogKind(kind slash.DialogKind) ui.DialogKind {
 	}
 }
 
+// mapScrollRole maps a slash restored-scrollback role onto its ui counterpart.
+func mapScrollRole(role slash.ScrollRole) ui.ScrollbackRole {
+	switch role {
+	case slash.ScrollUser:
+		return ui.ScrollbackUser
+	case slash.ScrollAssistant:
+		return ui.ScrollbackAssistant
+	default:
+		return ui.ScrollbackInfo
+	}
+}
+
 // ProviderDialogDeps returns the side-effect adapter the providers wizard uses.
 // It is consumed by the Bubble Tea layer when opening the providers overlay.
 func (a *App) ProviderDialogDeps() providersdialog.Deps {
@@ -706,7 +718,7 @@ func (d *modesDialogDeps) ListModes() []modesdialog.ModeEntry {
 	if s != nil && s.Sagittarius != nil {
 		modes = s.Sagittarius.Modes
 	}
-	modeNames := []string{"agent", "plan", "ask", "debug"}
+	modeNames := []string{"agent", "ask", "debug", "plan"}
 	entries := make([]modesdialog.ModeEntry, 0, len(modeNames))
 	for _, name := range modeNames {
 		prov, model := modeModeConfigValues(modes, name)

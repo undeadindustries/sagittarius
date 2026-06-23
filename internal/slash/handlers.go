@@ -2,11 +2,13 @@ package slash
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 
 	"github.com/undeadindustries/sagittarius/internal/agents"
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/session"
+	"github.com/undeadindustries/sagittarius/internal/version"
 )
 
 func helpCommand() Command {
@@ -18,6 +20,67 @@ func helpCommand() Command {
 			return InfoResult(reg.RenderHelp())
 		},
 	}
+}
+
+func aboutCommand() Command {
+	return Command{
+		Name:        "about",
+		Description: "Show version info. Share this information when filing issues.",
+		Handler:     handleAbout,
+	}
+}
+
+// handleAbout renders the CLI version, Go toolchain, and platform so users can
+// paste it into bug reports.
+func handleAbout(_ *Context) Result {
+	var sb strings.Builder
+	sb.WriteString("Sagittarius CLI\n")
+	sb.WriteString("Version: " + version.String() + "\n")
+	sb.WriteString("Go: " + runtime.Version() + "\n")
+	sb.WriteString("OS/Arch: " + runtime.GOOS + "/" + runtime.GOARCH)
+	return InfoResult(sb.String())
+}
+
+func compressCommand() Command {
+	return Command{
+		Name:        "compress",
+		Description: "Replace the chat context with a summary to save tokens",
+		Handler:     handleCompress,
+	}
+}
+
+// handleCompress manually compresses the conversation context into a summary.
+func handleCompress(ctx *Context) Result {
+	if ctx.Deps.Hooks == nil {
+		return InfoResult("Compression unavailable.")
+	}
+	msg, err := ctx.Deps.Hooks.ForceCompressHistory(ctx.Ctx)
+	if err != nil {
+		return ErrorResult(err)
+	}
+	return InfoResult(msg)
+}
+
+func copyCommand() Command {
+	return Command{
+		Name:        "copy",
+		Description: "Copy the last assistant response to the clipboard",
+		Handler:     handleCopy,
+	}
+}
+
+// handleCopy copies the most recent assistant response to the clipboard. The
+// actual copy is performed by the UI layer via Result.Clipboard so the slash
+// layer stays free of terminal I/O.
+func handleCopy(ctx *Context) Result {
+	if ctx.Deps.Hooks == nil {
+		return InfoResult("Clipboard unavailable.")
+	}
+	text := ctx.Deps.Hooks.LastAssistantText()
+	if text == "" {
+		return InfoResult("No assistant response to copy yet.")
+	}
+	return Result{Handled: true, Clipboard: text}
 }
 
 func quitCommand() Command {
@@ -116,7 +179,7 @@ func systemPromptCommand() Command {
 		Handler:     handleSystemPrompt,
 		ArgComplete: func(_ Deps, argPrefix string) []string {
 			var out []string
-			for _, p := range config.SystemPromptPresets {
+			for _, p := range config.SortedSystemPromptPresets() {
 				if strings.HasPrefix(p.ID, argPrefix) {
 					out = append(out, p.ID)
 				}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"sort"
 	"sync"
 
 	"github.com/undeadindustries/sagittarius/internal/config"
@@ -92,6 +93,9 @@ func (r *Registry) AllDefinitions() []Definition {
 	defer r.mu.RUnlock()
 	out := make([]Definition, len(r.agents))
 	copy(out, r.agents)
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Name < out[j].Name
+	})
 	return out
 }
 

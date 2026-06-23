@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -142,11 +143,18 @@ func (m *Manager) ToolInventory(ctx context.Context) []ServerToolInventory {
 			if err != nil {
 				inv.Err = err.Error()
 			} else {
-				inv.Tools = toolInfos(st.Name, all, st.Config.IncludeTools, st.Config.ExcludeTools)
+				infos := toolInfos(st.Name, all, st.Config.IncludeTools, st.Config.ExcludeTools)
+				sort.Slice(infos, func(i, j int) bool {
+					return infos[i].Name < infos[j].Name
+				})
+				inv.Tools = infos
 			}
 		}
 		out = append(out, inv)
 	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Server < out[j].Server
+	})
 	return out
 }
 
@@ -172,12 +180,15 @@ func toolInfos(server string, tools []*sdkmcp.Tool, include, exclude []string) [
 	return out
 }
 
-// States returns the last known server states.
+// States returns the last known server states, sorted by server name.
 func (m *Manager) States() []ServerState {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	out := make([]ServerState, len(m.states))
 	copy(out, m.states)
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Name < out[j].Name
+	})
 	return out
 }
 

@@ -19,12 +19,15 @@ import (
 )
 
 type mockHooks struct {
-	rebuildCalls int
-	reloadCalls  int
-	models       []provider.ModelInfo
-	storedKeys   map[string]string
-	rebuildLabel string
-	rebuildModel string
+	rebuildCalls  int
+	reloadCalls   int
+	models        []provider.ModelInfo
+	storedKeys    map[string]string
+	rebuildLabel  string
+	rebuildModel  string
+	workDir       string
+	lastAssistant string
+	lastUITheme   string
 }
 
 func (m *mockHooks) RebuildRunner(context.Context) (string, string, error) {
@@ -114,6 +117,49 @@ func (m *mockHooks) ApplyProjectSystemPromptPreset(ctx context.Context, presetID
 	return "System prompt → Programmer", nil
 }
 
+func (m *mockHooks) WriteRequestDebug() (string, error) {
+	return "/tmp/sagittarius-request-test.json", nil
+}
+
+func (m *mockHooks) CurrentHistory() ([]provider.Message, error) {
+	return []provider.Message{
+		{Role: provider.RoleUser, Parts: []provider.Part{{Text: "hi"}}},
+		{Role: provider.RoleModel, Parts: []provider.Part{{Text: "hello"}}},
+	}, nil
+}
+
+func (m *mockHooks) WorkDir() string { return m.workDir }
+
+func (m *mockHooks) SaveCheckpoint(tag string, _ bool) (string, error) {
+	return "/tmp/checkpoint-" + tag + ".jsonl", nil
+}
+
+func (m *mockHooks) ListCheckpoints() ([]string, error) {
+	return []string{"alpha", "beta"}, nil
+}
+
+func (m *mockHooks) ResumeCheckpoint(_ context.Context, tag string) (string, []provider.Message, error) {
+	return "Resumed " + tag, []provider.Message{
+		{Role: provider.RoleUser, Parts: []provider.Part{{Text: "hi"}}},
+		{Role: provider.RoleModel, Parts: []provider.Part{{Text: "hello"}}},
+	}, nil
+}
+
+func (m *mockHooks) DeleteCheckpoint(string) error { return nil }
+
+func (m *mockHooks) ForceCompressHistory(context.Context) (string, error) {
+	return "Compressed context: 100 → 20 tokens.", nil
+}
+
+func (m *mockHooks) LastAssistantText() string { return m.lastAssistant }
+
+func (m *mockHooks) SessionStatsText(section string) string { return "stats[" + section + "]" }
+
+func (m *mockHooks) SetUITheme(name string) error {
+	m.lastUITheme = name
+	return nil
+}
+
 func testDeps(t *testing.T, settings *config.Settings) (slash.Deps, *config.Loader, *mockHooks) {
 	t.Helper()
 	dir := t.TempDir()
@@ -131,7 +177,7 @@ func testDeps(t *testing.T, settings *config.Settings) (slash.Deps, *config.Load
 			Raw: map[string]json.RawMessage{},
 		}
 	}
-	hooks := &mockHooks{rebuildLabel: "OpenAI", rebuildModel: "gpt-4o-mini"}
+	hooks := &mockHooks{rebuildLabel: "OpenAI", rebuildModel: "gpt-4o-mini", lastAssistant: "assistant reply"}
 	return slash.Deps{Loader: loader, Settings: settings, Hooks: hooks}, loader, hooks
 }
 
@@ -318,9 +364,12 @@ func TestMemoryReloadStub(t *testing.T) {
 	}
 }
 
+// TestReasoningNotApplicableOnGemini mutates the package-level provider session
+// override global, so it is intentionally NOT parallel: it must not interleave
+// with TestReasoningApplicableOnResponses, which sets and asserts the same global.
 func TestReasoningNotApplicableOnGemini(t *testing.T) {
-	t.Parallel()
 	provider.ClearSessionReasoningOverride()
+	t.Cleanup(provider.ClearSessionReasoningOverride)
 
 	settings := &config.Settings{
 		Providers: &config.ProvidersSettings{
@@ -342,8 +391,11 @@ func TestReasoningNotApplicableOnGemini(t *testing.T) {
 	}
 }
 
+// TestReasoningApplicableOnResponses mutates the package-level provider session
+// override global, so it is intentionally NOT parallel (see the sibling
+// TestReasoningNotApplicableOnGemini): concurrent ClearSessionReasoningOverride
+// calls would otherwise wipe the override this test sets and asserts.
 func TestReasoningApplicableOnResponses(t *testing.T) {
-	t.Parallel()
 	provider.ClearSessionReasoningOverride()
 	t.Cleanup(provider.ClearSessionReasoningOverride)
 

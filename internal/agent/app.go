@@ -2,12 +2,20 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/undeadindustries/sagittarius/internal/agents"
+	"github.com/undeadindustries/sagittarius/internal/atmention"
 	"github.com/undeadindustries/sagittarius/internal/config"
+	"github.com/undeadindustries/sagittarius/internal/contextmgmt"
 	"github.com/undeadindustries/sagittarius/internal/credentials"
 	"github.com/undeadindustries/sagittarius/internal/mcp"
 	"github.com/undeadindustries/sagittarius/internal/modes"
@@ -37,10 +45,12 @@ type AppConfig struct {
 	BaseProviderID string
 }
 
-// App implements the optional ui.Completer and ui.MetricsProvider interfaces.
+// App implements the optional ui.Completer, ui.MentionCompleter, and
+// ui.MetricsProvider interfaces.
 var (
-	_ ui.Completer       = (*App)(nil)
-	_ ui.MetricsProvider = (*App)(nil)
+	_ ui.Completer        = (*App)(nil)
+	_ ui.MentionCompleter = (*App)(nil)
+	_ ui.MetricsProvider  = (*App)(nil)
 )
 
 // App adapts Runner to ui.App for interactive TUI sessions.
@@ -51,6 +61,11 @@ type App struct {
 	processor *slash.Processor
 	deps      slash.Deps
 	sessionID string
+	// generatorCache eliminates repeated client initialisation (DNS + TLS +
+	// genai.NewClient) on mode switches that involve a provider override. The
+	// cache is self-invalidating: any change to connection parameters or
+	// credentials produces a miss automatically.
+	generatorCache *provider.GeneratorCache
 	// providerDisplay is the current provider's display id (e.g. "openrouter",
 	// "gemini"). It backs the "{provider} - {model}" footer label and the exit
 	// summary Provider row, kept in sync on every rebuild / model / mode change.
@@ -59,6 +74,9 @@ type App struct {
 	// mode override temporarily switched to a different provider. Empty when no
 	// provider override is active.
 	baseProviderID string
+	// mentions is the lazily-built "@path" completion index over the runner's
+	// workspace. nil until the first CompleteMention call.
+	mentions *atmention.Index
 }
 
 // NewApp wraps runner for interactive use and exposes footer metadata.
@@ -78,6 +96,7 @@ func NewApp(cfg AppConfig) *App {
 		runtime:         cfg.Runtime,
 		processor:       slash.NewProcessor(),
 		sessionID:       cfg.SessionID,
+		generatorCache:  provider.NewGeneratorCache(),
 		baseProviderID:  config.NormalizeProviderID(cfg.BaseProviderID),
 		providerDisplay: cfg.ProviderLabel,
 		status: ui.StatusBar{
@@ -155,6 +174,19 @@ func (a *App) Complete(input string) ui.Completions {
 		})
 	}
 	return ui.Completions{Items: items, ReplaceFrom: comp.ReplaceFrom}
+}
+
+// CompleteMention implements ui.MentionCompleter, providing "@path" file
+// completions sourced from the runner's workspace. It is read-only and
+// non-blocking (cached workspace listing) so the TUI can call it per keystroke.
+func (a *App) CompleteMention(input string, cursor int) ui.Completions {
+	if a.runner == nil {
+		return ui.Completions{}
+	}
+	if a.mentions == nil {
+		a.mentions = atmention.NewIndex(a.runner.Workspace())
+	}
+	return a.mentions.Complete(input, cursor)
 }
 
 // CycleInteractionMode advances agent → plan → ask → debug → agent.
@@ -237,6 +269,16 @@ func (a *App) handleSlash(ctx context.Context, input string) (<-chan ui.StreamEv
 			out <- ui.StreamEvent{Type: ui.StreamDone}
 			return
 		}
+		if result.ClearScrollback {
+			out <- ui.StreamEvent{Type: ui.StreamClearScrollback}
+		}
+		for _, entry := range result.Scrollback {
+			out <- ui.StreamEvent{
+				Type:           ui.StreamScrollback,
+				Text:           entry.Text,
+				ScrollbackRole: mapScrollRole(entry.Role),
+			}
+		}
 		for _, msg := range result.Messages {
 			out <- ui.StreamEvent{Type: ui.StreamInfo, Text: msg + "\n"}
 		}
@@ -245,6 +287,27 @@ func (a *App) handleSlash(ctx context.Context, input string) (<-chan ui.StreamEv
 		}
 		if result.OpenDialog != "" {
 			out <- ui.StreamEvent{Type: ui.StreamOpenDialog, Dialog: mapDialogKind(result.OpenDialog)}
+		}
+		if result.Clipboard != "" {
+			out <- ui.StreamEvent{Type: ui.StreamCopyToClipboard, Text: result.Clipboard}
+		}
+		if result.ThemeName != "" {
+			out <- ui.StreamEvent{Type: ui.StreamSetTheme, Text: result.ThemeName}
+		}
+		if result.SubmitPrompt != "" {
+			// Hand off to a real model turn (e.g. /init analyzing the project) by
+			// merging RunTurn's events into this stream. RunTurn emits its own
+			// terminal StreamDone, so we do not emit one here.
+			turnEvents, err := a.runner.RunTurn(ctx, result.SubmitPrompt)
+			if err != nil {
+				out <- ui.StreamEvent{Type: ui.StreamError, Err: err}
+				out <- ui.StreamEvent{Type: ui.StreamDone}
+				return
+			}
+			for ev := range turnEvents {
+				out <- ev
+			}
+			return
 		}
 		out <- ui.StreamEvent{Type: ui.StreamDone}
 	}()
@@ -264,7 +327,7 @@ func (h *appHooks) RebuildRunner(ctx context.Context) (string, string, error) {
 		return "", "", fmt.Errorf("settings not loaded")
 	}
 
-	gen, err := provider.NewContentGenerator(ctx, h.app.deps.Settings)
+	gen, err := h.app.generatorCache.GetOrCreate(ctx, h.app.deps.Settings)
 	if err != nil {
 		return "", "", err
 	}
@@ -359,6 +422,71 @@ func (h *appHooks) ReloadMCP(ctx context.Context) (string, error) {
 	return formatMCPReloadSummary(h.app.runtime.Catalog.MCPManager().States()), nil
 }
 
+// ForceCompressHistory manually compresses the live conversation context and
+// returns a human-readable summary of the outcome.
+func (h *appHooks) ForceCompressHistory(ctx context.Context) (string, error) {
+	if h.app == nil || h.app.runner == nil {
+		return "", fmt.Errorf("runner not available")
+	}
+	if !h.app.runner.ContextCompressionAvailable() {
+		return "Context compression is only available for OpenAI-compatible chat providers; the current provider manages context server-side.", nil
+	}
+	info, err := h.app.runner.ForceCompress(ctx)
+	if err != nil {
+		return "", err
+	}
+	return formatCompressionResult(info), nil
+}
+
+// LastAssistantText returns the most recent assistant response text for /copy.
+func (h *appHooks) LastAssistantText() string {
+	if h.app == nil || h.app.runner == nil {
+		return ""
+	}
+	return h.app.runner.LastAssistantText()
+}
+
+// SessionStatsText implements slash.Hooks. It renders live session telemetry as
+// plain text for /stats; section is "", "session", "model", or "tools".
+func (h *appHooks) SessionStatsText(section string) string {
+	if h.app == nil {
+		return "Session statistics are not available."
+	}
+	return ui.FormatSessionStats(h.app.SessionMetrics(), section)
+}
+
+// SetUITheme implements slash.Hooks: it persists the theme to settings.json.
+func (h *appHooks) SetUITheme(name string) error {
+	if h.app == nil || h.app.deps.Settings == nil {
+		return fmt.Errorf("settings not loaded")
+	}
+	if err := h.app.deps.Settings.SetUITheme(name); err != nil {
+		return err
+	}
+	if h.app.deps.Loader != nil {
+		if err := h.app.deps.Loader.Save(h.app.deps.Settings); err != nil {
+			return fmt.Errorf("save settings: %w", err)
+		}
+	}
+	return nil
+}
+
+// formatCompressionResult renders a CompressionInfo as a user-facing line.
+func formatCompressionResult(info contextmgmt.CompressionInfo) string {
+	switch info.Status {
+	case contextmgmt.Compressed:
+		return fmt.Sprintf("Compressed context: %d → %d tokens.", info.OriginalTokenCount, info.NewTokenCount)
+	case contextmgmt.ContentTruncated:
+		return fmt.Sprintf("Truncated tool output: %d → %d tokens (no summary produced).", info.OriginalTokenCount, info.NewTokenCount)
+	case contextmgmt.CompressionFailedEmptySummary:
+		return "Compression produced no usable summary; context left unchanged."
+	case contextmgmt.CompressionFailedInflatedTokenCount:
+		return "Compression would have grown the context; left unchanged."
+	default:
+		return "Nothing to compress yet — the conversation is already small."
+	}
+}
+
 func (h *appHooks) ReloadSkills(ctx context.Context) (string, error) {
 	if h.app == nil || h.app.runtime == nil || h.app.runner == nil {
 		return "", fmt.Errorf("runtime not available")
@@ -449,6 +577,279 @@ func (h *appHooks) ClearHistory() error {
 	}
 	h.app.runner.ClearHistory()
 	h.app.runner.RotateSession()
+	return nil
+}
+
+// checkpointTagRE constrains user-supplied checkpoint tags to a filesystem-safe
+// charset so a tag can never escape the checkpoints directory or collide with
+// the "checkpoint-<tag>.jsonl" naming scheme.
+var checkpointTagRE = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
+// WriteRequestDebug writes the most recent provider request to a timestamped
+// JSON file in the working directory and returns its path, for /chat debug. When
+// the active generator owns its serialization the exact wire body is written;
+// otherwise the provider-neutral request is written as a fallback. It errors
+// when no request has been recorded yet (no message sent this session).
+func (h *appHooks) WriteRequestDebug() (string, error) {
+	if h.app == nil || h.app.runner == nil {
+		return "", fmt.Errorf("runner not available")
+	}
+	data, err := h.app.runner.DebugRequest()
+	if err != nil {
+		return "", err
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("resolve working directory: %w", err)
+	}
+	name := fmt.Sprintf("sagittarius-request-%s.json", time.Now().Format("20060102-150405"))
+	path := filepath.Join(wd, name)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return "", fmt.Errorf("write debug request: %w", err)
+	}
+	return path, nil
+}
+
+// CurrentHistory returns a copy of the live conversation history for /chat share.
+func (h *appHooks) CurrentHistory() ([]provider.Message, error) {
+	if h.app == nil || h.app.runner == nil {
+		return nil, fmt.Errorf("runner not available")
+	}
+	return h.app.runner.History(), nil
+}
+
+// WorkDir returns the runner's workspace root, used to keep /chat share writes
+// inside the project boundary. Returns "" when no runner is available.
+func (h *appHooks) WorkDir() string {
+	if h.app == nil || h.app.runner == nil {
+		return ""
+	}
+	return h.app.runner.WorkDir()
+}
+
+// checkpointsDir resolves the per-project checkpoints directory
+// (~/.sagittarius/tmp/<slug>/chats/checkpoints).
+func (h *appHooks) checkpointsDir() (string, error) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("resolve working directory: %w", err)
+	}
+	dir, err := session.ChatsDir(wd)
+	if err != nil {
+		return "", fmt.Errorf("resolve chats directory: %w", err)
+	}
+	return filepath.Join(dir, "checkpoints"), nil
+}
+
+// checkpointFileName maps a validated tag to its on-disk checkpoint filename.
+func checkpointFileName(tag string) string {
+	return "checkpoint-" + tag + ".jsonl"
+}
+
+// checkpointMetaFileName maps a validated tag to its provider/model sidecar
+// filename. The ".meta.json" suffix keeps it out of the ".jsonl" tag listing.
+func checkpointMetaFileName(tag string) string {
+	return "checkpoint-" + tag + ".meta.json"
+}
+
+// validCheckpointTag validates a user-supplied checkpoint tag, rejecting empty
+// strings, path traversal, and any character outside [A-Za-z0-9._-].
+func validCheckpointTag(tag string) error {
+	tag = strings.TrimSpace(tag)
+	if tag == "" {
+		return fmt.Errorf("checkpoint tag is required")
+	}
+	if tag == "." || tag == ".." {
+		return fmt.Errorf("invalid checkpoint tag %q: use letters, digits, '.', '_' or '-'", tag)
+	}
+	if !checkpointTagRE.MatchString(tag) {
+		return fmt.Errorf("invalid checkpoint tag %q: use letters, digits, '.', '_' or '-'", tag)
+	}
+	return nil
+}
+
+// checkpointMeta records the provider and model a checkpoint was saved under, so
+// /chat resume can warn when restoring it into a different provider.
+type checkpointMeta struct {
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	SavedAt  string `json:"savedAt"`
+}
+
+// SaveCheckpoint serialises the live in-memory conversation to a named
+// checkpoint and returns the destination path. It refuses to overwrite an
+// existing checkpoint unless overwrite is true and guards against saving an
+// empty conversation. A best-effort metadata sidecar records the active
+// provider/model for the resume-mismatch warning.
+//
+// The checkpoint is written from runner.History() rather than copied from the
+// active session file: after a session rotation (/chat resume, /clear) or a
+// context compression the on-disk file no longer matches the in-memory history,
+// and the in-memory history is the conversation the user means to save.
+func (h *appHooks) SaveCheckpoint(tag string, overwrite bool) (string, error) {
+	if h.app == nil || h.app.runner == nil {
+		return "", fmt.Errorf("runner not available")
+	}
+	if err := validCheckpointTag(tag); err != nil {
+		return "", err
+	}
+	history := h.app.runner.History()
+	if len(history) == 0 {
+		return "", fmt.Errorf("no conversation to save yet — send a message first")
+	}
+	dir, err := h.checkpointsDir()
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", fmt.Errorf("create checkpoints directory: %w", err)
+	}
+	trimmed := strings.TrimSpace(tag)
+	dst := filepath.Join(dir, checkpointFileName(trimmed))
+	if !overwrite {
+		if _, statErr := os.Stat(dst); statErr == nil {
+			return "", fmt.Errorf("checkpoint %q already exists; add 'force' to overwrite: /chat save %s force", trimmed, trimmed)
+		}
+	}
+	if err := session.WriteHistory(dst, h.app.sessionID, "", "", history); err != nil {
+		return "", err
+	}
+	h.writeCheckpointMeta(dir, trimmed)
+	return dst, nil
+}
+
+// writeCheckpointMeta persists the provider/model sidecar next to a checkpoint.
+// Failures are non-fatal (logged): the sidecar only powers a resume-time warning.
+func (h *appHooks) writeCheckpointMeta(dir, tag string) {
+	meta := checkpointMeta{
+		Provider: h.app.providerDisplay,
+		Model:    h.app.runner.Model(),
+		SavedAt:  time.Now().UTC().Format(time.RFC3339),
+	}
+	data, err := json.MarshalIndent(meta, "", "  ")
+	if err != nil {
+		slog.Warn("checkpoint metadata marshal failed", "tag", tag, "error", err)
+		return
+	}
+	if err := os.WriteFile(filepath.Join(dir, checkpointMetaFileName(tag)), data, 0o600); err != nil {
+		slog.Warn("checkpoint metadata write failed", "tag", tag, "error", err)
+	}
+}
+
+// readCheckpointMeta returns the provider/model sidecar for a checkpoint, or nil
+// when it is absent or unreadable (older checkpoints predate the sidecar).
+func (h *appHooks) readCheckpointMeta(dir, tag string) *checkpointMeta {
+	data, err := os.ReadFile(filepath.Join(dir, checkpointMetaFileName(tag)))
+	if err != nil {
+		return nil
+	}
+	var meta checkpointMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return nil
+	}
+	return &meta
+}
+
+// ListCheckpoints returns the sorted tags of saved checkpoints. A missing
+// checkpoints directory yields an empty list, not an error.
+func (h *appHooks) ListCheckpoints() ([]string, error) {
+	dir, err := h.checkpointsDir()
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read checkpoints directory: %w", err)
+	}
+	const prefix, suffix = "checkpoint-", ".jsonl"
+	var tags []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		name := e.Name()
+		if !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, suffix) {
+			continue
+		}
+		tag := strings.TrimSuffix(strings.TrimPrefix(name, prefix), suffix)
+		if tag != "" {
+			tags = append(tags, tag)
+		}
+	}
+	sort.Strings(tags)
+	return tags, nil
+}
+
+// ResumeCheckpoint restores a saved checkpoint into the live runner history and
+// rotates the session recorder. It returns a human-readable summary.
+//
+// v1 limitation: the resumed prior turns remain only in the checkpoint file.
+// After resume the recorder rotates to a fresh session file, so new turns are
+// recorded from the resume point forward rather than appended to the
+// checkpoint's history.
+func (h *appHooks) ResumeCheckpoint(ctx context.Context, tag string) (string, []provider.Message, error) {
+	_ = ctx
+	if h.app == nil || h.app.runner == nil {
+		return "", nil, fmt.Errorf("runner not available")
+	}
+	if err := validCheckpointTag(tag); err != nil {
+		return "", nil, err
+	}
+	dir, err := h.checkpointsDir()
+	if err != nil {
+		return "", nil, err
+	}
+	trimmed := strings.TrimSpace(tag)
+	path := filepath.Join(dir, checkpointFileName(trimmed))
+	if _, err := os.Stat(path); err != nil {
+		if os.IsNotExist(err) {
+			return "", nil, fmt.Errorf("checkpoint %q not found", tag)
+		}
+		return "", nil, fmt.Errorf("stat checkpoint: %w", err)
+	}
+	record, err := session.LoadSession(path)
+	if err != nil {
+		return "", nil, fmt.Errorf("load checkpoint %q: %w", tag, err)
+	}
+	history := session.ConvertToProviderHistory(record)
+	h.app.runner.ReplaceHistory(history)
+	h.app.runner.RotateSession()
+
+	var b strings.Builder
+	// Sagittarius history is provider-neutral, so cross-provider resume is safe;
+	// we still warn (rather than block, as gemini-cli does) because thought
+	// signatures and reasoning state are provider-specific and not replayed.
+	if meta := h.readCheckpointMeta(dir, trimmed); meta != nil && meta.Provider != "" && meta.Provider != h.app.providerDisplay {
+		fmt.Fprintf(&b, "Note: checkpoint was saved under %q; you are now on %q.\n", meta.Provider, h.app.providerDisplay)
+	}
+	fmt.Fprintf(&b, "Resumed checkpoint %q (%d messages). New turns record to a fresh session.", trimmed, len(history))
+	return b.String(), history, nil
+}
+
+// DeleteCheckpoint removes a saved checkpoint file.
+func (h *appHooks) DeleteCheckpoint(tag string) error {
+	if err := validCheckpointTag(tag); err != nil {
+		return err
+	}
+	dir, err := h.checkpointsDir()
+	if err != nil {
+		return err
+	}
+	trimmed := strings.TrimSpace(tag)
+	path := filepath.Join(dir, checkpointFileName(trimmed))
+	if err := os.Remove(path); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("checkpoint %q not found", tag)
+		}
+		return fmt.Errorf("delete checkpoint %q: %w", tag, err)
+	}
+	// Best-effort sidecar cleanup; absence is fine (older checkpoints have none).
+	if err := os.Remove(filepath.Join(dir, checkpointMetaFileName(trimmed))); err != nil && !os.IsNotExist(err) {
+		slog.Warn("checkpoint metadata delete failed", "tag", trimmed, "error", err)
+	}
 	return nil
 }
 

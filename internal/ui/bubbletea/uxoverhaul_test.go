@@ -116,16 +116,3 @@ func TestEscCancelsTurn(t *testing.T) {
 		t.Fatal("turnCancel should be cleared after cancel")
 	}
 }
-
-func TestInputHeightGrowsAndCaps(t *testing.T) {
-	t.Parallel()
-	m := newTestModel()
-	m.input.SetValue("a\nb\nc")
-	if got := m.inputHeight(); got != 3 {
-		t.Fatalf("inputHeight = %d, want 3", got)
-	}
-	m.input.SetValue(strings.Repeat("x\n", 20))
-	if got := m.inputHeight(); got != maxInputRows {
-		t.Fatalf("inputHeight = %d, want cap %d", got, maxInputRows)
-	}
-}

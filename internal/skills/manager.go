@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -81,6 +82,9 @@ func (m *Manager) Discover(ctx context.Context, extensionSkills []Definition) er
 	for _, skill := range byName {
 		m.skills = append(m.skills, skill)
 	}
+	sort.Slice(m.skills, func(i, j int) bool {
+		return m.skills[i].Name < m.skills[j].Name
+	})
 	return nil
 }
 

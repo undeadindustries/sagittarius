@@ -61,8 +61,8 @@ func TestResolveEffectiveTemperature(t *testing.T) {
 
 	// Creative assistant default for a generic model.
 	creative := &Settings{Providers: &ProvidersSettings{
-		Active:  "openai",
-		OpenAI:  &ProviderInstanceConfig{Personality: PersonalityCreativeAssistant},
+		Active: "openai",
+		OpenAI: &ProviderInstanceConfig{Personality: PersonalityCreativeAssistant},
 	}}
 	if got := ResolveEffectiveTemperature(creative, "openai", "gpt-4o"); got == nil || *got != 0.85 {
 		t.Fatalf("creative default expected: got %v", got)

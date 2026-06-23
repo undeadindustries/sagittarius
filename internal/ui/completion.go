@@ -32,3 +32,12 @@ type Completions struct {
 type Completer interface {
 	Complete(input string) Completions
 }
+
+// MentionCompleter optionally provides "@path" file-mention completions for an
+// active mention token ending at the byte offset cursor within input. The TUI
+// type-asserts the App to this interface; apps that do not implement it simply
+// have no mention autocompletion. Like Completer, implementations must be fast
+// and non-blocking because CompleteMention runs on the UI thread per keystroke.
+type MentionCompleter interface {
+	CompleteMention(input string, cursor int) Completions
+}

@@ -52,6 +52,32 @@ type Hooks interface {
 	// ApplyProjectSystemPromptPreset writes a preset to the project settings file
 	// and reloads the runner system instruction.
 	ApplyProjectSystemPromptPreset(ctx context.Context, presetID string) (string, error)
+	// Chat checkpoint + export hooks (/chat).
+	// WriteRequestDebug writes the most recent provider request to a timestamped
+	// JSON file in the working directory and returns its path.
+	WriteRequestDebug() (string, error)
+	CurrentHistory() ([]provider.Message, error)
+	WorkDir() string
+	// SaveCheckpoint persists the current conversation under tag. It refuses to
+	// clobber an existing checkpoint unless overwrite is true.
+	SaveCheckpoint(tag string, overwrite bool) (string, error)
+	ListCheckpoints() ([]string, error)
+	// ResumeCheckpoint restores tag into the live session and returns a summary
+	// plus the restored conversation for scrollback repaint.
+	ResumeCheckpoint(ctx context.Context, tag string) (summary string, history []provider.Message, err error)
+	DeleteCheckpoint(tag string) error
+	// ForceCompressHistory manually compresses the conversation context into a
+	// summary and returns a human-readable result message.
+	ForceCompressHistory(ctx context.Context) (string, error)
+	// LastAssistantText returns the most recent assistant response text, or ""
+	// when there is none. Used by /copy.
+	LastAssistantText() string
+	// SessionStatsText returns session telemetry formatted as plain text for the
+	// /stats command. section is "" or "session" (full summary), "model", or "tools".
+	SessionStatsText(section string) string
+	// SetUITheme persists the chosen TUI theme ("default" or "greyscale") to
+	// settings. Used by /theme; the live switch is driven separately via the UI.
+	SetUITheme(name string) error
 }
 
 // Deps supplies slash command dependencies (injectable for tests).

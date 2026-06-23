@@ -22,6 +22,32 @@ const (
 	StreamOpenDialog
 	// StreamDone marks the end of a single assistant turn stream.
 	StreamDone
+	// StreamClearScrollback clears the scrollback before a restored conversation
+	// is repainted, so /chat resume replaces the visible history instead of
+	// appending to it.
+	StreamClearScrollback
+	// StreamScrollback repaints a restored conversation block (role + text) into
+	// the scrollback, used by /chat resume.
+	StreamScrollback
+	// StreamCopyToClipboard asks the UI to copy Text to the system clipboard
+	// (used by /copy).
+	StreamCopyToClipboard
+	// StreamSetTheme asks the TUI to switch its active theme to Text live
+	// ("default" or "greyscale"), used by /theme.
+	StreamSetTheme
+)
+
+// ScrollbackRole classifies a StreamScrollback block so the TUI applies the
+// matching user / assistant / info styling.
+type ScrollbackRole int
+
+const (
+	// ScrollbackUser is a user turn.
+	ScrollbackUser ScrollbackRole = iota
+	// ScrollbackAssistant is a model turn.
+	ScrollbackAssistant
+	// ScrollbackInfo is system / informational text.
+	ScrollbackInfo
 )
 
 // DialogKind identifies an interactive TUI dialog requested by the agent layer.
@@ -58,6 +84,8 @@ type StreamEvent struct {
 	ConfirmReply chan ConfirmDecision
 	// Dialog is set for StreamOpenDialog and names the overlay to open.
 	Dialog DialogKind
+	// ScrollbackRole is set for StreamScrollback and selects the block styling.
+	ScrollbackRole ScrollbackRole
 }
 
 // ConfirmDecision is the user's answer to a tool confirmation prompt.

@@ -3,6 +3,7 @@ package bubbletea
 import (
 	"context"
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -243,6 +244,91 @@ func suggestApp() completerApp {
 	}}
 }
 
+// mentionApp is a quitApp that serves "@path" mention completions, used to
+// exercise the inline mention-suggestion UI.
+type mentionApp struct {
+	quitApp
+}
+
+func (mentionApp) CompleteMention(input string, cursor int) ui.Completions {
+	at := strings.LastIndexByte(input[:cursor], '@')
+	if at < 0 {
+		return ui.Completions{}
+	}
+	return ui.Completions{
+		Items: []ui.Suggestion{
+			{Label: "internal/agent/app.go", Insert: "internal/agent/app.go", AppendSpace: true},
+		},
+		ReplaceFrom: at + 1,
+	}
+}
+
+func TestMentionSuggestionsAppearOnAt(t *testing.T) {
+	t.Parallel()
+	m := newModel(ui.Options{}, mentionApp{}, NewTerminal(ui.Options{}))
+	typeRunes(m, "explain @int")
+	if len(m.suggestions) != 1 {
+		t.Fatalf("mention suggestions = %d, want 1", len(m.suggestions))
+	}
+}
+
+func TestMentionTabReplacesPartial(t *testing.T) {
+	t.Parallel()
+	m := newModel(ui.Options{}, mentionApp{}, NewTerminal(ui.Options{}))
+	typeRunes(m, "explain @int")
+	m.handleKey(tea.KeyMsg{Type: tea.KeyTab})
+	if got := m.input.Value(); got != "explain @internal/agent/app.go " {
+		t.Fatalf("input after tab = %q, want %q", got, "explain @internal/agent/app.go ")
+	}
+}
+
+func TestClearScrollbackReplacesHistory(t *testing.T) {
+	t.Parallel()
+	m := newModel(ui.Options{}, quitApp{}, NewTerminal(ui.Options{}))
+	m.addBlock(roleUser, "old turn")
+	m.addBlock(roleResponse, "old reply")
+
+	m.handleStream(ui.StreamEvent{Type: ui.StreamClearScrollback})
+	if len(m.blocks) != 0 {
+		t.Fatalf("blocks after clear = %d, want 0", len(m.blocks))
+	}
+
+	m.handleStream(ui.StreamEvent{Type: ui.StreamScrollback, Text: "restored", ScrollbackRole: ui.ScrollbackUser})
+	if len(m.blocks) != 1 || m.blocks[0].text != "restored" {
+		t.Fatalf("blocks after repaint = %+v, want single restored block", m.blocks)
+	}
+}
+
+func TestInputByteCursorTracksCursor(t *testing.T) {
+	t.Parallel()
+	m := newModel(ui.Options{}, mentionApp{}, NewTerminal(ui.Options{}))
+	typeRunes(m, "explain @int")
+	if got := m.inputByteCursor(); got != 12 {
+		t.Fatalf("cursor at end = %d, want 12", got)
+	}
+	for i := 0; i < 2; i++ {
+		m.handleKey(tea.KeyMsg{Type: tea.KeyLeft})
+	}
+	if got := m.inputByteCursor(); got != 10 {
+		t.Fatalf("cursor after 2 lefts = %d, want 10", got)
+	}
+}
+
+func TestMentionTabPreservesSuffix(t *testing.T) {
+	t.Parallel()
+	m := newModel(ui.Options{}, mentionApp{}, NewTerminal(ui.Options{}))
+	typeRunes(m, "explain @int here")
+	// Move the cursor back to just after "@int" (before " here", 5 runes).
+	for i := 0; i < 5; i++ {
+		m.handleKey(tea.KeyMsg{Type: tea.KeyLeft})
+	}
+	m.handleKey(tea.KeyMsg{Type: tea.KeyTab})
+	want := "explain @internal/agent/app.go  here"
+	if got := m.input.Value(); got != want {
+		t.Fatalf("input after mid-line tab = %q, want %q", got, want)
+	}
+}
+
 func TestSuggestionsAppearOnSlash(t *testing.T) {
 	t.Parallel()
 	m := newModel(ui.Options{}, suggestApp(), NewTerminal(ui.Options{}))
@@ -275,6 +361,53 @@ func TestSuggestionArrowNavigationWraps(t *testing.T) {
 	m.handleKey(tea.KeyMsg{Type: tea.KeyUp})
 	if m.suggestionIdx != 1 {
 		t.Fatalf("after wrap up idx = %d, want 1", m.suggestionIdx)
+	}
+}
+
+type longSuggestApp struct {
+	quitApp
+}
+
+func (longSuggestApp) Complete(input string) ui.Completions {
+	if !strings.HasPrefix(input, "/") {
+		return ui.Completions{}
+	}
+	items := make([]ui.Suggestion, 10)
+	for i := 0; i < 10; i++ {
+		items[i] = ui.Suggestion{Label: fmt.Sprintf("cmd%d", i), Insert: fmt.Sprintf("cmd%d", i)}
+	}
+	return ui.Completions{Items: items, ReplaceFrom: 1}
+}
+
+func TestSuggestionScrolling(t *testing.T) {
+	t.Parallel()
+	m := newModel(ui.Options{}, longSuggestApp{}, NewTerminal(ui.Options{}))
+	typeRunes(m, "/")
+
+	// Initially no highlight, showing top 8.
+	rendered := m.renderSuggestions()
+	if !strings.Contains(rendered, "cmd0") || !strings.Contains(rendered, "cmd7") {
+		t.Errorf("expected cmd0..cmd7 in initial render")
+	}
+	if !strings.Contains(rendered, "↓ 2 more") {
+		t.Errorf("expected bottom indicator '↓ 2 more', got:\n%s", rendered)
+	}
+
+	// Arrow up to wrap to the last item (index 9).
+	m.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	if m.suggestionIdx != 9 {
+		t.Fatalf("expected suggestionIdx 9, got %d", m.suggestionIdx)
+	}
+
+	rendered = m.renderSuggestions()
+	if !strings.Contains(rendered, "cmd2") || !strings.Contains(rendered, "cmd9") {
+		t.Errorf("expected cmd2..cmd9 in wrapped render")
+	}
+	if !strings.Contains(rendered, "↑ 2 more") {
+		t.Errorf("expected top indicator '↑ 2 more', got:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "↓") {
+		t.Errorf("unexpected bottom indicator when at bottom")
 	}
 }
 

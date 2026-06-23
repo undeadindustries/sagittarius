@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -69,6 +70,21 @@ func NewOpenAIChatGenerator(cfg OpenAIChatConfig) (*OpenAIChatGenerator, error) 
 		toolCallParsing: parseMode,
 		temperature:     cfg.Temperature,
 	}, nil
+}
+
+// DebugWireRequest implements WireRequestDebugger: it builds the chat-completions
+// request body exactly as GenerateContentStream would and returns it as indented
+// JSON for /chat debug.
+func (g *OpenAIChatGenerator) DebugWireRequest(req *GenerateRequest) ([]byte, error) {
+	if req == nil {
+		return nil, fmt.Errorf("debug wire request: request is required")
+	}
+	model := g.model
+	if req.Model != "" {
+		model = req.Model
+	}
+	chatReq := BuildOpenAIChatRequest(req, model, g.toolCallParsing, g.temperature)
+	return json.MarshalIndent(chatReq, "", "  ")
 }
 
 // GenerateContentStream implements ContentGenerator.

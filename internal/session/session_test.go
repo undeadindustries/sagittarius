@@ -399,6 +399,75 @@ func TestConvertToProviderHistoryToolRoundTrip(t *testing.T) {
 	}
 }
 
+// TestWriteHistoryRoundTrip verifies a checkpoint written from in-memory history
+// reloads to the same provider history through LoadSession + ConvertToProviderHistory.
+func TestWriteHistoryRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	history := []provider.Message{
+		{Role: provider.RoleUser, Parts: []provider.Part{{Text: "read the file"}}},
+		{Role: provider.RoleModel, Parts: []provider.Part{
+			{Text: "sure"},
+			{FunctionCall: &provider.ToolCall{ID: "call-1", Name: "read_file", Args: map[string]any{"path": "/tmp/x"}}},
+		}},
+		{Role: provider.RoleUser, Parts: []provider.Part{
+			{FunctionResponse: &provider.FunctionResponse{Name: "read_file", Response: map[string]any{"output": "file contents"}}},
+		}},
+		{Role: provider.RoleModel, Parts: []provider.Part{{Text: "done"}}},
+	}
+
+	path := filepath.Join(t.TempDir(), "checkpoint-test.jsonl")
+	if err := session.WriteHistory(path, "", "", "", history); err != nil {
+		t.Fatalf("WriteHistory: %v", err)
+	}
+
+	record, err := session.LoadSession(path)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if record.SessionID == "" {
+		t.Fatal("WriteHistory must emit a non-empty session id so LoadSession succeeds")
+	}
+
+	got := session.ConvertToProviderHistory(record)
+	if len(got) != len(history) {
+		t.Fatalf("round-trip history len = %d, want %d: %+v", len(got), len(history), got)
+	}
+
+	if got[1].Parts[1].FunctionCall == nil || got[1].Parts[1].FunctionCall.Name != "read_file" {
+		t.Errorf("model tool call not preserved: %+v", got[1].Parts)
+	}
+	var resp *provider.FunctionResponse
+	for _, m := range got {
+		for _, p := range m.Parts {
+			if p.FunctionResponse != nil {
+				resp = p.FunctionResponse
+			}
+		}
+	}
+	if resp == nil || resp.Response["output"] != "file contents" {
+		t.Errorf("function response not preserved: %+v", resp)
+	}
+}
+
+// TestWriteHistoryEmpty verifies an empty conversation still yields a loadable
+// file (metadata only) without panicking.
+func TestWriteHistoryEmpty(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "checkpoint-empty.jsonl")
+	if err := session.WriteHistory(path, "sid-1", "", "", nil); err != nil {
+		t.Fatalf("WriteHistory: %v", err)
+	}
+	record, err := session.LoadSession(path)
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if len(record.Messages) != 0 {
+		t.Errorf("expected no messages, got %d", len(record.Messages))
+	}
+}
+
 // TestRecorderRotateStartsNewFile verifies /clear-style rotation begins a fresh
 // session file with a new id, leaving the original intact.
 func TestRecorderRotateStartsNewFile(t *testing.T) {

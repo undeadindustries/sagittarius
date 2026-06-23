@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/undeadindustries/sagittarius/internal/tools"
 	"github.com/undeadindustries/sagittarius/internal/ui/toolsdialog"
@@ -34,6 +35,9 @@ func (d *toolsDialogDeps) BuiltinTools() []toolsdialog.BuiltinTool {
 			Source:      string(e.Source),
 		})
 	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].Name < out[j].Name
+	})
 	return out
 }
 

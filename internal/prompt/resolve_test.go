@@ -30,11 +30,11 @@ func TestResolvePersonalityPrecedence(t *testing.T) {
 	}
 
 	cases := []struct {
-		name      string
-		provider  string
-		model     string
-		wantPers  Personality
-		wantVrnt  Variant
+		name     string
+		provider string
+		model    string
+		wantPers Personality
+		wantVrnt Variant
 	}{
 		{"model override wins", "openai", "gpt-4o", PersonalityPersonalAssistant, VariantFull},
 		{"provider override next", "openai", "other-model", PersonalitySysadmin, VariantLite},

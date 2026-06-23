@@ -1,6 +1,9 @@
 package config
 
-import "strings"
+import (
+	"sort"
+	"strings"
+)
 
 // Variant ids for the system prompt size. Canonical home is config so provider
 // and prompt can both reference them without an import cycle.
@@ -38,6 +41,17 @@ var SystemPromptPresets = []SystemPromptPreset{
 	{ID: "personal-assistant-lite", Label: "Personal assistant (low context)", Personality: PersonalityPersonalAssistant, Variant: VariantLite},
 	{ID: "creative-assistant", Label: "Creative assistant", Personality: PersonalityCreativeAssistant, Variant: VariantFull},
 	{ID: "creative-assistant-lite", Label: "Creative assistant (low context)", Personality: PersonalityCreativeAssistant, Variant: VariantLite},
+}
+
+// SortedSystemPromptPresets returns a copy of SystemPromptPresets sorted alphabetically by ID,
+// keeping full/lite variants together while presenting them in a predictable order.
+func SortedSystemPromptPresets() []SystemPromptPreset {
+	out := make([]SystemPromptPreset, len(SystemPromptPresets))
+	copy(out, SystemPromptPresets)
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].ID < out[j].ID
+	})
+	return out
 }
 
 // LookupPreset returns the preset with the given id (case-insensitive).
