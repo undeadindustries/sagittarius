@@ -46,7 +46,7 @@ func TestExitSummaryShowsStatsAndResume(t *testing.T) {
 		"abcdef12", // short id
 		"OpenAI",
 		"gpt-5-codex",
-		"4 (75% ok)",
+		"4 (", "✓ 3", "✗ 1",
 		"1m35s",
 		"12.0k / 3.4k",
 		"sagittarius --resume abcdef1234567890",

@@ -24,52 +24,77 @@ func (m *model) renderExitSummary() string {
 		stats := mp.SessionMetrics()
 		sections = append(sections, m.renderExitStats(stats))
 		if hint := resumeHint(stats.SessionID); hint != "" {
-			sections = append(sections, m.th.Secondary.Render(hint))
+			if len(m.th.TitleGradient) > 0 {
+				sections = append(sections, m.th.GradientText(hint, m.th.Secondary, m.th.TitleGradient))
+			} else {
+				sections = append(sections, m.th.Secondary.Render(hint))
+			}
 		}
 	}
 
 	return strings.Join(sections, "\n\n") + "\n"
 }
 
+// statRow renders a single label+value row aligned in a gutter layout.
+// label is blue (Link), value is white (Primary).
+func (m *model) statRow(label, value string) string {
+	return m.th.Link.Render(fmt.Sprintf("  %-18s", label+":")) + m.th.Primary.Render(value)
+}
+
+// sectionHeader renders a bold white section heading.
+func (m *model) sectionHeader(title string) string {
+	return m.th.Primary.Bold(true).Render(title)
+}
+
 func (m *model) renderExitStats(stats ui.SessionStats) string {
-	label := m.th.Secondary
-	sessionCostStr := ""
-	if stats.SessionCostKnown {
-		sessionCostStr = ui.FormatCostUSD(stats.SessionCostUSD)
-	}
-	rows := [][2]string{
-		{"Session", strings.TrimSpace(stats.SessionID)},
-		{"Provider", stats.Provider},
-		{"Model", stats.Model},
-		{"Turns", fmt.Sprintf("%d", stats.Turns)},
-		{"Tool calls", ui.ToolCallsSummary(stats)},
-		{"Duration", ui.FormatDuration(stats.Duration)},
-		{"Session cost", sessionCostStr},
-	}
-
 	var b strings.Builder
-	for i, row := range rows {
-		if row[1] == "" {
-			continue
+
+	// ── Interaction Summary ─────────────────────────────────────────────────
+	b.WriteString(m.sectionHeader("Interaction Summary"))
+	writeRow := func(label, value string) {
+		if value == "" {
+			return
 		}
-		if i > 0 {
-			b.WriteString("\n")
-		}
-		b.WriteString(label.Render(fmt.Sprintf("  %-16s ", row[0]+":")))
-		b.WriteString(m.th.Primary.Render(row[1]))
+		b.WriteString("\n")
+		b.WriteString(m.statRow(label, value))
+	}
+	writeRow("Session", strings.TrimSpace(stats.SessionID))
+	writeRow("Provider", stats.Provider)
+	writeRow("Model", stats.Model)
+	writeRow("Turns", fmt.Sprintf("%d", stats.Turns))
+
+	// Tool calls with semantic color indicators.
+	if stats.ToolCalls > 0 {
+		ok := stats.ToolCalls - stats.ToolFailures
+		b.WriteString("\n")
+		b.WriteString(m.th.Link.Render(fmt.Sprintf("  %-18s", "Tool calls:")))
+		b.WriteString(m.th.Primary.Render(fmt.Sprintf("%d (", stats.ToolCalls)))
+		b.WriteString(m.th.Success.Render(fmt.Sprintf("✓ %d", ok)))
+		b.WriteString(m.th.Primary.Render(" "))
+		b.WriteString(m.th.Error.Render(fmt.Sprintf("✗ %d", stats.ToolFailures)))
+		b.WriteString(m.th.Primary.Render(")"))
+	} else {
+		writeRow("Tool calls", "0")
 	}
 
+	// ── Performance ─────────────────────────────────────────────────────────
+	b.WriteString("\n\n")
+	b.WriteString(m.sectionHeader("Performance"))
+	writeRow("Duration", ui.FormatDuration(stats.Duration))
+	if stats.SessionCostKnown {
+		writeRow("Session cost", ui.FormatCostUSD(stats.SessionCostUSD))
+	}
+
+	// ── Token Usage ─────────────────────────────────────────────────────────
 	if len(stats.ModelUsage) > 0 {
-		if b.Len() > 0 {
-			b.WriteString("\n")
-		}
-		b.WriteString(m.renderModelUsage(stats.ModelUsage))
-	} else {
-		// Fallback: flat token row when no per-model data is available.
-		tok := fmt.Sprintf("%s / %s", ui.CompactCount(stats.InputTokens), ui.CompactCount(stats.OutputTokens))
 		b.WriteString("\n")
-		b.WriteString(label.Render(fmt.Sprintf("  %-16s ", "Tokens (in/out):")))
-		b.WriteString(m.th.Primary.Render(tok))
+		b.WriteString(m.renderModelUsage(stats.ModelUsage))
+	} else if stats.InputTokens > 0 || stats.OutputTokens > 0 {
+		tok := fmt.Sprintf("%s / %s", ui.CompactCount(stats.InputTokens), ui.CompactCount(stats.OutputTokens))
+		b.WriteString("\n\n")
+		b.WriteString(m.sectionHeader("Token Usage"))
+		b.WriteString("\n")
+		b.WriteString(m.statRow("In / Out", tok))
 	}
 
 	return strings.TrimRight(b.String(), "\n")
@@ -93,17 +118,18 @@ func (m *model) renderModelUsage(stats []ui.ModelUsageStat) string {
 	// rendering of the pre-aggregated rows.
 	rows, showCost := ui.AggregateModelUsage(stats)
 
-	label := m.th.Secondary
 	dim := m.th.Dim
 	primary := m.th.Primary
 
 	var b strings.Builder
-	b.WriteString(label.Render("  Model Usage"))
 	b.WriteString("\n")
+	b.WriteString(m.sectionHeader("Model Usage"))
+	b.WriteString("\n")
+	col := m.th.Secondary
 	if showCost {
-		b.WriteString(label.Render(fmt.Sprintf("  %-32s  %4s  %7s  %7s  %9s", "Model", "Reqs", "In", "Out", "Cost")))
+		b.WriteString(col.Render(fmt.Sprintf("  %-32s  %4s  %7s  %7s  %9s", "Model", "Reqs", "In", "Out", "Cost")))
 	} else {
-		b.WriteString(label.Render(fmt.Sprintf("  %-32s  %4s  %7s  %7s", "Model", "Reqs", "In", "Out")))
+		b.WriteString(col.Render(fmt.Sprintf("  %-32s  %4s  %7s  %7s", "Model", "Reqs", "In", "Out")))
 	}
 
 	for _, row := range rows {
