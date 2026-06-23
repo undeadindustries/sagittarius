@@ -2,6 +2,7 @@ package bubbletea
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -12,7 +13,9 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mattn/go-runewidth"
 
+	"github.com/undeadindustries/sagittarius/internal/clipboard"
 	"github.com/undeadindustries/sagittarius/internal/ui"
 	"github.com/undeadindustries/sagittarius/internal/ui/mcpdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/modelpickdialog"
@@ -75,6 +78,13 @@ type onboardingHost interface {
 
 type streamEventMsg struct {
 	event ui.StreamEvent
+}
+
+// clipboardResultMsg carries the outcome of an async clipboard copy started by
+// copyToClipboard, so the blocking copy runs off the UI goroutine.
+type clipboardResultMsg struct {
+	text string
+	err  error
 }
 
 type statusMsg struct {
@@ -208,25 +218,7 @@ func newModel(opts ui.Options, app ui.App, term *Terminal) *model {
 	ti.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("alt+enter", "shift+enter", "ctrl+j"))
 
 	th := theme.Resolve(opts.ThemeName, opts.NoColor)
-
-	// Style the input box so it has a visible background affordance, like
-	// Gemini CLI's grey input area. On color themes use the InputBg color;
-	// on greyscale use Reverse so no color codes are emitted.
-	if th.Colored {
-		inputBg := lipgloss.NewStyle().Background(th.InputBg)
-		ti.FocusedStyle.Base = inputBg
-		ti.FocusedStyle.Text = inputBg
-		ti.FocusedStyle.CursorLine = inputBg
-		ti.FocusedStyle.Prompt = inputBg.Foreground(th.Accent.GetForeground())
-		ti.FocusedStyle.Placeholder = inputBg.Faint(true)
-	} else {
-		rev := lipgloss.NewStyle().Reverse(true)
-		ti.FocusedStyle.Base = rev
-		ti.FocusedStyle.Text = rev
-		ti.FocusedStyle.CursorLine = rev
-		ti.FocusedStyle.Prompt = rev
-		ti.FocusedStyle.Placeholder = rev.Faint(true)
-	}
+	applyInputTheme(&ti, th)
 
 	welcome := welcomeText(opts, th)
 	vp := viewport.New(80, 20)
@@ -261,6 +253,39 @@ func newModel(opts ui.Options, app ui.App, term *Terminal) *model {
 	return m
 }
 
+// applyInputTheme restyles the chat input box for th: a colored background on
+// color themes, or reverse-video on greyscale (no color codes). It gives the
+// typing zone a visible affordance, like Gemini CLI's grey input area.
+func applyInputTheme(ti *textarea.Model, th theme.Theme) {
+	if th.Colored {
+		inputBg := lipgloss.NewStyle().Background(th.InputBg)
+		ti.FocusedStyle.Base = inputBg
+		ti.FocusedStyle.Text = inputBg
+		ti.FocusedStyle.CursorLine = inputBg
+		ti.FocusedStyle.Prompt = inputBg.Foreground(th.Accent.GetForeground())
+		ti.FocusedStyle.Placeholder = inputBg.Faint(true)
+		return
+	}
+	rev := lipgloss.NewStyle().Reverse(true)
+	ti.FocusedStyle.Base = rev
+	ti.FocusedStyle.Text = rev
+	ti.FocusedStyle.CursorLine = rev
+	ti.FocusedStyle.Prompt = rev
+	ti.FocusedStyle.Placeholder = rev.Faint(true)
+}
+
+// setTheme switches the live UI theme by name ("default"|"greyscale") and
+// re-derives the cached input/spinner/welcome styling, then repaints. The name
+// is an explicit in-session choice, so NO_COLOR (a startup-only signal) is not
+// re-applied here.
+func (m *model) setTheme(name string) {
+	m.th = theme.Resolve(name, false)
+	applyInputTheme(&m.input, m.th)
+	m.spin = newWorkingSpinner(m.th)
+	m.welcome = welcomeText(m.opts, m.th)
+	m.syncViewportContent()
+}
+
 func (m *model) Init() tea.Cmd {
 	if m.opts.NeedsOnboarding {
 		m.openOnboarding()
@@ -292,15 +317,19 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleSubmit(msg.line)
 	case streamEventMsg:
 		return m.handleStream(msg.event)
+	case clipboardResultMsg:
+		return m, m.handleClipboardResult(msg)
 	case statusMsg:
 		m.status = msg.status
 		return m, nil
 	case spinner.TickMsg:
 		// Keep the working indicator animating for the whole busy period; the
-		// chain self-perpetuates via spinner.Update and dies once idle.
+		// chain self-perpetuates via spinner.Update and dies once idle. Each tick
+		// also advances the spinner's gradient color (no-op on greyscale).
 		if !m.busy {
 			return m, nil
 		}
+		applySpinnerColor(&m.spin, m.th)
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(msg)
 		return m, cmd
@@ -310,6 +339,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
+	m.syncInputLayout()
 	return m, cmd
 }
 
@@ -594,6 +624,8 @@ func (m *model) View() string {
 	if m.toolsOverlay != nil {
 		return m.toolsOverlay.View()
 	}
+	m.syncInputLayout()
+
 	header := renderHeader(m.opts, m.th, m.width)
 	footer := renderFooter(m.statusWithMetrics(), m.th, m.width)
 	inputLine := m.input.View()
@@ -602,8 +634,6 @@ func (m *model) View() string {
 	bodyHeight := m.bodyHeight()
 	m.viewport.Height = bodyHeight
 	m.viewport.Width = max(m.width-2, 1)
-	m.input.SetWidth(max(m.width-2, 1))
-	m.input.SetHeight(m.inputHeight())
 
 	sections := []string{header, m.viewport.View()}
 	if band := m.renderConfirmBand(); band != "" {
@@ -698,21 +728,44 @@ func (m *model) renderConfirmBand() string {
 	return style.Render(body)
 }
 
+// suggestionWindow calculates the visible slice of suggestions, keeping the
+// highlighted item in view. It returns the start index, number of items to show,
+// and whether there are hidden items above or below the window.
+func (m *model) suggestionWindow() (start, count int, showTop, showBottom bool) {
+	n := len(m.suggestions)
+	if n == 0 {
+		return 0, 0, false, false
+	}
+	count = n
+	if count > maxVisibleSuggestions {
+		count = maxVisibleSuggestions
+	}
+	start = 0
+	if m.suggestionIdx >= 0 {
+		start = m.suggestionIdx - count + 1
+		if start < 0 {
+			start = 0
+		}
+	}
+	showTop = start > 0
+	showBottom = start+count < n
+	return start, count, showTop, showBottom
+}
+
 // renderSuggestions draws the inline completion list, highlighting the selected
 // row. It returns "" when there is nothing to show.
 func (m *model) renderSuggestions() string {
-	if len(m.suggestions) == 0 {
+	start, count, showTop, showBottom := m.suggestionWindow()
+	if count == 0 {
 		return ""
-	}
-	limit := len(m.suggestions)
-	more := 0
-	if limit > maxVisibleSuggestions {
-		more = limit - maxVisibleSuggestions
-		limit = maxVisibleSuggestions
 	}
 
 	var b strings.Builder
-	for i := 0; i < limit; i++ {
+	if showTop {
+		b.WriteString(m.th.Dim.Render(fmt.Sprintf("  ↑ %d more", start)))
+		b.WriteString("\n")
+	}
+	for i := start; i < start+count; i++ {
 		s := m.suggestions[i]
 		if i == m.suggestionIdx {
 			row := "› " + s.Label
@@ -728,8 +781,8 @@ func (m *model) renderSuggestions() string {
 		}
 		b.WriteString("\n")
 	}
-	if more > 0 {
-		b.WriteString(m.th.Dim.Render(fmt.Sprintf("  … %d more", more)))
+	if showBottom {
+		b.WriteString(m.th.Dim.Render(fmt.Sprintf("  ↓ %d more", len(m.suggestions)-(start+count))))
 		b.WriteString("\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
@@ -740,8 +793,7 @@ func (m *model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	m.height = msg.Height
 	m.viewport.Width = max(msg.Width-2, 1)
 	m.viewport.Height = m.bodyHeight()
-	m.input.SetWidth(max(msg.Width-2, 1))
-	m.input.SetHeight(m.inputHeight())
+	m.syncInputLayout()
 	m.syncViewportContent()
 	return m, nil
 }
@@ -864,6 +916,7 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
+	m.syncInputLayout()
 	m.refreshSuggestions()
 	return m, cmd
 }
@@ -887,22 +940,58 @@ func (m *model) handleEnter() (tea.Model, tea.Cmd) {
 	return m, func() tea.Msg { return submitMsg{line: line} }
 }
 
-// refreshSuggestions recomputes the completion list from the current input. It
-// is a no-op when the app provides no completer or the line is not a slash
-// command. Selection resets to "typing" (no highlight) on every change.
+// refreshSuggestions recomputes the completion list from the current input.
+// Slash commands (line starts with "/") use the slash Completer; otherwise an
+// active "@path" mention at the end of the input uses the MentionCompleter. It
+// is a no-op when neither applies. Selection resets to "typing" (no highlight)
+// on every change.
 func (m *model) refreshSuggestions() {
 	m.clearSuggestions()
-	completer, ok := m.app.(ui.Completer)
-	if !ok {
-		return
-	}
 	val := m.input.Value()
-	if !strings.HasPrefix(val, "/") {
+	if strings.HasPrefix(val, "/") {
+		completer, ok := m.app.(ui.Completer)
+		if !ok {
+			return
+		}
+		res := completer.Complete(val)
+		m.suggestions = res.Items
+		m.completionFrom = res.ReplaceFrom
 		return
 	}
-	res := completer.Complete(val)
-	m.suggestions = res.Items
-	m.completionFrom = res.ReplaceFrom
+	if mc, ok := m.app.(ui.MentionCompleter); ok {
+		res := mc.CompleteMention(val, m.inputByteCursor())
+		m.suggestions = res.Items
+		m.completionFrom = res.ReplaceFrom
+	}
+}
+
+// inputByteCursor returns the byte offset of the textarea cursor within
+// m.input.Value(), so @-mention completion targets the token the cursor is in
+// rather than always the end of the input. The textarea exposes no flat offset,
+// so the column is reconstructed from LineInfo (StartColumn+ColumnOffset is the
+// cursor's rune column within the current logical line) and added to the byte
+// length of the preceding lines.
+func (m *model) inputByteCursor() int {
+	val := m.input.Value()
+	lines := strings.Split(val, "\n")
+	row := m.input.Line()
+	if row < 0 || row >= len(lines) {
+		return len(val)
+	}
+	li := m.input.LineInfo()
+	col := li.StartColumn + li.ColumnOffset
+	off := 0
+	for i := 0; i < row; i++ {
+		off += len(lines[i]) + 1 // +1 for the '\n' separator
+	}
+	runes := []rune(lines[row])
+	if col < 0 {
+		col = 0
+	}
+	if col > len(runes) {
+		col = len(runes)
+	}
+	return off + len(string(runes[:col]))
 }
 
 func (m *model) clearSuggestions() {
@@ -939,11 +1028,18 @@ func (m *model) acceptSuggestion(i int) {
 	if from < 0 || from > len(val) {
 		from = len(val)
 	}
-	newVal := val[:from] + s.Insert
-	if s.AppendSpace {
-		newVal += " "
+	// Preserve any text after the cursor so completing a token mid-line does not
+	// truncate the rest of the input. For the common end-of-input case cur ==
+	// len(val) and this collapses to the previous behaviour.
+	cur := m.inputByteCursor()
+	if cur < from || cur > len(val) {
+		cur = len(val)
 	}
-	m.input.SetValue(newVal)
+	insert := s.Insert
+	if s.AppendSpace {
+		insert += " "
+	}
+	m.input.SetValue(val[:from] + insert + val[cur:])
 	m.input.CursorEnd()
 	m.refreshSuggestions()
 }
@@ -1018,6 +1114,18 @@ func (m *model) handleStream(ev ui.StreamEvent) (tea.Model, tea.Cmd) {
 		m.addResponseDelta(ev.Text)
 	case ui.StreamInfo:
 		m.addBlock(roleInfo, ev.Text)
+	case ui.StreamClearScrollback:
+		m.clearScrollbackBlocks()
+	case ui.StreamScrollback:
+		m.addBlock(scrollbackRoleToRole(ev.ScrollbackRole), ev.Text)
+	case ui.StreamCopyToClipboard:
+		cmd := m.copyToClipboard(ev.Text)
+		if m.stream != nil {
+			return m, tea.Batch(cmd, waitStream(m.stream))
+		}
+		return m, cmd
+	case ui.StreamSetTheme:
+		m.setTheme(ev.Text)
 	case ui.StreamQuit:
 		m.busy = false
 		m.setWorking(false, "")
@@ -1110,8 +1218,58 @@ func inputPromptForMode(mode string) string {
 
 // addBlock appends a discrete (non-streaming) scrollback block and closes any
 // open assistant response so the next text delta starts a fresh block.
+// scrollbackRoleToRole maps a ui-level restored-block role onto the internal
+// scrollRole used by the renderer.
+func scrollbackRoleToRole(r ui.ScrollbackRole) scrollRole {
+	switch r {
+	case ui.ScrollbackUser:
+		return roleUser
+	case ui.ScrollbackAssistant:
+		return roleResponse
+	default:
+		return roleInfo
+	}
+}
+
+// copyToClipboard returns a command that copies text to the local clipboard off
+// the UI goroutine. atotto shells out to xclip/wl-copy/pbcopy, which can block,
+// so the copy runs inside the command and reports back via clipboardResultMsg
+// rather than blocking Update.
+func (m *model) copyToClipboard(text string) tea.Cmd {
+	return func() tea.Msg {
+		return clipboardResultMsg{text: text, err: clipboard.Copy(text)}
+	}
+}
+
+// handleClipboardResult renders the outcome of an async clipboard copy, falling
+// back to an OSC 52 escape sequence (emitted via tea.Printf, the only
+// display-safe path) when no local clipboard mechanism is available.
+func (m *model) handleClipboardResult(msg clipboardResultMsg) tea.Cmd {
+	switch {
+	case msg.err == nil:
+		m.addBlock(roleInfo, "Copied last response to the clipboard.")
+		return nil
+	case errors.Is(msg.err, clipboard.ErrUnavailable):
+		m.addBlock(roleInfo, "Copied last response via terminal clipboard (OSC 52).")
+		return tea.Printf("%s", clipboard.OSC52Sequence(msg.text))
+	default:
+		m.addBlock(roleError, "Clipboard copy failed: "+msg.err.Error())
+		return nil
+	}
+}
+
 func (m *model) addBlock(role scrollRole, text string) {
 	m.blocks = append(m.blocks, scrollBlock{role: role, text: strings.TrimRight(text, "\n")})
+	m.openResponseIdx = -1
+	m.syncViewportContent()
+}
+
+// clearScrollbackBlocks drops every scrollback block and closes any open
+// assistant response so a restored conversation (/chat resume) replaces the
+// visible history instead of being appended beneath it. The static welcome
+// banner is preserved.
+func (m *model) clearScrollbackBlocks() {
+	m.blocks = nil
 	m.openResponseIdx = -1
 	m.syncViewportContent()
 }
@@ -1277,38 +1435,72 @@ func (m *model) renderDiffLines(text string, width, maxLines int) []string {
 // inside it.
 const maxInputRows = 6
 
-// inputContentWidth is the wrap width for typed text inside the input box: the
-// total input width minus the per-line prompt.
-func (m *model) inputContentWidth() int {
-	w := max(m.width-2, 1) - lipgloss.Width(m.input.Prompt)
-	if w < 1 {
+// wordWrapLineCount computes the number of soft-wrapped lines that a single line of
+// text would occupy when word-wrapped to width.
+func wordWrapLineCount(text string, width int) int {
+	if width <= 0 {
 		return 1
 	}
-	return w
+	// Split into words, but keep whitespace/spaces
+	var parts []string
+	var current strings.Builder
+	for _, r := range text {
+		if r == ' ' {
+			if current.Len() > 0 {
+				parts = append(parts, current.String())
+				current.Reset()
+			}
+			parts = append(parts, " ")
+		} else {
+			current.WriteRune(r)
+		}
+	}
+	if current.Len() > 0 {
+		parts = append(parts, current.String())
+	}
+
+	lines := 1
+	currentLen := 0
+	for _, part := range parts {
+		partLen := runewidth.StringWidth(part)
+		if part == " " {
+			if currentLen+1 <= width {
+				currentLen++
+			} else {
+				lines++
+				currentLen = 0
+			}
+		} else {
+			if currentLen == 0 {
+				if partLen > width {
+					lines += (partLen - 1) / width
+					currentLen = partLen % width
+				} else {
+					currentLen = partLen
+				}
+			} else if currentLen+partLen <= width {
+				currentLen += partLen
+			} else {
+				lines++
+				if partLen > width {
+					lines += (partLen - 1) / width
+					currentLen = partLen % width
+				} else {
+					currentLen = partLen
+				}
+			}
+		}
+	}
+	return lines
 }
 
-// inputHeight estimates the visible rows the input box needs for its current
-// value (soft-wrapped to inputContentWidth), clamped to [1, maxInputRows]. It
-// mirrors the textarea's own wrapping so the surrounding layout reserves the
-// right number of rows.
+// inputHeight is the number of terminal rows the input band occupies in the
+// outer layout (1–maxInputRows).
 func (m *model) inputHeight() int {
-	w := m.inputContentWidth()
-	rows := 0
-	for _, line := range strings.Split(m.input.Value(), "\n") {
-		lw := lipgloss.Width(line)
-		r := 1
-		if w > 0 && lw > w {
-			r = (lw + w - 1) / w
-		}
-		rows += r
+	if strings.TrimSpace(m.input.Value()) == "" {
+		return 1
 	}
-	if rows < 1 {
-		rows = 1
-	}
-	if rows > maxInputRows {
-		rows = maxInputRows
-	}
-	return rows
+	return inputBoxHeight(inputContentLines(m.input))
 }
 
 func (m *model) bodyHeight() int {
@@ -1342,16 +1534,17 @@ func (m *model) confirmBandRows() int {
 }
 
 // suggestionRows is the number of terminal lines the suggestion block occupies,
-// including the optional "… N more" line, so the viewport can shrink to fit.
+// including the optional "↑/↓ N more" lines, so the viewport can shrink to fit.
 func (m *model) suggestionRows() int {
-	n := len(m.suggestions)
-	if n == 0 {
-		return 0
+	_, count, showTop, showBottom := m.suggestionWindow()
+	rows := count
+	if showTop {
+		rows++
 	}
-	if n > maxVisibleSuggestions {
-		return maxVisibleSuggestions + 1
+	if showBottom {
+		rows++
 	}
-	return n
+	return rows
 }
 
 func waitStream(events <-chan ui.StreamEvent) tea.Cmd {
@@ -1399,10 +1592,10 @@ func (m *model) statusWithMetrics() ui.StatusBar {
 	var right string
 	if stats.LastInputTokens > 0 || stats.LastOutputTokens > 0 {
 		right = fmt.Sprintf("↑%s ↓%s",
-			compactCount(stats.LastInputTokens),
-			compactCount(stats.LastOutputTokens))
+			ui.CompactCount(stats.LastInputTokens),
+			ui.CompactCount(stats.LastOutputTokens))
 		if wide && stats.LastCostKnown {
-			right += "  " + formatCostUSD(stats.LastCostUSD)
+			right += "  " + ui.FormatCostUSD(stats.LastCostUSD)
 		}
 	}
 	if pct := stats.ContextPercent(); pct >= 0 {
@@ -1422,10 +1615,10 @@ func (m *model) statusWithMetrics() ui.StatusBar {
 	// ── Line 2: system-prompt label + session totals ──────────────────────────
 	if wide && (stats.InputTokens > 0 || stats.OutputTokens > 0) {
 		sessionStr := fmt.Sprintf("Σ %s/%s",
-			compactCount(stats.InputTokens),
-			compactCount(stats.OutputTokens))
+			ui.CompactCount(stats.InputTokens),
+			ui.CompactCount(stats.OutputTokens))
 		if stats.SessionCostKnown {
-			sessionStr += "  " + formatCostUSD(stats.SessionCostUSD)
+			sessionStr += "  " + ui.FormatCostUSD(stats.SessionCostUSD)
 		}
 		if status.Detail != "" {
 			status.Detail = status.Detail + "  ·  " + sessionStr
@@ -1437,29 +1630,23 @@ func (m *model) statusWithMetrics() ui.StatusBar {
 	return status
 }
 
-// formatCostUSD renders a USD cost value to 4 significant decimal places
-// (e.g. $0.0021, $1.2345).
-func formatCostUSD(usd float64) string {
-	return fmt.Sprintf("$%.4f", usd)
-}
-
-// compactCount formats a token count compactly (e.g. 1234 -> "1.2k").
-func compactCount(n int) string {
-	if n < 1000 {
-		return fmt.Sprintf("%d", n)
-	}
-	return fmt.Sprintf("%.1fk", float64(n)/1000)
-}
-
 func renderFooter(status ui.StatusBar, th theme.Theme, width int) string {
 	left := status.Left
 	right := status.Right
 	gap := max(width-lipgloss.Width(left)-lipgloss.Width(right), 1)
 	line := left + strings.Repeat(" ", gap) + right
+	
+	rendered := th.Secondary.Width(max(width, 1)).Render(line)
 	if status.Detail != "" {
-		line += "\n" + status.Detail
+		detail := status.Detail
+		if len(th.TitleGradient) > 0 {
+			detail = th.GradientText(status.Detail, th.Secondary, th.TitleGradient)
+		} else {
+			detail = th.Secondary.Render(status.Detail)
+		}
+		rendered += "\n" + detail
 	}
-	return th.Secondary.Width(max(width, 1)).Render(line)
+	return rendered
 }
 
 func max(a, b int) int {

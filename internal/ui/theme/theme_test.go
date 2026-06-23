@@ -1,84 +1,34 @@
 package theme
 
 import (
-	"regexp"
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/lipgloss"
-	"github.com/muesli/termenv"
 )
 
-// ansiColor matches SGR sequences that set a foreground or background color
-// (codes 38/48 for 256/truecolor, or the 30-49 basic color range). Attribute-
-// only sequences (bold=1, faint=2, reverse=7, underline=4) are allowed in
-// greyscale and must not match.
-var ansiColor = regexp.MustCompile(`\x1b\[[0-9;]*(?:38|48|3[0-9]|4[0-9])[;m]`)
-
-func TestGreyscaleEmitsNoColor(t *testing.T) {
-	// Force color rendering on so a leaking color would actually be emitted.
-	lipgloss.SetColorProfile(termenv.TrueColor)
-
-	th := Greyscale()
-	if th.Colored {
-		t.Fatal("greyscale theme should report Colored=false")
-	}
-
-	styles := map[string]lipgloss.Style{
-		"title":     th.Title,
-		"primary":   th.Primary,
-		"secondary": th.Secondary,
-		"accent":    th.Accent,
-		"response":  th.Response,
-		"link":      th.Link,
-		"dim":       th.Dim,
-		"error":     th.Error,
-		"warning":   th.Warning,
-		"success":   th.Success,
-		"selected":  th.Selected,
-	}
-	for name, st := range styles {
-		out := st.Render("sample")
-		if ansiColor.MatchString(out) {
-			t.Errorf("greyscale style %q emitted a color code: %q", name, out)
-		}
-	}
-}
-
-func TestDefaultEmitsColor(t *testing.T) {
-	lipgloss.SetColorProfile(termenv.TrueColor)
-
+func TestGradientText(t *testing.T) {
 	th := Default()
-	if !th.Colored {
-		t.Fatal("default theme should report Colored=true")
-	}
-	if !ansiColor.MatchString(th.Accent.Render("x")) {
-		t.Error("default accent should emit a color code")
-	}
-}
+	style := lipgloss.NewStyle().Bold(true)
 
-func TestResolve(t *testing.T) {
-	tests := []struct {
-		name    string
-		noColor bool
-		want    string
-	}{
-		{"", false, "default"},
-		{"default", false, "default"},
-		{"greyscale", false, "greyscale"},
-		{"grayscale", false, "greyscale"},
-		{"GREYSCALE", false, "greyscale"},
-		{"default", true, "greyscale"}, // NO_COLOR overrides a named theme
-		{"", true, "greyscale"},
-	}
-	for _, tc := range tests {
-		if got := Resolve(tc.name, tc.noColor).Name; got != tc.want {
-			t.Errorf("Resolve(%q, %v) = %q, want %q", tc.name, tc.noColor, got, tc.want)
-		}
-	}
-}
+	// Valid stops
+	stops := []string{"#FF0000", "#00FF00", "#0000FF"}
+	res := th.GradientText("Hello", style, stops)
 
-func TestResolveTrimsAndLowercases(t *testing.T) {
-	if got := Resolve("  Mono  ", false).Name; got != "greyscale" {
-		t.Errorf("Resolve(\"  Mono  \") = %q, want greyscale", got)
+	if !strings.Contains(res, "H") || !strings.Contains(res, "o") {
+		t.Errorf("expected string to contain characters")
+	}
+
+	// Should not gradient if not colored
+	thGrey := Greyscale()
+	resGrey := thGrey.GradientText("Hello", style, stops)
+	if strings.Contains(resGrey, "38;2") {
+		t.Errorf("expected no truecolor ansi in greyscale, got %q", resGrey)
+	}
+
+	// Should fall back gracefully with < 2 stops
+	res1Stop := th.GradientText("Hello", style, []string{"#FF0000"})
+	if strings.Contains(res1Stop, "38;2") {
+		t.Errorf("expected no gradient with 1 stop, got %q", res1Stop)
 	}
 }

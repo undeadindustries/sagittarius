@@ -10,6 +10,8 @@
 package theme
 
 import (
+	"fmt"
+	"math"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -56,6 +58,16 @@ type Theme struct {
 	// to set PromptStyle/TextStyle/CursorStyle on the textinput so the typing
 	// zone has a visible affordance. NoColor{} on greyscale themes.
 	InputBg lipgloss.TerminalColor
+
+	// SpinnerGradient is the ordered set of hex colors the working spinner cycles
+	// through while the agent is busy (a smooth loop, last stop interpolating back
+	// to the first). Empty on greyscale themes, which keep a static spinner.
+	SpinnerGradient []string
+
+	// TitleGradient is the set of hex colors used for the text gradient on
+	// titles (like the exit summary) to match gemini-cli's styling. Empty on
+	// greyscale themes.
+	TitleGradient []string
 }
 
 // Default palette: purple-leaning dark theme. Accents lean lightly purple; the
@@ -95,6 +107,19 @@ func Default() Theme {
 		BorderColor:      lipgloss.Color(grey),
 		FocusBorderColor: lipgloss.Color(purple),
 		InputBg:          lipgloss.Color("235"),
+		SpinnerGradient: []string{
+			purple, // #9B7EDE
+			link,   // #87AFFF blue
+			code,   // #5FD7AF teal/cyan
+			green,  // #5FD787
+			yellow, // #FFD75F
+			red,    // #FF5F87
+		},
+		TitleGradient: []string{
+			"#4796E4", // blue
+			"#847ACE", // purple
+			"#C3677F", // off-red
+		},
 	}
 }
 
@@ -125,6 +150,76 @@ func Greyscale() Theme {
 		FocusBorderColor: lipgloss.NoColor{},
 		InputBg:          lipgloss.NoColor{},
 	}
+}
+
+// GradientText renders the string with a multi-stop color gradient using RGB
+// linear interpolation across its runes. The supplied hex stops (e.g. "#4796E4")
+// are distributed evenly across the string length. If the theme is not Colored
+// (e.g. Greyscale), the string is returned unchanged or wrapped in a plain style.
+func (t Theme) GradientText(text string, style lipgloss.Style, hexStops []string) string {
+	if !t.Colored || len(hexStops) < 2 {
+		return style.Render(text)
+	}
+
+	runes := []rune(text)
+	n := len(runes)
+	if n == 0 {
+		return ""
+	}
+
+	// Parse hex stops into RGB.
+	type rgb struct{ r, g, b float64 }
+	stops := make([]rgb, 0, len(hexStops))
+	for _, hex := range hexStops {
+		var r, g, b uint8
+		hex = strings.TrimPrefix(hex, "#")
+		if len(hex) == 3 {
+			fmt.Sscanf(hex, "%1x%1x%1x", &r, &g, &b)
+			r, g, b = r*17, g*17, b*17
+		} else if len(hex) == 6 {
+			fmt.Sscanf(hex, "%02x%02x%02x", &r, &g, &b)
+		} else {
+			continue // skip invalid
+		}
+		stops = append(stops, rgb{float64(r), float64(g), float64(b)})
+	}
+	if len(stops) < 2 {
+		return style.Render(text)
+	}
+
+	var b strings.Builder
+	segments := float64(len(stops) - 1)
+	
+	for i, r := range runes {
+		// Calculate progress [0, 1] across the whole string.
+		var p float64
+		if n > 1 {
+			p = float64(i) / float64(n-1)
+		}
+		
+		// Find which segment this point falls into.
+		segFloat := p * segments
+		segIdx := int(segFloat)
+		if segIdx >= len(stops)-1 {
+			segIdx = len(stops) - 2
+		}
+		
+		// Progress within the current segment.
+		localP := segFloat - float64(segIdx)
+		
+		c1 := stops[segIdx]
+		c2 := stops[segIdx+1]
+		
+		// Lerp.
+		fr := c1.r + (c2.r-c1.r)*localP
+		fg := c1.g + (c2.g-c1.g)*localP
+		fb := c1.b + (c2.b-c1.b)*localP
+		
+		hex := fmt.Sprintf("#%02X%02X%02X", uint8(math.Round(fr)), uint8(math.Round(fg)), uint8(math.Round(fb)))
+		b.WriteString(style.Foreground(lipgloss.Color(hex)).Render(string(r)))
+	}
+	
+	return b.String()
 }
 
 // Resolve picks a theme from an optional name plus the NO_COLOR signal. NO_COLOR
