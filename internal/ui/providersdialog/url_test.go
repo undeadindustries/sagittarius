@@ -5,14 +5,14 @@ import "testing"
 func TestURLHasPort(t *testing.T) {
 	t.Parallel()
 	cases := map[string]bool{
-		"http://127.0.0.1:8000":  true,
-		"http://127.0.0.1":       false,
+		"http://127.0.0.1:8000":   true,
+		"http://127.0.0.1":        false,
 		"https://api.example.com": false,
-		"127.0.0.1:8000":         true,
-		"127.0.0.1":              false,
-		"localhost:11434":        true,
-		"localhost":              false,
-		"":                       false,
+		"127.0.0.1:8000":          true,
+		"127.0.0.1":               false,
+		"localhost:11434":         true,
+		"localhost":               false,
+		"":                        false,
 	}
 	for in, want := range cases {
 		if got := urlHasPort(in); got != want {

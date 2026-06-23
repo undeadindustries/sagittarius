@@ -27,8 +27,8 @@ const (
 func OpenRouterDefinition() config.CustomProviderDefinition {
 	return config.CustomProviderDefinition{
 		DisplayName:  "OpenRouter",
-		BaseURL:        OpenRouterBaseURL,
-		APIKeyEnvVar:   OpenRouterEnvVar,
-		WireFormat:     config.WireFormatOpenAIChat,
+		BaseURL:      OpenRouterBaseURL,
+		APIKeyEnvVar: OpenRouterEnvVar,
+		WireFormat:   config.WireFormatOpenAIChat,
 	}
 }

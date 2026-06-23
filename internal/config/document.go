@@ -25,8 +25,8 @@ func unmarshalProviderInstance(raw json.RawMessage) (*ProviderInstanceConfig, er
 	}
 	cfg := &ProviderInstanceConfig{Extra: make(map[string]json.RawMessage)}
 	known := map[string]func(json.RawMessage) error{
-		"model":        func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.Model) },
-		"baseUrl":      func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.BaseURL) },
+		"model":               func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.Model) },
+		"baseUrl":             func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.BaseURL) },
 		"contextLimit":        func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.ContextLimit) },
 		"contextLimitUserSet": func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.ContextLimitUserSet) },
 		"compressionThreshold": func(b json.RawMessage) error {

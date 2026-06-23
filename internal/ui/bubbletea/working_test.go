@@ -3,8 +3,10 @@ package bubbletea
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/undeadindustries/sagittarius/internal/ui"
+	"github.com/undeadindustries/sagittarius/internal/ui/theme"
 )
 
 func TestWorkingIndicatorVisibility(t *testing.T) {
@@ -52,5 +54,46 @@ func TestRenderWorkingLine(t *testing.T) {
 	// MiniDot's first frame is ⠋; the spinner must render a glyph, not "(error)".
 	if !strings.Contains(line, "⠋") {
 		t.Fatalf("working line missing spinner glyph: %q", line)
+	}
+}
+
+func TestSpinnerColorCycles(t *testing.T) {
+	t.Parallel()
+	grad := theme.Default().SpinnerGradient
+	if len(grad) < 2 {
+		t.Fatalf("default theme should define a multi-stop spinner gradient, got %d", len(grad))
+	}
+
+	base := time.Unix(0, 0)
+	seen := map[string]bool{}
+	for i := 0; i < 8; i++ {
+		c, ok := spinnerColorAt(grad, base.Add(time.Duration(i)*colorCycleDuration/8))
+		if !ok {
+			t.Fatal("expected a color for a non-empty gradient")
+		}
+		seen[string(c)] = true
+	}
+	if len(seen) < 4 {
+		t.Fatalf("spinner color should change over time, got only %d distinct colors", len(seen))
+	}
+}
+
+func TestSpinnerColorGreyscaleStatic(t *testing.T) {
+	t.Parallel()
+	if _, ok := spinnerColorAt(theme.Greyscale().SpinnerGradient, time.Now()); ok {
+		t.Fatal("greyscale theme should not produce a cycling spinner color")
+	}
+}
+
+func TestLerpHex(t *testing.T) {
+	t.Parallel()
+	if got := lerpHex("#000000", "#FFFFFF", 0); got != "#000000" {
+		t.Fatalf("lerp at 0 = %q, want #000000", got)
+	}
+	if got := lerpHex("#000000", "#FFFFFF", 1); got != "#FFFFFF" {
+		t.Fatalf("lerp at 1 = %q, want #FFFFFF", got)
+	}
+	if got := lerpHex("#000000", "#FFFFFF", 0.5); got != "#808080" {
+		t.Fatalf("lerp at 0.5 = %q, want #808080", got)
 	}
 }

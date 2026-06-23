@@ -73,7 +73,7 @@ type addState struct {
 const (
 	addFieldName = iota
 	addFieldHostOrURL
-	addFieldPort       // shown only when hostOrURL has no port
+	addFieldPort // shown only when hostOrURL has no port
 	addFieldWire
 	addFieldEnvVar
 	addFieldAPIKey
@@ -738,10 +738,11 @@ func (m *Model) refreshEditItems() {
 
 // enterPreset opens the system-prompt preset picker.
 func (m Model) enterPreset() Model {
-	opts := make([]pickerOption, 0, len(config.SystemPromptPresets))
+	presets := config.SortedSystemPromptPresets()
+	opts := make([]pickerOption, 0, len(presets))
 	current := m.deps.SystemPromptPresetID(m.targetID)
 	m.cursor = 0
-	for i, p := range config.SystemPromptPresets {
+	for i, p := range presets {
 		opts = append(opts, pickerOption{id: p.ID, label: p.Label})
 		if p.ID == current {
 			m.cursor = i
@@ -1116,7 +1117,6 @@ func (m Model) selectAddModel() (Model, tea.Cmd) {
 	m.cursor = 0
 	return m, nil
 }
-
 
 // ---- helpers -------------------------------------------------------------
 

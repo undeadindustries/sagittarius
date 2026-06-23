@@ -1,9 +1,13 @@
 package session
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/undeadindustries/sagittarius/internal/provider"
 )
@@ -171,6 +175,112 @@ func coerceResponseMap(raw any) map[string]any {
 		return m
 	}
 	return map[string]any{"output": raw}
+}
+
+// WriteHistory writes history to path as a session JSONL file: a metadata line
+// followed by one record per message, in the exact format LoadSession reads
+// back. It backs /chat checkpoints, persisting the live in-memory conversation
+// rather than copying the on-disk session file (which can diverge after a
+// rotation or context compression). The file is created or truncated with 0o600
+// permissions. A blank sessionID is replaced with a fresh id so LoadSession,
+// which requires non-empty metadata, always succeeds.
+func WriteHistory(path, sessionID, projectHash, summary string, history []provider.Message) error {
+	if strings.TrimSpace(sessionID) == "" {
+		sessionID = newID()
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	if err != nil {
+		return fmt.Errorf("session: create %s: %w", path, err)
+	}
+	defer func() { _ = f.Close() }()
+
+	w := bufio.NewWriter(f)
+	ts := time.Now().UTC().Format(time.RFC3339Nano)
+	meta := MetadataRecord{
+		SessionID:   sessionID,
+		ProjectHash: projectHash,
+		StartTime:   ts,
+		LastUpdated: ts,
+		Summary:     summary,
+		Kind:        "main",
+	}
+	if err := writeJSONLine(w, meta); err != nil {
+		return err
+	}
+	for _, msg := range history {
+		if err := writeJSONLine(w, messageToRecord(msg)); err != nil {
+			return err
+		}
+	}
+	if err := w.Flush(); err != nil {
+		return fmt.Errorf("session: write %s: %w", path, err)
+	}
+	return nil
+}
+
+// writeJSONLine marshals v and writes it as a single newline-terminated line.
+func writeJSONLine(w *bufio.Writer, v any) error {
+	line, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Errorf("session: marshal record: %w", err)
+	}
+	if _, err := w.Write(line); err != nil {
+		return fmt.Errorf("session: write record: %w", err)
+	}
+	if err := w.WriteByte('\n'); err != nil {
+		return fmt.Errorf("session: write newline: %w", err)
+	}
+	return nil
+}
+
+// messageToRecord converts a provider.Message into the JSONL MessageRecord shape
+// (the inverse of buildProviderParts), preserving text, tool calls, and tool
+// responses so a checkpoint round-trips through LoadSession + ConvertToProviderHistory.
+func messageToRecord(msg provider.Message) MessageRecord {
+	rec := MessageRecord{
+		ID:        newID(),
+		Timestamp: now(),
+		Content:   providerPartsToParts(msg.Parts),
+	}
+	if msg.Role == provider.RoleModel {
+		rec.Type = MessageTypeModel
+		for _, p := range msg.Parts {
+			if p.FunctionCall != nil {
+				rec.ToolCalls = append(rec.ToolCalls, ToolCallRecord{
+					ID:     p.FunctionCall.ID,
+					Name:   p.FunctionCall.Name,
+					Status: "success",
+				})
+			}
+		}
+	} else {
+		rec.Type = MessageTypeUser
+	}
+	return rec
+}
+
+// providerPartsToParts maps provider parts onto the serialisable session Part
+// shape, keeping only text, function calls, and function responses.
+func providerPartsToParts(parts []provider.Part) []Part {
+	out := make([]Part, 0, len(parts))
+	for _, p := range parts {
+		switch {
+		case p.Text != "":
+			out = append(out, Part{Text: p.Text})
+		case p.FunctionCall != nil:
+			out = append(out, Part{FunctionCall: &FunctionCallPart{
+				ID:   p.FunctionCall.ID,
+				Name: p.FunctionCall.Name,
+				Args: p.FunctionCall.Args,
+			}})
+		case p.FunctionResponse != nil:
+			out = append(out, Part{FunctionResponse: &FuncResponsePart{
+				Name:     p.FunctionResponse.Name,
+				Response: p.FunctionResponse.Response,
+			}})
+		}
+	}
+	return out
 }
 
 // FormatSessionList renders a human-readable session list (used by --list-sessions).

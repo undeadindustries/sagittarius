@@ -2,6 +2,7 @@ package contextmgmt
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 )
 
@@ -132,6 +133,42 @@ func (m *Manager) ContextLimit() int {
 		return 0
 	}
 	return m.cfg.ContextLimit
+}
+
+// CompressionAvailable reports whether manual compression can run: the manager
+// must be enabled and have a configured summarizer. It is false for nil or
+// disabled managers (gemini-native and openai-responses paths).
+func (m *Manager) CompressionAvailable() bool {
+	return m != nil && m.cfg.Enabled && m.compressor != nil
+}
+
+// ForceCompress summarizes history immediately, bypassing the budget and
+// threshold checks, and returns the (possibly unchanged) history plus the
+// compression info. It is a no-op returning the original history and a
+// CompressionNoOp status when compression is unavailable or history is empty.
+func (m *Manager) ForceCompress(ctx context.Context, history []Message) ([]Message, CompressionInfo, error) {
+	if !m.CompressionAvailable() || len(history) == 0 {
+		return history, CompressionInfo{Status: CompressionNoOp}, nil
+	}
+	preserveFraction := m.cfg.PreserveFraction
+	if preserveFraction <= 0 {
+		preserveFraction = DefaultLocalPreserveFraction
+	}
+	original := EstimateTokens(flattenParts(history))
+	res, err := m.compressor.Compress(ctx, CompressOptions{
+		History:            history,
+		Force:              true,
+		OriginalTokenCount: original,
+		EffectiveLimit:     m.cfg.ContextLimit,
+		PreserveFraction:   preserveFraction,
+	})
+	if err != nil {
+		return history, res.Info, fmt.Errorf("manual compression failed: %w", err)
+	}
+	if res.NewHistory != nil {
+		return res.NewHistory, res.Info, nil
+	}
+	return history, res.Info, nil
 }
 
 // PrepareTurn applies ejection, masking, and (when over budget) compression to

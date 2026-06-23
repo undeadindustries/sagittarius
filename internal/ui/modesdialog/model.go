@@ -25,11 +25,11 @@ type Model struct {
 	width  int
 	height int
 
-	modes     []ModeEntry
+	modes      []ModeEntry
 	modeCursor int
-	screen    screen
-	done      bool
-	status    string
+	screen     screen
+	done       bool
+	status     string
 
 	// targetMode is the mode name being edited in screenPicker.
 	targetMode string

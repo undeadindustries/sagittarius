@@ -34,8 +34,9 @@ type Model struct {
 
 // New constructs the project system-prompt picker.
 func New(ctx context.Context, deps Deps) Model {
-	opts := make([]presetOption, len(config.SystemPromptPresets))
-	for i, p := range config.SystemPromptPresets {
+	presets := config.SortedSystemPromptPresets()
+	opts := make([]presetOption, len(presets))
+	for i, p := range presets {
 		opts[i] = presetOption{id: p.ID, label: p.Label}
 	}
 	cursor := 0

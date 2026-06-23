@@ -83,6 +83,76 @@ func collectEvents(t *testing.T, events <-chan ui.StreamEvent) []ui.StreamEvent 
 	return out
 }
 
+func TestRunTurnExpandsFileMention(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "note.txt"), []byte("INJECTED-CONTENT"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	gen := &fakeGenerator{batches: [][]provider.StreamResponse{{{TextDelta: "ok"}, {Done: true}}}}
+	runner, err := NewRunner(RunnerConfig{
+		Generator:   gen,
+		Model:       "test-model",
+		WorkDir:     root,
+		Interactive: false,
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	events, err := runner.RunTurn(testContext(t), "summarize @note.txt")
+	if err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+	collectEvents(t, events)
+
+	req := gen.lastRequest()
+	if req == nil || len(req.Messages) == 0 {
+		t.Fatal("no request captured")
+	}
+	user := req.Messages[len(req.Messages)-1]
+	if len(user.Parts) != 2 {
+		t.Fatalf("user parts = %d, want 2 (query + injected content)", len(user.Parts))
+	}
+	if user.Parts[0].Text != "summarize @note.txt" {
+		t.Fatalf("first part = %q, want original query", user.Parts[0].Text)
+	}
+	if !strings.Contains(user.Parts[1].Text, "INJECTED-CONTENT") {
+		t.Fatalf("second part missing file content: %q", user.Parts[1].Text)
+	}
+}
+
+func TestRunTurnMissingMentionErrors(t *testing.T) {
+	t.Parallel()
+
+	gen := &fakeGenerator{batches: [][]provider.StreamResponse{{{Done: true}}}}
+	runner, err := NewRunner(RunnerConfig{
+		Generator:   gen,
+		Model:       "test-model",
+		WorkDir:     t.TempDir(),
+		Interactive: false,
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	events, err := runner.RunTurn(testContext(t), "read @does-not-exist.txt")
+	if err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+	evs := collectEvents(t, events)
+	sawErr := false
+	for _, e := range evs {
+		if e.Type == ui.StreamError && e.Err != nil {
+			sawErr = true
+		}
+	}
+	if !sawErr {
+		t.Fatalf("expected a StreamError for missing mention, got %+v", evs)
+	}
+}
+
 func TestSessionMetricsAccumulate(t *testing.T) {
 	t.Parallel()
 

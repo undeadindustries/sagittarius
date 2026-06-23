@@ -9,10 +9,10 @@ import "context"
 
 // ModelEntry is one row in the global active-model list.
 type ModelEntry struct {
-	ProviderID   string
-	DisplayID    string // short provider label shown in the list
-	DisplayName  string // full provider display name
-	Model        string
+	ProviderID  string
+	DisplayID   string // short provider label shown in the list
+	DisplayName string // full provider display name
+	Model       string
 }
 
 // Deps performs the side effects the global model picker needs.

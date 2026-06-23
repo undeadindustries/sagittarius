@@ -718,12 +718,12 @@ func TestSystemPromptPickerAppliesPreset(t *testing.T) {
 	if len(m.pickerOptions) != len(config.SystemPromptPresets) {
 		t.Fatalf("picker options = %d, want %d", len(m.pickerOptions), len(config.SystemPromptPresets))
 	}
-	// Move to the second preset and apply it.
+	// Move to the second preset (in the sorted list) and apply it.
 	m, _ = send(m, key("down"), key("enter"))
 	if m.screen != screenEdit {
 		t.Fatalf("screen = %d, want edit after applying preset", m.screen)
 	}
-	want := "openai:" + config.SystemPromptPresets[1].ID
+	want := "openai:" + config.SortedSystemPromptPresets()[1].ID
 	if len(deps.appliedPwith) != 1 || deps.appliedPwith[0] != want {
 		t.Fatalf("applied preset = %v, want [%s]", deps.appliedPwith, want)
 	}

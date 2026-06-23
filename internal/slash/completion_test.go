@@ -34,6 +34,44 @@ func TestCompleteTopLevelShowsAllCommands(t *testing.T) {
 	if got.ReplaceFrom != 1 {
 		t.Errorf("ReplaceFrom = %d, want 1", got.ReplaceFrom)
 	}
+
+	// Verify top-level commands are sorted alphabetically.
+	for i := 1; i < len(got.Items); i++ {
+		if got.Items[i-1].Label > got.Items[i].Label {
+			t.Errorf("top-level completion not sorted: %q comes before %q", got.Items[i-1].Label, got.Items[i].Label)
+		}
+	}
+}
+
+func TestCompleteSubcommandsAreSorted(t *testing.T) {
+	t.Parallel()
+	reg := NewRegistry()
+
+	// Test /mode subcommands
+	got := reg.Complete("/mode ", Deps{})
+	if len(got.Items) < 6 {
+		t.Fatalf("/mode completion items = %d, want at least 6", len(got.Items))
+	}
+	for i := 1; i < len(got.Items); i++ {
+		if got.Items[i-1].Label > got.Items[i].Label {
+			t.Errorf("/mode subcommand completion not sorted: %q comes before %q", got.Items[i-1].Label, got.Items[i].Label)
+		}
+	}
+
+	// Verify /reasoning subcommands are NOT sorted
+	got = reg.Complete("/reasoning ", Deps{})
+	if len(got.Items) < 7 {
+		t.Fatalf("/reasoning completion items = %d, want at least 7", len(got.Items))
+	}
+	// Verify order matches definition (minimal, low, medium, high)
+	expectedOrder := []string{"show", "clear", "save", "minimal", "low", "medium", "high"}
+	actual := labels(got.Items)
+	for i, want := range expectedOrder {
+		if i >= len(actual) || actual[i] != want {
+			t.Errorf("/reasoning subcommands order wrong at index %d: want %q, got %q", i, want, actual[i])
+			break
+		}
+	}
 }
 
 func TestCompletePrefixFiltersCommands(t *testing.T) {

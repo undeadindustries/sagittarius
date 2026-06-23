@@ -1,6 +1,11 @@
 package ui
 
-import "time"
+import (
+	"fmt"
+	"sort"
+	"strings"
+	"time"
+)
 
 // ModelUsageStat holds token counts (and optional cost) for one
 // (provider, model, mode) triple observed during the session.
@@ -81,4 +86,205 @@ func (s SessionStats) ContextPercent() int {
 // telemetry for the footer and exit summary. The agent App implements it.
 type MetricsProvider interface {
 	SessionMetrics() SessionStats
+}
+
+// CompactCount formats a token count compactly (e.g. 1234 -> "1.2k").
+func CompactCount(n int) string {
+	if n < 1000 {
+		return fmt.Sprintf("%d", n)
+	}
+	return fmt.Sprintf("%.1fk", float64(n)/1000)
+}
+
+// FormatCostUSD renders a USD cost value to 4 significant decimal places
+// (e.g. $0.0021, $1.2345).
+func FormatCostUSD(usd float64) string {
+	return fmt.Sprintf("$%.4f", usd)
+}
+
+// FormatDuration renders a session duration rounded to whole seconds, returning
+// "" for non-positive durations so callers can omit the field.
+func FormatDuration(d time.Duration) string {
+	if d <= 0 {
+		return ""
+	}
+	return d.Round(time.Second).String()
+}
+
+// ToolCallsSummary renders the tool-call count with a success percentage
+// (e.g. "4 (75% ok)"), or "0" when no tools were called.
+func ToolCallsSummary(stats SessionStats) string {
+	if stats.ToolCalls == 0 {
+		return "0"
+	}
+	ok := stats.ToolCalls - stats.ToolFailures
+	pct := ok * 100 / stats.ToolCalls
+	return fmt.Sprintf("%d (%d%% ok)", stats.ToolCalls, pct)
+}
+
+// ModelUsageRow is a per-model aggregation of ModelUsageStat across modes,
+// used by both the exit screen and /stats.
+type ModelUsageRow struct {
+	Label     string // "{provider}/{model}", or bare model when provider is empty
+	Requests  int
+	InTokens  int
+	OutTokens int
+	CostUSD   float64
+	CostKnown bool
+	Modes     []ModelUsageStat // sorted by Mode
+}
+
+// AggregateModelUsage groups raw per-(provider,model,mode) stats into per-model
+// rows sorted by the provider+model key, and reports whether any row carries a
+// known cost (so callers can decide whether to render a cost column).
+//
+// Rows are keyed by provider+model (never model alone) so two providers exposing
+// the same model id stay distinct rather than merging their tokens and cost.
+func AggregateModelUsage(stats []ModelUsageStat) (rows []ModelUsageRow, showCost bool) {
+	byKey := map[string]*ModelUsageRow{}
+	order := make([]string, 0, len(stats))
+	for _, s := range stats {
+		if s.CostKnown {
+			showCost = true
+		}
+		key := s.Provider + "\x00" + s.Model
+		row := byKey[key]
+		if row == nil {
+			row = &ModelUsageRow{Label: modelUsageLabel(s.Provider, s.Model)}
+			byKey[key] = row
+			order = append(order, key)
+		}
+		row.Requests += s.Requests
+		row.InTokens += s.InTokens
+		row.OutTokens += s.OutTokens
+		row.CostUSD += s.CostUSD
+		if s.CostKnown {
+			row.CostKnown = true
+		}
+		row.Modes = append(row.Modes, s)
+	}
+	sort.Strings(order)
+	rows = make([]ModelUsageRow, 0, len(order))
+	for _, key := range order {
+		row := byKey[key]
+		sort.Slice(row.Modes, func(i, j int) bool { return row.Modes[i].Mode < row.Modes[j].Mode })
+		rows = append(rows, *row)
+	}
+	return rows, showCost
+}
+
+// modelUsageLabel renders a {provider}/{model} label for the usage table,
+// falling back to the bare model id when the provider is unknown. This keeps
+// same-named models from different providers visually distinct.
+func modelUsageLabel(provider, model string) string {
+	provider = strings.TrimSpace(provider)
+	if provider == "" {
+		return model
+	}
+	return provider + "/" + model
+}
+
+// FormatSessionStats renders session telemetry as plain text (no ANSI) for the
+// /stats command. section selects the block: "" or "session" for the full
+// summary, "model" for the per-model token table, "tools" for tool-call counts.
+func FormatSessionStats(stats SessionStats, section string) string {
+	switch section {
+	case "model":
+		return formatModelSection(stats)
+	case "tools":
+		return formatToolsSection(stats)
+	default:
+		return formatSessionSection(stats)
+	}
+}
+
+// formatSessionSection renders the full session summary: a header, aligned
+// key/value lines (empty values omitted), and the per-model usage table.
+func formatSessionSection(stats SessionStats) string {
+	var b strings.Builder
+	b.WriteString("Session statistics")
+
+	rows := [][2]string{
+		{"Session", strings.TrimSpace(stats.SessionID)},
+		{"Provider", stats.Provider},
+		{"Model", stats.Model},
+		{"Turns", fmt.Sprintf("%d", stats.Turns)},
+		{"Tool calls", ToolCallsSummary(stats)},
+		{"Duration", FormatDuration(stats.Duration)},
+	}
+	if stats.SessionCostKnown {
+		rows = append(rows, [2]string{"Session cost", FormatCostUSD(stats.SessionCostUSD)})
+	}
+	for _, row := range rows {
+		if row[1] == "" {
+			continue
+		}
+		fmt.Fprintf(&b, "\n  %-14s %s", row[0]+":", row[1])
+	}
+
+	if len(stats.ModelUsage) > 0 {
+		b.WriteString("\n\n")
+		b.WriteString(formatModelTable(stats.ModelUsage))
+	} else {
+		fmt.Fprintf(&b, "\n  %-14s %s / %s", "Tokens (in/out):",
+			CompactCount(stats.InputTokens), CompactCount(stats.OutputTokens))
+	}
+	return b.String()
+}
+
+// formatModelSection renders only the per-model usage table, or an empty-state
+// message when no usage has been recorded.
+func formatModelSection(stats SessionStats) string {
+	if len(stats.ModelUsage) == 0 {
+		return "No model usage recorded yet."
+	}
+	return formatModelTable(stats.ModelUsage)
+}
+
+// formatToolsSection renders aggregate tool-call counts and the success rate, or
+// an empty-state message when no tools have been called.
+func formatToolsSection(stats SessionStats) string {
+	if stats.ToolCalls == 0 {
+		return "No tool calls recorded yet."
+	}
+	ok := stats.ToolCalls - stats.ToolFailures
+	pct := ok * 100 / stats.ToolCalls
+	var b strings.Builder
+	fmt.Fprintf(&b, "Tool calls: %d", stats.ToolCalls)
+	fmt.Fprintf(&b, "\nFailures: %d", stats.ToolFailures)
+	fmt.Fprintf(&b, "\nSuccess rate: %d%%", pct)
+	return b.String()
+}
+
+// formatModelTable renders the shared per-model/per-mode usage breakdown as
+// plain text, appending a cost column only when any row carries a known cost.
+func formatModelTable(stats []ModelUsageStat) string {
+	rows, showCost := AggregateModelUsage(stats)
+	var b strings.Builder
+	b.WriteString("Model Usage")
+	if showCost {
+		fmt.Fprintf(&b, "\n  %-32s  %5s  %8s  %8s  %9s", "Model", "Reqs", "In", "Out", "Cost")
+	} else {
+		fmt.Fprintf(&b, "\n  %-32s  %5s  %8s  %8s", "Model", "Reqs", "In", "Out")
+	}
+	for _, row := range rows {
+		writeModelTableRow(&b, "  "+row.Label, row.Requests, row.InTokens, row.OutTokens, row.CostUSD, row.CostKnown, showCost)
+		for _, mode := range row.Modes {
+			writeModelTableRow(&b, "    ↳ "+mode.Mode, mode.Requests, mode.InTokens, mode.OutTokens, mode.CostUSD, mode.CostKnown, showCost)
+		}
+	}
+	return b.String()
+}
+
+// writeModelTableRow appends one aligned usage line (parent or mode child) to b.
+func writeModelTableRow(b *strings.Builder, label string, reqs, in, out int, costUSD float64, costKnown, showCost bool) {
+	if showCost {
+		cost := ""
+		if costKnown {
+			cost = FormatCostUSD(costUSD)
+		}
+		fmt.Fprintf(b, "\n%-34s  %5d  %8s  %8s  %9s", label, reqs, CompactCount(in), CompactCount(out), cost)
+		return
+	}
+	fmt.Fprintf(b, "\n%-34s  %5d  %8s  %8s", label, reqs, CompactCount(in), CompactCount(out))
 }
