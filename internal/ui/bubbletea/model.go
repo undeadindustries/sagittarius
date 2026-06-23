@@ -1633,20 +1633,31 @@ func (m *model) statusWithMetrics() ui.StatusBar {
 func renderFooter(status ui.StatusBar, th theme.Theme, width int) string {
 	left := status.Left
 	right := status.Right
+
+	// Measure raw string widths before injecting ANSI so the gap is accurate.
 	gap := max(width-lipgloss.Width(left)-lipgloss.Width(right), 1)
-	line := left + strings.Repeat(" ", gap) + right
-	
-	rendered := th.Secondary.Width(max(width, 1)).Render(line)
-	if status.Detail != "" {
-		detail := status.Detail
-		if len(th.TitleGradient) > 0 {
-			detail = th.GradientText(status.Detail, th.Secondary, th.TitleGradient)
-		} else {
-			detail = th.Secondary.Render(status.Detail)
-		}
-		rendered += "\n" + detail
+
+	leftRendered := th.Secondary.Render(left)
+	var rightRendered string
+	if len(th.TitleGradient) > 0 && right != "" {
+		rightRendered = th.GradientText(right, th.Secondary, th.TitleGradient)
+	} else {
+		rightRendered = th.Secondary.Render(right)
 	}
-	return rendered
+
+	line := leftRendered + strings.Repeat(" ", gap) + rightRendered
+
+	if status.Detail == "" {
+		return line
+	}
+
+	var detail string
+	if len(th.TitleGradient) > 0 {
+		detail = th.GradientText(status.Detail, th.Secondary, th.TitleGradient)
+	} else {
+		detail = th.Secondary.Render(status.Detail)
+	}
+	return line + "\n" + detail
 }
 
 func max(a, b int) int {
