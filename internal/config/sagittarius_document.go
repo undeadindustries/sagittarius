@@ -16,6 +16,7 @@ var reservedSagittariusKeys = map[string]struct{}{
 	"systemPrompt":  {},
 	"snapshots":     {},
 	"verify":        {},
+	"web":           {},
 }
 
 var reservedSagittariusModeKeys = map[string]struct{}{
@@ -503,6 +504,91 @@ func marshalVerifyConfig(cfg *SagittariusVerifyConfig) (json.RawMessage, error) 
 	return json.Marshal(obj)
 }
 
+func unmarshalWebConfig(raw json.RawMessage) (*SagittariusWebConfig, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, fmt.Errorf("decode web config: %w", err)
+	}
+	cfg := &SagittariusWebConfig{Extra: make(map[string]json.RawMessage)}
+	for key, val := range obj {
+		switch key {
+		case "searchEnabled":
+			if err := json.Unmarshal(val, &cfg.SearchEnabled); err != nil {
+				return nil, err
+			}
+		case "fetchEnabled":
+			if err := json.Unmarshal(val, &cfg.FetchEnabled); err != nil {
+				return nil, err
+			}
+		case "directWebFetch":
+			if err := json.Unmarshal(val, &cfg.DirectWebFetch); err != nil {
+				return nil, err
+			}
+		case "utilityModel":
+			if err := json.Unmarshal(val, &cfg.UtilityModel); err != nil {
+				return nil, err
+			}
+		case "retryFetchErrors":
+			if err := json.Unmarshal(val, &cfg.RetryFetchErrors); err != nil {
+				return nil, err
+			}
+		case "maxFetchBytes":
+			if err := json.Unmarshal(val, &cfg.MaxFetchBytes); err != nil {
+				return nil, err
+			}
+		default:
+			cfg.Extra[key] = val
+		}
+	}
+	return cfg, nil
+}
+
+func marshalWebConfig(cfg *SagittariusWebConfig) (json.RawMessage, error) {
+	if cfg == nil {
+		return nil, nil
+	}
+	obj := make(map[string]json.RawMessage)
+	add := func(key string, v any) error {
+		if isEmptyValue(v) {
+			return nil
+		}
+		b, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		obj[key] = b
+		return nil
+	}
+	if err := add("searchEnabled", cfg.SearchEnabled); err != nil {
+		return nil, err
+	}
+	if err := add("fetchEnabled", cfg.FetchEnabled); err != nil {
+		return nil, err
+	}
+	if err := add("directWebFetch", cfg.DirectWebFetch); err != nil {
+		return nil, err
+	}
+	if err := add("utilityModel", cfg.UtilityModel); err != nil {
+		return nil, err
+	}
+	if err := add("retryFetchErrors", cfg.RetryFetchErrors); err != nil {
+		return nil, err
+	}
+	if err := add("maxFetchBytes", cfg.MaxFetchBytes); err != nil {
+		return nil, err
+	}
+	for key, val := range cfg.Extra {
+		obj[key] = val
+	}
+	if len(obj) == 0 {
+		return json.RawMessage("{}"), nil
+	}
+	return json.Marshal(obj)
+}
+
 func unmarshalSagittarius(raw json.RawMessage) (*SagittariusSettings, error) {
 	if len(raw) == 0 {
 		return nil, nil
@@ -568,6 +654,12 @@ func unmarshalSagittarius(raw json.RawMessage) (*SagittariusSettings, error) {
 				return nil, fmt.Errorf("decode sagittarius.verify: %w", err)
 			}
 			s.Verify = v
+		case "web":
+			w, err := unmarshalWebConfig(val)
+			if err != nil {
+				return nil, fmt.Errorf("decode sagittarius.web: %w", err)
+			}
+			s.Web = w
 		default:
 			if _, reserved := reservedSagittariusKeys[key]; reserved {
 				continue
@@ -657,6 +749,13 @@ func marshalSagittarius(s *SagittariusSettings) (json.RawMessage, error) {
 			return nil, err
 		}
 		obj["verify"] = b
+	}
+	if s.Web != nil {
+		b, err := marshalWebConfig(s.Web)
+		if err != nil {
+			return nil, err
+		}
+		obj["web"] = b
 	}
 	for key, val := range s.Extra {
 		obj[key] = val

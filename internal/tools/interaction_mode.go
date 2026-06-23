@@ -8,11 +8,13 @@ import (
 )
 
 var readOnlyBuiltinTools = map[string]bool{
-	ReadFileToolName:      true,
-	ListDirectoryToolName: true,
-	GrepToolName:          true,
-	activateSkillToolName: true,
-	ProjectChecksToolName: true,
+	ReadFileToolName:        true,
+	ListDirectoryToolName:   true,
+	GrepToolName:            true,
+	activateSkillToolName:   true,
+	ProjectChecksToolName:   true,
+	GoogleWebSearchToolName: true,
+	WebFetchToolName:        true,
 }
 
 // projectChecksFixRequested reports whether a run_project_checks call asks for

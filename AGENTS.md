@@ -122,10 +122,10 @@ in this file (see [Keeping this file current](#keeping-this-file-current)).
   `↑in ↓out` + optional OpenRouter cost; session totals on detail line), exit summary
   per-model/per-mode token breakdown with cost column when OpenRouter cost is known.
   De-emphasized `You ›` user blocks with per-turn spacing, colorized `write_file`
-  diffs (confirm preview + result), a multi-line wrapping input (`textarea`), a
-  loaded-`AGENTS.md` banner line, an elapsed-timer working spinner, and per-turn
-  cancel (`Esc`; `Ctrl+C` cancels then quits). Tool confirmations offer
-  Allow once / Allow for this session / No.
+  diffs (confirm preview + result), a multi-line wrapping input (`textarea`) with
+  `@path/to/file` mention autocompletion, a loaded-`AGENTS.md` banner line, a
+  color-cycling working spinner, and per-turn cancel (`Esc`; `Ctrl+C` cancels
+  then quits). Tool confirmations offer Allow once / Allow for this session / No.
   Overlay dialogs: providers wizard, global model picker (`modelpickdialog`), per-model
   settings editor (`modelsdialog`), mode-override editor (`modesdialog`), project
   system-prompt picker (`systempromptdialog`), MCP server wizard (`mcpdialog`),
@@ -147,6 +147,11 @@ in this file (see [Keeping this file current](#keeping-this-file-current)).
 `/help`, `/quit`, `/providers` (wizard; also holds API-key entry — no `/auth`),
 `/model` (global picker + autocomplete), `/models` (per-model settings editor),
 `/system-prompt` (project personality preset), `/modes` (mode-override editor; alias `/mode settings`), `/mode`, `/reasoning`,
+`/compress` (summarize the live context to save tokens; openai-chat only),
+`/copy` (copy the last assistant response to the clipboard),
+`/stats` (live session usage statistics; `session`/`model`/`tools`),
+`/init` (analyze the project and generate a tailored AGENTS.md),
+`/theme` (show or switch the TUI color theme; `default`/`greyscale`),
 `/memory reload`, `/mcp` (wizard; list/reload), `/tools` (inventory; list/desc),
 `/skills` (list/reload), `/agents` (list/reload), `/diff`, `/undo`. Naming rule:
 singular sets current one (`/model`, `/mode`), plural manages settings
@@ -250,6 +255,154 @@ and `docs/reference/commands.md` for details.
 ---
 
 ## Recent decisions
+
+- **2026-06-23 — First-class web tools mirroring gemini-cli (AD-042):** Added `google_web_search` and `web_fetch` built-in tools. These tools operate independently of the active chat provider by instantiating a dedicated `GeminiUtilityClient` for non-streaming calls, enabling Gemini's native `GoogleSearch` and `URLContext` grounding even when the user is chatting via OpenRouter. Implemented citation insertion from `GroundingMetadata`. Included a native Go HTTP fallback for `web_fetch` with SSRF protection (blocking localhost/RFC1918), rate limiting (10 req/min per host), and HTML-to-text conversion. `google_web_search` is read-only; `web_fetch` requires confirmation. Configuration lives in `sagittarius.web`.
+
+
+- **2026-06-23 — Alphabetize menus & fix suggestion scrolling (AD-049):** (1) 
+  Added a scrolling window (`suggestionWindow`) to the inline TUI suggestions so 
+  arrowing past item 8 keeps the highlight visible with `↑ / ↓ N more` indicators. 
+  (2) Alphabetized all user-facing lists: slash command tree (recursively sorted 
+  at registration, except `/reasoning`), TUI dialogs (modes, MCP servers, system 
+  prompts), and map-iteration lists (skills, agents, tools). System prompts use a 
+  new `config.SortedSystemPromptPresets()` to keep full/lite pairs grouped 
+  alphabetically. Providers dialog and model pickers retain their built-in-first 
+  grouping but sort alphabetically within groups.
+
+- **2026-06-23 — Bugbot fixes on the new slash commands (AD-048):** Four review
+  findings on the `/chat`, `/compress`, and `@`-mention work. (1) `/chat save`
+  now serialises `Runner.History()` via a new `session.WriteHistory` (the inverse
+  of `ConvertToProviderHistory`) instead of copying the active session JSONL,
+  which is empty/partial after a `/chat resume` or `/clear` rotation; the old
+  `copyFile`/`Runner.SessionFilePath` plumbing was removed. (2) `/chat resume`
+  now replaces the visible scrollback rather than appending to it: a new
+  `Result.ClearScrollback` → `ui.StreamClearScrollback` event clears `m.blocks`
+  before the restored turns repaint. (3) `@`-mention completion uses the real
+  textarea cursor (`inputByteCursor`, reconstructed from `LineInfo`) instead of
+  `len(value)`, and `acceptSuggestion` preserves the text after the cursor so a
+  mid-line completion no longer truncates the suffix. (4) The `/compress`
+  in-memory/JSONL "desync" is **by design, not fixed**: automatic over-budget
+  compression rewrites `r.history` the same way and never rewrites the recorder —
+  the session JSONL is the full append-only transcript, while history is the
+  live compressed working set. Fix (1) already makes `/chat save` capture the
+  compressed history, which was the only real consistency gap.
+
+- **2026-06-23 — `/theme` live theme switch + persistence (AD-047):** Added a
+  `/theme` slash command (`show`/`default`/`greyscale`, plus a `set <name>` and
+  bare-name root handler with alias resolution) that switches the TUI between the
+  colored default and greyscale themes live **and** persists the choice to
+  `ui.theme` in settings so it survives restart. Seam: `internal/slash` validates
+  plain theme-name string constants (`themeDefault`/`themeGreyscale` + a
+  `parseThemeName` alias resolver) and never imports `internal/ui/theme` (which
+  pulls in lipgloss/charm) — `theme.Resolve` runs only in the bubbletea layer.
+  Persistence flows through a new `config.Settings.SetUITheme` (merges into the
+  `ui.*` object so `hideBanner`/`hideTips`/unknown keys round-trip; clears the key
+  for `default`/empty) called by the new `Hooks.SetUITheme` (`*appHooks` →
+  `Loader.Save`). The live switch flows agent→UI via a new `StreamSetTheme` event
+  (carrying the name in `StreamEvent.Text`, like `/copy`'s `StreamCopyToClipboard`):
+  the bubbletea model applies it by swapping `m.th = theme.Resolve(name, false)`
+  and re-deriving cached input/spinner/welcome styling via a new `applyInputTheme`
+  helper (extracted verbatim from `newModel`, shared by both paths) then
+  `syncViewportContent`. The explicit in-session choice intentionally bypasses
+  `NO_COLOR` (a startup-only signal), so re-selecting `default` re-colors even
+  when launched with `NO_COLOR`.
+
+- **2026-06-23 — `/stats` live session statistics (AD-046):** Added a `/stats`
+  slash command that shows the same telemetry as the app exit screen, live,
+  without quitting, with `session` (default), `model`, and `tools` subcommands.
+  To keep `internal/slash` UI-free, the rendering lives in a new theme-free
+  (plain-text, no ANSI) `ui.FormatSessionStats` and is surfaced via the
+  string-returning `Hooks.SessionStatsText` (implemented by `*appHooks`, which
+  already imports `internal/ui`). The per-(provider,model,mode) grouping was
+  extracted from the bubbletea exit screen into a shared `ui.AggregateModelUsage`
+  (keyed by provider+model, never model alone) so the exit screen and `/stats`
+  share one implementation; the exit-screen output is byte-identical. The pure
+  leaf helpers `CompactCount`/`FormatCostUSD`/`FormatDuration`/`ToolCallsSummary`
+  also moved into `internal/ui/metrics.go` (DRY). `/stats tools` reports only
+  aggregate tool-call counts (calls / failures / success rate) because
+  Sagittarius does not track per-tool granularity yet.
+
+- **2026-06-23 — `/init` AI-driven AGENTS.md (AD-045):** Added a `/init` slash
+  command that, matching gemini-cli, is AI-driven rather than a static template:
+  it creates an empty `AGENTS.md` in the workspace root (no-op when one already
+  exists) and then submits an analysis prompt instructing the agent to explore
+  the project with its tools and write a comprehensive `AGENTS.md`. Implemented
+  via a new `slash.Result.SubmitPrompt` field; `App.handleSlash` runs that prompt
+  through `Runner.RunTurn` and merges the turn's events into the same stream
+  (RunTurn emits its own terminal `StreamDone`), so the TUI and headless
+  consumers need no changes.
+
+- **2026-06-23 — `/copy` to clipboard (AD-044):** Added a `/copy` slash command
+  that copies the last assistant response to the clipboard. New leaf
+  `internal/clipboard` wraps `atotto/clipboard` (now a direct dep) with an OSC 52
+  escape-sequence fallback (`Copy`/`Available`/`OSC52Sequence`/`ErrUnavailable`).
+  The copy is routed through the UI layer — `slash.Result.Clipboard` →
+  `ui.StreamCopyToClipboard` — so the agent/slash layers stay terminal-free: the
+  bubbletea model performs the copy via `tea.Printf` for OSC 52 (never raw
+  `os.Stdout` while rendering, which would corrupt the display), and headless
+  `runSlash` writes OSC 52 directly to stdout. New `Runner.LastAssistantText` +
+  `Hooks.LastAssistantText` (pure `lastAssistantText` helper) expose the last
+  model turn's text.
+
+- **2026-06-23 — `/compress` manual context compression (AD-043):** Added a
+  `/compress` slash command that summarizes the live conversation on demand.
+  New exported symbols: `Manager.CompressionAvailable`/`Manager.ForceCompress`
+  (`internal/contextmgmt`), `Runner.ContextCompressionAvailable`/
+  `Runner.ForceCompress` (between-turns contract like `ReplaceHistory`, no
+  history mutex), and the `Hooks.ForceCompressHistory` hook (implemented by
+  `appHooks` with `formatCompressionResult`). `ForceCompress` bypasses the
+  budget/threshold checks (`Force: true`) and replaces `r.history` in place.
+  Because client-side compression is gated to the openai-chat wire format
+  (AD-015), the command degrades gracefully with a clear message on
+  gemini-native and openai-responses providers (nil/disabled manager), never
+  silently claiming success.
+
+- **2026-06-23 — `/chat` gap-closing vs gemini-cli (AD-042):** Closed the
+  behavioral gaps between Sagittarius's `/chat` and gemini-cli's. (1) `save`
+  now guards empty conversations and refuses to clobber an existing checkpoint
+  unless a `force` token is given (slash has no interactive confirm, so a token
+  replaces gemini's y/n prompt); a best-effort `checkpoint-<tag>.meta.json`
+  sidecar records the provider+model. (2) `resume` (alias `load`) restores the
+  prior conversation into the TUI scrollback via a new `ui.StreamScrollback`
+  event + `slash.Result.Scrollback []ScrollbackEntry` (role-tagged), and warns —
+  but does not block — on a provider mismatch read from the sidecar (Sagittarius
+  history is provider-neutral and thought signatures aren't replayed, so a hard
+  block like gemini-cli's would be user-hostile). (3) `debug` now writes the
+  wire request to a timestamped `sagittarius-request-*.json` file: a new optional
+  `provider.WireRequestDebugger` interface (implemented by the openai-chat and
+  openai-responses generators) emits the exact serialized body, with the
+  provider-neutral `GenerateRequest` as the fallback for the Gemini genai path.
+  (4) `share` defaults to `.json`, rejects extensions other than `.md`/`.json`,
+  and guards empty history. The interactive session-browser dialog for bare
+  `/chat` remains deferred (text list for now).
+
+- **2026-06-23 — `@path` file mentions + color-cycling spinner (AD-041):**
+  New leaf package `internal/atmention/` parses gemini-cli-style `@path/to/file`
+  references (a hand-written scanner, since Go's RE2 has no lookaround) and
+  injects the referenced file contents into the model-bound user message inside
+  `--- Content from referenced files ---` delimiters. `Runner.RunTurn` calls
+  `atmention.Expand` before appending the user turn, so headless and TUI share
+  one path; scrollback and session JSONL keep the raw text the user typed, while
+  only the provider message gains the file blocks (not replayed on resume — a v1
+  limitation). A mention is recognised only when `@` starts a whitespace/
+  delimiter-bounded token, so emails like `rob@example.com` are left alone;
+  resolution failures (missing/binary/directory/out-of-workspace) abort the turn
+  with a surfaced `StreamError`. Per-file 256 KiB / combined 512 KiB caps bound
+  injected context. The TUI gains an `@` autocompleter via a new optional
+  `ui.MentionCompleter` interface (`App.CompleteMention` → cached workspace walk
+  in `atmention.Index`), reusing the existing suggestion UI. Separately, the
+  working spinner now cycles colors (`theme.SpinnerGradient` + `applySpinnerColor`
+  on each `spinner.TickMsg`), matching gemini-cli's `GeminiSpinner` ~4s gradient;
+  greyscale themes keep a static spinner.
+
+- **2026-06-23 — Generator cache for O(1) mode switches (AD-040):**
+  `provider.GeneratorCache` (`internal/provider/cache.go`) caches
+  `ContentGenerator` instances keyed on all material connection parameters
+  including the resolved credential. `RebuildRunner` in `internal/agent/app.go`
+  now calls `generatorCache.GetOrCreate` instead of `provider.NewContentGenerator`
+  directly. Mode switches that return to a previously-used provider are now
+  sub-millisecond (no DNS/TLS/`genai.NewClient`); the cache self-invalidates on
+  any credential or endpoint change because those are part of the key.
 
 - **2026-06-23 — TUI UX overhaul (AD-039):** (1) User scrollback blocks are
   de-emphasized (`You ›` prefix, grey `UserBody`) with a blank line between

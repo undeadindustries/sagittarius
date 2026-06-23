@@ -9,12 +9,17 @@ const (
 	ShellToolName         = "run_shell_command"
 	GrepToolName          = "grep_search"
 	ProjectChecksToolName = "run_project_checks"
+	GoogleWebSearchToolName = "google_web_search"
+	WebFetchToolName      = "web_fetch"
 )
 
 const (
 	ParamFilePath = "file_path"
 	ParamDirPath  = "dir_path"
 	ParamPattern  = "pattern"
+	ParamQuery    = "query"
+	ParamPrompt   = "prompt"
+	ParamURL      = "url"
 
 	ReadFileParamStartLine = "start_line"
 	ReadFileParamEndLine   = "end_line"

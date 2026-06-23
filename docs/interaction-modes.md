@@ -140,6 +140,7 @@ tool list sent to the model:
 | Tool | agent / debug | plan | ask |
 |------|---------------|------|-----|
 | `read_file`, `grep_search`, `list_directory`, `activate_skill` | yes | yes | yes |
+| `google_web_search`, `web_fetch`, `run_project_checks` | yes | yes | yes |
 | `write_file` | yes | `docs/plans/` only | no |
 | `run_shell_command` | yes | no | no |
 | MCP tools | yes | no | no |
