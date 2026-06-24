@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/undeadindustries/sagittarius/internal/bgproc"
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/extensions"
 	"github.com/undeadindustries/sagittarius/internal/mcp"
@@ -19,6 +20,7 @@ type Catalog struct {
 	skills     *skills.Manager
 	extensions *extensions.Loader
 	settings   *config.Settings
+	bgMgr      *bgproc.Manager
 	allowFix   bool
 }
 
@@ -29,6 +31,7 @@ type CatalogConfig struct {
 	Skills     *skills.Manager
 	Extensions *extensions.Loader
 	Settings   *config.Settings
+	BgMgr      *bgproc.Manager
 	ClientName string
 	Version    string
 	// AllowFix permits run_project_checks to run mutating formatters (fix=true).
@@ -58,13 +61,14 @@ func NewCatalog(cfg CatalogConfig) (*Catalog, error) {
 		skills:     cfg.Skills,
 		extensions: cfg.Extensions,
 		settings:   cfg.Settings,
+		bgMgr:      cfg.BgMgr,
 		allowFix:   cfg.AllowFix,
 	}, nil
 }
 
 // BuildRegistry assembles the current registry without reconnecting MCP servers.
 func (c *Catalog) BuildRegistry() *tools.Registry {
-	reg := tools.NewBuiltinRegistry(c.ws, tools.WithAllowFix(c.allowFix))
+	reg := tools.NewBuiltinRegistry(c.ws, tools.WithAllowFix(c.allowFix), tools.WithBackgroundManager(c.bgMgr))
 	reg.Register(tools.NewActivateSkillTool(c.skills))
 	for _, tool := range c.mcp.Tools() {
 		reg.Register(wrapMCPTool(tool))

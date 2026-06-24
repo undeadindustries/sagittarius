@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/undeadindustries/sagittarius/internal/bgproc"
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 )
@@ -72,6 +73,12 @@ type RegistryOption func(*registryConfig)
 
 type registryConfig struct {
 	allowFix bool
+	bgMgr    *bgproc.Manager
+}
+
+// WithBackgroundManager provides a background process manager to tools.
+func WithBackgroundManager(mgr *bgproc.Manager) RegistryOption {
+	return func(c *registryConfig) { c.bgMgr = mgr }
 }
 
 // WithAllowFix permits run_project_checks to run mutating formatters/auto-fixers
@@ -94,7 +101,7 @@ func NewBuiltinRegistry(ws *Workspace, opts ...RegistryOption) *Registry {
 		newReadFileTool(ws),
 		newWriteFileTool(ws),
 		newListDirectoryTool(ws),
-		newShellTool(ws),
+		newShellTool(ws, cfg.bgMgr),
 		newGrepTool(ws),
 		newProjectChecksTool(ws, cfg.allowFix),
 	} {

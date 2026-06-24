@@ -18,7 +18,7 @@ func newTestShellTool(t *testing.T) *shellTool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &shellTool{ws: ws, autoBackgroundAfter: defaultAutoBackgroundAfter}
+	return &shellTool{ws: ws, autoBackgroundAfter: defaultAutoBackgroundAfter, bgMgr: nil}
 }
 
 // processAlive reports whether pid is a live process (signal 0 probes existence

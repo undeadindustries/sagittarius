@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/undeadindustries/sagittarius/internal/agents"
+	"github.com/undeadindustries/sagittarius/internal/bgproc"
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/extensions"
 	"github.com/undeadindustries/sagittarius/internal/mcp"
@@ -18,6 +19,7 @@ type Runtime struct {
 	Catalog  *Catalog
 	Agents   *agents.Registry
 	Settings *config.Settings
+	BgMgr    *bgproc.Manager
 	workDir  string
 }
 
@@ -48,12 +50,14 @@ func NewRuntime(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 	}
 	extLoader := extensions.NewLoader()
 	skillMgr := skills.NewManager(ws.Root(), cfg.Trusted)
+	bgMgr := bgproc.NewManager()
 	catalog, err := NewCatalog(CatalogConfig{
 		Workspace:  ws,
 		MCP:        mcp.NewManager(mcp.ManagerConfig{ClientName: cfg.ClientName, ClientVersion: cfg.ClientVersion}),
 		Skills:     skillMgr,
 		Extensions: extLoader,
 		Settings:   cfg.Settings,
+		BgMgr:      bgMgr,
 		ClientName: cfg.ClientName,
 		Version:    cfg.ClientVersion,
 		AllowFix:   cfg.AllowFix,
@@ -68,6 +72,7 @@ func NewRuntime(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 		Catalog:  catalog,
 		Agents:   agents.NewRegistry(ws.Root(), cfg.Trusted),
 		Settings: cfg.Settings,
+		BgMgr:    bgMgr,
 		workDir:  ws.Root(),
 	}
 	if _, err := rt.Agents.Reload(ctx, extLoader.ActiveAgents()); err != nil {

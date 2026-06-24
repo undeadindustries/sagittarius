@@ -6,9 +6,14 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
+	"github.com/charmbracelet/x/vt"
+	"github.com/creack/pty"
+	"github.com/undeadindustries/sagittarius/internal/bgproc"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 )
 
@@ -31,10 +36,11 @@ type shellTool struct {
 	// autoBackgroundAfter is the foreground auto-background threshold. A field
 	// (not a const) so tests can shorten it; production uses the default.
 	autoBackgroundAfter time.Duration
+	bgMgr               *bgproc.Manager
 }
 
-func newShellTool(ws *Workspace) Tool {
-	return &shellTool{ws: ws, autoBackgroundAfter: defaultAutoBackgroundAfter}
+func newShellTool(ws *Workspace, bgMgr *bgproc.Manager) Tool {
+	return &shellTool{ws: ws, autoBackgroundAfter: defaultAutoBackgroundAfter, bgMgr: bgMgr}
 }
 
 func (t *shellTool) Name() string { return ShellToolName }
@@ -73,6 +79,10 @@ func (t *shellTool) Declaration() provider.ToolDeclaration {
 }
 
 func (t *shellTool) Execute(ctx context.Context, args map[string]any) (map[string]any, error) {
+	return t.ExecuteStream(ctx, args, nil)
+}
+
+func (t *shellTool) ExecuteStream(ctx context.Context, args map[string]any, sink ToolOutputSink) (map[string]any, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -89,13 +99,11 @@ func (t *shellTool) Execute(ctx context.Context, args map[string]any) (map[strin
 		return nil, err
 	}
 
-	// Both modes share one execution path. The only differences are how long we
-	// wait before declaring the process "backgrounded" and the wording we report.
 	grace := t.autoBackgroundAfter
 	if background {
 		grace = backgroundStartGrace
 	}
-	return t.run(ctx, command, background, grace)
+	return t.run(ctx, command, background, grace, sink)
 }
 
 // run starts command with stdout+stderr redirected to a temp log file, then
@@ -111,43 +119,139 @@ func (t *shellTool) Execute(ctx context.Context, args map[string]any) (map[strin
 // returns without risking SIGPIPE on the writer or leaking a copy goroutine.
 // The process is started under context.Background, not ctx, so a backgrounded
 // process outlives the agent turn; cancellation is handled explicitly below.
-func (t *shellTool) run(ctx context.Context, command string, explicitBackground bool, grace time.Duration) (map[string]any, error) {
+func (t *shellTool) run(ctx context.Context, command string, explicitBackground bool, grace time.Duration, sink ToolOutputSink) (map[string]any, error) {
 	logFile, err := os.CreateTemp("", "sagittarius-shell-*.log")
 	if err != nil {
 		return nil, fmt.Errorf("shell: create log file: %w", err)
 	}
 	logPath := logFile.Name()
 
-	cmd := exec.Command("bash", "-c", command)
+	jobsFile, err := os.CreateTemp("", "sagittarius-jobs-*.pid")
+	if err != nil {
+		return nil, fmt.Errorf("shell: create jobs file: %w", err)
+	}
+	jobsPath := jobsFile.Name()
+	_ = jobsFile.Close()
+	defer os.Remove(jobsPath)
+
+	wrappedCommand := fmt.Sprintf(`trap 'jobs -p > %q' EXIT; %s`, jobsPath, command)
+
+	cmd := exec.Command("bash", "-c", wrappedCommand)
 	cmd.Dir = t.ws.Root()
 	cmd.Env = os.Environ()
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Stdout = logFile
-	cmd.Stderr = logFile
 
-	if err = cmd.Start(); err != nil {
+	f, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 24, Cols: 80})
+	if err != nil {
 		_ = logFile.Close()
 		_ = os.Remove(logPath)
-		return nil, fmt.Errorf("shell execution failed: %w", err)
+		return nil, fmt.Errorf("shell pty failed: %w", err)
 	}
-	// The child holds its own dup'd fd; the parent handle is no longer needed.
-	_ = logFile.Close()
 
 	pid := cmd.Process.Pid
+	term := vt.NewEmulator(80, 24)
+	term.SetScrollbackSize(100)
+	var isDone atomic.Bool
+
+	ioDone := make(chan struct{})
+	// Copy output from PTY to logFile and emulator
+	go func() {
+		defer close(ioDone)
+		buf := make([]byte, 1024)
+		for {
+			n, err := f.Read(buf)
+			if n > 0 {
+				_, _ = logFile.Write(buf[:n])
+				if !isDone.Load() {
+					_, _ = term.Write(buf[:n])
+				}
+			}
+			if err != nil {
+				break
+			}
+		}
+		_ = logFile.Close()
+	}()
+
 	waitErr := make(chan error, 1)
-	go func() { waitErr <- cmd.Wait() }()
+	go func() {
+		err := cmd.Wait()
+		// Give the PTY read loop a brief moment to flush OS buffers before
+		// we close the master and potentially drop unread data.
+		time.Sleep(50 * time.Millisecond)
+		_ = f.Close() // Close PTY after wait to unblock Read
+		waitErr <- err
+	}()
+
+	var tailCancel context.CancelFunc
+	if sink != nil {
+		var tailCtx context.Context
+		tailCtx, tailCancel = context.WithCancel(ctx)
+		go func() {
+			ticker := time.NewTicker(250 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-tailCtx.Done():
+					return
+				case <-ticker.C:
+					sink(renderEmulator(term))
+				}
+			}
+		}()
+	}
 
 	select {
 	case err = <-waitErr:
+		<-ioDone // wait for remaining output to flush
+		isDone.Store(true)
+		if tailCancel != nil {
+			tailCancel()
+		}
+		if sink != nil {
+			sink(renderEmulator(term))
+		}
+
+		// Capture background jobs started by '&'
+		t.captureJobs(jobsPath, command, logPath)
+
 		return t.completedResult(logPath, err)
 	case <-ctx.Done():
+		isDone.Store(true)
+		if tailCancel != nil {
+			tailCancel()
+		}
 		_ = syscall.Kill(-pid, syscall.SIGKILL)
 		_ = os.Remove(logPath)
 		return nil, ctx.Err()
 	case <-time.After(grace):
-		// Still running: leave it alive. The Wait goroutine reaps it on exit
-		// (no zombie). The log file is intentionally retained for inspection.
+		isDone.Store(true)
+		if tailCancel != nil {
+			tailCancel()
+		}
+		if t.bgMgr != nil {
+			t.bgMgr.Register(pid, pid, command, logPath)
+		}
 		return backgroundedResult(pid, logPath, explicitBackground, grace), nil
+	}
+}
+
+func (t *shellTool) captureJobs(jobsPath, command, logPath string) {
+	if t.bgMgr == nil {
+		return
+	}
+	data, err := os.ReadFile(jobsPath)
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var pid int
+		if _, err := fmt.Sscanf(line, "%d", &pid); err == nil && pid > 0 {
+			t.bgMgr.Register(pid, 0, command+" (& child)", logPath)
+		}
 	}
 }
 
@@ -205,5 +309,5 @@ func readLogSnapshot(path string) string {
 	if err != nil {
 		return ""
 	}
-	return strings.TrimSpace(string(data))
+	return strings.TrimSpace(ansi.Strip(string(data)))
 }

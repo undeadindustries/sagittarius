@@ -38,6 +38,7 @@ func TestProgrammerFullAnchors(t *testing.T) {
 		"run_shell_command",
 		"grep_search",
 		"No Post-Change Summaries",
+		"Execute, don't narrate",
 		"git rebase -i",
 	}
 	for _, a := range wantAnchors {
@@ -59,7 +60,7 @@ func TestProgrammerLiteAnchors(t *testing.T) {
 		IsGitRepo:   false,
 	})
 
-	for _, a := range []string{"## Tool Usage", "## Workflow", "## Editing Rules", "grep_search", "git rebase -i", "npm init -y"} {
+	for _, a := range []string{"## Tool Usage", "## Workflow", "## Editing Rules", "grep_search", "git rebase -i", "npm init -y", "Execute, don't narrate"} {
 		if !strings.Contains(out, a) {
 			t.Errorf("lite prompt missing anchor %q", a)
 		}

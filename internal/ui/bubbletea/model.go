@@ -15,8 +15,10 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mattn/go-runewidth"
 
+	"github.com/undeadindustries/sagittarius/internal/bgproc"
 	"github.com/undeadindustries/sagittarius/internal/clipboard"
 	"github.com/undeadindustries/sagittarius/internal/ui"
+	"github.com/undeadindustries/sagittarius/internal/ui/bgprocdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/mcpdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/modelpickdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/modelsdialog"
@@ -105,6 +107,7 @@ const (
 	roleInfo
 	roleError
 	roleToolStart
+	roleToolOutput
 	roleToolResult
 	roleConfirm
 )
@@ -137,8 +140,9 @@ type model struct {
 	// renderer can prefix and color it consistently (user, assistant, info,
 	// error, tool lifecycle). Streamed assistant text accumulates into the
 	// block at openResponseIdx until the turn ends.
-	blocks          []scrollBlock
-	openResponseIdx int
+	blocks            []scrollBlock
+	openResponseIdx   int
+	openToolOutputIdx int
 
 	busy     bool
 	quitting bool
@@ -159,6 +163,7 @@ type model struct {
 	// the current activity (e.g. "Thinking…" or "Running write_file").
 	working      bool
 	workingLabel string
+	runningTool  string
 	// exitSummary is captured when quitting begins so the Terminal can print the
 	// goodbye screen after the alt-screen program tears down.
 	exitSummary string
@@ -196,6 +201,8 @@ type model struct {
 	mcpOverlay *mcpdialog.Model
 	// toolsOverlay holds the tool inventory.
 	toolsOverlay *toolsdialog.Model
+	// bgProcOverlay holds the background process viewer.
+	bgProcOverlay *bgprocdialog.Model
 	// onboardingOverlay holds the first-run provider setup wizard.
 	onboardingOverlay *onboardingdialog.Model
 }
@@ -204,7 +211,7 @@ type model struct {
 func (m *model) hasOverlay() bool {
 	return m.onboardingOverlay != nil || m.overlay != nil ||
 		m.modelsOverlay != nil || m.modelPickOverlay != nil || m.modesOverlay != nil ||
-		m.systemPromptOverlay != nil || m.mcpOverlay != nil || m.toolsOverlay != nil
+		m.systemPromptOverlay != nil || m.mcpOverlay != nil || m.toolsOverlay != nil || m.bgProcOverlay != nil
 }
 
 // maxVisibleSuggestions caps the inline suggestion list height.
@@ -241,18 +248,19 @@ func newModel(opts ui.Options, app ui.App, term *Terminal) *model {
 	}
 
 	m := &model{
-		opts:            opts,
-		app:             app,
-		term:            term,
-		th:              th,
-		welcome:         welcome,
-		openResponseIdx: -1,
-		input:           ti,
-		viewport:        vp,
-		spin:            newWorkingSpinner(th),
-		status:          idleStatus,
-		idleStatus:      idleStatus,
-		suggestionIdx:   -1,
+		opts:              opts,
+		app:               app,
+		term:              term,
+		th:                th,
+		welcome:           welcome,
+		openResponseIdx:   -1,
+		openToolOutputIdx: -1,
+		input:             ti,
+		viewport:          vp,
+		spin:              newWorkingSpinner(th),
+		status:            idleStatus,
+		idleStatus:        idleStatus,
+		suggestionIdx:     -1,
 	}
 	m.syncInputPrompt(idleStatus.Mode)
 
@@ -399,6 +407,10 @@ func (m *model) updateOverlay(msg tea.Msg) (tea.Model, tea.Cmd) {
 			o := m.toolsOverlay.SetSize(msg.Width, msg.Height)
 			m.toolsOverlay = &o
 		}
+		if m.bgProcOverlay != nil {
+			next, _ := m.bgProcOverlay.Update(msg)
+			m.bgProcOverlay = next
+		}
 		return m, nil
 	case streamEventMsg:
 		return m.handleStream(msg.event)
@@ -494,6 +506,16 @@ func (m *model) updateOverlay(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	if m.bgProcOverlay != nil {
+		next, cmd := m.bgProcOverlay.Update(msg)
+		if _, ok := msg.(bgprocdialog.MsgDone); ok {
+			m.closeOverlay("")
+			return m, cmd
+		}
+		m.bgProcOverlay = next
+		return m, cmd
+	}
+
 	return m, nil
 }
 
@@ -508,6 +530,7 @@ func (m *model) closeOverlay(status string) {
 	m.systemPromptOverlay = nil
 	m.mcpOverlay = nil
 	m.toolsOverlay = nil
+	m.bgProcOverlay = nil
 	if status != "" {
 		m.addBlock(roleInfo, status)
 	}
@@ -609,6 +632,19 @@ func (m *model) openDialog(kind ui.DialogKind) {
 		o = o.SetTheme(m.th)
 		o = o.SetSize(m.width, m.height)
 		m.toolsOverlay = &o
+	case ui.DialogBackground:
+		host, ok := m.app.(interface {
+			ListBackgroundProcesses() []bgproc.Process
+			KillBackgroundProcess(pid int) error
+			BackgroundProcessOutput(pid int) string
+		})
+		if !ok {
+			m.addBlock(roleInfo, "Background processes are unavailable in this session.")
+			return
+		}
+		procs := host.ListBackgroundProcesses()
+		o := bgprocdialog.New(m.width, m.height, m.th, procs, host.BackgroundProcessOutput, host.KillBackgroundProcess)
+		m.bgProcOverlay = o
 	}
 }
 
@@ -639,6 +675,9 @@ func (m *model) View() string {
 	}
 	if m.toolsOverlay != nil {
 		return m.toolsOverlay.View()
+	}
+	if m.bgProcOverlay != nil {
+		return m.bgProcOverlay.View()
 	}
 	m.syncInputLayout()
 
@@ -698,7 +737,7 @@ func (m *model) sendConfirm(d ui.ConfirmDecision) {
 	m.confirmDiff = ""
 	m.confirmChoice = 0
 	m.status.Left = ""
-	m.setWorking(true, "Thinking…")
+	m.setWorking(true, m.busyLabel())
 }
 
 // confirmBandLines builds the inner (un-bordered) lines of the confirmation
@@ -906,6 +945,9 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, waitStream(events)
 		}
 		return m, nil
+	case "ctrl+b":
+		m.openDialog(ui.DialogBackground)
+		return m, nil
 	case "up":
 		if len(m.suggestions) > 0 {
 			m.moveSuggestion(-1)
@@ -1084,6 +1126,7 @@ func (m *model) cancelTurn() {
 // goroutine can unblock without leaking.
 func (m *model) forceAbandonTurn() {
 	m.busy = false
+	m.runningTool = ""
 	m.turnCanceled = false
 	m.streamAbandoned = true
 	m.turnStart = time.Time{}
@@ -1136,7 +1179,7 @@ func (m *model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 	m.addBlock(roleUser, line)
 	m.busy = true
 	m.streamAbandoned = false
-	m.setWorking(true, "Thinking…")
+	m.setWorking(true, m.busyLabel())
 
 	base := m.ctx
 	if base == nil {
@@ -1196,8 +1239,22 @@ func (m *model) handleStream(ev ui.StreamEvent) (tea.Model, tea.Cmd) {
 		if ev.Text != "" {
 			label += " " + ev.Text
 		}
+		m.openToolOutputIdx = -1
 		m.addBlock(roleToolStart, label)
-		m.setWorking(true, "Running "+ev.ToolName)
+		m.runningTool = ev.ToolName
+		m.setWorking(true, m.busyLabel())
+	case ui.StreamToolOutput:
+		text := ev.Text
+		if text == "" {
+			text = "Waiting for output..."
+		}
+		if m.openToolOutputIdx < 0 {
+			m.blocks = append(m.blocks, scrollBlock{role: roleToolOutput, text: text})
+			m.openToolOutputIdx = len(m.blocks) - 1
+		} else {
+			m.blocks[m.openToolOutputIdx].text = text
+		}
+		m.syncViewportContent()
 	case ui.StreamToolConfirm:
 		text := ev.ToolName
 		if ev.Text != "" {
@@ -1216,18 +1273,24 @@ func (m *model) handleStream(ev ui.StreamEvent) (tea.Model, tea.Cmd) {
 		if ev.Text != "" {
 			text += " " + ev.Text
 		}
+		m.openToolOutputIdx = -1
 		m.addBlock(roleToolResult, text)
+		m.runningTool = ""
 		// Tool finished; the model will be queried again next.
-		m.setWorking(true, "Thinking…")
+		m.setWorking(true, m.busyLabel())
 	case ui.StreamError:
 		if ev.Err != nil {
 			m.addBlock(roleError, ev.Err.Error())
 		} else if ev.Text != "" {
 			m.addBlock(roleError, ev.Text)
 		}
+		m.openToolOutputIdx = -1
+		m.runningTool = ""
 		m.setWorking(false, "")
 	case ui.StreamDone:
 		m.busy = false
+		m.openToolOutputIdx = -1
+		m.runningTool = ""
 		m.clearTurn()
 		m.setWorking(false, "")
 		m.closeResponse()
@@ -1349,6 +1412,15 @@ func (m *model) closeResponse() {
 	m.openResponseIdx = -1
 }
 
+// busyLabel returns the activity label for the working indicator. When a tool is
+// executing, it returns "Running <tool>". Otherwise, it defaults to "Thinking…".
+func (m *model) busyLabel() string {
+	if m.runningTool != "" {
+		return "Running " + m.runningTool
+	}
+	return "Thinking…"
+}
+
 // setWorking toggles the working/thinking indicator and re-syncs the viewport so
 // it stays scrolled to the bottom as the reserved row appears or disappears. The
 // label is kept when turning the indicator on.
@@ -1405,6 +1477,8 @@ func (m *model) roleStyle(role scrollRole) (glyph string, prefix, body lipgloss.
 		return "✕ ", m.th.Error, m.th.Error
 	case roleToolStart:
 		return "⚙ ", m.th.Secondary, m.th.Secondary
+	case roleToolOutput:
+		return "│ ", m.th.Dim, m.th.Primary
 	case roleToolResult:
 		return "↳ ", m.th.Dim, m.th.Dim
 	case roleConfirm:

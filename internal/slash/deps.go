@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/undeadindustries/sagittarius/internal/agents"
+	"github.com/undeadindustries/sagittarius/internal/bgproc"
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/mcp"
 	"github.com/undeadindustries/sagittarius/internal/modes"
@@ -78,6 +79,11 @@ type Hooks interface {
 	// SetUITheme persists the chosen TUI theme ("default" or "greyscale") to
 	// settings. Used by /theme; the live switch is driven separately via the UI.
 	SetUITheme(name string) error
+
+	// Background process viewer hooks
+	ListBackgroundProcesses() []bgproc.Process
+	KillBackgroundProcess(pid int) error
+	BackgroundProcessOutput(pid int) string
 }
 
 // Deps supplies slash command dependencies (injectable for tests).
