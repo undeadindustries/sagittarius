@@ -474,19 +474,6 @@ func TestChatCompletionsURL(t *testing.T) {
 	}
 }
 
-func TestMistralSafeToolCallID(t *testing.T) {
-	t.Parallel()
-
-	a := MistralSafeToolCallID("call_read_file_0")
-	b := MistralSafeToolCallID("call_read_file_1")
-	if a == b {
-		t.Error("expected distinct ids for different counters")
-	}
-	if len(a) != 9 {
-		t.Errorf("id len = %d, want 9", len(a))
-	}
-}
-
 func mustMarshalJSON(t *testing.T, v any) json.RawMessage {
 	t.Helper()
 	b, err := json.Marshal(v)

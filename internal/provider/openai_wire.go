@@ -146,20 +146,6 @@ var (
 	parameterRE       = regexp.MustCompile(`(?s)<parameter=(\w+)>(.*?)</parameter>`)
 )
 
-// MistralSafeToolCallID sanitizes a tool call id for Mistral-family parsers.
-func MistralSafeToolCallID(rawID string) string {
-	cleaned := strings.Map(func(r rune) rune {
-		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
-			return r
-		}
-		return -1
-	}, rawID)
-	if len(cleaned) >= 9 {
-		return cleaned[len(cleaned)-9:]
-	}
-	return strings.Repeat("0", 9-len(cleaned)) + cleaned
-}
-
 // IsMistralFamilyModel reports whether modelID belongs to the Mistral model family.
 func IsMistralFamilyModel(modelID string) bool {
 	return mistralFamilyRE.MatchString(modelID)
