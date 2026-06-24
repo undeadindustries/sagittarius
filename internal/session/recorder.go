@@ -218,6 +218,21 @@ func (r *Recorder) appendLineLocked(v interface{}) error {
 	return err
 }
 
+// RecordSessionGrant appends a $set record adding a tool to the session grants list.
+func (r *Recorder) RecordSessionGrant(toolName string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.disabled {
+		return nil
+	}
+	set := SetRecord{
+		Set: &MetadataRecord{
+			SessionGrants: []string{toolName},
+		},
+	}
+	return r.appendLineLocked(set)
+}
+
 func (r *Recorder) handleWriteError(err error) {
 	if isENOSPC(err) {
 		r.disabled = true

@@ -417,7 +417,7 @@ func TestWriteHistoryRoundTrip(t *testing.T) {
 	}
 
 	path := filepath.Join(t.TempDir(), "checkpoint-test.jsonl")
-	if err := session.WriteHistory(path, "", "", "", history); err != nil {
+	if err := session.WriteHistory(path, "", "", "", history, nil); err != nil {
 		t.Fatalf("WriteHistory: %v", err)
 	}
 
@@ -456,7 +456,7 @@ func TestWriteHistoryEmpty(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "checkpoint-empty.jsonl")
-	if err := session.WriteHistory(path, "sid-1", "", "", nil); err != nil {
+	if err := session.WriteHistory(path, "sid-1", "", "", nil, nil); err != nil {
 		t.Fatalf("WriteHistory: %v", err)
 	}
 	record, err := session.LoadSession(path)

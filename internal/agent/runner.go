@@ -53,6 +53,8 @@ type RunnerConfig struct {
 	SessionRecorder *session.Recorder
 	// InitialHistory pre-populates the conversation from a resumed session.
 	InitialHistory []provider.Message
+	// InitialSessionGrants pre-populates tools already approved for the session.
+	InitialSessionGrants []string
 	// Settings enables interaction-mode model routing. Nil disables mode overrides.
 	Settings *config.Settings
 	// ProjectBoundary blocks out-of-project file mutations (file writes and a
@@ -121,6 +123,8 @@ type Runner struct {
 	// loadedMemoryFiles are the AGENTS.md paths that contributed to the system
 	// instruction, captured at construction for the welcome banner.
 	loadedMemoryFiles []string
+	// initialSessionGrants seeds the scheduler.
+	initialSessionGrants []string
 }
 
 // LoadedMemoryFiles returns the AGENTS.md paths that contributed to the system
@@ -209,6 +213,7 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		suggestVerify:        cfg.SuggestVerifyAfterWrite,
 		goplsHintPending:     needsGoplsHint(cfg.Settings, ws.Root()),
 		loadedMemoryFiles:    memoryFiles,
+		initialSessionGrants: cfg.InitialSessionGrants,
 	}
 	if !cfg.ModelPinned {
 		runner.refreshModelFromMode()
@@ -807,6 +812,14 @@ func (r *Runner) schedulerOptions() []tools.SchedulerOption {
 	if r.snap != nil {
 		opts = append(opts, tools.WithSnapshotter(r.snap))
 	}
+	opts = append(opts,
+		tools.WithSessionGrants(r.initialSessionGrants),
+		tools.WithSessionGrantRecorder(func(toolName string) {
+			if r.sessionRecorder != nil {
+				_ = r.sessionRecorder.RecordSessionGrant(toolName)
+			}
+		}),
+	)
 	return opts
 }
 
@@ -1009,16 +1022,23 @@ func (r *Runner) LastAssistantText() string {
 	return lastAssistantText(r.history)
 }
 
-// ReplaceHistory swaps the in-memory conversation history for a copy of h and
-// resets the context turn counter. It backs /chat resume, restoring a saved
-// checkpoint into the live session.
-//
-// It must only be called when no turn is in flight: like ClearHistory, the
-// runner's history field has no mutex and is owned by the turn goroutine. The
-// caller (a slash handler running between turns) satisfies this contract.
-func (r *Runner) ReplaceHistory(h []provider.Message) {
+// ReplaceHistory swaps the in-memory conversation history for a copy of h,
+// resets the context turn counter, and optionally sets the session grants.
+func (r *Runner) ReplaceHistory(h []provider.Message, grants []string) {
 	r.history = append([]provider.Message(nil), h...)
 	r.turnCounter = 0
+	r.initialSessionGrants = grants
+	r.attachInteractionModeGate() // Recreate scheduler to adopt new grants
+}
+
+// SessionGrants returns a copy of the current session tool grants.
+func (r *Runner) SessionGrants() []string {
+	r.regMu.RLock()
+	defer r.regMu.RUnlock()
+	if r.scheduler == nil {
+		return nil
+	}
+	return r.scheduler.SessionGrants()
 }
 
 // ContextCompressionAvailable reports whether manual /compress can run for the

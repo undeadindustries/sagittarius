@@ -68,6 +68,7 @@ type MetadataRecord struct {
 	LastUpdated string `json:"lastUpdated"`
 	Summary     string `json:"summary,omitempty"`
 	Kind        string `json:"kind,omitempty"` // "main" | "subagent"
+	SessionGrants []string `json:"sessionGrants,omitempty"`
 }
 
 // SetRecord carries a $set metadata update appended mid-session.
@@ -88,6 +89,7 @@ type ConversationRecord struct {
 	LastUpdated string
 	Summary     string
 	Kind        string
+	SessionGrants []string
 	Messages    []MessageRecord
 }
 

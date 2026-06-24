@@ -667,6 +667,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 	// Resolve session (resume or fresh).
 	var sessRecorder *session.Recorder
 	var initialHistory []provider.Message
+	var initialGrants []string
 
 	projectRoot, wdErr := os.Getwd()
 	if wdErr != nil {
@@ -695,6 +696,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		}
 		slog.Info("resuming session", "info", result.DisplayInfo)
 		initialHistory = session.ConvertToProviderHistory(result.Record)
+		initialGrants = result.Record.SessionGrants
 		mgr, mgrErr := session.NewManagerForResume(projectRoot, sessID, result)
 		if mgrErr != nil {
 			slog.Warn("session recording disabled: cannot open recorder for resumed session", "err", mgrErr)
@@ -722,6 +724,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		ApprovalMode:            opts.approvalMode,
 		SessionRecorder:         sessRecorder,
 		InitialHistory:          initialHistory,
+		InitialSessionGrants:    initialGrants,
 		Settings:                settings,
 		InitialMode:             initialMode,
 		ModelPinned:             modelPinned,

@@ -35,10 +35,29 @@ type Scheduler struct {
 	// invocations of the same tool skip confirmation. Guarded by mu.
 	mu            sync.Mutex
 	sessionGrants map[string]bool
+	grantRecorder func(string)
 }
 
 // SchedulerOption configures optional Scheduler behavior.
 type SchedulerOption func(*Scheduler)
+
+// WithSessionGrants pre-populates tools already approved for the session.
+func WithSessionGrants(grants []string) SchedulerOption {
+	return func(s *Scheduler) {
+		if s.sessionGrants == nil {
+			s.sessionGrants = make(map[string]bool)
+		}
+		for _, g := range grants {
+			s.sessionGrants[canonicalToolName(g)] = true
+		}
+	}
+}
+
+// WithSessionGrantRecorder registers a callback invoked when a tool is approved
+// for the session.
+func WithSessionGrantRecorder(cb func(string)) SchedulerOption {
+	return func(s *Scheduler) { s.grantRecorder = cb }
+}
 
 // WithProjectBoundary enables out-of-project mutation blocking (file writes and
 // the shell heuristic). The protected-snapshot-path guard applies regardless.
@@ -153,7 +172,18 @@ func (s *Scheduler) executeOne(
 		s.snapshotter.CaptureWrite(snapAbs)
 	}
 
-	result, err := tool.Execute(ctx, args)
+	var result map[string]any
+	var err error
+
+	if streamTool, ok := tool.(StreamingTool); ok {
+		sink := func(text string) {
+			emit(ui.StreamEvent{Type: ui.StreamToolOutput, ToolName: name, Text: text})
+		}
+		result, err = streamTool.ExecuteStream(ctx, args, sink)
+	} else {
+		result, err = tool.Execute(ctx, args)
+	}
+
 	if err != nil {
 		errText := err.Error()
 		emit(ui.StreamEvent{Type: ui.StreamToolResult, ToolName: name, Text: errText})
@@ -240,14 +270,32 @@ func (s *Scheduler) sessionGranted(toolName string) bool {
 	return s.sessionGrants[canonicalToolName(toolName)]
 }
 
+// SessionGrants returns a list of tools granted for this session.
+func (s *Scheduler) SessionGrants() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	grants := make([]string, 0, len(s.sessionGrants))
+	for g := range s.sessionGrants {
+		grants = append(grants, g)
+	}
+	return grants
+}
+
 // grantSession records a session-wide approval for the named tool.
 func (s *Scheduler) grantSession(toolName string) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.sessionGrants == nil {
 		s.sessionGrants = make(map[string]bool)
 	}
-	s.sessionGrants[canonicalToolName(toolName)] = true
+	name := canonicalToolName(toolName)
+	granted := s.sessionGrants[name]
+	s.sessionGrants[name] = true
+	cb := s.grantRecorder
+	s.mu.Unlock()
+
+	if !granted && cb != nil {
+		cb(name)
+	}
 }
 
 // writeFileDiff returns a git-style unified diff of a write_file call's pending
