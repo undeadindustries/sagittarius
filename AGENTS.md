@@ -395,6 +395,40 @@ and `docs/reference/commands.md` for details.
   on each `spinner.TickMsg`), matching gemini-cli's `GeminiSpinner` ~4s gradient;
   greyscale themes keep a static spinner.
 
+- **2026-06-24 — Background shell + foreground auto-background safety net (AD-044):**
+ `run_shell_command` now runs every command through one log-file-backed path
+ (`shellTool.run`): stdout+stderr redirect to a temp log file, the process is
+ started under `context.Background()` (so a survivor outlives the turn), and a
+ reaper goroutine `cmd.Wait()`s to avoid zombies. The tool then selects on three
+ outcomes — process exits within the grace window (return output + `exit_code`,
+ remove log), ctx canceled (SIGKILL the process group, return ctx err), or grace
+ elapses while still running (leave it running, return `{pid, log_file,
+ background:true}` + captured startup output). The grace window is
+ `backgroundStartGrace` (750ms) when `is_background=true`, else
+ `autoBackgroundAfter` (default 30s). The 30s foreground threshold is the key
+ fix: a server launched WITHOUT `is_background` (e.g. `python3 -m http.server`,
+ which a smaller model often forgets to background) used to block the turn
+ forever in `cmd.Wait()`; it is now auto-moved to the background so a result
+ always returns. Using a log file (not a pipe) means the child keeps writing
+ after the tool returns with no SIGPIPE risk and no copy-goroutine leak. The old
+ `WaitDelay` band-aid is gone. New `internal/tools/shell_test.go` covers
+ foreground capture, non-zero exit, the `&`-no-hang regression, explicit-
+ background return-immediately + process-alive + startup capture, immediate-
+ failure reporting, cancel-during-grace, foreground auto-background (shortened
+ threshold), under-threshold synchronous completion, and an end-to-end
+ `python3 -m http.server` TCP-reachability test.
+
+- **2026-06-24 — `--resume` scrollback replay + stale session ID fix (AD-043):**
+ `--resume` now replays the loaded conversation into the TUI scrollback so the
+ user can see the prior turns immediately (not just have them silently in model
+ context). `ui.Options.InitialScrollback []ui.ScrollbackEntry` was added;
+ `historyToScrollback` in `cmd/sagittarius/main.go` converts `runner.History()`
+ to these entries; the Bubble Tea model seeds blocks from the field in its
+ constructor. Separately, `App.SessionMetrics()` now reads the recorder's live
+ session ID via `Runner.CurrentSessionID()` so the exit summary and `--resume`
+ hint stay accurate after `/clear` or `/chat resume` (which rotate the recorder
+ to a new UUID, leaving the original PID-based ID pointing at an empty file).
+
 - **2026-06-23 — Generator cache for O(1) mode switches (AD-040):**
   `provider.GeneratorCache` (`internal/provider/cache.go`) caches
   `ContentGenerator` instances keyed on all material connection parameters

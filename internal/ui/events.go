@@ -50,6 +50,13 @@ const (
 	ScrollbackInfo
 )
 
+// ScrollbackEntry is one restored conversation block used to seed the TUI
+// scrollback on startup (e.g. when --resume loads a prior session).
+type ScrollbackEntry struct {
+	Role ScrollbackRole
+	Text string
+}
+
 // DialogKind identifies an interactive TUI dialog requested by the agent layer.
 type DialogKind string
 
