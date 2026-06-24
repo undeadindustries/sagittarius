@@ -261,7 +261,7 @@ func messageToOpenAIMessages(msg Message, legacyCounter *int, legacyIDs map[stri
 			s := string(content)
 			out = append(out, OpenAIMessage{
 				Role:       OpenAIRoleTool,
-				ToolCallID: MistralSafeToolCallID(rawID),
+				ToolCallID: rawID,
 				Content:    &s,
 			})
 		case part.FunctionCall != nil:
@@ -276,7 +276,7 @@ func messageToOpenAIMessages(msg Message, legacyCounter *int, legacyIDs map[stri
 			legacyIDs[part.FunctionCall.Name] = append(legacyIDs[part.FunctionCall.Name], rawID)
 			args, _ := json.Marshal(part.FunctionCall.Args)
 			toolCalls = append(toolCalls, openAIToolCall{
-				ID:   MistralSafeToolCallID(rawID),
+				ID:   rawID,
 				Type: "function",
 				Function: openAIFunctionCall{
 					Name:      part.FunctionCall.Name,

@@ -114,7 +114,7 @@ func (t *grepTool) Execute(ctx context.Context, args map[string]any) (map[string
 
 	rgPath, err := exec.LookPath("rg")
 	if err != nil {
-		return nil, fmt.Errorf("ripgrep (rg) not found in PATH")
+		return nil, fmt.Errorf("ripgrep (rg) not found in PATH. Please ask the user to install ripgrep to use this search feature")
 	}
 
 	rgArgs := []string{"--line-number", "--color=never", "--max-columns=500"}
