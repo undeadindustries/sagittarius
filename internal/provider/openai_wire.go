@@ -395,6 +395,12 @@ func parseSSEStream(
 			continue
 		}
 
+		if reasoning := deltaReasoning(choice.Delta); reasoning != "" {
+			if !onChunk(StreamResponse{ReasoningDelta: reasoning}) {
+				return false, nil
+			}
+		}
+
 		deltaText := deltaContent(choice.Delta)
 		if deltaText != "" {
 			state.contentBuffer.WriteString(deltaText)
@@ -457,6 +463,13 @@ func deltaContent(delta openAIStreamDelta) string {
 	if delta.Content != nil {
 		return *delta.Content
 	}
+	return ""
+}
+
+// deltaReasoning extracts incremental reasoning ("thinking") text from a stream
+// delta. Providers use either reasoning_content (DeepSeek-style) or reasoning
+// (OpenRouter); both are surfaced separately from the answer content.
+func deltaReasoning(delta openAIStreamDelta) string {
 	if delta.ReasoningContent != nil {
 		return *delta.ReasoningContent
 	}

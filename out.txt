@@ -1,0 +1,121 @@
+
+============================================================
+  Results for: "test"
+============================================================
+
+  [1] src / gemini_cli
+      Source: metrics.test.ts
+      Match:  cosine_sim=0.401  bm25=0.601
+
+      l': 'test@example.com',
+              agent_name: 'TestAgent',
+              terminate_reason: 'GOAL',
+            });
+      
+            // Verify agent duration histogram
+            expect(mockHistogramRecordFn).toHaveBeenCalledWith(1000, {
+              'session.id': 'test-session-id',
+              'installation.id': 'test-installation-id',
+              'user.email': 'test@example.com',
+              agent_name: 'TestAgent',
+            });
+      
+            // Verify agent turns histogram
+            expect(mockHistogramRecordFn).toHaveBeenCalledWith(5, {
+              'session.id': 'test-session-id',
+              'installation.id': 'test-installation-id',
+              'user.email': 'test@example.com',
+              agent_name: 'TestAgent',
+            });
+          });
+        });
+
+  ────────────────────────────────────────────────────────
+  [2] src / gemini_cli
+      Source: README.md
+      Match:  cosine_sim=0.468  bm25=0.484
+
+      An object defining the test case.
+      
+      #### Policies
+      
+      Policies control how strictly a test is validated.
+      
+      - `ALWAYS_PASSES`: Tests expected to pass 100% of the time. These are typically
+        trivial and test basic functionality. These run in every CI and can block PRs
+        on failure.
+      - `USUALLY_PASSES`: Tests expected to pass most of the time but may have some
+        flakiness due to non-deterministic behaviors. These are run nightly and used
+        to track the health of the product from build to build.
+      
+      **All new behavioral evaluations must be created with the `USUALLY_PASSES`
+      policy.** A subset that prove to be highly stable over time may be promoted to
+      `ALWAYS_PASSES`. For more information, see
+      [Test promotion process](#test-promotion-process).
+      
+      #### `EvalCase` Properties
+
+  ────────────────────────────────────────────────────────
+  [3] src / gemini_cli
+      Source: metrics.test.ts
+      Match:  cosine_sim=0.404  bm25=0.516
+
+      ricsModule(mockConfig);
+            mockCounterAddFn.mockClear();
+            mockHistogramRecordFn.mockClear();
+      
+            const event = new AgentFinishEvent(
+              'agent-123',
+              'TestAgent',
+              1000,
+              5,
+              AgentTerminateMode.GOAL,
+            );
+            recordAgentRunMetricsModule(mockConfig, event);
+      
+            // Verify agent run counter
+            expect(mockCounterAddFn).toHaveBeenCalledWith(1, {
+              'session.id': 'test-session-id',
+              'installation.id': 'test-installation-id',
+              'user.email': 'test@example.com',
+              agent_name: 'TestAgent',
+              terminate_reason: 'GOAL',
+            });
+
+  ────────────────────────────────────────────────────────
+  [4] src / gemini_cli
+      Source: promoting.md
+      Match:  cosine_sim=0.42  bm25=0.5
+
+      y
+          to promoting the test status. Do not refactor the test or setup fixtures.
+      
+      ---
+      
+      ## 3. ✅ Verify
+      
+      1.  **Run Prompted Tests**: Run the promoted test locally using non-interactive
+          Vitest to confirm structure validity.
+      2.  **Verify Suite Inclusion**: Check that the test is successfully picked up by
+          standard runnable ranges.
+      
+      ---
+      
+      ## 4. 📊 Report
+      
+      Provide a summary of:
+      
+      - Which tests were promoted.
+      - Provide the success rate evidence (e.g., 7/7 runs passed for all models).
+      - If no candidates qualified, list the next closest candidates and their current
+        pass rate.
+
+  ────────────────────────────────────────────────────────
+  [5] c2dc63b1_566c_47d4_8b53_a614b66ed22d / architecture
+      Source: c2dc63b1-566c-47d4-8b53-a614b66ed22d.jsonl
+      Match:  cosine_sim=0.419  bm25=0.0
+
+      ig/ ./internal/agent/ 2>&1 | grep -E 'RUN|PASS|FAIL|ok '","description":"Verify new regression tests run","working_directory":"/home/rob/src/sagittarius","block_until_ms":60000}}]}}
+
+  ────────────────────────────────────────────────────────
+

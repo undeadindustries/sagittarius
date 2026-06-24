@@ -561,6 +561,44 @@ func TestListSessionsRespectsRewind(t *testing.T) {
 	}
 }
 
+// TestSessionGrantsPersistAndLoad verifies session-wide tool approvals survive
+// a RecordSessionGrant write and LoadSession reload (used by --resume).
+func TestSessionGrantsPersistAndLoad(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	hash := session.ProjectHash(dir)
+	rec := session.NewRecorder(dir, "grants-test", hash)
+
+	if err := rec.RecordSessionGrant("write_file"); err != nil {
+		t.Fatalf("RecordSessionGrant: %v", err)
+	}
+	if err := rec.RecordSessionGrant("run_shell_command"); err != nil {
+		t.Fatalf("RecordSessionGrant: %v", err)
+	}
+
+	record, err := session.LoadSession(rec.FilePath())
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	want := []string{"write_file", "run_shell_command"}
+	if len(record.SessionGrants) != len(want) {
+		t.Fatalf("SessionGrants = %v, want %v", record.SessionGrants, want)
+	}
+	for _, g := range want {
+		found := false
+		for _, got := range record.SessionGrants {
+			if got == g {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("SessionGrants %v missing %q", record.SessionGrants, g)
+		}
+	}
+}
+
 // extractText pulls plain text from session.Part slice (test helper).
 func extractText(parts []session.Part) string {
 	var sb strings.Builder

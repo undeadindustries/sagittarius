@@ -44,6 +44,9 @@ type ProviderInstanceConfig struct {
 	ReasoningEffort      string              `json:"reasoningEffort,omitempty"`
 	UseResponseChaining  *bool               `json:"useResponseChaining,omitempty"`
 	WireFormat           WireFormat          `json:"wireFormat,omitempty"`
+	// ShowThinking reveals the model reasoning box for this provider. Nil
+	// inherits the global ui.showThinking; per-model entries can override it.
+	ShowThinking *bool `json:"showThinking,omitempty"`
 
 	// Personality selects the system-prompt personality for this provider
 	// (e.g. "programmer"). Empty falls back to sagittarius.systemPrompt.personality.
@@ -85,8 +88,11 @@ type ProviderModelConfig struct {
 	ContextLimit *int `json:"contextLimit,omitempty"`
 	// ReasoningEffort overrides the provider-level reasoning effort for this
 	// model only (openai-responses wire only; empty inherits provider value).
-	ReasoningEffort string                     `json:"reasoningEffort,omitempty"`
-	Extra           map[string]json.RawMessage `json:"-"`
+	ReasoningEffort string `json:"reasoningEffort,omitempty"`
+	// ShowThinking overrides the provider/global thinking-box visibility for
+	// this model only. Nil inherits the provider instance value.
+	ShowThinking *bool                      `json:"showThinking,omitempty"`
+	Extra        map[string]json.RawMessage `json:"-"`
 }
 
 // UnmarshalJSON decodes the known per-model fields and preserves unknown keys.
@@ -120,6 +126,10 @@ func (c *ProviderModelConfig) UnmarshalJSON(data []byte) error {
 			c.ContextLimit = &n
 		case "reasoningEffort":
 			if err := json.Unmarshal(val, &c.ReasoningEffort); err != nil {
+				return err
+			}
+		case "showThinking":
+			if err := json.Unmarshal(val, &c.ShowThinking); err != nil {
 				return err
 			}
 		default:
@@ -169,6 +179,13 @@ func (c ProviderModelConfig) MarshalJSON() ([]byte, error) {
 			return nil, err
 		}
 		obj["reasoningEffort"] = b
+	}
+	if c.ShowThinking != nil {
+		b, err := json.Marshal(*c.ShowThinking)
+		if err != nil {
+			return nil, err
+		}
+		obj["showThinking"] = b
 	}
 	for key, val := range c.Extra {
 		obj[key] = val

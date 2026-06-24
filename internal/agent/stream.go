@@ -12,6 +12,12 @@ func MapStreamResponse(resp provider.StreamResponse) []ui.StreamEvent {
 	}
 
 	var events []ui.StreamEvent
+	if resp.ReasoningDelta != "" {
+		events = append(events, ui.StreamEvent{
+			Type: ui.StreamReasoningDelta,
+			Text: resp.ReasoningDelta,
+		})
+	}
 	if resp.TextDelta != "" {
 		events = append(events, ui.StreamEvent{
 			Type: ui.StreamTextDelta,

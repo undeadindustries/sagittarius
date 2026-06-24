@@ -76,10 +76,16 @@ type Usage struct {
 // cost. It is set once on the final chunk (alongside or just before Done=true).
 type StreamResponse struct {
 	TextDelta string
-	ToolCalls []ToolCall
-	Usage     *Usage
-	Done      bool
-	Error     error
+	// ReasoningDelta carries incremental model reasoning ("thinking") text,
+	// kept separate from TextDelta so the UI can show it in a dedicated,
+	// optional thinking view rather than mixing it into the answer. Only the
+	// OpenAI-chat (OpenRouter reasoning/reasoning_content) and OpenAI-Responses
+	// (reasoning summary) wire paths populate it; Gemini has no readable thoughts.
+	ReasoningDelta string
+	ToolCalls      []ToolCall
+	Usage          *Usage
+	Done           bool
+	Error          error
 	// ModelParts, when non-nil, carries the complete set of model content parts
 	// for the turn (including Gemini thoughtSignature metadata). It is set once
 	// on the final chunk so the runner can store the model message verbatim

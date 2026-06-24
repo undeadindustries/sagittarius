@@ -58,6 +58,9 @@ type Result struct {
 	// ThemeName, when non-empty, asks the UI to switch its active theme live
 	// ("default" or "greyscale"). Set by /theme.
 	ThemeName string
+	// MouseMode, when non-empty, asks the UI to enable/disable mouse-wheel
+	// reporting live ("on", "off", or "toggle"). Set by /mouse.
+	MouseMode string
 }
 
 // ScrollRole classifies a restored scrollback entry so the TUI can apply the

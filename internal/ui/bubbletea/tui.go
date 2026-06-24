@@ -64,6 +64,12 @@ func (t *Terminal) Run(ctx context.Context, app ui.App) error {
 	if t.opts.Headless {
 		progOpts = append(progOpts, tea.WithoutRenderer(), tea.WithInput(strings.NewReader("")))
 	} else if !t.opts.ScreenReader {
+		// Alt-screen hides the terminal's native scrollback. Mouse reporting is
+		// left OFF by default so the terminal's native click-drag text selection
+		// keeps working (users copy/paste from the transcript); the conversation
+		// viewport is driven by keyboard scroll (PgUp/PgDn/Shift+arrows). Mouse
+		// wheel scrolling is opt-in via Alt+M or the /mouse command, which sends
+		// tea.EnableMouseCellMotion at runtime.
 		progOpts = append(progOpts, tea.WithAltScreen())
 	}
 

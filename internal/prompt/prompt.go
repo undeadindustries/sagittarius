@@ -142,6 +142,8 @@ func liteToolUsage() string {
 		"",
 		"**No Placeholders:** NEVER use placeholders or elision (like `// ... existing code ...`) in file writes. Tools overwrite files entirely, so you must always provide the COMPLETE file content.",
 		"",
+		"**No Diff Format:** NEVER send unified-diff lines (`+` / `-` prefixes) or UI diff previews to `write_file`. It is not a patch tool — send the entire file body.",
+		"",
 		"**Prefer editing over creating.** Do not create new files when you can update existing ones. Do not create documentation files unless explicitly asked.",
 		"",
 		toolInvocationMandate(),

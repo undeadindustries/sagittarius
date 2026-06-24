@@ -1,0 +1,3 @@
+MemPalace MCP Server starting...
+HNSW mtime gap 71576s on /home/rob/.mempalace/palace/f5aa9284-c085-4724-ac4c-51528620fc00 exceeds threshold but segment metadata and payload size are intact — flush-lag, not corruption. Leaving in place.
+Embedding function initialized (model=minilm device=cpu providers=['CPUExecutionProvider'])

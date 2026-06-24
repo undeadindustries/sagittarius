@@ -7,9 +7,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 
 	"golang.org/x/term"
@@ -198,7 +200,7 @@ func run(args []string) int {
 	// With --resume but no prompt: open interactive mode on the resumed session.
 	if shouldRunInteractive(fs) {
 		opts.interactive = true
-		return runInteractive(*screenReader, opts)
+		return runInteractive(*screenReader, *debug || *debugShort, opts)
 	}
 
 	fmt.Fprintln(os.Stderr, "sagittarius: interactive mode requires a terminal (stdin and stdout must be TTYs)")
@@ -498,7 +500,33 @@ func writeJSONError(err error, streaming bool) {
 	emitJSONLine(map[string]string{"type": "error", "error": msg})
 }
 
-func runInteractive(screenReader bool, opts runnerOptions) int {
+// configureInteractiveLogging redirects slog away from stderr while the Bubble
+// Tea alt-screen owns the terminal. Without this, any log line (e.g. a late
+// cancel-path error) is written to stderr and overwrites the bottom row of the
+// alt-screen, leaving stray artifacts like `error="...: context canceled"`.
+// Logs go to ~/.sagittarius/logs/sagittarius.log; if that cannot be opened we
+// fall back to io.Discard — never stderr — so the display stays clean.
+func configureInteractiveLogging(debug bool) {
+	level := slog.LevelInfo
+	if debug {
+		level = slog.LevelDebug
+	}
+	var w io.Writer = io.Discard
+	if dir, err := storage.EnsureGlobalHome(); err == nil {
+		logsDir := filepath.Join(dir, "logs")
+		if mkErr := os.MkdirAll(logsDir, 0o700); mkErr == nil {
+			if f, openErr := os.OpenFile(filepath.Join(logsDir, "sagittarius.log"),
+				os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); openErr == nil {
+				w = f
+			}
+		}
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: level})))
+}
+
+func runInteractive(screenReader bool, debug bool, opts runnerOptions) int {
+	configureInteractiveLogging(debug)
+
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
@@ -555,6 +583,7 @@ func runInteractive(screenReader bool, opts runnerOptions) int {
 		NoColor:           noColorEnv(),
 		HideBanner:        uiCfg.HideBanner,
 		HideTips:          uiCfg.HideTips,
+		ShowThinking:      uiCfg.ShowThinking,
 		NeedsOnboarding:   needsOnboarding,
 		LoadedMemoryFiles: runner.LoadedMemoryFiles(),
 		InitialScrollback: historyToScrollback(runner.History()),

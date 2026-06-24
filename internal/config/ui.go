@@ -17,6 +17,9 @@ type UISettings struct {
 	HideBanner bool `json:"hideBanner,omitempty"`
 	// HideTips suppresses the welcome tips block when true.
 	HideTips bool `json:"hideTips,omitempty"`
+	// ShowThinking reveals the model reasoning ("thinking") box by default.
+	// Off by default; toggled live with Ctrl+T or per-provider/model settings.
+	ShowThinking bool `json:"showThinking,omitempty"`
 }
 
 // UI returns the parsed ui.* section, or the zero value when absent or invalid.
@@ -36,37 +39,25 @@ func (s *Settings) UI() UISettings {
 	return ui
 }
 
-// SetUITheme records the TUI color theme under ui.theme, preserving other ui.*
-// keys. An empty or "default" name clears the key (default is the implicit
-// theme). The caller flushes the mutation via Loader.Save.
-func (s *Settings) SetUITheme(name string) error {
+// mutateUISection loads the passthrough ui.* object, applies mutate, and stores
+// the result (removing the section entirely when it ends up empty). Unknown
+// ui.* keys round-trip untouched. The caller flushes via Loader.Save.
+func (s *Settings) mutateUISection(mutate func(map[string]json.RawMessage) error) error {
 	if s == nil {
-		return fmt.Errorf("set ui theme: nil settings")
+		return fmt.Errorf("mutate ui section: nil settings")
 	}
 	if s.Raw == nil {
 		s.Raw = make(map[string]json.RawMessage)
 	}
-
-	// Decode the existing ui.* object into a generic map so unknown keys
-	// (hideBanner/hideTips and anything Sagittarius does not model) round-trip.
 	ui := make(map[string]json.RawMessage)
 	if raw, ok := s.Raw["ui"]; ok && len(raw) > 0 {
 		if err := json.Unmarshal(raw, &ui); err != nil {
 			return fmt.Errorf("decode ui section: %w", err)
 		}
 	}
-
-	name = strings.TrimSpace(name)
-	if name == "" || name == "default" {
-		delete(ui, "theme")
-	} else {
-		encoded, err := json.Marshal(name)
-		if err != nil {
-			return fmt.Errorf("encode ui theme: %w", err)
-		}
-		ui["theme"] = encoded
+	if err := mutate(ui); err != nil {
+		return err
 	}
-
 	if len(ui) == 0 {
 		delete(s.Raw, "ui")
 		return nil
@@ -77,4 +68,37 @@ func (s *Settings) SetUITheme(name string) error {
 	}
 	s.Raw["ui"] = b
 	return nil
+}
+
+// SetUITheme records the TUI color theme under ui.theme, preserving other ui.*
+// keys. An empty or "default" name clears the key (default is the implicit
+// theme). The caller flushes the mutation via Loader.Save.
+func (s *Settings) SetUITheme(name string) error {
+	return s.mutateUISection(func(ui map[string]json.RawMessage) error {
+		name = strings.TrimSpace(name)
+		if name == "" || name == "default" {
+			delete(ui, "theme")
+			return nil
+		}
+		encoded, err := json.Marshal(name)
+		if err != nil {
+			return fmt.Errorf("encode ui theme: %w", err)
+		}
+		ui["theme"] = encoded
+		return nil
+	})
+}
+
+// SetUIShowThinking records the global thinking-box visibility under
+// ui.showThinking, preserving other ui.* keys. A false value clears the key
+// (off is the implicit default). The caller flushes via Loader.Save.
+func (s *Settings) SetUIShowThinking(on bool) error {
+	return s.mutateUISection(func(ui map[string]json.RawMessage) error {
+		if !on {
+			delete(ui, "showThinking")
+			return nil
+		}
+		ui["showThinking"] = json.RawMessage("true")
+		return nil
+	})
 }

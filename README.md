@@ -47,6 +47,26 @@ You can define custom rules and instructions that the agent must follow. These a
 - **Global rules:** Create `~/.sagittarius/AGENTS.md`. The agent will apply these rules across all projects.
 - **Project rules:** Create an `AGENTS.md` file in the root of your project. The agent will read this file when run within the project directory.
 
+## Keyboard shortcuts
+
+The interactive TUI supports these keyboard shortcuts:
+
+| Key | Action |
+|-----|--------|
+| `Alt+1` / `Alt+2` / `Alt+3` / `Alt+4` | Switch to agent / plan / ask / debug mode |
+| `Ctrl+Shift+M` | Cycle interaction mode (agent → plan → ask → debug) |
+| `Ctrl+/` | Cycle forward through active models |
+| `Ctrl+Shift+P` | Cycle backward through active models |
+| `Alt+T` | Cycle the color theme (default ↔ greyscale) |
+| `Ctrl+T` | Toggle the thinking ("reasoning") box |
+| `Alt+M` | Toggle mouse-wheel scrolling |
+| `Ctrl+B` | Open the background process viewer |
+| `PgUp` / `PgDn` / `Shift+Up` / `Shift+Down` | Scroll the conversation |
+| `Up` / `Down` / `Ctrl+P` / `Ctrl+N` | Navigate prompt history (at input boundaries) |
+| `Esc` / `Ctrl+C` | Cancel the turn / Quit when idle |
+
+*Note: On macOS, terminals often send special characters for Option+key. Sagittarius supports the default Mac Option characters out of the box: `Option+1..4` (`¡`, `™`, `£`, `¢`), `Option+T` (`†`), and `Option+M` (`µ`) work identically to the Alt bindings without requiring terminal reconfiguration.*
+
 ### Skills (`SKILL.md`)
 
 You can extend the agent's domain knowledge and capabilities by creating skills. Skills are simply Markdown files named `SKILL.md` (or ending in `.md` inside a skill directory). 

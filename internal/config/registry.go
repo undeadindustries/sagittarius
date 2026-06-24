@@ -110,6 +110,7 @@ var openAIChatSettingKeys = []string{
 	"temperature",
 	"toolCallParsing",
 	"systemPromptOverride",
+	"showThinking",
 	"toolOutputMaskingEnabled",
 	"toolOutputMaskingProtectionFraction",
 	"toolOutputMaskingPrunableFraction",
@@ -134,6 +135,7 @@ var openAIResponsesSettingKeys = []string{
 	"reasoningEffort",
 	"useResponseChaining",
 	"systemPromptOverride",
+	"showThinking",
 }
 
 // ValidSettingKeys returns the editable providers.<id>.* leaf keys for a wire

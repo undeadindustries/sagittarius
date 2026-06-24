@@ -640,7 +640,7 @@ func (m Model) buildEditItems(p ProviderEntry) []editItem {
 			continue // edited via the definition row above
 		}
 		switch key {
-		case "enableTools":
+		case "enableTools", "showThinking":
 			items = append(items, editItem{label: key, kind: editToggleBool, key: key})
 		case "toolCallParsing":
 			items = append(items, editItem{label: key, kind: editEnum, key: key})

@@ -88,6 +88,40 @@ type MetricsProvider interface {
 	SessionMetrics() SessionStats
 }
 
+// ComposerStatus is optional metadata rendered in the composer status row
+// (between the scrollback and the input box): the active tool-approval policy
+// and a count of loaded skills. The AGENTS.md count is sourced separately from
+// Options.LoadedMemoryFiles.
+type ComposerStatus struct {
+	// ApprovalMode is the tool approval policy ("default", "autoEdit", "yolo").
+	ApprovalMode string
+	// SkillCount is the number of discovered skills available to the agent.
+	SkillCount int
+	// ShowThinking is the resolved thinking-box visibility for the active
+	// (provider, model): per-model override, else provider, else global setting.
+	ShowThinking bool
+}
+
+// ComposerStatusProvider is an optional capability the TUI uses to render the
+// composer status row. The agent App implements it.
+type ComposerStatusProvider interface {
+	ComposerStatus() ComposerStatus
+}
+
+// ThinkingController is an optional capability the TUI uses to persist the
+// global thinking-box visibility when the user toggles it live (Ctrl+T). The
+// agent App implements it.
+type ThinkingController interface {
+	SetShowThinking(on bool) error
+}
+
+// ThemeController is an optional capability the TUI uses to cycle the active
+// color theme live (Alt+T) and persist the choice. CycleTheme returns the new
+// canonical theme name ("default" or "greyscale"). The agent App implements it.
+type ThemeController interface {
+	CycleTheme() (string, error)
+}
+
 // CompactCount formats a token count compactly (e.g. 1234 -> "1.2k").
 func CompactCount(n int) string {
 	if n < 1000 {

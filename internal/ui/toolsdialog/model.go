@@ -40,6 +40,8 @@ type Model struct {
 
 	rows   []row
 	cursor int
+	// listOffset is the first visible row in the scrollable inventory.
+	listOffset int
 
 	done        bool
 	openServers bool
@@ -69,6 +71,7 @@ func (m Model) Status() string { return m.status }
 func (m Model) SetSize(w, h int) Model {
 	m.width = w
 	m.height = h
+	m.ensureListVisible()
 	return m
 }
 
@@ -123,6 +126,7 @@ func (m *Model) rebuild() {
 	if m.cursor >= len(m.rows) {
 		m.cursor = m.firstSelectable()
 	}
+	m.ensureListVisible()
 }
 
 func selectable(k rowKind) bool {
@@ -148,6 +152,7 @@ func (m *Model) moveCursor(dir int) {
 		i = (i + dir + n) % n
 		if selectable(m.rows[i].kind) {
 			m.cursor = i
+			m.ensureListVisible()
 			return
 		}
 	}

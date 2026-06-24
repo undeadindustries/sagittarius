@@ -6,6 +6,9 @@ type StreamEventType int
 const (
 	// StreamTextDelta appends incremental model output text.
 	StreamTextDelta StreamEventType = iota
+	// StreamReasoningDelta appends incremental model reasoning ("thinking")
+	// text, shown in the optional thinking view rather than the answer body.
+	StreamReasoningDelta
 	// StreamToolStart announces a tool invocation.
 	StreamToolStart
 	// StreamToolConfirm prompts the user to approve a destructive tool (interactive mode).
@@ -37,6 +40,9 @@ const (
 	// StreamSetTheme asks the TUI to switch its active theme to Text live
 	// ("default" or "greyscale"), used by /theme.
 	StreamSetTheme
+	// StreamSetMouse asks the TUI to enable/disable mouse-wheel reporting live;
+	// Text is "on", "off", or "toggle". Used by the /mouse command.
+	StreamSetMouse
 )
 
 // ScrollbackRole classifies a StreamScrollback block so the TUI applies the

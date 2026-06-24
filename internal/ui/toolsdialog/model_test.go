@@ -2,6 +2,8 @@ package toolsdialog
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -142,5 +144,34 @@ func TestManageServersAction(t *testing.T) {
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	if !m.Done() || !m.OpenServers() {
 		t.Fatal("activating the action row should close and request the /mcp wizard")
+	}
+}
+
+func TestLongInventoryScrolls(t *testing.T) {
+	tools := make([]ServerTool, 40)
+	for i := range tools {
+		tools[i] = ServerTool{Name: fmt.Sprintf("tool_%02d", i), Enabled: true}
+	}
+	deps := &fakeDeps{
+		builtins: []BuiltinTool{{Name: "read_file", Description: "read"}},
+		groups:   []ServerGroup{{Server: "demo", Status: "connected", Tools: tools}},
+	}
+	m := New(context.Background(), deps)
+	m = m.SetSize(80, 12)
+
+	view := m.View()
+	if !strings.Contains(view, "more below") {
+		t.Fatalf("expected below scroll indicator in short terminal:\n%s", view)
+	}
+
+	for i := 0; i < 30; i++ {
+		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	}
+	view = m.View()
+	if !strings.Contains(view, "more above") {
+		t.Fatalf("expected above scroll indicator after scrolling down:\n%s", view)
+	}
+	if strings.Contains(view, "tool_00") {
+		t.Fatal("first tool should not render when scrolled down")
 	}
 }

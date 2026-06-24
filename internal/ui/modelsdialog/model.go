@@ -59,6 +59,7 @@ var settingsMenu = []settingItem{
 	{label: "temperature", key: "temperature"},
 	{label: "contextLimit (tokens)", key: "contextLimit"},
 	{label: "reasoningEffort", key: "reasoningEffort"},
+	{label: "showThinking (true/false)", key: "showThinking"},
 	{label: "← Back", key: "back"},
 }
 

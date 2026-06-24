@@ -49,9 +49,10 @@ type AppConfig struct {
 // App implements the optional ui.Completer, ui.MentionCompleter, and
 // ui.MetricsProvider interfaces.
 var (
-	_ ui.Completer        = (*App)(nil)
-	_ ui.MentionCompleter = (*App)(nil)
-	_ ui.MetricsProvider  = (*App)(nil)
+	_ ui.Completer             = (*App)(nil)
+	_ ui.MentionCompleter      = (*App)(nil)
+	_ ui.MetricsProvider       = (*App)(nil)
+	_ ui.ComposerStatusProvider = (*App)(nil)
 )
 
 // App adapts Runner to ui.App for interactive TUI sessions.
@@ -168,6 +169,67 @@ func (a *App) SessionMetrics() ui.SessionStats {
 	return stats
 }
 
+// ComposerStatus implements ui.ComposerStatusProvider, exposing the tool
+// approval policy and skill count for the TUI composer status row.
+func (a *App) ComposerStatus() ui.ComposerStatus {
+	cs := ui.ComposerStatus{}
+	if a.runner != nil {
+		cs.ApprovalMode = string(a.runner.ApprovalMode())
+	}
+	if a.runtime != nil && a.runtime.Catalog != nil {
+		cs.SkillCount = len(a.runtime.Catalog.SkillManager().Skills())
+	}
+	if s := a.deps.Settings; s != nil {
+		providerID := config.NormalizeProviderID(s.ActiveProvider())
+		model := ""
+		if ep, err := provider.ResolveEndpointForProvider(s, providerID); err == nil {
+			model = strings.TrimSpace(ep.Model)
+		}
+		cs.ShowThinking = config.ResolveShowThinking(s, providerID, model)
+	}
+	return cs
+}
+
+// SetShowThinking implements ui.ThinkingController: it persists the global
+// thinking-box visibility (ui.showThinking) so a live Ctrl+T toggle survives
+// restart. The per-provider/model overrides are managed via /models.
+func (a *App) SetShowThinking(on bool) error {
+	if a.deps.Settings == nil {
+		return fmt.Errorf("settings not loaded")
+	}
+	if err := a.deps.Settings.SetUIShowThinking(on); err != nil {
+		return err
+	}
+	if a.deps.Loader != nil {
+		if err := a.deps.Loader.Save(a.deps.Settings); err != nil {
+			return fmt.Errorf("save settings: %w", err)
+		}
+	}
+	return nil
+}
+
+// CycleTheme implements ui.ThemeController: it toggles the TUI color theme
+// between "default" and "greyscale", persists the choice (ui.theme), and returns
+// the new name so the TUI applies it live. Backs the Alt+T shortcut.
+func (a *App) CycleTheme() (string, error) {
+	if a.deps.Settings == nil {
+		return "", fmt.Errorf("settings not loaded")
+	}
+	next := "greyscale"
+	if strings.EqualFold(strings.TrimSpace(a.deps.Settings.UI().Theme), "greyscale") {
+		next = "default"
+	}
+	if err := a.deps.Settings.SetUITheme(next); err != nil {
+		return "", err
+	}
+	if a.deps.Loader != nil {
+		if err := a.deps.Loader.Save(a.deps.Settings); err != nil {
+			return "", fmt.Errorf("save settings: %w", err)
+		}
+	}
+	return next, nil
+}
+
 // Complete implements ui.Completer, providing slash-command, subcommand, and
 // argument (e.g. provider id) completions for the interactive input line. It is
 // read-only and non-blocking so the TUI can call it on every keystroke.
@@ -203,14 +265,55 @@ func (a *App) CycleInteractionMode(ctx context.Context) (<-chan ui.StreamEvent, 
 	if a.runner == nil {
 		return nil, fmt.Errorf("runner not available")
 	}
-	next := modes.CycleMode(a.runner.InteractionMode())
-	return a.handleSlash(ctx, "/mode "+next.String())
+	return a.switchToMode(ctx, modes.CycleMode(a.runner.InteractionMode()))
+}
+
+// SetModeByName switches directly to the named interaction mode (agent, plan,
+// ask, debug). It backs the Alt+1..4 shortcuts; the UI passes a plain string so
+// the bubbletea layer stays free of the modes package.
+func (a *App) SetModeByName(ctx context.Context, name string) (<-chan ui.StreamEvent, error) {
+	if a.runner == nil {
+		return nil, fmt.Errorf("runner not available")
+	}
+	mode, err := modes.ParseMode(name)
+	if err != nil {
+		return nil, err
+	}
+	return a.switchToMode(ctx, mode)
+}
+
+// switchToMode rebuilds the runner for the target mode and emits the standard
+// status events, shared by the cycle and direct-set entry points. It reuses the
+// /mode slash path so mode-provider overrides and footer updates stay identical.
+func (a *App) switchToMode(ctx context.Context, mode modes.Mode) (<-chan ui.StreamEvent, error) {
+	return a.handleSlash(ctx, "/mode "+mode.String())
+}
+
+// wrapIndex returns idx advanced by step within [0,n), wrapping in both
+// directions so a forward (+1) or reverse (-1) model cycle stays in range.
+func wrapIndex(idx, step, n int) int {
+	if n <= 0 {
+		return 0
+	}
+	return ((idx+step)%n + n) % n
 }
 
 // CycleModel advances the global curated model list circularly across all
-// providers, updates the active provider+model, and rebuilds the runner.
-// It emits an info message showing the resolved live model.
+// providers (Ctrl+/), updates the active provider+model, and rebuilds the runner.
 func (a *App) CycleModel(ctx context.Context) (<-chan ui.StreamEvent, error) {
+	return a.cycleModel(ctx, +1)
+}
+
+// CycleModelReverse steps backward through the global curated model list
+// (Ctrl+Shift+P), the inverse of CycleModel.
+func (a *App) CycleModelReverse(ctx context.Context) (<-chan ui.StreamEvent, error) {
+	return a.cycleModel(ctx, -1)
+}
+
+// cycleModel moves the active selection step places through the global curated
+// (provider, model) list (wrapping), updates the active provider+model, rebuilds
+// the runner, and emits an info message showing the resolved live model.
+func (a *App) cycleModel(ctx context.Context, step int) (<-chan ui.StreamEvent, error) {
 	if a.runner == nil || a.deps.Settings == nil || a.deps.Loader == nil {
 		return nil, fmt.Errorf("runner not available")
 	}
@@ -235,7 +338,7 @@ func (a *App) CycleModel(ctx context.Context) (<-chan ui.StreamEvent, error) {
 			break
 		}
 	}
-	next := pairs[(idx+1)%len(pairs)]
+	next := pairs[wrapIndex(idx, step, len(pairs))]
 
 	if err := provider.SelectCurrentModel(a.deps.Loader, s, next.ProviderID, next.Model); err != nil {
 		return nil, err
@@ -302,6 +405,9 @@ func (a *App) handleSlash(ctx context.Context, input string) (<-chan ui.StreamEv
 		}
 		if result.ThemeName != "" {
 			out <- ui.StreamEvent{Type: ui.StreamSetTheme, Text: result.ThemeName}
+		}
+		if result.MouseMode != "" {
+			out <- ui.StreamEvent{Type: ui.StreamSetMouse, Text: result.MouseMode}
 		}
 		if result.SubmitPrompt != "" {
 			// Hand off to a real model turn (e.g. /init analyzing the project) by
@@ -1173,8 +1279,16 @@ func (r *Runner) SetRegistry(registry *tools.Registry) {
 	if registry == nil {
 		return
 	}
-	scheduler := r.newToolScheduler(registry)
 	r.regMu.Lock()
+	r.mergeSchedulerGrantsLocked()
+	scheduler := tools.NewScheduler(
+		registry,
+		approvalToPolicy(r.approval),
+		r.interactive,
+		r.InteractionMode,
+		r.workspace,
+		r.schedulerOptions()...,
+	)
 	r.registry = registry
 	r.scheduler = scheduler
 	r.regMu.Unlock()
