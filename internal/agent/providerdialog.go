@@ -769,7 +769,7 @@ func (d *modesDialogDeps) AllActiveModels() []modesdialog.ModelEntry {
 	return entries
 }
 
-func (d *modesDialogDeps) SetModeOverride(_ context.Context, modeName, providerID, model string) error {
+func (d *modesDialogDeps) SetModeOverride(ctx context.Context, modeName, providerID, model string) error {
 	if d.app.deps.Loader == nil || d.settings() == nil {
 		return fmt.Errorf("settings not loaded")
 	}
@@ -812,10 +812,14 @@ func (d *modesDialogDeps) SetModeOverride(_ context.Context, modeName, providerI
 	default:
 		return fmt.Errorf("unknown mode %q", modeName)
 	}
-	return d.app.deps.Loader.Save(s)
+	if err := d.app.deps.Loader.Save(s); err != nil {
+		return err
+	}
+	d.maybeRebuildActiveMode(ctx, modeName)
+	return nil
 }
 
-func (d *modesDialogDeps) ClearModeOverride(_ context.Context, modeName string) error {
+func (d *modesDialogDeps) ClearModeOverride(ctx context.Context, modeName string) error {
 	if d.app.deps.Loader == nil || d.settings() == nil {
 		return fmt.Errorf("settings not loaded")
 	}
@@ -824,7 +828,28 @@ func (d *modesDialogDeps) ClearModeOverride(_ context.Context, modeName string) 
 		return nil
 	}
 	clearModeConfigOverride(s.Sagittarius.Modes, modeName)
-	return d.app.deps.Loader.Save(s)
+	if err := d.app.deps.Loader.Save(s); err != nil {
+		return err
+	}
+	d.maybeRebuildActiveMode(ctx, modeName)
+	return nil
+}
+
+// maybeRebuildActiveMode triggers a runner rebuild if the user just edited the
+// override for the mode they are currently in. This ensures the main screen
+// reflects the change immediately without requiring them to switch modes.
+func (d *modesDialogDeps) maybeRebuildActiveMode(ctx context.Context, modifiedModeName string) {
+	if d.app.runner == nil {
+		return
+	}
+	currentMode := d.app.runner.InteractionMode()
+	if strings.EqualFold(currentMode.String(), modifiedModeName) {
+		// Calling SetInteractionMode again correctly re-resolves the mode's
+		// provider override, switches the app's ActiveProvider if necessary,
+		// triggers a RebuildRunner to rebuild the generator, and updates the
+		// app's status bar all at once.
+		_, _ = d.app.deps.Hooks.SetInteractionMode(ctx, currentMode)
+	}
 }
 
 func clearModeConfigOverride(modes *config.SagittariusModes, modeName string) {
