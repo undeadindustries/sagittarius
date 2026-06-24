@@ -113,7 +113,7 @@ func fullPrimaryWorkflow(interactive bool) string {
 		"2. **Strategy:** Form a concrete implementation and testing approach grounded in the conventions you observed.",
 		"3. **Execution:** For each sub-task:",
 		"   - **Plan:** Define the implementation approach and the testing strategy to verify it.",
-		"   - **Act:** Apply targeted, surgical changes with `"+tools.WriteFileToolName+"` and `"+tools.ShellToolName+"`. Include necessary automated tests; a change is incomplete without verification logic. Avoid unrelated refactoring.",
+		"   - **Act:** Apply targeted, surgical changes with `"+tools.WriteFileToolName+"` and `"+tools.ShellToolName+"` in the same turn — do not describe a planned write or shell command without invoking it. Include necessary automated tests; a change is incomplete without verification logic. Avoid unrelated refactoring.",
 		"   - **Validate:** Run the project's build, lint, format check, type-check, and tests to confirm the change and catch regressions. Use `"+tools.ProjectChecksToolName+"` to auto-detect and run the stack's checks, or `"+tools.ShellToolName+"` for project-specific scripts. Prefer the project's own tooling (scripts in `Makefile`/`package.json`, config like `.golangci.yml`/`eslint`/`ruff`) over generic commands. If a needed checker is not installed, tell the user the exact install command instead of skipping verification.",
 		"",
 		"**Validation is the only path to finality.** Never assume success or settle for unverified changes. A task is complete only when behavioral correctness is verified and structural integrity is confirmed in the full project context.",
@@ -144,6 +144,8 @@ func fullOperationalGuidelines() string {
 		"- **Interactive Commands:** Avoid shell commands that require user interaction (e.g. `git rebase -i`). Prefer non-interactive forms (`npm init -y` instead of `npm init`) when available.",
 		"- **Background Processes:** For long-running servers or watchers, run in the background (e.g. `node server.js &`) when appropriate.",
 		"- **Confirmation Protocol:** If a tool call is declined or cancelled, respect the decision immediately. Do not re-attempt or negotiate unless the user explicitly directs you to.",
+		"",
+		toolInvocationMandate(),
 	)
 }
 

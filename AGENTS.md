@@ -256,6 +256,9 @@ and `docs/reference/commands.md` for details.
 
 ## Recent decisions
 
+- **2026-06-24 — PTY shell execution + Background process viewer (AD-050):** 
+  Brought `run_shell_command` to gemini-cli parity and beyond. (1) Shell execution now runs inside a true Pseudo-Terminal (PTY) using `creack/pty` with a headless VT emulator (`charmbracelet/x/vt`), providing accurate formatting and ANSI-stripping for the model's text result while capturing interactive screen updates correctly. (2) Live output streaming: a new `StreamingTool` interface and `ui.StreamToolOutput` event allow the TUI to render tool output dynamically during long executions. (3) The working status label was fixed (`m.runningTool`) to show "Running run_shell_command" instead of "Thinking…". (4) Background process manager: `internal/bgproc` tracks session-scoped background processes, with `&`-child capture via a subshell `jobs -p` trap, solving the hang issues with foreground servers and explicit background requests. (5) Ctrl+B viewer: A new `DialogBackground` overlay (`internal/ui/bgprocdialog`) lists tracked background processes, their uptime, status, and allows viewing their live log output or killing them via process group (`SIGKILL -pgid`).
+
 - **2026-06-23 — First-class web tools mirroring gemini-cli (AD-042):** Added `google_web_search` and `web_fetch` built-in tools. These tools operate independently of the active chat provider by instantiating a dedicated `GeminiUtilityClient` for non-streaming calls, enabling Gemini's native `GoogleSearch` and `URLContext` grounding even when the user is chatting via OpenRouter. Implemented citation insertion from `GroundingMetadata`. Included a native Go HTTP fallback for `web_fetch` with SSRF protection (blocking localhost/RFC1918), rate limiting (10 req/min per host), and HTML-to-text conversion. `google_web_search` is read-only; `web_fetch` requires confirmation. Configuration lives in `sagittarius.web`.
 
 

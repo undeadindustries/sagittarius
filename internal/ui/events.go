@@ -12,6 +12,8 @@ const (
 	StreamToolConfirm
 	// StreamToolResult reports tool execution outcome text.
 	StreamToolResult
+	// StreamToolOutput provides live incremental output from a long-running tool.
+	StreamToolOutput
 	// StreamError carries a non-fatal stream error for display.
 	StreamError
 	// StreamInfo carries non-model system text (slash command output).
@@ -75,6 +77,8 @@ const (
 	DialogMCP DialogKind = "mcp"
 	// DialogTools opens the tool inventory.
 	DialogTools DialogKind = "tools"
+	// DialogBackground opens the background process viewer.
+	DialogBackground DialogKind = "background"
 )
 
 // StreamEvent is a single streaming update rendered in the scrollback viewport.

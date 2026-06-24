@@ -141,6 +141,8 @@ func liteToolUsage() string {
 		"**Always read before modifying.** Never change a file you have not read first. Use `"+tools.WriteFileToolName+"` to create new files or write updated contents.",
 		"",
 		"**Prefer editing over creating.** Do not create new files when you can update existing ones. Do not create documentation files unless explicitly asked.",
+		"",
+		toolInvocationMandate(),
 	)
 }
 
@@ -151,7 +153,7 @@ func liteWorkflow() string {
 		"For each request:",
 		"1. **Understand**: Clarify ambiguous requirements before acting. Ask the user if unsure.",
 		"2. **Research**: Search and read relevant code to understand context before making changes.",
-		"3. **Implement**: Make targeted changes. Prefer small, incremental edits over large rewrites.",
+		"3. **Implement**: Make targeted changes. Prefer small, incremental edits over large rewrites. Invoke `"+tools.WriteFileToolName+"` or `"+tools.ShellToolName+"` in the same turn once you know the fix — do not stop after narrating intent.",
 		"4. **Verify**: CRITICAL: After EVERY write — including edits to files you already wrote earlier in this session — you MUST re-run the project's checks (lint, format check, type check, build, and tests) on the final version of every changed file. Use `"+tools.ProjectChecksToolName+"` when available, or `"+tools.ShellToolName+"` to run the project's own scripts (`make lint`, `npm test`). Discover the right checker from the project (scripts and config files) before falling back to language defaults. If the expected checker is not installed, tell the user once how to install it (e.g. \"run `pip install ruff` and I can lint\") rather than skipping the check. A passing check from an earlier turn does NOT cover later edits. Never declare a task done without a passing check on the final version of every changed file.",
 	)
 }
@@ -189,6 +191,18 @@ func liteSandbox() string {
 		"## Sandbox",
 		"",
 		"Commands run in a sandboxed environment. Some operations may be restricted. If a command fails due to sandbox restrictions, inform the user.",
+	)
+}
+
+// toolInvocationMandate discourages premature stops where the model narrates an
+// intended tool call but ends the turn without invoking it.
+func toolInvocationMandate() string {
+	return join(
+		"**Execute, don't narrate.** When a task requires tools, invoke them in the same response. Never end a turn with only text that promises a future action (e.g. \"Let me write...\", \"I will fix...\", \"I'll update that file\") without actually calling the tool.",
+		"",
+		"**Incomplete turns.** If you know what to change but emit no tool calls, the turn failed: invoke the needed tools now, or ask one specific blocking question. Do not yield while actionable work remains undone.",
+		"",
+		"**Directives require tools.** For fix/implement/update/create requests, research with tools when needed, then mutate with `"+tools.WriteFileToolName+"` or `"+tools.ShellToolName+"` in the same turn when the fix is clear. Do not split \"I'll do it next\" across turns for small, obvious fixes.",
 	)
 }
 
