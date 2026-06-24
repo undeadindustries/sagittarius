@@ -232,8 +232,10 @@ func MessagesToOpenAIMessages(messages []Message, modelID string) []OpenAIMessag
 		}
 	}
 
-	afterOrphan := patchOrphanedToolCallsForMistral(out, modelID)
-	return patchToolUserTransitionForMistral(afterOrphan, modelID)
+	// Enforce tool-call/result integrity for every provider before applying the
+	// Mistral-specific role-bridging patches.
+	repaired := repairToolCallIntegrity(out)
+	return patchToolUserTransitionForMistral(repaired, modelID)
 }
 
 func messageToOpenAIMessages(msg Message, legacyCounter *int, legacyIDs map[string][]string) []OpenAIMessage {

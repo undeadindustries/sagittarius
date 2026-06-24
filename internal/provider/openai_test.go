@@ -474,6 +474,121 @@ func TestChatCompletionsURL(t *testing.T) {
 	}
 }
 
+func TestRepairToolCallIntegrity(t *testing.T) {
+	t.Parallel()
+
+	toolResultIDs := func(msgs []OpenAIMessage) []string {
+		var ids []string
+		for _, m := range msgs {
+			if m.Role == OpenAIRoleTool {
+				ids = append(ids, m.ToolCallID)
+			}
+		}
+		return ids
+	}
+	// validOrder reports whether every tool result's id matches a tool_call in
+	// the immediately preceding assistant message (the provider's invariant).
+	validOrder := func(msgs []OpenAIMessage) bool {
+		for i, m := range msgs {
+			if m.Role != OpenAIRoleTool {
+				continue
+			}
+			ok := false
+			for j := i - 1; j >= 0; j-- {
+				if msgs[j].Role == OpenAIRoleTool {
+					continue
+				}
+				if msgs[j].Role == OpenAIRoleAssistant {
+					for _, tc := range msgs[j].ToolCalls {
+						if tc.ID == m.ToolCallID {
+							ok = true
+						}
+					}
+				}
+				break
+			}
+			if !ok {
+				return false
+			}
+		}
+		return true
+	}
+
+	content := "x"
+	assistant := func(ids ...string) OpenAIMessage {
+		calls := make([]openAIToolCall, 0, len(ids))
+		for _, id := range ids {
+			calls = append(calls, openAIToolCall{ID: id, Type: "function", Function: openAIFunctionCall{Name: "grep_search"}})
+		}
+		return OpenAIMessage{Role: OpenAIRoleAssistant, ToolCalls: calls}
+	}
+	tool := func(id string) OpenAIMessage {
+		c := content
+		return OpenAIMessage{Role: OpenAIRoleTool, ToolCallID: id, Content: &c}
+	}
+	user := func() OpenAIMessage {
+		c := "hi"
+		return OpenAIMessage{Role: OpenAIRoleUser, Content: &c}
+	}
+
+	tests := []struct {
+		name    string
+		in      []OpenAIMessage
+		wantIDs []string
+	}{
+		{
+			name:    "id mismatch is repaired positionally",
+			in:      []OpenAIMessage{user(), assistant("call_grep_0"), tool("GkFfoVb0S"), user()},
+			wantIDs: []string{"call_grep_0"},
+		},
+		{
+			name:    "orphan tool result is dropped",
+			in:      []OpenAIMessage{user(), tool("GkFfoVb0S"), user()},
+			wantIDs: nil,
+		},
+		{
+			name:    "unanswered tool call is synthesized",
+			in:      []OpenAIMessage{user(), assistant("GkFfoVb0S"), user()},
+			wantIDs: []string{"GkFfoVb0S"},
+		},
+		{
+			name:    "parallel calls paired in order",
+			in:      []OpenAIMessage{assistant("A1", "B2"), tool("wrong1"), tool("wrong2")},
+			wantIDs: []string{"A1", "B2"},
+		},
+		{
+			name:    "extra tool results are dropped",
+			in:      []OpenAIMessage{assistant("A1"), tool("A1"), tool("extra")},
+			wantIDs: []string{"A1"},
+		},
+		{
+			name:    "well-formed history is unchanged",
+			in:      []OpenAIMessage{user(), assistant("A1"), tool("A1"), user()},
+			wantIDs: []string{"A1"},
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := repairToolCallIntegrity(tc.in)
+			if !validOrder(got) {
+				t.Fatalf("repaired output violates tool-call ordering: %+v", got)
+			}
+			gotIDs := toolResultIDs(got)
+			if len(gotIDs) != len(tc.wantIDs) {
+				t.Fatalf("tool result ids = %v, want %v", gotIDs, tc.wantIDs)
+			}
+			for i := range gotIDs {
+				if gotIDs[i] != tc.wantIDs[i] {
+					t.Fatalf("tool result ids = %v, want %v", gotIDs, tc.wantIDs)
+				}
+			}
+		})
+	}
+}
+
 func mustMarshalJSON(t *testing.T, v any) json.RawMessage {
 	t.Helper()
 	b, err := json.Marshal(v)
