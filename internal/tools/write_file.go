@@ -25,6 +25,7 @@ func (t *writeFileTool) Declaration() provider.ToolDeclaration {
 	return provider.ToolDeclaration{
 		Name: WriteFileToolName,
 		Description: "Writes content to a specified file in the local filesystem. " +
+			"This tool completely OVERWRITES the file. You MUST provide the ENTIRE file content. NEVER use placeholders, truncation, or elision like '// ... existing code ...'. " +
 			"The user has the ability to modify `content`. If modified, this will be stated in the response.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -35,7 +36,7 @@ func (t *writeFileTool) Declaration() provider.ToolDeclaration {
 				},
 				WriteFileParamContent: map[string]any{
 					"type":        "string",
-					"description": "The content to write to the file.",
+					"description": "The ENTIRE, complete content to write to the file. Do not truncate.",
 				},
 			},
 			"required": []string{ParamFilePath, WriteFileParamContent},

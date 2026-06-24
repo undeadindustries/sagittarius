@@ -78,8 +78,9 @@ func TestActivateSkillDeclarationNoSkillsOmitsEnum(t *testing.T) {
 // TestActivateSkillDeclarationWithSkillsHasEnum verifies the enum lists the
 // discovered skill names (no empty entries) when skills exist.
 func TestActivateSkillDeclarationWithSkillsHasEnum(t *testing.T) {
-	t.Parallel()
 	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir) // Windows fallback
 	skillRoot := filepath.Join(dir, ".sagittarius", "skills", "writer")
 	if err := os.MkdirAll(skillRoot, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)

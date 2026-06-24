@@ -140,6 +140,8 @@ func liteToolUsage() string {
 		"",
 		"**Always read before modifying.** Never change a file you have not read first. Use `"+tools.WriteFileToolName+"` to create new files or write updated contents.",
 		"",
+		"**No Placeholders:** NEVER use placeholders or elision (like `// ... existing code ...`) in file writes. Tools overwrite files entirely, so you must always provide the COMPLETE file content.",
+		"",
 		"**Prefer editing over creating.** Do not create new files when you can update existing ones. Do not create documentation files unless explicitly asked.",
 		"",
 		toolInvocationMandate(),
