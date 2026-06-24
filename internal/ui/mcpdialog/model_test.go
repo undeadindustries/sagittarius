@@ -2,6 +2,7 @@ package mcpdialog
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -138,6 +139,45 @@ func TestViewToolsCrossLink(t *testing.T) {
 	m, _ = m.Update(keyRunes("t"))
 	if !m.Done() || !m.OpenTools() {
 		t.Fatal("t should close the wizard and request the /tools inventory")
+	}
+}
+
+func TestSaveShowsSpinnerWhileAsync(t *testing.T) {
+	deps := newFake()
+	m := New(context.Background(), deps)
+	m, _ = m.Update(keyRunes("a"))
+	m.form.Name = "new"
+	m.form.Command = "echo"
+	m.rebuildFields()
+	m.fieldCursor = len(m.fields) - 1 // Save
+
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if !m.saving {
+		t.Fatal("expected saving=true after activating Save")
+	}
+	if cmd == nil {
+		t.Fatal("expected spinner tick command while saving")
+	}
+	view := m.View()
+	if !strings.Contains(view, "Saving and reconnecting") {
+		t.Fatalf("view should show saving spinner line, got %q", view)
+	}
+
+	// Keys are ignored while saving.
+	m2, cmd2 := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if !m2.saving || cmd2 != nil {
+		t.Fatal("input should be ignored while saving")
+	}
+
+	m, _ = m.Update(saveResultMsg{name: "new", adding: true})
+	if m.saving {
+		t.Fatal("saving should clear after saveResultMsg")
+	}
+	if m.screen != screenList {
+		t.Fatalf("screen = %v, want list after save", m.screen)
+	}
+	if m.info != "Server new added." {
+		t.Fatalf("info = %q", m.info)
 	}
 }
 

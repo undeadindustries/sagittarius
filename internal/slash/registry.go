@@ -63,6 +63,19 @@ func (r *Registry) RenderHelp() string {
 		"reference a file; its contents are sent to the model (tab to autocomplete)")
 	fmt.Fprintf(&b, "  %-28s %s\n", "Web Tools",
 		"google_web_search and web_fetch are available (Gemini API key required)")
+
+	b.WriteString("\nKeyboard shortcuts:\n\n")
+	fmt.Fprintf(&b, "  %-28s %s\n", "Alt+1..4 (or ⌥+1..4)", "Switch mode (agent/plan/ask/debug)")
+	fmt.Fprintf(&b, "  %-28s %s\n", "Ctrl+Shift+M", "Cycle mode (agent → plan → ask → debug)")
+	fmt.Fprintf(&b, "  %-28s %s\n", "Ctrl+/", "Cycle active models forward")
+	fmt.Fprintf(&b, "  %-28s %s\n", "Ctrl+Shift+P", "Cycle active models backward")
+	fmt.Fprintf(&b, "  %-28s %s\n", "Alt+T (or ⌥+T)", "Cycle color theme (default ↔ greyscale)")
+	fmt.Fprintf(&b, "  %-28s %s\n", "Alt+M (or ⌥+M)", "Toggle mouse-wheel scrolling")
+	fmt.Fprintf(&b, "  %-28s %s\n", "Ctrl+T", "Toggle thinking box")
+	fmt.Fprintf(&b, "  %-28s %s\n", "Ctrl+B", "Open background process viewer")
+	fmt.Fprintf(&b, "  %-28s %s\n", "PgUp/PgDn, Shift+Up/Down", "Scroll conversation")
+	fmt.Fprintf(&b, "  %-28s %s\n", "Esc / Ctrl+C", "Cancel turn / Quit")
+
 	return strings.TrimRight(b.String(), "\n")
 }
 
@@ -117,6 +130,7 @@ func (r *Registry) registerBuiltins() {
 		reasoningCommand(),
 		modeCommand(),
 		themeCommand(),
+		mouseCommand(),
 	}
 	r.sortCommandTree(r.commands)
 }

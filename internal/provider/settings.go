@@ -411,6 +411,9 @@ func InstanceSettingValues(settings *config.Settings, providerID string) map[str
 	if inst.EnableTools != nil {
 		out["enableTools"] = strconv.FormatBool(*inst.EnableTools)
 	}
+	if inst.ShowThinking != nil {
+		out["showThinking"] = strconv.FormatBool(*inst.ShowThinking)
+	}
 	if inst.UseResponseChaining != nil {
 		out["useResponseChaining"] = strconv.FormatBool(*inst.UseResponseChaining)
 	}
@@ -551,6 +554,12 @@ func assignInstanceSetting(cfg *config.ProviderInstanceConfig, key, value string
 			return err
 		}
 		cfg.EnableTools = b
+	case "showThinking":
+		b, err := parseBool(key, value)
+		if err != nil {
+			return err
+		}
+		cfg.ShowThinking = b
 	case "useResponseChaining":
 		b, err := parseBool(key, value)
 		if err != nil {
@@ -798,6 +807,12 @@ func SetModelConfig(settings *config.Settings, providerID, model, key, value str
 			return fmt.Errorf("reasoningEffort %q is not a valid level", value)
 		}
 		mc.ReasoningEffort = value
+	case "showThinking":
+		b, err := parseBool(key, value)
+		if err != nil {
+			return err
+		}
+		mc.ShowThinking = b
 	default:
 		return fmt.Errorf("set model config: unsupported key %q", key)
 	}
@@ -826,6 +841,8 @@ func ClearModelConfig(settings *config.Settings, providerID, model, key string) 
 		mc.ContextLimit = nil
 	case "reasoningEffort":
 		mc.ReasoningEffort = ""
+	case "showThinking":
+		mc.ShowThinking = nil
 	}
 	cfg, err := ensureProviderInstance(settings, providerID)
 	if err != nil {
@@ -835,7 +852,7 @@ func ClearModelConfig(settings *config.Settings, providerID, model, key string) 
 		cfg.Models = make(map[string]config.ProviderModelConfig)
 	}
 	if mc.Temperature == nil && mc.ContextLimit == nil && mc.ReasoningEffort == "" &&
-		mc.Personality == "" && mc.PromptMode == "" && mc.Extra == nil {
+		mc.ShowThinking == nil && mc.Personality == "" && mc.PromptMode == "" && mc.Extra == nil {
 		delete(cfg.Models, model)
 	} else {
 		cfg.Models[model] = mc
@@ -862,6 +879,9 @@ func ModelConfigValues(settings *config.Settings, providerID, model string) map[
 	}
 	if mc.ReasoningEffort != "" {
 		out["reasoningEffort"] = mc.ReasoningEffort
+	}
+	if mc.ShowThinking != nil {
+		out["showThinking"] = strconv.FormatBool(*mc.ShowThinking)
 	}
 	return out
 }

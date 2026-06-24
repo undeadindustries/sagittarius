@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -78,11 +79,26 @@ type Model struct {
 	status    string
 	errMsg    string
 	info      string
+
+	saving bool
+	spin   spinner.Model
+}
+
+type saveResultMsg struct {
+	err    error
+	adding bool
+	name   string
 }
 
 // New constructs the MCP server wizard.
 func New(ctx context.Context, deps Deps) Model {
-	m := Model{deps: deps, ctx: ctx, th: theme.Default(), screen: screenList}
+	m := Model{
+		deps:   deps,
+		ctx:    ctx,
+		th:     theme.Default(),
+		screen: screenList,
+		spin:   newDialogSpinner(theme.Default()),
+	}
 	m.servers = deps.ListServers()
 	return m
 }
@@ -106,11 +122,28 @@ func (m Model) SetSize(w, h int) Model {
 // SetTheme applies the resolved color theme to the overlay.
 func (m Model) SetTheme(th theme.Theme) Model {
 	m.th = th
+	m.spin = newDialogSpinner(th)
 	return m
 }
 
 // Update advances the wizard for one message.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case spinner.TickMsg:
+		if !m.saving {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.spin, cmd = m.spin.Update(msg)
+		return m, cmd
+	case saveResultMsg:
+		return m.handleSaveResult(msg)
+	}
+
+	if m.saving {
+		return m, nil
+	}
+
 	if m.screen == screenField {
 		return m.updateField(msg)
 	}
@@ -301,19 +334,48 @@ func (m Model) activateField(keyStr string) (Model, tea.Cmd) {
 }
 
 func (m Model) save() (Model, tea.Cmd) {
-	if err := m.deps.SaveServer(m.ctx, m.originalName, m.form); err != nil {
-		m.errMsg = err.Error()
+	if m.saving {
+		return m, nil
+	}
+	m.saving = true
+	m.errMsg = ""
+	form := m.form
+	return m, tea.Batch(
+		m.spin.Tick,
+		saveServerCmd(m.ctx, m.deps, m.originalName, form, m.adding),
+	)
+}
+
+func saveServerCmd(ctx context.Context, deps Deps, originalName string, form ServerForm, adding bool) tea.Cmd {
+	return func() tea.Msg {
+		err := deps.SaveServer(ctx, originalName, form)
+		return saveResultMsg{err: err, adding: adding, name: form.Name}
+	}
+}
+
+func (m Model) handleSaveResult(msg saveResultMsg) (Model, tea.Cmd) {
+	m.saving = false
+	if msg.err != nil {
+		m.errMsg = msg.err.Error()
 		return m, nil
 	}
 	verb := "added"
-	if !m.adding {
+	if !msg.adding {
 		verb = "updated"
 	}
-	m.info = fmt.Sprintf("Server %s %s.", m.form.Name, verb)
+	m.info = fmt.Sprintf("Server %s %s.", msg.name, verb)
 	m.errMsg = ""
 	m.servers = m.deps.ListServers()
 	m.screen = screenList
 	return m, nil
+}
+
+func newDialogSpinner(th theme.Theme) spinner.Model {
+	s := spinner.New(spinner.WithSpinner(spinner.MiniDot))
+	if th.Colored {
+		s.Style = s.Style.Foreground(th.Accent.GetForeground())
+	}
+	return s
 }
 
 func (m Model) updateField(msg tea.Msg) (Model, tea.Cmd) {

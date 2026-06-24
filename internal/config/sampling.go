@@ -92,3 +92,24 @@ func ResolveEffectiveTemperature(settings *Settings, providerID, model string) *
 	}
 	return PersonalityDefaultTemperature(ResolvePersonality(settings, providerID, model))
 }
+
+// ResolveShowThinking reports whether the model reasoning ("thinking") box
+// should be shown for a (provider, model), applying the resolution order:
+//  1. per-model override (providers.<id>.models.<model>.showThinking)
+//  2. provider instance override (providers.<id>.showThinking)
+//  3. global ui.showThinking
+//  4. false (hidden)
+func ResolveShowThinking(settings *Settings, providerID, model string) bool {
+	if settings == nil {
+		return false
+	}
+	if inst := settings.ProviderInstance(providerID); inst != nil {
+		if mc, ok := lookupModelConfig(inst, model); ok && mc.ShowThinking != nil {
+			return *mc.ShowThinking
+		}
+		if inst.ShowThinking != nil {
+			return *inst.ShowThinking
+		}
+	}
+	return settings.UI().ShowThinking
+}

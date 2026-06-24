@@ -42,6 +42,7 @@ func unmarshalProviderInstance(raw json.RawMessage) (*ProviderInstanceConfig, er
 			return json.Unmarshal(b, &cfg.SystemPromptOverride)
 		},
 		"reasoningEffort":     func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.ReasoningEffort) },
+		"showThinking":        func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.ShowThinking) },
 		"useResponseChaining": func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.UseResponseChaining) },
 		"wireFormat":          func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.WireFormat) },
 		"toolOutputMaskingEnabled": func(b json.RawMessage) error {
@@ -108,6 +109,7 @@ func marshalProviderInstance(cfg *ProviderInstanceConfig) (json.RawMessage, erro
 		{"toolCallParsing", cfg.ToolCallParsing},
 		{"systemPromptOverride", cfg.SystemPromptOverride},
 		{"reasoningEffort", cfg.ReasoningEffort},
+		{"showThinking", cfg.ShowThinking},
 		{"useResponseChaining", cfg.UseResponseChaining},
 		{"wireFormat", cfg.WireFormat},
 		{"toolOutputMaskingEnabled", cfg.ToolOutputMaskingEnabled},

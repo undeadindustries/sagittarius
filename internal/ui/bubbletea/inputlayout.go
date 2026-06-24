@@ -26,21 +26,19 @@ func inputContentLines(input textarea.Model) int {
 	return lines
 }
 
-// inputBoxHeight returns the textarea viewport height that keeps all wrapped
-// content visible while typing. Bubbles' textarea always appends m.height blank
-// "end of buffer" rows to its content and then scrolls to keep the cursor in
-// view; when height equals the wrapped line count the first line is pushed out
-// of the viewport. Reserve one extra row (+1) so the cursor on the last content
-// line still leaves earlier lines visible. Clamp to maxInputRows.
+// inputBoxHeight returns the textarea viewport height for the given number of
+// wrapped content lines. The box grows one row per content line, clamped to
+// maxInputRows; beyond the cap the textarea scrolls internally. A single,
+// per-line prompt is rendered via SetPromptFunc (continuation rows are blank),
+// so no extra "+1" buffer row is needed to avoid a duplicate prompt prefix.
 func inputBoxHeight(contentLines int) int {
-	if contentLines <= 0 {
+	if contentLines <= 1 {
 		return 1
 	}
-	h := contentLines + 1
-	if h > maxInputRows {
+	if contentLines > maxInputRows {
 		return maxInputRows
 	}
-	return h
+	return contentLines
 }
 
 // syncInputLayout sizes the textarea to the terminal width and the computed box
@@ -54,9 +52,11 @@ func (m *model) syncInputLayout() {
 	h := inputBoxHeight(contentLines)
 	m.input.SetHeight(h)
 
-	// When not capped, keep the viewport pinned to the top so wrapped line 1
-	// stays visible. At the cap we allow the widget's own scroll behaviour.
-	if h == contentLines+1 {
+	// While the whole prompt fits in the box, keep the widget's internal
+	// viewport pinned to the top so wrapped line 1 stays visible. Once the
+	// content exceeds the cap we allow the widget's own scroll behaviour to
+	// follow the cursor.
+	if contentLines <= maxInputRows {
 		inputScrollToTop(&m.input)
 	}
 }

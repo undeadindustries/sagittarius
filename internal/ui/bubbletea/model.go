@@ -17,6 +17,7 @@ import (
 
 	"github.com/undeadindustries/sagittarius/internal/bgproc"
 	"github.com/undeadindustries/sagittarius/internal/clipboard"
+	"github.com/undeadindustries/sagittarius/internal/diff"
 	"github.com/undeadindustries/sagittarius/internal/ui"
 	"github.com/undeadindustries/sagittarius/internal/ui/bgprocdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/mcpdialog"
@@ -144,6 +145,18 @@ type model struct {
 	openResponseIdx   int
 	openToolOutputIdx int
 
+	// followBottom pins the scrollback viewport to the newest content. It is
+	// true until the user scrolls up (PgUp/wheel/Shift+Up) and is restored when
+	// they scroll back to the bottom or submit a new turn, so incoming output
+	// does not yank the view away while the user is reading history.
+	followBottom bool
+
+	// mouseEnabled tracks whether mouse-wheel reporting is currently active.
+	// Mouse capture is OFF at launch so the terminal's native text selection
+	// works; Alt+M (or the /mouse command) toggles it via tea.EnableMouseCellMotion
+	// / tea.DisableMouse at runtime.
+	mouseEnabled bool
+
 	busy     bool
 	quitting bool
 	// turnCancel cancels the in-flight HandleInput turn; nil when no cancelable
@@ -164,6 +177,14 @@ type model struct {
 	working      bool
 	workingLabel string
 	runningTool  string
+
+	// Thinking ("reasoning") box state. thinking accumulates the reasoning text
+	// streamed for the current turn (cleared on StreamDone). showThinking is the
+	// live session visibility; thinkingToggled records whether the user has
+	// overridden the resolved per-model/global setting via Ctrl+T.
+	thinking        string
+	showThinking    bool
+	thinkingToggled bool
 	// exitSummary is captured when quitting begins so the Terminal can print the
 	// goodbye screen after the alt-screen program tears down.
 	exitSummary string
@@ -184,6 +205,12 @@ type model struct {
 	suggestions    []ui.Suggestion
 	suggestionIdx  int // -1 means nothing highlighted (user is still typing)
 	completionFrom int // byte offset in the input where the active token starts
+
+	// history is the prompt-history navigator (Up/Down/Ctrl+P/Ctrl+N at the
+	// input boundaries). queue holds messages typed while a turn is in flight;
+	// they are submitted in order once the turn completes.
+	history *inputHistory
+	queue   []string
 
 	// overlay holds the active providers wizard. When non-nil it takes over
 	// input and rendering until it reports Done.
@@ -261,6 +288,9 @@ func newModel(opts ui.Options, app ui.App, term *Terminal) *model {
 		status:            idleStatus,
 		idleStatus:        idleStatus,
 		suggestionIdx:     -1,
+		history:           newInputHistory(),
+		followBottom:      true,
+		showThinking:      opts.ShowThinking,
 	}
 	m.syncInputPrompt(idleStatus.Mode)
 
@@ -335,6 +365,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		return m.handleWindowSize(msg)
+	case tea.MouseMsg:
+		// Mouse-wheel scrolling of the conversation. The viewport only acts on
+		// wheel-press events; forward and track whether we are still pinned to
+		// the bottom so streamed output does not yank the view away.
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(msg)
+		m.followBottom = m.viewport.AtBottom()
+		return m, cmd
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	case submitMsg:
@@ -694,9 +732,17 @@ func (m *model) View() string {
 	if band := m.renderConfirmBand(); band != "" {
 		sections = append(sections, band)
 	}
-	if m.working {
+	if row := m.renderStatusRow(); row != "" {
+		sections = append(sections, row)
+	}
+	// The thinking box carries its own spinner in the border, so when it is
+	// visible it replaces the standalone working line.
+	if box := m.renderThinkingBox(); box != "" {
+		sections = append(sections, box)
+	} else if m.showWorkingIndicator() {
 		sections = append(sections, renderWorkingLine(m.spin, m.workingDisplayLabel(), m.th, m.width))
 	}
+	sections = append(sections, m.renderInputSeparator())
 	sections = append(sections, inputLine)
 	if suggestions != "" {
 		sections = append(sections, suggestions)
@@ -854,6 +900,29 @@ func (m *model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Conversation scrolling works in every state (idle, busy, confirming) and
+	// uses dedicated keys that do not collide with the input cursor or history.
+	if m.handleScrollKey(msg.String()) {
+		return m, nil
+	}
+
+	// Ctrl+T toggles the thinking box live in any state and persists the choice.
+	if msg.String() == "ctrl+t" {
+		return m.toggleThinking()
+	}
+
+	// Alt+M toggles mouse-wheel scrolling in any state. It is off by default so
+	// the terminal's native click-drag text selection works. 'µ' is Mac Option+M.
+	if msg.String() == "alt+m" || msg.String() == "µ" {
+		return m, m.setMouse(!m.mouseEnabled)
+	}
+
+	// Alt+T cycles the color theme live in any state and persists the choice.
+	// '†' is Mac Option+T.
+	if msg.String() == "alt+t" || msg.String() == "†" {
+		return m.cycleTheme()
+	}
+
 	if m.confirmReply != nil {
 		switch msg.String() {
 		case "up":
@@ -900,8 +969,47 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m, m.beginQuit()
+		case "enter":
+			// Enter while a turn is running queues the message for submission
+			// once the turn completes (gemini-cli parity), rather than blocking.
+			return m.handleBusyEnter()
+		case "tab":
+			if len(m.suggestions) > 0 {
+				idx := m.suggestionIdx
+				if idx < 0 {
+					idx = 0
+				}
+				m.acceptSuggestion(idx)
+				return m, nil
+			}
+			return m.handleBusyTab()
+		case "ctrl+shift+m", "ctrl+/":
+			// Mode/model switching is not allowed mid-turn; ignore so the keys
+			// do not corrupt the in-flight stream.
+			return m, nil
+		case "ctrl+b":
+			m.openDialog(ui.DialogBackground)
+			return m, nil
+		case "up":
+			if len(m.suggestions) > 0 {
+				m.moveSuggestion(-1)
+				return m, nil
+			}
+			return m.handleHistoryUp()
+		case "down":
+			if len(m.suggestions) > 0 {
+				m.moveSuggestion(1)
+				return m, nil
+			}
+			return m.handleHistoryDown()
 		}
-		return m, nil
+		// Otherwise keep the input editable while the turn runs so the user can
+		// compose the next message; the cursor and typing stay responsive.
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		m.syncInputLayout()
+		m.refreshSuggestions()
+		return m, cmd
 	}
 
 	switch msg.String() {
@@ -926,6 +1034,14 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, waitStream(events)
 		}
 		return m, nil
+	case "alt+1", "¡":
+		return m.startModeSwitch("agent")
+	case "alt+2", "™":
+		return m.startModeSwitch("plan")
+	case "alt+3", "£":
+		return m.startModeSwitch("ask")
+	case "alt+4", "¢":
+		return m.startModeSwitch("debug")
 	case "ctrl+/":
 		if cycler, ok := m.app.(interface {
 			CycleModel(context.Context) (<-chan ui.StreamEvent, error)
@@ -945,6 +1061,14 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, waitStream(events)
 		}
 		return m, nil
+	case "ctrl+shift+p":
+		if cycler, ok := m.app.(interface {
+			CycleModelReverse(context.Context) (<-chan ui.StreamEvent, error)
+		}); ok {
+			events, err := cycler.CycleModelReverse(m.streamContext())
+			return m.startAppStream(events, err, "model")
+		}
+		return m, nil
 	case "ctrl+b":
 		m.openDialog(ui.DialogBackground)
 		return m, nil
@@ -953,11 +1077,31 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.moveSuggestion(-1)
 			return m, nil
 		}
+		return m.handleHistoryUp()
 	case "down":
 		if len(m.suggestions) > 0 {
 			m.moveSuggestion(1)
 			return m, nil
 		}
+		return m.handleHistoryDown()
+	case "ctrl+p":
+		if len(m.suggestions) > 0 {
+			m.moveSuggestion(-1)
+			return m, nil
+		}
+		if text, ok := m.history.up(m.input.Value()); ok {
+			m.applyHistoryEntry(text, cursorStart)
+		}
+		return m, nil
+	case "ctrl+n":
+		if len(m.suggestions) > 0 {
+			m.moveSuggestion(1)
+			return m, nil
+		}
+		if text, ok := m.history.down(m.input.Value()); ok {
+			m.applyHistoryEntry(text, cursorEnd)
+		}
+		return m, nil
 	case "tab":
 		if len(m.suggestions) > 0 {
 			idx := m.suggestionIdx
@@ -1000,6 +1144,174 @@ func (m *model) handleEnter() (tea.Model, tea.Cmd) {
 	m.input.SetValue("")
 	m.clearSuggestions()
 	return m, func() tea.Msg { return submitMsg{line: line} }
+}
+
+// handleBusyEnter queues the current input for submission after the in-flight
+// turn finishes. Slash commands cannot be queued (they may depend on live
+// session state), so they are rejected with a brief notice.
+func (m *model) handleBusyEnter() (tea.Model, tea.Cmd) {
+	line := strings.TrimSpace(m.input.Value())
+	if line == "" {
+		return m, nil
+	}
+	if strings.HasPrefix(line, "/") {
+		m.addBlock(roleInfo, "Slash commands cannot be queued; wait for the current turn to finish.")
+		return m, nil
+	}
+	m.enqueueMessage(line)
+	m.input.SetValue("")
+	m.clearSuggestions()
+	m.syncInputLayout()
+	return m, nil
+}
+
+// handleBusyTab queues the current (non-slash) input while a turn runs, matching
+// gemini-cli's explicit Tab-to-queue. With no buffered text it is a no-op.
+func (m *model) handleBusyTab() (tea.Model, tea.Cmd) {
+	line := strings.TrimSpace(m.input.Value())
+	if line == "" || strings.HasPrefix(line, "/") {
+		return m, nil
+	}
+	m.enqueueMessage(line)
+	m.input.SetValue("")
+	m.clearSuggestions()
+	m.syncInputLayout()
+	return m, nil
+}
+
+// enqueueMessage appends a message to the pending queue and records it in the
+// prompt history so Up recalls it like a submitted prompt.
+func (m *model) enqueueMessage(line string) {
+	m.queue = append(m.queue, line)
+	m.history.record(line)
+	m.addBlock(roleInfo, fmt.Sprintf("Queued message (%d pending).", len(m.queue)))
+}
+
+// popQueuedIntoInput loads the entire pending queue into the input box when the
+// input is empty (gemini-cli's "Up on empty input pops queued messages"). It
+// returns true when it consumed the queue.
+func (m *model) popQueuedIntoInput() bool {
+	if len(m.queue) == 0 || strings.TrimSpace(m.input.Value()) != "" {
+		return false
+	}
+	combined := strings.Join(m.queue, "\n\n")
+	m.queue = nil
+	m.input.SetValue(combined)
+	m.syncInputLayout()
+	m.refreshSuggestions()
+	return true
+}
+
+// flushQueue submits any messages queued during the just-finished turn, joined
+// with blank lines, as a single new turn. Returns the command that starts the
+// stream, or nil when the queue is empty.
+func (m *model) flushQueue() tea.Cmd {
+	if len(m.queue) == 0 {
+		return nil
+	}
+	combined := strings.Join(m.queue, "\n\n")
+	m.queue = nil
+	return func() tea.Msg { return submitMsg{line: combined} }
+}
+
+// cursorPos selects where the cursor lands after a history entry is loaded.
+type cursorPos int
+
+const (
+	cursorStart cursorPos = iota
+	cursorEnd
+)
+
+// inputSingleVisualLine reports whether the input occupies a single visual
+// (wrapped) row, so Up/Down should fall through to history navigation.
+func (m *model) inputSingleVisualLine() bool {
+	return m.input.LineCount() == 1 && m.input.LineInfo().Height == 1
+}
+
+// inputAtFirstVisualRow reports whether the cursor is on the first visual row of
+// the whole input (logical line 0, first wrapped row).
+func (m *model) inputAtFirstVisualRow() bool {
+	return m.input.Line() == 0 && m.input.LineInfo().RowOffset == 0
+}
+
+// inputAtLastVisualRow reports whether the cursor is on the last visual row of
+// the whole input (last logical line, last wrapped row).
+func (m *model) inputAtLastVisualRow() bool {
+	li := m.input.LineInfo()
+	return m.input.Line() == m.input.LineCount()-1 && li.RowOffset == li.Height-1
+}
+
+// handleHistoryUp implements gemini-cli's Up behavior: move the cursor up a
+// visual line within multi-line text; at the first row move to line start; when
+// already at the start, pop any queued messages or step back through history.
+func (m *model) handleHistoryUp() (tea.Model, tea.Cmd) {
+	if !(m.inputSingleVisualLine() || m.inputAtFirstVisualRow()) {
+		m.input.CursorUp()
+		m.syncInputLayout()
+		return m, nil
+	}
+	if m.input.LineInfo().ColumnOffset > 0 {
+		m.input.CursorStart()
+		m.syncInputLayout()
+		return m, nil
+	}
+	if m.popQueuedIntoInput() {
+		return m, nil
+	}
+	if text, ok := m.history.up(m.input.Value()); ok {
+		m.applyHistoryEntry(text, cursorStart)
+	}
+	return m, nil
+}
+
+// handleHistoryDown implements gemini-cli's Down behavior: move the cursor down
+// a visual line within multi-line text; at the last row move to line end; when
+// already at the end, step forward through history (and finally the draft).
+func (m *model) handleHistoryDown() (tea.Model, tea.Cmd) {
+	if !(m.inputSingleVisualLine() || m.inputAtLastVisualRow()) {
+		m.input.CursorDown()
+		m.syncInputLayout()
+		return m, nil
+	}
+	// Move to the end of the line first; if that changes the cursor we were not
+	// at the end yet, so stop here. (LineInfo.Width can include a trailing
+	// soft-wrap space, so compare the cursor column before/after instead.)
+	before := m.input.LineInfo().ColumnOffset
+	m.input.CursorEnd()
+	if m.input.LineInfo().ColumnOffset != before {
+		m.syncInputLayout()
+		return m, nil
+	}
+	if text, ok := m.history.down(m.input.Value()); ok {
+		m.applyHistoryEntry(text, cursorEnd)
+	}
+	return m, nil
+}
+
+// applyHistoryEntry replaces the input with a history entry and positions the
+// cursor at the start (Up) or end (Down), matching gemini-cli's default cursor
+// placement when browsing history.
+func (m *model) applyHistoryEntry(text string, pos cursorPos) {
+	m.input.SetValue(text)
+	if pos == cursorStart {
+		m.inputCursorToBegin()
+	}
+	m.syncInputLayout()
+	m.refreshSuggestions()
+}
+
+// inputCursorToBegin moves the textarea cursor to the very beginning (row 0,
+// col 0) using only the widget's public API. SetValue leaves the cursor at the
+// end, so we walk up visual rows until reaching the top.
+func (m *model) inputCursorToBegin() {
+	for n := 0; n < 2000; n++ {
+		li := m.input.LineInfo()
+		if m.input.Line() == 0 && li.RowOffset == 0 {
+			break
+		}
+		m.input.CursorUp()
+	}
+	m.input.CursorStart()
 }
 
 // refreshSuggestions recomputes the completion list from the current input.
@@ -1176,6 +1488,8 @@ func (m *model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	m.history.record(line)
+	m.followBottom = true
 	m.addBlock(roleUser, line)
 	m.busy = true
 	m.streamAbandoned = false
@@ -1210,10 +1524,14 @@ func (m *model) handleStream(ev ui.StreamEvent) (tea.Model, tea.Cmd) {
 	}
 	switch ev.Type {
 	case ui.StreamTextDelta:
-		// Hide the working line while the model is streaming visible output; the
-		// response block itself signals activity. (Cheap path: no extra sync.)
-		m.working = false
+		// Response text streams in the scrollback; keep the working indicator
+		// visible whenever busy so gaps before tool calls still show activity.
 		m.addResponseDelta(ev.Text)
+	case ui.StreamReasoningDelta:
+		// Reasoning ("thinking") streams into the dedicated box, never the
+		// scrollback. Accumulate even when hidden so toggling on mid-turn shows
+		// the thoughts so far; the buffer is cleared at StreamDone.
+		m.thinking += ev.Text
 	case ui.StreamInfo:
 		m.addBlock(roleInfo, ev.Text)
 	case ui.StreamClearScrollback:
@@ -1228,6 +1546,12 @@ func (m *model) handleStream(ev ui.StreamEvent) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case ui.StreamSetTheme:
 		m.setTheme(ev.Text)
+	case ui.StreamSetMouse:
+		cmd := m.applyMouseMode(ev.Text)
+		if m.stream != nil {
+			return m, tea.Batch(cmd, waitStream(m.stream))
+		}
+		return m, cmd
 	case ui.StreamQuit:
 		m.busy = false
 		m.setWorking(false, "")
@@ -1291,12 +1615,17 @@ func (m *model) handleStream(ev ui.StreamEvent) (tea.Model, tea.Cmd) {
 		m.busy = false
 		m.openToolOutputIdx = -1
 		m.runningTool = ""
+		m.thinking = ""
 		m.clearTurn()
 		m.setWorking(false, "")
 		m.closeResponse()
 		m.refreshIdleStatus()
 		m.status = m.idleStatus
 		m.stream = nil
+		// Submit any messages the user queued while this turn was running.
+		if cmd := m.flushQueue(); cmd != nil {
+			return m, cmd
+		}
 		return m, nil
 	}
 	if m.stream != nil {
@@ -1325,9 +1654,20 @@ func (m *model) refreshIdleStatus() {
 	m.syncInputPrompt(s.Mode)
 }
 
-// syncInputPrompt sets the input prefix to "<Mode> " (e.g. "Plan> ").
+// syncInputPrompt sets the input prefix to "<Mode> " (e.g. "Plan> "). It uses a
+// per-line prompt function so only the first visual row carries the mode prefix;
+// wrapped continuation rows (and the textarea's end-of-buffer padding rows) are
+// blank, aligned under the text. This mirrors gemini-cli's single-prompt input
+// and prevents a duplicate "Agent> " row from appearing below the cursor.
 func (m *model) syncInputPrompt(mode string) {
-	m.input.Prompt = inputPromptForMode(mode)
+	prompt := inputPromptForMode(mode)
+	width := runewidth.StringWidth(prompt)
+	m.input.SetPromptFunc(width, func(line int) string {
+		if line == 0 {
+			return prompt
+		}
+		return ""
+	})
 }
 
 func inputPromptForMode(mode string) string {
@@ -1432,6 +1772,13 @@ func (m *model) setWorking(on bool, label string) {
 	m.syncViewportContent()
 }
 
+// showWorkingIndicator reports whether the spinner row should render. The turn
+// is busy from submit until StreamDone; show activity whenever busy except
+// during tool confirmation (confirm band carries its own UX).
+func (m *model) showWorkingIndicator() bool {
+	return m.busy && m.confirmReply == nil
+}
+
 func (m *model) wrapWidth() int {
 	w := m.viewport.Width
 	if w <= 0 {
@@ -1442,7 +1789,149 @@ func (m *model) wrapWidth() int {
 
 func (m *model) syncViewportContent() {
 	m.viewport.SetContent(m.renderScrollback(m.wrapWidth()))
-	m.viewport.GotoBottom()
+	if m.followBottom {
+		m.viewport.GotoBottom()
+	}
+}
+
+// handleScrollKey scrolls the conversation viewport for the dedicated scroll
+// keys (PgUp/PgDn for half pages, Shift+Up/Down for single lines). It reports
+// true when key was a scroll command so handleKey can return early. Scrolling
+// up unpins followBottom; reaching the bottom re-pins it.
+func (m *model) handleScrollKey(key string) bool {
+	switch key {
+	case "pgup":
+		m.viewport.HalfViewUp()
+	case "pgdown":
+		m.viewport.HalfViewDown()
+	case "shift+up":
+		m.viewport.LineUp(1)
+	case "shift+down":
+		m.viewport.LineDown(1)
+	default:
+		return false
+	}
+	m.followBottom = m.viewport.AtBottom()
+	return true
+}
+
+// effectiveShowThinking reports whether the thinking box should be visible: the
+// live session toggle once the user has pressed Ctrl+T, otherwise the resolved
+// per-provider/model/global setting from the composer status.
+func (m *model) effectiveShowThinking() bool {
+	if m.thinkingToggled {
+		return m.showThinking
+	}
+	if cs, ok := m.composerStatus(); ok {
+		return cs.ShowThinking
+	}
+	return m.showThinking
+}
+
+// toggleThinking flips the thinking-box visibility, records the session override,
+// and persists the global setting via the app's ThinkingController capability.
+func (m *model) toggleThinking() (tea.Model, tea.Cmd) {
+	newVal := !m.effectiveShowThinking()
+	m.showThinking = newVal
+	m.thinkingToggled = true
+	if tc, ok := m.app.(ui.ThinkingController); ok {
+		if err := tc.SetShowThinking(newVal); err != nil {
+			_ = m.term.ShowError(err)
+		}
+	}
+	state := "hidden"
+	if newVal {
+		state = "shown"
+	}
+	m.addBlock(roleInfo, "Thinking box "+state+" (Ctrl+T).")
+	m.syncViewportContent()
+	return m, nil
+}
+
+// streamContext returns the live turn context, falling back to a background
+// context when the model has not captured one yet.
+func (m *model) streamContext() context.Context {
+	if m.ctx != nil {
+		return m.ctx
+	}
+	return context.Background()
+}
+
+// startAppStream wires an app capability that returns a stream of events
+// (mode/model switches) into the busy state with the given status label. An
+// error surfaces via the terminal error banner without entering the busy state.
+func (m *model) startAppStream(events <-chan ui.StreamEvent, err error, statusLeft string) (tea.Model, tea.Cmd) {
+	if err != nil {
+		_ = m.term.ShowError(err)
+		return m, nil
+	}
+	if events == nil {
+		return m, nil
+	}
+	m.busy = true
+	m.status.Left = statusLeft
+	m.stream = events
+	return m, waitStream(events)
+}
+
+// startModeSwitch switches directly to the named interaction mode via the app's
+// SetModeByName capability (backs Alt+1..4), mirroring the Ctrl+Shift+M cycle.
+func (m *model) startModeSwitch(name string) (tea.Model, tea.Cmd) {
+	setter, ok := m.app.(interface {
+		SetModeByName(context.Context, string) (<-chan ui.StreamEvent, error)
+	})
+	if !ok {
+		return m, nil
+	}
+	events, err := setter.SetModeByName(m.streamContext(), name)
+	return m.startAppStream(events, err, "mode")
+}
+
+// cycleTheme toggles the color theme via the app's ThemeController capability
+// and applies it live (Alt+T). It is a no-op when the app does not implement the
+// capability (e.g. in tests).
+func (m *model) cycleTheme() (tea.Model, tea.Cmd) {
+	tc, ok := m.app.(ui.ThemeController)
+	if !ok {
+		return m, nil
+	}
+	name, err := tc.CycleTheme()
+	if err != nil {
+		_ = m.term.ShowError(err)
+		return m, nil
+	}
+	m.addBlock(roleInfo, "Theme → "+name+" (Alt+T).")
+	m.setTheme(name)
+	return m, nil
+}
+
+// setMouse turns mouse-wheel reporting on or off at runtime and returns the tea
+// command that applies it. When on, the conversation viewport scrolls with the
+// wheel but native click-drag selection requires holding Shift; when off, native
+// text selection works and scrollback uses the keyboard (PgUp/PgDn/Shift+arrows).
+func (m *model) setMouse(on bool) tea.Cmd {
+	m.mouseEnabled = on
+	if on {
+		m.addBlock(roleInfo, "Mouse scroll on (Alt+M); hold Shift to select text.")
+		m.syncViewportContent()
+		return tea.EnableMouseCellMotion
+	}
+	m.addBlock(roleInfo, "Mouse scroll off (Alt+M); text selection enabled.")
+	m.syncViewportContent()
+	return tea.DisableMouse
+}
+
+// applyMouseMode resolves a /mouse argument ("on"|"off"|"toggle") to the matching
+// setMouse command. An empty or unknown value toggles.
+func (m *model) applyMouseMode(mode string) tea.Cmd {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "on":
+		return m.setMouse(true)
+	case "off":
+		return m.setMouse(false)
+	default:
+		return m.setMouse(!m.mouseEnabled)
+	}
 }
 
 // renderScrollback paints the welcome banner plus every block with its role's
@@ -1501,7 +1990,7 @@ func (m *model) renderBlock(blk scrollBlock, width int) []string {
 	switch {
 	case blk.role == roleResponse:
 		rendered = renderMarkdown(blk.text, max(width-gw, 1), m.th)
-	case (blk.role == roleToolResult || blk.role == roleConfirm) && looksLikeDiff(blk.text):
+	case (blk.role == roleToolResult || blk.role == roleConfirm) && diff.LooksLikeUnifiedDiff(blk.text):
 		rendered = m.renderDiffLines(blk.text, max(width-gw, 1), diffResultMaxLines)
 	default:
 		for _, line := range strings.Split(wrapText(blk.text, max(width-gw, 1)), "\n") {
@@ -1523,12 +2012,6 @@ func (m *model) renderBlock(blk scrollBlock, width int) []string {
 // diffResultMaxLines caps how many lines of a write_file result diff are shown
 // in the scrollback before a "… N more" footer.
 const diffResultMaxLines = 60
-
-// looksLikeDiff reports whether text begins like a unified diff produced by
-// internal/diff (a "--- a/" file marker or an "@@" hunk header).
-func looksLikeDiff(text string) bool {
-	return strings.HasPrefix(text, "--- ") || strings.HasPrefix(text, "@@")
-}
 
 // renderDiffLines colorizes unified-diff text: additions green, deletions red,
 // hunk/file markers dim, context faint. width bounds wrapping; maxLines caps
@@ -1565,8 +2048,8 @@ func (m *model) renderDiffLines(text string, width, maxLines int) []string {
 }
 
 // maxInputRows caps the visible height of the input box; longer content scrolls
-// inside it.
-const maxInputRows = 6
+// inside it. Matches gemini-cli's 10-line input viewport.
+const maxInputRows = 10
 
 // wordWrapLineCount computes the number of soft-wrapped lines that a single line of
 // text would occupy when word-wrapped to width.
@@ -1630,16 +2113,13 @@ func wordWrapLineCount(text string, width int) int {
 // inputHeight is the number of terminal rows the input band occupies in the
 // outer layout (1–maxInputRows).
 func (m *model) inputHeight() int {
-	if strings.TrimSpace(m.input.Value()) == "" {
-		return 1
-	}
 	return inputBoxHeight(inputContentLines(m.input))
 }
 
 func (m *model) bodyHeight() int {
 	// Baseline 6 covers header, a single input row, and the two-line footer;
 	// add the extra input rows when the box has grown for a multi-line prompt.
-	chrome := 6 + m.suggestionRows() + m.confirmBandRows() + m.workingRows() + (m.inputHeight() - 1)
+	chrome := 6 + m.suggestionRows() + m.confirmBandRows() + m.statusRowRows() + m.activityRows() + separatorRows + (m.inputHeight() - 1)
 	h := m.height - chrome
 	if h < 3 {
 		return 3
@@ -1647,10 +2127,31 @@ func (m *model) bodyHeight() int {
 	return h
 }
 
+// activityRows is the height of the composer activity area between the status
+// row and the input: the thinking box when visible (it owns the spinner),
+// otherwise the standalone working line. They are mutually exclusive in View.
+func (m *model) activityRows() int {
+	if rows := m.thinkingBoxRows(); rows > 0 {
+		return rows
+	}
+	return m.workingRows()
+}
+
+// separatorRows is the fixed height of the dim rule drawn between the agent area
+// and the input box (always one row), accounted for in bodyHeight.
+const separatorRows = 1
+
+// renderInputSeparator draws a dim horizontal rule visually separating the agent
+// area above from the input box below.
+func (m *model) renderInputSeparator() string {
+	width := max(m.width, 1)
+	return m.th.Dim.Render(strings.Repeat("─", width))
+}
+
 // workingRows is the height of the working/thinking indicator line (1 while the
 // agent is working, else 0) so the viewport shrinks to make room for it.
 func (m *model) workingRows() int {
-	if m.working {
+	if m.showWorkingIndicator() {
 		return 1
 	}
 	return 0

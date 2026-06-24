@@ -147,7 +147,7 @@ func (s *Scheduler) executeOne(
 		return errorResponse(call, errText), nil
 	}
 
-	if s.policy.NeedsConfirmation(tool) && !s.sessionGranted(name) {
+	if s.policy.NeedsConfirmation(tool) && !s.sessionGranted(tool.Name()) {
 		approved, err := s.requestApproval(ctx, tool.Name(), args, emit)
 		if err != nil {
 			return nil, err

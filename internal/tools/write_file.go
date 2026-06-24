@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/undeadindustries/sagittarius/internal/diff"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 )
 
@@ -60,6 +61,9 @@ func (t *writeFileTool) Execute(ctx context.Context, args map[string]any) (map[s
 	if !ok {
 		return nil, fmt.Errorf("parameter %q must be a string", WriteFileParamContent)
 	}
+	if err := validateWriteFileContent(content); err != nil {
+		return nil, err
+	}
 	abs, err := t.ws.ResolvePath(path)
 	if err != nil {
 		return nil, err
@@ -74,4 +78,22 @@ func (t *writeFileTool) Execute(ctx context.Context, args map[string]any) (map[s
 		"file_path": path,
 		"status":    "ok",
 	}, nil
+}
+
+func validateWriteFileContent(content string) error {
+	if diff.LooksLikeEjectionMarker(content) {
+		return fmt.Errorf("write_file content looks like a context ejection marker (<file_written ...>), not real file data. " +
+			"That tag is metadata in conversation history — read the file with read_file (or reconstruct the code) and send the COMPLETE file body")
+	}
+	if diff.LooksLikePlaceholderContent(content) {
+		return fmt.Errorf("write_file content contains a placeholder elision (e.g. \"... existing code ...\"). " +
+			"This tool overwrites the entire file — read the file with read_file, then send the COMPLETE new contents. " +
+			"Do not use placeholders or partial snippets")
+	}
+	if diff.LooksLikeUnifiedDiff(content) {
+		return fmt.Errorf("write_file content looks like a unified diff (+/- edit lines or diff headers), not a complete file. " +
+			"This tool is not a patch editor — read the file with read_file, then call write_file with the ENTIRE file body. " +
+			"Never prefix lines with + or - and never copy diff previews from the UI")
+	}
+	return nil
 }

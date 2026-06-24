@@ -237,11 +237,12 @@ func TestMapResponsesSseEventTable(t *testing.T) {
 
 	tests := []struct {
 		name      string
-		events    []ResponsesSseEvent
-		wantText  string
-		wantCalls int
-		wantDone  bool
-		wantErr   bool
+		events        []ResponsesSseEvent
+		wantText      string
+		wantReasoning string
+		wantCalls     int
+		wantDone      bool
+		wantErr       bool
 	}{
 		{
 			name: "text delta",
@@ -255,7 +256,7 @@ func TestMapResponsesSseEventTable(t *testing.T) {
 			events: []ResponsesSseEvent{
 				{Type: "response.reasoning_summary_text.delta", Delta: "thinking"},
 			},
-			wantText: "thinking",
+			wantReasoning: "thinking",
 		},
 		{
 			name: "completed marks done",
@@ -284,6 +285,7 @@ func TestMapResponsesSseEventTable(t *testing.T) {
 			t.Parallel()
 			state := NewResponsesSseMapperState()
 			var text strings.Builder
+			var reasoning strings.Builder
 			var calls int
 			var done bool
 			for _, ev := range tt.events {
@@ -299,6 +301,7 @@ func TestMapResponsesSseEventTable(t *testing.T) {
 				}
 				for _, chunk := range chunks {
 					text.WriteString(chunk.TextDelta)
+					reasoning.WriteString(chunk.ReasoningDelta)
 					calls += len(chunk.ToolCalls)
 					if chunk.Done {
 						done = true
@@ -307,6 +310,9 @@ func TestMapResponsesSseEventTable(t *testing.T) {
 			}
 			if got := text.String(); got != tt.wantText {
 				t.Errorf("text = %q, want %q", got, tt.wantText)
+			}
+			if got := reasoning.String(); got != tt.wantReasoning {
+				t.Errorf("reasoning = %q, want %q", got, tt.wantReasoning)
 			}
 			if calls != tt.wantCalls {
 				t.Errorf("tool calls = %d, want %d", calls, tt.wantCalls)

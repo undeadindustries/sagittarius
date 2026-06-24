@@ -7,13 +7,19 @@ import (
 	"github.com/charmbracelet/bubbles/textarea"
 )
 
-func TestInputBoxHeightReservesExtraRow(t *testing.T) {
+func TestInputBoxHeightMatchesContent(t *testing.T) {
 	t.Parallel()
-	if got := inputBoxHeight(2); got != 3 {
-		t.Fatalf("inputBoxHeight(2) = %d, want 3", got)
+	if got := inputBoxHeight(0); got != 1 {
+		t.Fatalf("inputBoxHeight(0) = %d, want 1", got)
 	}
-	if got := inputBoxHeight(6); got != maxInputRows {
-		t.Fatalf("inputBoxHeight(6) = %d, want cap %d", got, maxInputRows)
+	if got := inputBoxHeight(1); got != 1 {
+		t.Fatalf("inputBoxHeight(1) = %d, want 1", got)
+	}
+	if got := inputBoxHeight(2); got != 2 {
+		t.Fatalf("inputBoxHeight(2) = %d, want 2", got)
+	}
+	if got := inputBoxHeight(maxInputRows + 5); got != maxInputRows {
+		t.Fatalf("inputBoxHeight(over cap) = %d, want cap %d", got, maxInputRows)
 	}
 }
 
@@ -22,8 +28,8 @@ func TestInputHeightGrowsAndCaps(t *testing.T) {
 	m := newTestModel()
 	m.input.SetValue("a\nb\nc")
 	m.syncInputLayout()
-	if got := m.inputHeight(); got != 4 {
-		t.Fatalf("inputHeight = %d, want 4 (3 content lines + 1)", got)
+	if got := m.inputHeight(); got != 3 {
+		t.Fatalf("inputHeight = %d, want 3 (one row per content line)", got)
 	}
 	m.input.SetValue(strings.Repeat("x\n", 20))
 	m.syncInputLayout()
@@ -49,8 +55,29 @@ func TestInputHeightGrowsAndCaps(t *testing.T) {
 	if got := inputContentLines(m.input); got != 1 {
 		t.Fatalf("inputContentLines with width 80 = %d, want 1", got)
 	}
-	if got := m.inputHeight(); got != 2 {
-		t.Fatalf("inputHeight for short line with width 80 = %d, want 2", got)
+	if got := m.inputHeight(); got != 1 {
+		t.Fatalf("inputHeight for short line with width 80 = %d, want 1", got)
+	}
+}
+
+func TestInputEmptyShowsSinglePrompt(t *testing.T) {
+	t.Parallel()
+	m := newTestModel()
+	m.syncInputLayout()
+	view := stripANSI(m.input.View())
+	if got := strings.Count(view, "Agent>"); got != 1 {
+		t.Fatalf("empty input should show exactly one Agent> prompt, got %d:\n%s", got, view)
+	}
+}
+
+func TestInputSingleLineNoDuplicatePrompt(t *testing.T) {
+	t.Parallel()
+	m := newTestModel()
+	m.input.SetValue("hello")
+	m.syncInputLayout()
+	view := stripANSI(m.input.View())
+	if got := strings.Count(view, "Agent>"); got != 1 {
+		t.Fatalf("single-line input should show exactly one Agent> prompt, got %d:\n%s", got, view)
 	}
 }
 

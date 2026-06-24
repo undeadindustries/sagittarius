@@ -1,0 +1,2 @@
+{"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": "{\n  \"success\": true,\n  \"drawer_id\": \"drawer_sagittarius_mcp-setup_7dc0d79877f3da77800cfa09\",\n  \"wing\": \"sagittarius\",\n  \"room\": \"mcp-setup\",\n  \"chunks\": 1\n}"}]}}
+{"jsonrpc": "2.0", "id": 4, "result": {"content": [{"type": "text", "text": "{\n  \"success\": true,\n  \"drawer_id\": \"drawer_sagittarius_daemon-management_1799b345a831320202b87805\",\n  \"wing\": \"sagittarius\",\n  \"room\": \"daemon-management\",\n  \"chunks\": 1\n}"}]}}

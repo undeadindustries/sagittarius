@@ -15,32 +15,49 @@ func TestWorkingIndicatorVisibility(t *testing.T) {
 	m.width = 80
 	m.height = 24
 
-	if m.working || m.workingRows() != 0 {
+	if m.showWorkingIndicator() || m.workingRows() != 0 {
 		t.Fatalf("idle model should not show the working line")
 	}
 
+	m.busy = true
+
 	// A tool round shows the indicator with the tool name.
 	m.handleStream(ui.StreamEvent{Type: ui.StreamToolStart, ToolName: "write_file"})
-	if !m.working || m.workingLabel != "Running write_file" || m.workingRows() != 1 {
-		t.Fatalf("tool start: working=%v label=%q rows=%d", m.working, m.workingLabel, m.workingRows())
+	if !m.showWorkingIndicator() || m.workingLabel != "Running write_file" || m.workingRows() != 1 {
+		t.Fatalf("tool start: show=%v label=%q rows=%d", m.showWorkingIndicator(), m.workingLabel, m.workingRows())
 	}
 
-	// Streaming visible text hides the indicator (the response block takes over).
+	// While busy, text deltas still keep the working indicator visible so gaps
+	// before the next tool call do not look idle.
 	m.handleStream(ui.StreamEvent{Type: ui.StreamTextDelta, Text: "hi"})
-	if m.working {
-		t.Fatal("text delta should hide the working line")
+	if !m.showWorkingIndicator() || m.workingRows() != 1 {
+		t.Fatal("text delta should keep the working line visible while busy")
 	}
 
 	// After a tool result the model is queried again: back to Thinking….
 	m.handleStream(ui.StreamEvent{Type: ui.StreamToolResult, ToolName: "write_file", Text: "ok"})
-	if !m.working || m.workingLabel != "Thinking…" {
-		t.Fatalf("tool result: working=%v label=%q", m.working, m.workingLabel)
+	if !m.showWorkingIndicator() || m.workingLabel != "Thinking…" {
+		t.Fatalf("tool result: show=%v label=%q", m.showWorkingIndicator(), m.workingLabel)
 	}
 
 	// End of turn hides the indicator.
 	m.handleStream(ui.StreamEvent{Type: ui.StreamDone})
-	if m.working || m.busy {
-		t.Fatalf("done: working=%v busy=%v", m.working, m.busy)
+	if m.showWorkingIndicator() || m.busy {
+		t.Fatalf("done: show=%v busy=%v", m.showWorkingIndicator(), m.busy)
+	}
+}
+
+func TestBusyShowsWorkingAfterTextWithoutWorkingFlag(t *testing.T) {
+	t.Parallel()
+	m := newModel(ui.Options{ThemeName: "greyscale"}, quitApp{}, NewTerminal(ui.Options{}))
+	m.busy = true
+	m.working = false
+	m.workingLabel = "Thinking…"
+
+	m.handleStream(ui.StreamEvent{Type: ui.StreamTextDelta, Text: "Let me fix it:"})
+
+	if !m.showWorkingIndicator() {
+		t.Fatal("busy turn should show working indicator even when working flag was cleared during text stream")
 	}
 }
 

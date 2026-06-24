@@ -308,7 +308,7 @@ func MapResponsesSseEvent(event ResponsesSseEvent, state *ResponsesSseMapperStat
 
 	case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
 		if event.Delta != "" {
-			return []StreamResponse{{TextDelta: event.Delta}}, nil
+			return []StreamResponse{{ReasoningDelta: event.Delta}}, nil
 		}
 		return nil, nil
 

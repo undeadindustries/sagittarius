@@ -33,6 +33,10 @@ type Options struct {
 	HideBanner bool
 	// HideTips suppresses the welcome tips block (settings ui.hideTips).
 	HideTips bool
+	// ShowThinking seeds the live thinking-box visibility from the resolved
+	// startup setting (ui.showThinking / per-provider override). Ctrl+T toggles
+	// it during the session.
+	ShowThinking bool
 	// NeedsOnboarding opens the first-run provider setup overlay before the
 	// first chat turn when no provider or API key is configured.
 	NeedsOnboarding bool

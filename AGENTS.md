@@ -125,7 +125,16 @@ in this file (see [Keeping this file current](#keeping-this-file-current)).
   diffs (confirm preview + result), a multi-line wrapping input (`textarea`) with
   `@path/to/file` mention autocompletion, a loaded-`AGENTS.md` banner line, a
   color-cycling working spinner, and per-turn cancel (`Esc`; `Ctrl+C` cancels
-  then quits). Tool confirmations offer Allow once / Allow for this session / No.
+  then quits). In-app conversation scrolling (`PgUp`/`PgDn` + `Shift+Up`/
+  `Shift+Down`, with a `followBottom` pin) since alt-screen hides native
+  scrollback; mouse-wheel scrolling is opt-in (off by default so native text
+  selection works) via `Alt+M` / `/mouse`. Keyboard shortcuts: `Alt+1..4` set
+  the mode directly, `Ctrl+Shift+M` cycles it, `Ctrl+/` / `Ctrl+Shift+P` cycle
+  active models forward/back, `Alt+T` cycles the color theme. An optional
+  auto-hiding "thinking" box (spinner in its border) shows provider reasoning,
+  opt-in via `ui.showThinking` (`Ctrl+T` toggles live) or a per-provider/model
+  `showThinking` setting; and a dim separator rule above the input. Tool
+  confirmations offer Allow once / Allow for this session / No.
   Overlay dialogs: providers wizard, global model picker (`modelpickdialog`), per-model
   settings editor (`modelsdialog`), mode-override editor (`modesdialog`), project
   system-prompt picker (`systempromptdialog`), MCP server wizard (`mcpdialog`),
@@ -255,6 +264,61 @@ and `docs/reference/commands.md` for details.
 ---
 
 ## Recent decisions
+
+- **2026-06-24 — TUI shortcuts, mouse opt-in, log-corruption fix (AD-054):**
+  Three follow-ups to the scrollback work (AD-053). (1) **Logging no longer
+  corrupts the alt-screen:** the codebase had no `slog` handler redirect, so the
+  default handler wrote to stderr — a late cancel-path error (slog-quoted as
+  `error="...: context canceled"`) overwrote the bottom row of the alt-screen.
+  `runInteractive` now calls `configureInteractiveLogging`, which points `slog`
+  at `~/.sagittarius/logs/sagittarius.log` (fallback `io.Discard`, never stderr);
+  headless paths keep stderr. (2) **Mouse capture is opt-in:** `tea.WithMouseCellMotion`
+  was removed from the default program options so the terminal's native click-drag
+  text selection works again; mouse-wheel scrolling is toggled at runtime with
+  `Alt+M` or the new `/mouse` command (on/off/toggle/show) via a new
+  `ui.StreamSetMouse` event + `slash.Result.MouseMode` (mirrors the `StreamSetTheme`
+  plumbing). Keyboard scrollback (`PgUp`/`PgDn`/`Shift+arrows`) is unchanged.
+  (3) **New keyboard shortcuts:** `Alt+1..4` select agent/plan/ask/debug directly
+  (`App.SetModeByName` + shared `switchToMode` helper, refactored from
+  `CycleInteractionMode`; the UI passes a plain string so bubbletea stays free of
+  the `modes` package); `Alt+T` cycles the color theme (new `ui.ThemeController` /
+  `App.CycleTheme`, persisted via `SetUITheme`/`Loader.Save`, applied live through
+  `m.setTheme`); `Ctrl+Shift+P` cycles active models backward (`App.CycleModelReverse`,
+  sharing `cycleModel(step)` with `CycleModel` via the `wrapIndex` helper).
+  `Alt+digit` is used because terminals cannot distinguish `Ctrl+digit`. To
+  support macOS out-of-the-box without requiring terminal re-configuration, the
+  special characters produced by Mac Option keys (`¡`, `™`, `£`, `¢`, `†`, `µ`)
+  are accepted as direct aliases for the `Alt` bindings.
+
+- **2026-06-24 — TUI scrollback, thinking box, input separator (AD-053):** Three
+  Bubble Tea composer improvements. (1) **In-app scrollback:** alt-screen hides
+  the terminal's native scrollback, so the program handles `tea.MouseMsg`
+  (wheel) plus `PgUp`/`PgDn` (half page) and `Shift+Up`/`Shift+Down` (line) —
+  dedicated keys (mouse capture was initially on by default; see AD-054 which
+  made it opt-in to restore native text selection)
+  that don't collide with the input cursor or history Up/Down. A new
+  `followBottom` flag (default true) gates the auto-`GotoBottom` in
+  `syncViewportContent`: scrolling up unpins it so new turns don't yank the view
+  away while reading; reaching the bottom (or submitting a turn) re-pins it.
+  (2) **Optional thinking box:** reasoning is no longer folded into the answer —
+  `provider.StreamResponse` gained `ReasoningDelta`, `deltaContent` returns only
+  `Content` (new `deltaReasoning` extracts `reasoning`/`reasoning_content`), the
+  Responses adapter maps `reasoning_*_text.delta` to it, and the runner forwards
+  it as a new `ui.StreamReasoningDelta` event. The new
+  `internal/ui/bubbletea/thinkingbox.go` renders an auto-hiding rounded box with
+  the working spinner embedded in its top border and a rolling tail of the
+  reasoning buffer (cleared on `StreamDone`); it replaces the standalone working
+  line while shown. Visibility is opt-in: a global `ui.showThinking` setting
+  (toggled live with `Ctrl+T` via the new `ui.ThinkingController` capability,
+  persisted through `Settings.SetUIShowThinking`) OR a per-provider/model
+  `showThinking` setting (config round-trip + `/models` row + providers wizard
+  bool toggle), resolved by `config.ResolveShowThinking` and surfaced via
+  `ComposerStatus.ShowThinking`. Only OpenRouter + OpenAI-Responses populate
+  reasoning; Gemini exposes only opaque `thoughtSignature` bytes. (3)
+  **Separator:** a dim 1-row rule (`separatorRows`) renders directly above the
+  input box, accounted for in `bodyHeight` chrome. The agent/UI seam holds —
+  `internal/slash` and `internal/agent` stay Bubble Tea-free; new capabilities
+  cross the `internal/ui` interface only.
 
 - **2026-06-24 — Universal tool-call/result integrity repair (AD-052):** Fixed
   recurring `invalid_request_message_order` 400s from OpenRouter/Mistral

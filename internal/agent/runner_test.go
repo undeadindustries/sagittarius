@@ -843,3 +843,29 @@ func TestRunnerKeylessStartupRecovers(t *testing.T) {
 		t.Fatalf("recovered events = %#v", got)
 	}
 }
+
+func TestInitialSessionGrantsSurviveSetRegistry(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	runner, err := NewRunner(RunnerConfig{
+		Model:                "test-model",
+		WorkDir:              root,
+		Interactive:          true,
+		InitialSessionGrants: []string{"write_file"},
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	ws, err := tools.NewWorkspace(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.SetRegistry(tools.NewBuiltinRegistry(ws))
+
+	grants := runner.SessionGrants()
+	if len(grants) != 1 || grants[0] != "write_file" {
+		t.Fatalf("SessionGrants after SetRegistry = %v, want [write_file]", grants)
+	}
+}

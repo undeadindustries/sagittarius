@@ -302,6 +302,11 @@ func (r *Runner) ModelPinned() bool {
 	return r.modelPinned
 }
 
+// ApprovalMode returns the active tool-approval policy (default/autoEdit/yolo).
+func (r *Runner) ApprovalMode() ApprovalMode {
+	return r.approval
+}
+
 // InteractionMode returns the active interaction mode.
 func (r *Runner) InteractionMode() modes.Mode {
 	if r.modeState == nil {
@@ -780,9 +785,10 @@ func isGitRepo(dir string) bool {
 func (r *Runner) attachInteractionModeGate() {
 	r.regMu.Lock()
 	defer r.regMu.Unlock()
-	if r.scheduler == nil {
+	if r.registry == nil {
 		return
 	}
+	r.mergeSchedulerGrantsLocked()
 	r.scheduler = tools.NewScheduler(
 		r.registry,
 		approvalToPolicy(r.approval),
@@ -815,12 +821,41 @@ func (r *Runner) schedulerOptions() []tools.SchedulerOption {
 	opts = append(opts,
 		tools.WithSessionGrants(r.initialSessionGrants),
 		tools.WithSessionGrantRecorder(func(toolName string) {
+			r.rememberSessionGrant(toolName)
 			if r.sessionRecorder != nil {
 				_ = r.sessionRecorder.RecordSessionGrant(toolName)
 			}
 		}),
 	)
 	return opts
+}
+
+// rememberSessionGrant records a session-wide tool approval in runner state so
+// scheduler rebuilds (SetRegistry, attachInteractionModeGate) keep the grant.
+func (r *Runner) rememberSessionGrant(toolName string) {
+	r.regMu.Lock()
+	defer r.regMu.Unlock()
+	r.appendInitialSessionGrantLocked(toolName)
+}
+
+func (r *Runner) appendInitialSessionGrantLocked(toolName string) {
+	for _, g := range r.initialSessionGrants {
+		if g == toolName {
+			return
+		}
+	}
+	r.initialSessionGrants = append(r.initialSessionGrants, toolName)
+}
+
+// mergeSchedulerGrantsLocked copies live scheduler grants into initialSessionGrants
+// before rebuilding the scheduler so in-session approvals survive SetRegistry.
+func (r *Runner) mergeSchedulerGrantsLocked() {
+	if r.scheduler == nil {
+		return
+	}
+	for _, g := range r.scheduler.SessionGrants() {
+		r.appendInitialSessionGrantLocked(g)
+	}
 }
 
 // SnapshotDiff renders the net unified diff of files changed this session,
@@ -1027,7 +1062,9 @@ func (r *Runner) LastAssistantText() string {
 func (r *Runner) ReplaceHistory(h []provider.Message, grants []string) {
 	r.history = append([]provider.Message(nil), h...)
 	r.turnCounter = 0
-	r.initialSessionGrants = grants
+	r.regMu.Lock()
+	r.initialSessionGrants = append([]string(nil), grants...)
+	r.regMu.Unlock()
 	r.attachInteractionModeGate() // Recreate scheduler to adopt new grants
 }
 

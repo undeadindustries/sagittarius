@@ -30,6 +30,50 @@ preview for `write_file` — and three choices: **Allow once** (`1`/`y`), **Allo
 for this session** (`2`, skips later prompts for that tool), and **No**
 (`3`/`n`/`Esc`). Pick with the arrow keys + `Enter` or press the key directly.
 
+## Keyboard shortcuts
+
+These work in the interactive TUI in addition to the slash commands above.
+
+| Key | Action |
+|-----|--------|
+| `Alt+1` / `Alt+2` / `Alt+3` / `Alt+4` | Switch to agent / plan / ask / debug mode |
+| `Ctrl+Shift+M` | Cycle interaction mode (agent → plan → ask → debug) |
+| `Ctrl+/` | Cycle forward through active models |
+| `Ctrl+Shift+P` | Cycle backward through active models |
+| `Alt+T` | Cycle the color theme (default ↔ greyscale) |
+| `Ctrl+T` | Toggle the thinking ("reasoning") box |
+| `Alt+M` | Toggle mouse-wheel scrolling (see below) |
+| `Ctrl+B` | Open the background process viewer |
+| `PgUp` / `PgDn` / `Shift+Up` / `Shift+Down` | Scroll the conversation |
+| `Up` / `Down` / `Ctrl+P` / `Ctrl+N` | Navigate prompt history (at the input boundaries) |
+| `Esc` | Cancel the in-flight turn (second `Esc` force-stops) |
+| `Ctrl+C` | Cancel the turn, or quit when idle |
+
+`Alt+digit` is used for direct mode selection because terminals cannot
+distinguish `Ctrl+digit` from the plain digit. On macOS, if your terminal sends
+special characters for `Option+key` instead of Alt sequences, Sagittarius accepts
+the characters `¡`, `™`, `£`, `¢` as aliases for `Alt+1..4`, `†` for `Alt+T`,
+and `µ` for `Alt+M`, so the shortcuts work out of the box.
+
+### Mouse scrolling vs. text selection
+
+Mouse-wheel scrolling is **off by default** so the terminal's native click-drag
+text selection works (for copy/paste). Enable wheel scrolling with `Alt+M` or
+`/mouse on`; while it is on, hold `Shift` to select text. Keyboard scrollback
+(`PgUp`/`PgDn`, `Shift+Up`/`Down`) works regardless. The setting is per-session
+and resets to off on the next launch.
+
+### `/mouse`
+
+- **Description:** Toggle mouse-wheel scrolling of the conversation.
+- **Usage:** `/mouse` (toggle), `/mouse on`, `/mouse off`, `/mouse show`.
+
+### `/theme`
+
+- **Description:** Show or switch the TUI color theme (persisted).
+- **Usage:** `/theme` (show), `/theme default`, `/theme greyscale`. `Alt+T`
+  cycles between the two live.
+
 ### `/providers`
 
 - **Description:** Manage provider connections — edit definitions, API keys, and

@@ -1,6 +1,7 @@
 package toolsdialog
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -33,11 +34,20 @@ func (m Model) View() string {
 
 func (m Model) body() string {
 	dim := m.th.Dim
+	total := len(m.rows)
+	if total == 0 {
+		return ""
+	}
+	start, end := m.listWindow(total)
 	var b strings.Builder
-	for i, r := range m.rows {
+	if start > 0 {
+		b.WriteString(dim.Render(fmt.Sprintf("  … %d more above", start)) + "\n")
+	}
+	for i := start; i < end; i++ {
+		r := m.rows[i]
 		switch r.kind {
 		case rowSectionHeader:
-			if i > 0 {
+			if i > start {
 				b.WriteString("\n")
 			}
 			b.WriteString(m.th.Accent.Render(r.text) + "\n")
@@ -55,8 +65,14 @@ func (m Model) body() string {
 			}
 			b.WriteString(m.renderRow(box+" "+r.text, i == m.cursor) + "\n")
 		case rowAction:
-			b.WriteString("\n" + m.renderRow(r.text, i == m.cursor) + "\n")
+			if i > start {
+				b.WriteString("\n")
+			}
+			b.WriteString(m.renderRow(r.text, i == m.cursor) + "\n")
 		}
+	}
+	if end < total {
+		b.WriteString(dim.Render(fmt.Sprintf("  … %d more below", total-end)) + "\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

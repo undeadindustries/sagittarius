@@ -11,6 +11,10 @@ import (
 
 // View renders the MCP server wizard overlay.
 func (m Model) View() string {
+	if m.saving {
+		return m.wrapBox(m.viewSaving())
+	}
+
 	var b strings.Builder
 	switch m.screen {
 	case screenForm:
@@ -30,12 +34,27 @@ func (m Model) View() string {
 		b.WriteString("\n\n" + m.th.Error.Render(m.wrap("✗ "+m.errMsg)))
 	}
 
-	box := m.boxStyle()
 	body := b.String()
+	return m.wrapBox(body)
+}
+
+func (m Model) wrapBox(body string) string {
+	box := m.boxStyle()
 	if m.width > 0 {
 		return box.Width(m.contentWidth()).Render(body)
 	}
 	return box.Render(body)
+}
+
+func (m Model) viewSaving() string {
+	var b strings.Builder
+	title := "Add MCP Server"
+	if !m.adding {
+		title = "Edit MCP Server: " + m.originalName
+	}
+	b.WriteString(m.th.Title.Render(title) + "\n\n")
+	b.WriteString(m.spin.View() + " " + m.th.Dim.Render("Saving and reconnecting MCP servers…"))
+	return b.String()
 }
 
 func (m Model) viewList() string {
