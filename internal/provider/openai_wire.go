@@ -255,31 +255,53 @@ func patchToolUserTransitionForMistral(messages []OpenAIMessage, modelID string)
 	return out
 }
 
-func patchOrphanedToolCallsForMistral(messages []OpenAIMessage, modelID string) []OpenAIMessage {
-	if !IsMistralFamilyModel(modelID) {
-		return messages
-	}
+// repairToolCallIntegrity enforces the tool-call/result invariants that every
+// OpenAI-compatible chat provider requires (OpenAI, OpenRouter, Mistral, local
+// vLLM, …): each tool message must immediately follow an assistant message whose
+// tool_calls contain its id, every assistant tool_call must be answered exactly
+// once, and no tool result may be orphaned. Violations produce hard 400s such as
+// Mistral's "Unexpected tool call id <id> in tool results"
+// (invalid_request_message_order) when a turn is cancelled mid-flight or a long
+// session leaves a dangling pair.
+//
+// The block of tool results following an assistant turn is paired positionally
+// with that assistant's tool_calls. Our scheduler executes calls in order and
+// appends responses in the same order, so positional pairing matches by
+// construction and recovers the original content even when ids drifted; the
+// result's id is forced to its paired call's id. Missing answers are synthesized,
+// extra results are dropped, and any tool message with no preceding assistant
+// tool_calls is removed.
+func repairToolCallIntegrity(messages []OpenAIMessage) []OpenAIMessage {
 	out := make([]OpenAIMessage, 0, len(messages))
 	for i := 0; i < len(messages); i++ {
 		current := messages[i]
+
+		if current.Role == OpenAIRoleTool {
+			// Orphan tool result: no preceding assistant tool_calls owns it.
+			continue
+		}
+
 		if current.Role != OpenAIRoleAssistant || len(current.ToolCalls) == 0 {
 			out = append(out, current)
 			continue
 		}
+
 		out = append(out, current)
-		i++
-		responded := map[string]struct{}{}
-		for i < len(messages) && messages[i].Role == OpenAIRoleTool {
-			toolMsg := messages[i]
-			if toolMsg.ToolCallID != "" {
-				responded[toolMsg.ToolCallID] = struct{}{}
-			}
-			out = append(out, toolMsg)
-			i++
+
+		// Gather the contiguous run of tool results that answer this turn.
+		results := make([]OpenAIMessage, 0, len(current.ToolCalls))
+		j := i + 1
+		for j < len(messages) && messages[j].Role == OpenAIRoleTool {
+			results = append(results, messages[j])
+			j++
 		}
-		i--
-		for _, tc := range current.ToolCalls {
-			if _, ok := responded[tc.ID]; ok {
+		i = j - 1
+
+		for idx, tc := range current.ToolCalls {
+			if idx < len(results) {
+				paired := results[idx]
+				paired.ToolCallID = tc.ID
+				out = append(out, paired)
 				continue
 			}
 			content := orphanedToolResponseContent
@@ -289,6 +311,7 @@ func patchOrphanedToolCallsForMistral(messages []OpenAIMessage, modelID string) 
 				Content:    &content,
 			})
 		}
+		// Extra results beyond the number of tool_calls are dropped.
 	}
 	return out
 }

@@ -256,6 +256,46 @@ and `docs/reference/commands.md` for details.
 
 ## Recent decisions
 
+- **2026-06-24 — Universal tool-call/result integrity repair (AD-052):** Fixed
+  recurring `invalid_request_message_order` 400s from OpenRouter/Mistral
+  (`Unexpected tool call id <id> in tool results`). Root cause: a turn cancelled
+  mid-flight, or a long session, could leave the wire history with an orphaned or
+  mismatched assistant tool_call / tool result pair. Replaced the Mistral-only
+  `patchOrphanedToolCallsForMistral` with a provider-agnostic
+  `repairToolCallIntegrity` (`internal/provider/openai_wire.go`) that runs for
+  every openai-chat provider in `MessagesToOpenAIMessages`: the block of tool
+  results following an assistant turn is paired *positionally* with that turn's
+  tool_calls (the scheduler emits calls and responses in the same order, so this
+  recovers the original content and forces ids to match even when they drifted),
+  unanswered calls get a synthesized response, extra results are dropped, and
+  orphan tool results (no preceding assistant tool_calls) are removed. Also
+  removed `MistralSafeToolCallID` — OpenRouter handles Mistral's 9-char id
+  translation, so client-side truncation was unnecessary and only risked
+  call/response id divergence. Verified against live `mistralai/devstral-2512`:
+  mismatch, orphan-result, and unanswered-call histories all now return 200.
+
+- **2026-06-24 — TUI input/composer parity with gemini-cli (AD-051):** Reworked
+  the Bubble Tea input box to match gemini-cli's composer. (1) Single mode prompt:
+  `syncInputPrompt` now uses the textarea's `SetPromptFunc` so only the first
+  visual row carries `Agent> ` (or `Plan> `, etc.); wrapped/padding rows are blank
+  indent, eliminating the duplicate `Agent>` row. (2) The box grows one row per
+  content line up to `maxInputRows` (raised 6 → 10) with no `+1` buffer row;
+  `inputBoxHeight`/`inputHeight` and `bodyHeight` chrome were realigned (empty
+  input is exactly one row). (3) Composer status row: a new
+  `internal/ui/bubbletea/statusrow.go` renders a dim line between the scrollback
+  and input — tool-approval hint on the left, `N AGENTS.md files · M skills` on
+  the right — fed by a new optional `ui.ComposerStatusProvider` (implemented by
+  `App.ComposerStatus`, backed by `Runner.ApprovalMode` + the skill catalog) and
+  `Options.LoadedMemoryFiles`. (4) Prompt history: new `inputHistory`
+  (a port of gemini-cli's `useInputHistory`, with per-level draft/edit caching)
+  drives boundary-aware Up/Down and Ctrl+P/Ctrl+N — arrows move between lines in
+  multi-line text, jump to line start/end at the edges, then step through history.
+  (5) Type-while-busy + message queue: the input stays editable during a turn;
+  Enter/Tab queue a (non-slash) message that is auto-submitted on `StreamDone`,
+  and Up on an empty input pops the queue back for editing. The agent/UI seam is
+  preserved — `internal/slash` and `internal/agent` stay free of Bubble Tea; the
+  composer-status capability crosses the `internal/ui` interface only.
+
 - **2026-06-24 — PTY shell execution + Background process viewer (AD-050):** 
   Brought `run_shell_command` to gemini-cli parity and beyond. (1) Shell execution now runs inside a true Pseudo-Terminal (PTY) using `creack/pty` with a headless VT emulator (`charmbracelet/x/vt`), providing accurate formatting and ANSI-stripping for the model's text result while capturing interactive screen updates correctly. (2) Live output streaming: a new `StreamingTool` interface and `ui.StreamToolOutput` event allow the TUI to render tool output dynamically during long executions. (3) The working status label was fixed (`m.runningTool`) to show "Running run_shell_command" instead of "Thinking…". (4) Background process manager: `internal/bgproc` tracks session-scoped background processes, with `&`-child capture via a subshell `jobs -p` trap, solving the hang issues with foreground servers and explicit background requests. (5) Ctrl+B viewer: A new `DialogBackground` overlay (`internal/ui/bgprocdialog`) lists tracked background processes, their uptime, status, and allows viewing their live log output or killing them via process group (`SIGKILL -pgid`).
 
