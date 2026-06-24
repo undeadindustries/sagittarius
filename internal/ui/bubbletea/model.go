@@ -255,6 +255,17 @@ func newModel(opts ui.Options, app ui.App, term *Terminal) *model {
 		suggestionIdx:   -1,
 	}
 	m.syncInputPrompt(idleStatus.Mode)
+
+	// Seed initial scrollback (e.g. from --resume) so the user can see the
+	// prior conversation immediately, not just have it silently in context.
+	for _, entry := range opts.InitialScrollback {
+		m.addBlock(scrollbackRoleToRole(entry.Role), entry.Text)
+	}
+	if len(opts.InitialScrollback) > 0 {
+		m.viewport.SetContent(m.renderScrollback(m.wrapWidth()))
+		m.viewport.GotoBottom()
+	}
+
 	return m
 }
 

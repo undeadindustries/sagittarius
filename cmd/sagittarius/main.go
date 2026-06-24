@@ -557,6 +557,7 @@ func runInteractive(screenReader bool, opts runnerOptions) int {
 		HideTips:          uiCfg.HideTips,
 		NeedsOnboarding:   needsOnboarding,
 		LoadedMemoryFiles: runner.LoadedMemoryFiles(),
+		InitialScrollback: historyToScrollback(runner.History()),
 	})
 
 	if err := termUI.Run(ctx, app); err != nil {
@@ -806,6 +807,36 @@ func persistentSessionID() string {
 		return id
 	}
 	return fmt.Sprintf("sagittarius-%d", os.Getpid())
+}
+
+// historyToScrollback converts a provider message history into ui.ScrollbackEntry
+// blocks for seeding the TUI on startup (e.g. after --resume). Only text-bearing
+// user and model turns are included; tool calls and tool responses are skipped.
+func historyToScrollback(history []provider.Message) []ui.ScrollbackEntry {
+	if len(history) == 0 {
+		return nil
+	}
+	entries := make([]ui.ScrollbackEntry, 0, len(history))
+	for _, msg := range history {
+		var text string
+		for _, p := range msg.Parts {
+			if p.Text != "" {
+				if text != "" {
+					text += "\n"
+				}
+				text += p.Text
+			}
+		}
+		if strings.TrimSpace(text) == "" {
+			continue
+		}
+		role := ui.ScrollbackUser
+		if msg.Role == provider.RoleModel {
+			role = ui.ScrollbackAssistant
+		}
+		entries = append(entries, ui.ScrollbackEntry{Role: role, Text: text})
+	}
+	return entries
 }
 
 func loadSettings() (*config.Settings, *config.Loader, error) {

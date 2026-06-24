@@ -40,6 +40,10 @@ type Options struct {
 	// instruction; shown on the welcome banner so the user knows what context
 	// was loaded. Empty omits the line.
 	LoadedMemoryFiles []string
+	// InitialScrollback seeds the TUI with a restored conversation on startup.
+	// Used by --resume so the user can see the prior turns, not just have them
+	// silently loaded into the model's context.
+	InitialScrollback []ScrollbackEntry
 }
 
 // UI is the library-agnostic terminal interface. Agent code must depend on this
