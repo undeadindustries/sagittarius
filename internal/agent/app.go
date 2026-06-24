@@ -14,6 +14,7 @@ import (
 
 	"github.com/undeadindustries/sagittarius/internal/agents"
 	"github.com/undeadindustries/sagittarius/internal/atmention"
+	"github.com/undeadindustries/sagittarius/internal/bgproc"
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/contextmgmt"
 	"github.com/undeadindustries/sagittarius/internal/credentials"
@@ -627,6 +628,27 @@ func (h *appHooks) CurrentHistory() ([]provider.Message, error) {
 	return h.app.runner.History(), nil
 }
 
+func (h *appHooks) ListBackgroundProcesses() []bgproc.Process {
+	if h.app == nil || h.app.runtime == nil || h.app.runtime.BgMgr == nil {
+		return nil
+	}
+	return h.app.runtime.BgMgr.List()
+}
+
+func (h *appHooks) KillBackgroundProcess(pid int) error {
+	if h.app == nil || h.app.runtime == nil || h.app.runtime.BgMgr == nil {
+		return fmt.Errorf("background manager not available")
+	}
+	return h.app.runtime.BgMgr.Kill(pid)
+}
+
+func (h *appHooks) BackgroundProcessOutput(pid int) string {
+	if h.app == nil || h.app.runtime == nil || h.app.runtime.BgMgr == nil {
+		return ""
+	}
+	return h.app.runtime.BgMgr.Output(pid)
+}
+
 // WorkDir returns the runner's workspace root, used to keep /chat share writes
 // inside the project boundary. Returns "" when no runner is available.
 func (h *appHooks) WorkDir() string {
@@ -720,7 +742,7 @@ func (h *appHooks) SaveCheckpoint(tag string, overwrite bool) (string, error) {
 			return "", fmt.Errorf("checkpoint %q already exists; add 'force' to overwrite: /chat save %s force", trimmed, trimmed)
 		}
 	}
-	if err := session.WriteHistory(dst, h.app.sessionID, "", "", history); err != nil {
+	if err := session.WriteHistory(dst, h.app.sessionID, "", "", history, h.app.runner.SessionGrants()); err != nil {
 		return "", err
 	}
 	h.writeCheckpointMeta(dir, trimmed)
@@ -824,7 +846,7 @@ func (h *appHooks) ResumeCheckpoint(ctx context.Context, tag string) (string, []
 		return "", nil, fmt.Errorf("load checkpoint %q: %w", tag, err)
 	}
 	history := session.ConvertToProviderHistory(record)
-	h.app.runner.ReplaceHistory(history)
+	h.app.runner.ReplaceHistory(history, record.SessionGrants)
 	h.app.runner.RotateSession()
 
 	var b strings.Builder

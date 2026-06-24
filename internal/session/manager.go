@@ -185,7 +185,7 @@ func coerceResponseMap(raw any) map[string]any {
 // rotation or context compression). The file is created or truncated with 0o600
 // permissions. A blank sessionID is replaced with a fresh id so LoadSession,
 // which requires non-empty metadata, always succeeds.
-func WriteHistory(path, sessionID, projectHash, summary string, history []provider.Message) error {
+func WriteHistory(path, sessionID, projectHash, summary string, history []provider.Message, grants []string) error {
 	if strings.TrimSpace(sessionID) == "" {
 		sessionID = newID()
 	}
@@ -204,6 +204,7 @@ func WriteHistory(path, sessionID, projectHash, summary string, history []provid
 		LastUpdated: ts,
 		Summary:     summary,
 		Kind:        "main",
+		SessionGrants: grants,
 	}
 	if err := writeJSONLine(w, meta); err != nil {
 		return err

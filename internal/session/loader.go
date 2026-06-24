@@ -49,6 +49,7 @@ func LoadSession(filePath string) (*ConversationRecord, error) {
 		LastUpdated: coalesce(meta.LastUpdated, time.Now().UTC().Format(time.RFC3339)),
 		Summary:     meta.Summary,
 		Kind:        meta.Kind,
+		SessionGrants: meta.SessionGrants,
 		Messages:    messages,
 	}, nil
 }
@@ -321,6 +322,20 @@ func applyMetaUpdate(dst, src *MetadataRecord) {
 	}
 	if src.Kind != "" {
 		dst.Kind = src.Kind
+	}
+	if len(src.SessionGrants) > 0 {
+		for _, g := range src.SessionGrants {
+			found := false
+			for _, existing := range dst.SessionGrants {
+				if existing == g {
+					found = true
+					break
+				}
+			}
+			if !found {
+				dst.SessionGrants = append(dst.SessionGrants, g)
+			}
+		}
 	}
 }
 
