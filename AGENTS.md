@@ -261,6 +261,29 @@ isolation / without keys.
 
 ## Recent decisions
 
+- **2026-06-25 — Runner shared-state synchronization (AD-057):** Hardened the
+runner/app turn hot path against data races (plan 01 of the
+concurrency-cohesion audit). (1) A new `historyMu sync.RWMutex` guards
+`history` + `turnCounter`: `History`/`LastAssistantText`/`ClearHistory`/
+`ReplaceHistory`/`ForceCompress` and the turn goroutine's appends
+(`RunTurn`, `appendModelMessage`, `appendModelParts`, `appendFunctionResponses`,
+`buildGenerateRequest`, `prepareContext`) now lock. Critical sections cover only
+slice header reads/writes — `prepareContext` and `ForceCompress` snapshot under
+the lock, run their (network-bound) context-manager calls off-lock, then publish
+under the lock — so the mutex is never held across I/O. (2) `providerDefaultModel`
+and `modelPinned` were folded under the existing `modelMu` (they are part of
+model resolution, alongside `model`/`system`/`systemBase`/`memory`); a new
+unexported `pinned()` reads the flag under `RLock`, `SetProviderDefaultModel`/
+`PinModel` write under `Lock`, and `refreshModelFromMode` reads
+`providerDefaultModel` under `RLock` before re-resolving. (3) Settings remain a
+swap-only pointer under `settingsMu`; `settingsSnapshot`/`SetSettings` now
+document the "immutable once handed to the runner" contract (mutators build a
+fresh `*Settings` via `config.Documents` and publish via `SetSettings` — no
+in-place edits). (4) `App.status` is guarded by a new `statusMu sync.RWMutex`
+(`Status()` reads, `RebuildRunner`/`cycleModel`/`SetInteractionMode` writes).
+Regression coverage: `internal/agent/runner_race_test.go` exercises concurrent
+history, model-field, and status access under `-race`.
+
 - **2026-06-25 — Gemini native thinking support (AD-056):** Wired Gemini
 readable thought text into the existing thinking box. `GenerateRequest` gained
 `IncludeThoughts bool`; `BuildGenerateContentConfig` sets
