@@ -1131,22 +1131,9 @@ func (h *appHooks) SetInteractionMode(ctx context.Context, mode modes.Mode) (str
 }
 
 // modeConfigForMode returns the SagittariusModeConfig for the given mode, or nil.
+// It delegates to config.ModeConfig so reads and writes share one mode→slot switch.
 func modeConfigForMode(m *config.SagittariusModes, mode modes.Mode) *config.SagittariusModeConfig {
-	if m == nil {
-		return nil
-	}
-	switch mode {
-	case modes.ModePlan:
-		return m.Plan
-	case modes.ModeAsk:
-		return m.Ask
-	case modes.ModeDebug:
-		return m.Debug
-	case modes.ModeAgent:
-		return m.Agent
-	default:
-		return nil
-	}
+	return config.ModeConfig(m, mode.String())
 }
 
 func (h *appHooks) InteractionMode() (modes.Mode, string) {
@@ -1168,53 +1155,8 @@ func (h *appHooks) SetModeOverride(ctx context.Context, modeName, providerID, mo
 	if docs == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	if model == "" {
-		// Empty model means clear the override.
-		s := docs.TargetSettings(scope)
-		if s.Sagittarius == nil || s.Sagittarius.Modes == nil {
-			return nil
-		}
-		clearModeConfigOverride(s.Sagittarius.Modes, modeName)
-		return docs.Save(scope)
-	}
-	s := docs.TargetSettings(scope)
-	if s.Sagittarius == nil {
-		s.Sagittarius = &config.SagittariusSettings{}
-	}
-	if s.Sagittarius.Modes == nil {
-		s.Sagittarius.Modes = &config.SagittariusModes{}
-	}
-	mc := &config.SagittariusModeConfig{
-		Provider: config.NormalizeProviderID(providerID),
-		Model:    model,
-	}
-	switch modeName {
-	case "agent":
-		if s.Sagittarius.Modes.Agent != nil {
-			mc.SystemPromptSuffix = s.Sagittarius.Modes.Agent.SystemPromptSuffix
-			mc.Extra = s.Sagittarius.Modes.Agent.Extra
-		}
-		s.Sagittarius.Modes.Agent = mc
-	case "plan":
-		if s.Sagittarius.Modes.Plan != nil {
-			mc.SystemPromptSuffix = s.Sagittarius.Modes.Plan.SystemPromptSuffix
-			mc.Extra = s.Sagittarius.Modes.Plan.Extra
-		}
-		s.Sagittarius.Modes.Plan = mc
-	case "ask":
-		if s.Sagittarius.Modes.Ask != nil {
-			mc.SystemPromptSuffix = s.Sagittarius.Modes.Ask.SystemPromptSuffix
-			mc.Extra = s.Sagittarius.Modes.Ask.Extra
-		}
-		s.Sagittarius.Modes.Ask = mc
-	case "debug":
-		if s.Sagittarius.Modes.Debug != nil {
-			mc.SystemPromptSuffix = s.Sagittarius.Modes.Debug.SystemPromptSuffix
-			mc.Extra = s.Sagittarius.Modes.Debug.Extra
-		}
-		s.Sagittarius.Modes.Debug = mc
-	default:
-		return fmt.Errorf("unknown mode %q (expected agent, plan, ask, debug)", modeName)
+	if err := config.SetModeOverride(docs.TargetSettings(scope), modeName, providerID, model); err != nil {
+		return err
 	}
 	return docs.Save(scope)
 }
