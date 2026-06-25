@@ -85,7 +85,7 @@ Sources:
 				},
 				GroundingSupports: []*genai.GroundingSupport{
 					{
-						Segment: &genai.Segment{EndIndex: 19},
+						Segment:               &genai.Segment{EndIndex: 19},
 						GroundingChunkIndices: []int32{0, 1},
 					},
 				},

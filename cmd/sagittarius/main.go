@@ -851,7 +851,6 @@ func historyToScrollback(history []provider.Message) []ui.ScrollbackEntry {
 	return entries
 }
 
-
 func writeStartupError(err error) {
 	if errors.Is(err, credentials.ErrAPIKeyMissing) {
 		fmt.Fprintln(os.Stderr, err.Error())

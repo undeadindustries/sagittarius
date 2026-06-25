@@ -2,9 +2,9 @@ package tools
 
 import (
 	"fmt"
+	"github.com/creack/pty"
 	"os/exec"
 	"testing"
-	"github.com/creack/pty"
 )
 
 func TestPTY(t *testing.T) {

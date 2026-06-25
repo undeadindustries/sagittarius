@@ -61,7 +61,7 @@ func FormatSearchResult(query, text string, meta *genai.GroundingMetadata) strin
 		// Combine insertions that happen at the same index so we don't reverse their
 		// order incorrectly, though sort.SliceStable preserves relative order.
 		// Wait, if they are at the same index, we just append them.
-		
+
 		textBytes := []byte(text)
 		var parts [][]byte
 		lastIndex := len(textBytes)

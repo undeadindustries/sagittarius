@@ -83,9 +83,9 @@ type RunnerConfig struct {
 
 // Runner orchestrates conversation history and provider streaming for the agent loop.
 type Runner struct {
-	genMu                sync.RWMutex
-	gen                  provider.ContentGenerator
-	genErr               error
+	genMu  sync.RWMutex
+	gen    provider.ContentGenerator
+	genErr error
 	// modelMu guards model, providerDefaultModel, modelPinned, and the
 	// system-prompt fields (system, systemBase, memory) that model resolution
 	// rewrites together.

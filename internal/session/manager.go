@@ -198,12 +198,12 @@ func WriteHistory(path, sessionID, projectHash, summary string, history []provid
 	w := bufio.NewWriter(f)
 	ts := time.Now().UTC().Format(time.RFC3339Nano)
 	meta := MetadataRecord{
-		SessionID:   sessionID,
-		ProjectHash: projectHash,
-		StartTime:   ts,
-		LastUpdated: ts,
-		Summary:     summary,
-		Kind:        "main",
+		SessionID:     sessionID,
+		ProjectHash:   projectHash,
+		StartTime:     ts,
+		LastUpdated:   ts,
+		Summary:       summary,
+		Kind:          "main",
 		SessionGrants: grants,
 	}
 	if err := writeJSONLine(w, meta); err != nil {

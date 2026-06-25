@@ -189,36 +189,36 @@ func (t Theme) GradientText(text string, style lipgloss.Style, hexStops []string
 
 	var b strings.Builder
 	segments := float64(len(stops) - 1)
-	
+
 	for i, r := range runes {
 		// Calculate progress [0, 1] across the whole string.
 		var p float64
 		if n > 1 {
 			p = float64(i) / float64(n-1)
 		}
-		
+
 		// Find which segment this point falls into.
 		segFloat := p * segments
 		segIdx := int(segFloat)
 		if segIdx >= len(stops)-1 {
 			segIdx = len(stops) - 2
 		}
-		
+
 		// Progress within the current segment.
 		localP := segFloat - float64(segIdx)
-		
+
 		c1 := stops[segIdx]
 		c2 := stops[segIdx+1]
-		
+
 		// Lerp.
 		fr := c1.r + (c2.r-c1.r)*localP
 		fg := c1.g + (c2.g-c1.g)*localP
 		fb := c1.b + (c2.b-c1.b)*localP
-		
+
 		hex := fmt.Sprintf("#%02X%02X%02X", uint8(math.Round(fr)), uint8(math.Round(fg)), uint8(math.Round(fb)))
 		b.WriteString(style.Foreground(lipgloss.Color(hex)).Render(string(r)))
 	}
-	
+
 	return b.String()
 }
 

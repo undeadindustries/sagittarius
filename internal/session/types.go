@@ -62,12 +62,12 @@ type MessageRecord struct {
 
 // MetadataRecord is the first line of each JSONL file and any $set update.
 type MetadataRecord struct {
-	SessionID   string `json:"sessionId"`
-	ProjectHash string `json:"projectHash"`
-	StartTime   string `json:"startTime"`
-	LastUpdated string `json:"lastUpdated"`
-	Summary     string `json:"summary,omitempty"`
-	Kind        string `json:"kind,omitempty"` // "main" | "subagent"
+	SessionID     string   `json:"sessionId"`
+	ProjectHash   string   `json:"projectHash"`
+	StartTime     string   `json:"startTime"`
+	LastUpdated   string   `json:"lastUpdated"`
+	Summary       string   `json:"summary,omitempty"`
+	Kind          string   `json:"kind,omitempty"` // "main" | "subagent"
 	SessionGrants []string `json:"sessionGrants,omitempty"`
 }
 
@@ -83,14 +83,14 @@ type RewindRecord struct {
 
 // ConversationRecord is the fully loaded in-memory view of a session.
 type ConversationRecord struct {
-	SessionID   string
-	ProjectHash string
-	StartTime   string
-	LastUpdated string
-	Summary     string
-	Kind        string
+	SessionID     string
+	ProjectHash   string
+	StartTime     string
+	LastUpdated   string
+	Summary       string
+	Kind          string
 	SessionGrants []string
-	Messages    []MessageRecord
+	Messages      []MessageRecord
 }
 
 // SessionInfo is the display/selection view of a session (used for listing).

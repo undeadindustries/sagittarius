@@ -46,7 +46,7 @@ func TestWebFetchTool_DirectExecutionValidation(t *testing.T) {
 	if err != nil {
 		t.Errorf("expected no error, got: %v", err)
 	}
-	
+
 	// Expect results to indicate no valid URLs found.
 	// Since we wrap in map[string]interface{}{"results": ...}, check that.
 	if rStr, ok := result["results"].(string); !ok || !strings.Contains(rStr, "No valid URLs") {

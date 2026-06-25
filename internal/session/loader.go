@@ -43,14 +43,14 @@ func LoadSession(filePath string) (*ConversationRecord, error) {
 	}
 
 	return &ConversationRecord{
-		SessionID:   meta.SessionID,
-		ProjectHash: meta.ProjectHash,
-		StartTime:   coalesce(meta.StartTime, time.Now().UTC().Format(time.RFC3339)),
-		LastUpdated: coalesce(meta.LastUpdated, time.Now().UTC().Format(time.RFC3339)),
-		Summary:     meta.Summary,
-		Kind:        meta.Kind,
+		SessionID:     meta.SessionID,
+		ProjectHash:   meta.ProjectHash,
+		StartTime:     coalesce(meta.StartTime, time.Now().UTC().Format(time.RFC3339)),
+		LastUpdated:   coalesce(meta.LastUpdated, time.Now().UTC().Format(time.RFC3339)),
+		Summary:       meta.Summary,
+		Kind:          meta.Kind,
 		SessionGrants: meta.SessionGrants,
-		Messages:    messages,
+		Messages:      messages,
 	}, nil
 }
 

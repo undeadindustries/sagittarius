@@ -23,12 +23,12 @@ const (
 
 // SettingEntry is one row in the settings list.
 type SettingEntry struct {
-	Key         string      // dotted key path, e.g. "sagittarius.maxToolRounds"
-	Label       string      // human-readable display label
-	Description string      // brief description shown in the footer
-	Value       string      // raw value from the selected scope, or "(not set)"
-	DefinedHere bool        // true if this key is explicitly set in the selected scope
-	MergedValue string      // effective merged value (from the other scope or default)
+	Key         string // dotted key path, e.g. "sagittarius.maxToolRounds"
+	Label       string // human-readable display label
+	Description string // brief description shown in the footer
+	Value       string // raw value from the selected scope, or "(not set)"
+	DefinedHere bool   // true if this key is explicitly set in the selected scope
+	MergedValue string // effective merged value (from the other scope or default)
 	Kind        SettingKind
 	Choices     []string // for KindEnum only
 	ReadOnly    bool     // show but do not allow editing

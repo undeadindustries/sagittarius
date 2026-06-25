@@ -265,7 +265,7 @@ func HTMLToText(htmlBytes []byte, baseURL string) string {
 						break
 					}
 				}
-				
+
 				var innerText bytes.Buffer
 				var extractText func(*html.Node)
 				extractText = func(cn *html.Node) {
@@ -280,7 +280,7 @@ func HTMLToText(htmlBytes []byte, baseURL string) string {
 				for c := n.FirstChild; c != nil; c = c.NextSibling {
 					extractText(c)
 				}
-				
+
 				text := strings.TrimSpace(innerText.String())
 				if text != "" && href != "" {
 					buf.WriteString(fmt.Sprintf("%s (%s) ", text, href))

@@ -2,11 +2,11 @@ package tools
 
 import (
 	"fmt"
+	"github.com/creack/pty"
 	"io"
 	"os/exec"
 	"testing"
 	"time"
-	"github.com/creack/pty"
 )
 
 func TestPTYFail(t *testing.T) {
