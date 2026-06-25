@@ -265,6 +265,33 @@ boundary-checked.
 
 ## Recent decisions
 
+- **2026-06-25 — Cohesion & duplication refactors (AD-063):** Plan 07 of the
+concurrency-cohesion audit — a behavior-preserving structural pass (no runtime
+changes). (7.1) Mode-override mutation is consolidated into pure
+`config.SetModeOverride`/`ClearModeOverride`/`ModeConfig` helpers backed by one
+`modeSlot(modes, name) **SagittariusModeConfig` switch; the duplicate ~40-line
+switches in `app.go` (headless `/modes`) and `providerdialog.go` (dialog) and the
+old `clearModeConfigOverride`/`modeConfigForMode` switches now all route through
+it. (7.2) New `internal/ui/overlay` leaf provides `Frame`, `ContentWidth(width,min)`,
+and `Row`; the eight `*dialog` packages dropped their copy-pasted
+`boxStyle`/`contentWidth`/`renderRow` helpers (mcpdialog keeps its min-24 via a
+local const). (7.3) `documents.go` merge\* helpers use generic
+`overlayStr[T ~string]`/`overlayPtr[T any]` instead of ~300 lines of
+`if project.X != "" {…}`; the explicit special cases (activeModels, models,
+mcpServers, Active, ProjectBoundary) stay. (7.4) The charm seam is reconciled to
+reality (Approach A): charm is allowed under `internal/ui/*` and `internal/tools/`
+(`shell.go`/`ptyrun.go` use `x/vt`+`x/ansi`) but forbidden in `internal/agent`
+and `internal/slash`; new `internal/archtest/imports_test.go` walks the module and
+fails on any out-of-bounds charm import. (7.5) Retired the `internal/prompt`
+resolution wrappers — `resolve.go` is gone, `runner.go` calls
+`config.ResolvePersonality`/`ResolveVariant` directly (converting to
+`prompt.Personality`/`Variant`), the precedence test moved to
+`internal/config`, and the package doc now describes prompt as a construction-only
+leaf. (7.6) `internal/slash` has a `reloadHandler` higher-order function backing
+`/skills`, `/mcp`, and `/agents` reloads. (7.7) A shared `baseDialogDeps`
+(`ProjectAvailable`/`effective`) is embedded into the model-pick, modes, MCP, and
+settings dialog deps.
+
 - **2026-06-25 — TUI never blocks the Update goroutine (AD-062):** Plan 04 of the
 concurrency-cohesion audit. Anything synchronous (disk/network) on Bubble Tea's
 single `Update` goroutine freezes input, the spinner, and `Esc`/`Ctrl+C`; all such
