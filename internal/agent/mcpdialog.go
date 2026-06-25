@@ -46,7 +46,7 @@ func (d *mcpDialogDeps) ListServers() []mcpdialog.ServerEntry {
 	docs := d.docs()
 	merged := d.settings()
 	if docs != nil {
-		merged = docs.Merged
+		merged = docs.Merged()
 	}
 
 	settingsServers := map[string]config.MCPServerConfig{}
@@ -113,7 +113,7 @@ func (d *mcpDialogDeps) GetServer(name string) (mcpdialog.ServerForm, bool) {
 	docs := d.docs()
 	s := d.settings()
 	if docs != nil {
-		s = docs.Merged
+		s = docs.Merged()
 	}
 	if s == nil {
 		return mcpdialog.ServerForm{}, false

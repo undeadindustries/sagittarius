@@ -25,7 +25,7 @@ func (d *settingsDialogDeps) docs() *config.Documents { return d.app.docs }
 func (d *settingsDialogDeps) ListSettings(scope config.SettingScope) []settingsdialog.SettingEntry {
 	docs := d.docs()
 	scopeSettings := docs.TargetSettings(scope)
-	merged := docs.Merged
+	merged := docs.Merged()
 	if merged == nil {
 		merged = scopeSettings
 	}

@@ -40,13 +40,14 @@ func TestDocumentsSaveProjectSystemPrompt(t *testing.T) {
 	}
 
 	// Project wins in the merged view.
-	if got := docs.Merged.Sagittarius.SystemPrompt.Personality; got != PersonalitySysadmin {
+	merged := docs.Merged()
+	if got := merged.Sagittarius.SystemPrompt.Personality; got != PersonalitySysadmin {
 		t.Errorf("personality = %q, want %q", got, PersonalitySysadmin)
 	}
-	if got := docs.Merged.Sagittarius.SystemPrompt.Variant; got != VariantLite {
+	if got := merged.Sagittarius.SystemPrompt.Variant; got != VariantLite {
 		t.Errorf("variant = %q, want %q", got, VariantLite)
 	}
-	if got := ProjectSystemPromptPresetID(docs.Merged); got != "sysadmin-lite" {
+	if got := ProjectSystemPromptPresetID(merged); got != "sysadmin-lite" {
 		t.Errorf("preset id = %q, want sysadmin-lite", got)
 	}
 }
@@ -62,7 +63,7 @@ func TestDocumentsNoProjectFileIsNoOp(t *testing.T) {
 	if docs.Project != nil {
 		t.Fatal("expected nil project when no project file is present")
 	}
-	if docs.Merged.Sagittarius != nil && docs.Merged.Sagittarius.SystemPrompt != nil {
+	if m := docs.Merged(); m.Sagittarius != nil && m.Sagittarius.SystemPrompt != nil {
 		t.Fatal("expected no system prompt overlay when project file is absent")
 	}
 }

@@ -265,6 +265,28 @@ boundary-checked.
 
 ## Recent decisions
 
+- **2026-06-25 — Bugbot race fixes: Documents + MCP client (AD-064):** Two
+high-severity data races surfaced by a full-branch Bugbot review of plans 01–07.
+(1) **`config.Documents` global writes:** AD-062 (plan 04) moved live UI-pref
+persists (Ctrl+T `SetShowThinking`, Alt+T `CycleTheme`) onto background `tea.Cmd`
+goroutines, so concurrent `MutateGlobal`/`Save` could interleave on `Global.Raw`
+(lost writes, or a `concurrent map writes` panic). `Documents` gained a
+`sync.RWMutex`; `Save`/`SaveProject`/`MutateGlobal`/`ReloadMerged` now run their
+mutate→persist→recompute sequence under the write lock (via internal
+`saveLocked`/`saveProjectLocked`), and the `Merged` field became unexported
+`merged` behind a lock-guarded `Merged()` accessor (all readers in `agent`,
+`cmd`, and tests updated). (2) **MCP client use-after-close:** AD-059 (plan 03)
+copies `*Client` pointers under the manager lock then calls
+`ListAllTools`/`CallTool` off-lock, racing a concurrent
+`Reload`→`closeLocked`→`Client.Close()` that nils `session`. `Client` gained a
+`sync.RWMutex` guarding `session`/`status`/`lastErr`: methods snapshot `session`
+under `RLock` and run the network call off-lock; `Close` detaches the session
+under `Lock` then closes it off-lock, so closing never blocks an in-flight call
+and an in-flight call never dereferences a niled session. Regression tests:
+`TestDocuments_MutateGlobalConcurrent` (64 concurrent `MutateGlobal` + a `Merged`
+reader; asserts no lost writes) and `TestReloadVsToolInventoryNoUseAfterClose`
+(repeated `Reload` vs concurrent `ToolInventory`/`States`), both `-race`.
+
 - **2026-06-25 — Cohesion & duplication refactors (AD-063):** Plan 07 of the
 concurrency-cohesion audit — a behavior-preserving structural pass (no runtime
 changes). (7.1) Mode-override mutation is consolidated into pure

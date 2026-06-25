@@ -211,8 +211,10 @@ func (a *App) ComposerStatus() ui.ComposerStatus {
 // (lists, pickers, autocomplete, resolution). Writes must target a scope via
 // Documents; never mutate or persist through this pointer.
 func (a *App) effectiveSettings() *config.Settings {
-	if a.docs != nil && a.docs.Merged != nil {
-		return a.docs.Merged
+	if a.docs != nil {
+		if m := a.docs.Merged(); m != nil {
+			return m
+		}
 	}
 	return a.deps.Settings
 }
@@ -493,7 +495,7 @@ func (h *appHooks) RebuildRunner(ctx context.Context) (string, string, error) {
 	effectiveSettings := h.app.deps.Settings
 	if h.app.docs != nil {
 		h.app.docs.ReloadMerged()
-		effectiveSettings = h.app.docs.Merged
+		effectiveSettings = h.app.docs.Merged()
 	}
 
 	gen, err := h.app.generatorCache.GetOrCreate(ctx, effectiveSettings)
@@ -601,7 +603,7 @@ func (h *appHooks) ReloadMCP(ctx context.Context) (string, error) {
 	// project-scoped server definitions that were added since startup.
 	if h.app.docs != nil {
 		h.app.docs.ReloadMerged()
-		h.app.runtime.SetSettings(h.app.docs.Merged)
+		h.app.runtime.SetSettings(h.app.docs.Merged())
 	}
 	reg, err := h.app.runtime.ReloadTools(ctx)
 	if err != nil {
@@ -622,7 +624,7 @@ func (a *App) rebuildToolRegistry() error {
 	}
 	if a.docs != nil {
 		a.docs.ReloadMerged()
-		a.runtime.SetSettings(a.docs.Merged)
+		a.runtime.SetSettings(a.docs.Merged())
 	}
 	reg, err := a.runtime.RebuildToolRegistry()
 	if err != nil {
@@ -1085,7 +1087,7 @@ func (h *appHooks) SetInteractionMode(ctx context.Context, mode modes.Mode) (str
 	// target deps.Settings (= global) so writes go to the correct file.
 	settings := h.app.deps.Settings
 	if h.app.docs != nil {
-		settings = h.app.docs.Merged
+		settings = h.app.docs.Merged()
 	}
 
 	// Resolve this mode's provider override, if any.

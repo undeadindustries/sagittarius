@@ -711,7 +711,7 @@ func (d *modelPickDialogDeps) SelectCurrentModel(ctx context.Context, providerID
 	}
 	// For project scope: validate against merged (sees custom providers from global),
 	// then write only providers.active and providers.<id>.model to the project tier.
-	merged := docs.Merged
+	merged := docs.Merged()
 	providerID = config.NormalizeProviderID(providerID)
 	if _, ok := config.LookupBuiltInProvider(providerID); !ok {
 		if merged == nil || merged.Providers == nil || merged.Providers.Custom == nil {
@@ -764,7 +764,7 @@ func (d *modesDialogDeps) ListModes() []modesdialog.ModeEntry {
 	docs := d.app.docs
 	var s *config.Settings
 	if docs != nil {
-		s = docs.Merged
+		s = docs.Merged()
 	} else {
 		s = d.settings()
 	}
