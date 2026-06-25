@@ -87,6 +87,21 @@ func (m *Model) Init() tea.Cmd {
 
 type MsgDone struct{}
 
+// outputLoadedMsg carries a process log tail fetched off the Update goroutine.
+type outputLoadedMsg struct {
+	pid     int
+	content string
+}
+
+// loadOutputCmd fetches the log tail in a goroutine so a large log never blocks
+// the Bubble Tea Update loop (the provider does the disk read).
+func loadOutputCmd(op OutputProvider, pid int) tea.Cmd {
+	return func() tea.Msg {
+		out := op(pid)
+		return outputLoadedMsg{pid: pid, content: out}
+	}
+}
+
 // Update implements tea.Model.
 func (m *Model) Update(msg tea.Msg) (*Model, tea.Cmd) {
 	var cmds []tea.Cmd
@@ -111,13 +126,9 @@ func (m *Model) Update(msg tea.Msg) (*Model, tea.Cmd) {
 			if i, ok := m.list.SelectedItem().(item); ok {
 				m.activePid = i.p.PID
 				m.showOutput = true
-				out := m.outputProvider(m.activePid)
-				if out == "" {
-					out = "(No output or could not read log file)"
-				}
-				m.outputVP.SetContent(out)
-				m.outputVP.GotoBottom()
-				return m, nil
+				m.outputVP.SetContent("(loading…)")
+				m.outputVP.GotoTop()
+				return m, loadOutputCmd(m.outputProvider, m.activePid)
 			}
 		case "d", "delete", "backspace":
 			if i, ok := m.list.SelectedItem().(item); ok && i.p.Status == bgproc.StatusRunning {
@@ -129,6 +140,18 @@ func (m *Model) Update(msg tea.Msg) (*Model, tea.Cmd) {
 				m.list.SetItem(idx, i)
 			}
 		}
+
+	case outputLoadedMsg:
+		// Ignore stale loads (the user may have navigated away or to another PID).
+		if m.showOutput && msg.pid == m.activePid {
+			out := msg.content
+			if out == "" {
+				out = "(No output or could not read log file)"
+			}
+			m.outputVP.SetContent(out)
+			m.outputVP.GotoBottom()
+		}
+		return m, nil
 
 	case tea.WindowSizeMsg:
 		m.width = msg.Width

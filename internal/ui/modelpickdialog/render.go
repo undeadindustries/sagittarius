@@ -17,7 +17,11 @@ func (m Model) View() string {
 	b.WriteString(m.body())
 
 	if m.info != "" {
-		b.WriteString("\n\n" + dim.Render(m.wrap(m.info)))
+		line := m.info
+		if m.applying {
+			line = m.spin.View() + " " + line
+		}
+		b.WriteString("\n\n" + dim.Render(m.wrap(line)))
 	}
 	if m.errMsg != "" {
 		b.WriteString("\n\n" + m.th.Error.Render(m.wrap("✗ "+m.errMsg)))

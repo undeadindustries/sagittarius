@@ -258,6 +258,36 @@ boundary-checked.
 
 ## Recent decisions
 
+- **2026-06-25 — TUI never blocks the Update goroutine (AD-062):** Plan 04 of the
+concurrency-cohesion audit. Anything synchronous (disk/network) on Bubble Tea's
+single `Update` goroutine freezes input, the spinner, and `Esc`/`Ctrl+C`; all such
+work now runs in `tea.Cmd` goroutines that return a result `Msg`, mirroring the
+existing `waitStream`/`mcpdialog.reloadServerCmd`/`discoverCmd` templates.
+(A) **Slash `Process` runs off-thread:** `App.handleSlash` now calls
+`processor.Process` *inside* the goroutine it already spawned (returning the
+channel immediately) and a new `App.emitSlashResult` helper does the result→events
+translation; UI-thread-only effects (`StreamCopyToClipboard`/`StreamSetTheme`/
+`StreamClearScrollback`) stay correct because they already flow as events, and
+`SubmitPrompt` (`/init`) still re-enters `RunTurn` on the goroutine. `internal/agent`
+and `internal/slash` stay Bubble Tea-free. (B) **`@`-mention index serves stale +
+refreshes in background:** `atmention.Index.files()` returns the current cache
+(even nil/stale) immediately and kicks off a background `walkFiles` that swaps the
+cache under a short lock (new `refreshing` flag; the walk never holds the lock);
+first call returns nil (one frame of no suggestions). `atmention` stays a leaf.
+(C) **Overlay picks are async:** `modelpickdialog.selectCurrent`,
+`modesdialog.applyOverride`/`clearCurrentOverride`, and
+`systempromptdialog.applyCurrent` now return a `tea.Cmd` that performs the deps
+call (which rebuilds the runner) and yields an `applyResultMsg`, with a MiniDot
+spinner shown in the overlay while applying and input swallowed mid-flight.
+(D) **Live settings writes persist off-thread:** `Ctrl+T` (thinking) and `Alt+T`
+(theme) apply the in-memory/visual change instantly and persist via a
+fire-and-forget `tea.Cmd` (`thinkingSavedMsg`/`themeCycledMsg`) through the AD-061
+`App.persistGlobal` → `Documents.MutateGlobal` path (never raw `Loader.Save`);
+only errors surface. (E) **bgproc viewer tails 64 KiB:** `bgproc.Manager.Output`
+now `Seek`s to the last `tailBytes` (64 KiB) and `io.ReadAll`s the tail (preserving
+the AD-060 copy-LogPath-under-RLock, read-off-lock discipline); the bgproc overlay
+loads it from a `tea.Cmd` (`outputLoadedMsg`) instead of inline in `Update`. A
+`-race` concurrent `files()` hammer test asserts no race and non-blocking return.
 - **2026-06-25 — Settings persistence unified (AD-061):** Plan 05 of the
 concurrency-cohesion audit. Collapsed the three divergent settings paths that
 caused the dual-scope bug class (`bug1`–`bug5`) into one. (A) **All global

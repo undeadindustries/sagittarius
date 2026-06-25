@@ -5,8 +5,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/undeadindustries/sagittarius/internal/tools"
+	"github.com/undeadindustries/sagittarius/internal/ui"
 )
 
 func TestScanMentions(t *testing.T) {
@@ -119,8 +121,19 @@ func TestComplete(t *testing.T) {
 	})
 	idx := NewIndex(ws)
 
+	// files() now serves the cache immediately and refreshes in the background,
+	// so the first completion may be empty until the initial walk lands. Poll
+	// briefly to mirror the real per-keystroke behavior.
 	input := "explain @internal/agent/a"
-	comp := idx.Complete(input, len(input))
+	var comp ui.Completions
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		comp = idx.Complete(input, len(input))
+		if len(comp.Items) > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 	if len(comp.Items) == 0 {
 		t.Fatal("expected suggestions for @internal/agent/a")
 	}
