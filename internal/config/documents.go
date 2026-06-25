@@ -265,6 +265,26 @@ func settingsHasKey(s *Settings, key string) bool {
 // mergeSettings builds a merged Settings where project values win over global
 // for most keys. mcpServers uses a shallow (per-server) merge; provider custom
 // definitions stay global-only (credentials + catalog are user-wide).
+// overlayStr returns project when it is set (non-empty), else global. It encodes
+// the "project string field wins when present" rule shared by the merge* helpers.
+// The ~string constraint also covers named string types (e.g. WireFormat).
+func overlayStr[T ~string](global, project T) T {
+	if project != "" {
+		return project
+	}
+	return global
+}
+
+// overlayPtr returns project when it is set (non-nil), else global. Optional
+// fields use a nil pointer to mean "inherit from the lower tier", so a non-nil
+// project pointer (even one addressing the zero value) overrides global.
+func overlayPtr[T any](global, project *T) *T {
+	if project != nil {
+		return project
+	}
+	return global
+}
+
 func mergeSettings(global, project *Settings) *Settings {
 	if project == nil {
 		return global
@@ -343,9 +363,7 @@ func mergeProviders(global, project *ProvidersSettings) *ProvidersSettings {
 	merged := *global
 	// A project-scoped /model pick sets Active in the project tier; use it so
 	// endpoint resolution and mode routing see the project's chosen provider.
-	if project.Active != "" {
-		merged.Active = project.Active
-	}
+	merged.Active = overlayStr(global.Active, project.Active)
 	// Per-instance settings can be project-overridden (model, activeModels, etc).
 	// Custom provider definitions (connection params + catalog) stay global-only.
 	merged.OpenAI = mergeProviderInstance(global.OpenAI, project.OpenAI)
@@ -367,69 +385,27 @@ func mergeProviderInstance(global, project *ProviderInstanceConfig) *ProviderIns
 		return project
 	}
 	merged := *global
-	if project.Model != "" {
-		merged.Model = project.Model
-	}
-	if project.BaseURL != "" {
-		merged.BaseURL = project.BaseURL
-	}
-	if project.ContextLimit != nil {
-		merged.ContextLimit = project.ContextLimit
-	}
-	if project.ContextLimitUserSet != nil {
-		merged.ContextLimitUserSet = project.ContextLimitUserSet
-	}
-	if project.CompressionThreshold != nil {
-		merged.CompressionThreshold = project.CompressionThreshold
-	}
-	if project.PreserveFraction != nil {
-		merged.PreserveFraction = project.PreserveFraction
-	}
-	if project.PromptMode != "" {
-		merged.PromptMode = project.PromptMode
-	}
-	if project.EnableTools != nil {
-		merged.EnableTools = project.EnableTools
-	}
-	if project.Timeout != nil {
-		merged.Timeout = project.Timeout
-	}
-	if project.Temperature != nil {
-		merged.Temperature = project.Temperature
-	}
-	if project.ToolCallParsing != "" {
-		merged.ToolCallParsing = project.ToolCallParsing
-	}
-	if project.SystemPromptOverride != "" {
-		merged.SystemPromptOverride = project.SystemPromptOverride
-	}
-	if project.ReasoningEffort != "" {
-		merged.ReasoningEffort = project.ReasoningEffort
-	}
-	if project.UseResponseChaining != nil {
-		merged.UseResponseChaining = project.UseResponseChaining
-	}
-	if project.WireFormat != "" {
-		merged.WireFormat = project.WireFormat
-	}
-	if project.ShowThinking != nil {
-		merged.ShowThinking = project.ShowThinking
-	}
-	if project.Personality != "" {
-		merged.Personality = project.Personality
-	}
-	if project.ToolOutputMaskingEnabled != nil {
-		merged.ToolOutputMaskingEnabled = project.ToolOutputMaskingEnabled
-	}
-	if project.ToolOutputMaskingProtectionFraction != nil {
-		merged.ToolOutputMaskingProtectionFraction = project.ToolOutputMaskingProtectionFraction
-	}
-	if project.ToolOutputMaskingPrunableFraction != nil {
-		merged.ToolOutputMaskingPrunableFraction = project.ToolOutputMaskingPrunableFraction
-	}
-	if project.ToolOutputMaskingProtectLatestTurn != nil {
-		merged.ToolOutputMaskingProtectLatestTurn = project.ToolOutputMaskingProtectLatestTurn
-	}
+	merged.Model = overlayStr(global.Model, project.Model)
+	merged.BaseURL = overlayStr(global.BaseURL, project.BaseURL)
+	merged.ContextLimit = overlayPtr(global.ContextLimit, project.ContextLimit)
+	merged.ContextLimitUserSet = overlayPtr(global.ContextLimitUserSet, project.ContextLimitUserSet)
+	merged.CompressionThreshold = overlayPtr(global.CompressionThreshold, project.CompressionThreshold)
+	merged.PreserveFraction = overlayPtr(global.PreserveFraction, project.PreserveFraction)
+	merged.PromptMode = overlayStr(global.PromptMode, project.PromptMode)
+	merged.EnableTools = overlayPtr(global.EnableTools, project.EnableTools)
+	merged.Timeout = overlayPtr(global.Timeout, project.Timeout)
+	merged.Temperature = overlayPtr(global.Temperature, project.Temperature)
+	merged.ToolCallParsing = overlayStr(global.ToolCallParsing, project.ToolCallParsing)
+	merged.SystemPromptOverride = overlayStr(global.SystemPromptOverride, project.SystemPromptOverride)
+	merged.ReasoningEffort = overlayStr(global.ReasoningEffort, project.ReasoningEffort)
+	merged.UseResponseChaining = overlayPtr(global.UseResponseChaining, project.UseResponseChaining)
+	merged.WireFormat = overlayStr(global.WireFormat, project.WireFormat)
+	merged.ShowThinking = overlayPtr(global.ShowThinking, project.ShowThinking)
+	merged.Personality = overlayStr(global.Personality, project.Personality)
+	merged.ToolOutputMaskingEnabled = overlayPtr(global.ToolOutputMaskingEnabled, project.ToolOutputMaskingEnabled)
+	merged.ToolOutputMaskingProtectionFraction = overlayPtr(global.ToolOutputMaskingProtectionFraction, project.ToolOutputMaskingProtectionFraction)
+	merged.ToolOutputMaskingPrunableFraction = overlayPtr(global.ToolOutputMaskingPrunableFraction, project.ToolOutputMaskingPrunableFraction)
+	merged.ToolOutputMaskingProtectLatestTurn = overlayPtr(global.ToolOutputMaskingProtectLatestTurn, project.ToolOutputMaskingProtectLatestTurn)
 	// activeModels: project replaces when non-empty (curated list is atomic).
 	if len(project.ActiveModels) > 0 {
 		merged.ActiveModels = project.ActiveModels
@@ -457,18 +433,12 @@ func mergeSagittarius(global, project *SagittariusSettings) *SagittariusSettings
 		return project
 	}
 	merged := *global
-	if project.DefaultModel != "" {
-		merged.DefaultModel = project.DefaultModel
-	}
+	merged.DefaultModel = overlayStr(global.DefaultModel, project.DefaultModel)
 	if len(project.DefaultModels) > 0 {
 		merged.DefaultModels = project.DefaultModels
 	}
-	if project.DefaultMode != "" {
-		merged.DefaultMode = project.DefaultMode
-	}
-	if project.MaxToolRounds != nil {
-		merged.MaxToolRounds = project.MaxToolRounds
-	}
+	merged.DefaultMode = overlayStr(global.DefaultMode, project.DefaultMode)
+	merged.MaxToolRounds = overlayPtr(global.MaxToolRounds, project.MaxToolRounds)
 	merged.Modes = mergeModes(global.Modes, project.Modes)
 	merged.SystemPrompt = mergeSystemPromptConfig(global.SystemPrompt, project.SystemPrompt)
 	merged.Snapshots = mergeSnapshotConfig(global.Snapshots, project.Snapshots)
@@ -500,15 +470,9 @@ func mergeModeConfig(global, project *SagittariusModeConfig) *SagittariusModeCon
 		return project
 	}
 	merged := *global
-	if project.Model != "" {
-		merged.Model = project.Model
-	}
-	if project.Provider != "" {
-		merged.Provider = project.Provider
-	}
-	if project.SystemPromptSuffix != "" {
-		merged.SystemPromptSuffix = project.SystemPromptSuffix
-	}
+	merged.Model = overlayStr(global.Model, project.Model)
+	merged.Provider = overlayStr(global.Provider, project.Provider)
+	merged.SystemPromptSuffix = overlayStr(global.SystemPromptSuffix, project.SystemPromptSuffix)
 	return &merged
 }
 
@@ -520,12 +484,8 @@ func mergeSystemPromptConfig(global, project *SagittariusSystemPromptConfig) *Sa
 		return project
 	}
 	merged := *global
-	if project.Personality != "" {
-		merged.Personality = project.Personality
-	}
-	if project.Variant != "" {
-		merged.Variant = project.Variant
-	}
+	merged.Personality = overlayStr(global.Personality, project.Personality)
+	merged.Variant = overlayStr(global.Variant, project.Variant)
 	return &merged
 }
 
@@ -537,12 +497,8 @@ func mergeSnapshotConfig(global, project *SagittariusSnapshotConfig) *Sagittariu
 		return project
 	}
 	merged := *global
-	if project.Enabled != nil {
-		merged.Enabled = project.Enabled
-	}
-	if project.MaxFileBytes != nil {
-		merged.MaxFileBytes = project.MaxFileBytes
-	}
+	merged.Enabled = overlayPtr(global.Enabled, project.Enabled)
+	merged.MaxFileBytes = overlayPtr(global.MaxFileBytes, project.MaxFileBytes)
 	return &merged
 }
 
@@ -554,12 +510,8 @@ func mergeVerifyConfig(global, project *SagittariusVerifyConfig) *SagittariusVer
 		return project
 	}
 	merged := *global
-	if project.SuggestAfterWrite != nil {
-		merged.SuggestAfterWrite = project.SuggestAfterWrite
-	}
-	if project.AllowFix != nil {
-		merged.AllowFix = project.AllowFix
-	}
+	merged.SuggestAfterWrite = overlayPtr(global.SuggestAfterWrite, project.SuggestAfterWrite)
+	merged.AllowFix = overlayPtr(global.AllowFix, project.AllowFix)
 	return &merged
 }
 
@@ -576,9 +528,7 @@ func mergeSecurity(global, project *SecuritySettings) *SecuritySettings {
 			merged.ProjectBoundary = project.ProjectBoundary
 		} else {
 			pb := *global.ProjectBoundary
-			if project.ProjectBoundary.Enforce != nil {
-				pb.Enforce = project.ProjectBoundary.Enforce
-			}
+			pb.Enforce = overlayPtr(global.ProjectBoundary.Enforce, project.ProjectBoundary.Enforce)
 			merged.ProjectBoundary = &pb
 		}
 	}
