@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -24,6 +25,14 @@ type OpenAIResponsesGenerator struct {
 	temperature          *float64
 	systemPromptOverride string
 	toolsEnabled         bool
+	// chainMu guards lastResponseID, the Responses API previous_response_id used
+	// for response chaining. It is per-generator (not a process global) so two
+	// logical sessions — or a provider switch that builds a fresh generator —
+	// never chain off each other's response id. GeneratorCache keys instances by
+	// connection params, so this id stays correctly scoped across mode switches
+	// that return to the same provider/model.
+	chainMu        sync.Mutex
+	lastResponseID string
 }
 
 // OpenAIResponsesConfig holds runtime options for an OpenAIResponsesGenerator.
@@ -96,12 +105,26 @@ func (g *OpenAIResponsesGenerator) GenerateContentStream(
 		defer close(ch)
 		if err := g.streamOnce(ctx, body, ch); err != nil {
 			if g.useResponseChaining {
-				ClearLastResponseID()
+				g.setLastResponseID("")
 			}
-			ch <- StreamResponse{Error: err}
+			sendOrDone(ctx, ch, StreamResponse{Error: err})
 		}
 	}()
 	return ch, nil
+}
+
+// setLastResponseID stores the trailing Responses API response id for chaining.
+func (g *OpenAIResponsesGenerator) setLastResponseID(id string) {
+	g.chainMu.Lock()
+	g.lastResponseID = strings.TrimSpace(id)
+	g.chainMu.Unlock()
+}
+
+// lastID returns the stored response id for chaining the next request.
+func (g *OpenAIResponsesGenerator) lastID() string {
+	g.chainMu.Lock()
+	defer g.chainMu.Unlock()
+	return g.lastResponseID
 }
 
 func (g *OpenAIResponsesGenerator) streamOnce(ctx context.Context, body []byte, ch chan<- StreamResponse) error {
@@ -112,7 +135,7 @@ func (g *OpenAIResponsesGenerator) streamOnce(ctx context.Context, body []byte, 
 		defer cancel()
 	}
 
-	resp, err := g.doRequest(streamCtx, body)
+	resp, err := postSSE(streamCtx, g.client, g.url, g.bearer, body)
 	if err != nil {
 		return err
 	}
@@ -131,18 +154,13 @@ func (g *OpenAIResponsesGenerator) streamOnce(ctx context.Context, body []byte, 
 
 	state := NewResponsesSseMapperState()
 	err = scanResponsesSSE(resp.Body, state, func(chunk StreamResponse) bool {
-		select {
-		case <-streamCtx.Done():
-			return false
-		case ch <- chunk:
-			return true
-		}
+		return sendOrDone(streamCtx, ch, chunk)
 	})
 	if err != nil {
 		return err
 	}
 	if state.Completed && state.ResponseID != "" && g.useResponseChaining {
-		SetLastResponseID(state.ResponseID)
+		g.setLastResponseID(state.ResponseID)
 	}
 	return nil
 }
@@ -174,7 +192,7 @@ func (g *OpenAIResponsesGenerator) buildRequestBody(req *GenerateRequest, model 
 	input := plan.Input
 	previousID := ""
 	if g.useResponseChaining {
-		previousID = LastResponseID()
+		previousID = g.lastID()
 		if previousID != "" {
 			input = TrimInputForChaining(plan.Input)
 		}
@@ -202,23 +220,6 @@ func (g *OpenAIResponsesGenerator) buildRequestBody(req *GenerateRequest, model 
 		body.PreviousResponseID = previousID
 	}
 	return json.Marshal(body)
-}
-
-func (g *OpenAIResponsesGenerator) doRequest(ctx context.Context, body []byte) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, g.url, strings.NewReader(string(body)))
-	if err != nil {
-		return nil, fmt.Errorf("create responses request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-	if g.bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+g.bearer)
-	}
-	resp, err := g.client.Do(req)
-	if err != nil {
-		return nil, mapOpenAITransportError(err)
-	}
-	return resp, nil
 }
 
 func (g *OpenAIResponsesGenerator) assertModelOrLocalhost() error {

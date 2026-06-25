@@ -9,9 +9,10 @@ import (
 )
 
 // TestSaveActiveProviderClearsSessionState verifies that switching the active
-// provider invalidates session state scoped to the previous backend: the
-// Responses API chaining id and the session reasoning override. Not parallel:
-// it mutates the process-wide session singleton.
+// provider invalidates the session reasoning override scoped to the previous
+// backend. The Responses API chaining id is now per-generator (invalidated by
+// building a fresh generator on switch), so it is no longer a global concern
+// here. Not parallel: it mutates the process-wide session singleton.
 func TestSaveActiveProviderClearsSessionState(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	if err := os.WriteFile(path, []byte("{}"), 0o644); err != nil {
@@ -26,20 +27,13 @@ func TestSaveActiveProviderClearsSessionState(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	SetLastResponseID("resp_abc123")
 	SetSessionReasoningOverride("high")
-	t.Cleanup(func() {
-		ClearLastResponseID()
-		ClearSessionReasoningOverride()
-	})
+	t.Cleanup(ClearSessionReasoningOverride)
 
 	if err := SaveActiveProvider(loader, settings, string(config.BuiltInOpenAI)); err != nil {
 		t.Fatalf("SaveActiveProvider: %v", err)
 	}
 
-	if got := LastResponseID(); got != "" {
-		t.Errorf("LastResponseID after switch = %q, want empty", got)
-	}
 	if got := SessionReasoningOverride(); got != "" {
 		t.Errorf("SessionReasoningOverride after switch = %q, want empty", got)
 	}
