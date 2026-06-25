@@ -7,6 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/undeadindustries/sagittarius/internal/ui/overlay"
 	"github.com/undeadindustries/sagittarius/internal/ui/theme"
 )
 
@@ -284,9 +285,5 @@ func wrapDec(i, n int) int {
 }
 
 func (m Model) contentWidth() int {
-	w := m.width - 4
-	if w < 20 {
-		return 20
-	}
-	return w
+	return overlay.ContentWidth(m.width, overlay.DefaultMinWidth)
 }
