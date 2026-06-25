@@ -843,44 +843,8 @@ func (d *modesDialogDeps) SetModeOverride(ctx context.Context, modeName, provide
 	if docs == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	s := docs.TargetSettings(scope)
-	if s.Sagittarius == nil {
-		s.Sagittarius = &config.SagittariusSettings{}
-	}
-	if s.Sagittarius.Modes == nil {
-		s.Sagittarius.Modes = &config.SagittariusModes{}
-	}
-	mc := &config.SagittariusModeConfig{
-		Provider: config.NormalizeProviderID(providerID),
-		Model:    model,
-	}
-	switch modeName {
-	case "agent":
-		if s.Sagittarius.Modes.Agent != nil {
-			mc.SystemPromptSuffix = s.Sagittarius.Modes.Agent.SystemPromptSuffix
-			mc.Extra = s.Sagittarius.Modes.Agent.Extra
-		}
-		s.Sagittarius.Modes.Agent = mc
-	case "plan":
-		if s.Sagittarius.Modes.Plan != nil {
-			mc.SystemPromptSuffix = s.Sagittarius.Modes.Plan.SystemPromptSuffix
-			mc.Extra = s.Sagittarius.Modes.Plan.Extra
-		}
-		s.Sagittarius.Modes.Plan = mc
-	case "ask":
-		if s.Sagittarius.Modes.Ask != nil {
-			mc.SystemPromptSuffix = s.Sagittarius.Modes.Ask.SystemPromptSuffix
-			mc.Extra = s.Sagittarius.Modes.Ask.Extra
-		}
-		s.Sagittarius.Modes.Ask = mc
-	case "debug":
-		if s.Sagittarius.Modes.Debug != nil {
-			mc.SystemPromptSuffix = s.Sagittarius.Modes.Debug.SystemPromptSuffix
-			mc.Extra = s.Sagittarius.Modes.Debug.Extra
-		}
-		s.Sagittarius.Modes.Debug = mc
-	default:
-		return fmt.Errorf("unknown mode %q", modeName)
+	if err := config.SetModeOverride(docs.TargetSettings(scope), modeName, providerID, model); err != nil {
+		return err
 	}
 	if err := docs.Save(scope); err != nil {
 		return err
@@ -894,11 +858,7 @@ func (d *modesDialogDeps) ClearModeOverride(ctx context.Context, modeName string
 	if docs == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	s := docs.TargetSettings(scope)
-	if s.Sagittarius == nil || s.Sagittarius.Modes == nil {
-		return nil
-	}
-	clearModeConfigOverride(s.Sagittarius.Modes, modeName)
+	config.ClearModeOverride(docs.TargetSettings(scope), modeName)
 	if err := docs.Save(scope); err != nil {
 		return err
 	}
@@ -920,43 +880,6 @@ func (d *modesDialogDeps) maybeRebuildActiveMode(ctx context.Context, modifiedMo
 		// triggers a RebuildRunner to rebuild the generator, and updates the
 		// app's status bar all at once.
 		_, _ = d.app.deps.Hooks.SetInteractionMode(ctx, currentMode)
-	}
-}
-
-func clearModeConfigOverride(modes *config.SagittariusModes, modeName string) {
-	switch modeName {
-	case "agent":
-		if modes.Agent != nil {
-			modes.Agent.Provider = ""
-			modes.Agent.Model = ""
-			if modes.Agent.SystemPromptSuffix == "" && modes.Agent.Extra == nil {
-				modes.Agent = nil
-			}
-		}
-	case "plan":
-		if modes.Plan != nil {
-			modes.Plan.Provider = ""
-			modes.Plan.Model = ""
-			if modes.Plan.SystemPromptSuffix == "" && modes.Plan.Extra == nil {
-				modes.Plan = nil
-			}
-		}
-	case "ask":
-		if modes.Ask != nil {
-			modes.Ask.Provider = ""
-			modes.Ask.Model = ""
-			if modes.Ask.SystemPromptSuffix == "" && modes.Ask.Extra == nil {
-				modes.Ask = nil
-			}
-		}
-	case "debug":
-		if modes.Debug != nil {
-			modes.Debug.Provider = ""
-			modes.Debug.Model = ""
-			if modes.Debug.SystemPromptSuffix == "" && modes.Debug.Extra == nil {
-				modes.Debug = nil
-			}
-		}
 	}
 }
 
