@@ -305,7 +305,7 @@ func runWorktreeStub(name string) int {
 		writeStartupError(err)
 		return 1
 	}
-	settings := docs.Merged
+	settings := docs.Merged()
 
 	// Check experimental.worktrees in raw settings JSON.
 	if settings != nil {
@@ -382,7 +382,7 @@ func runSlash(command string, opts runnerOptions) int {
 	defer func() { _ = runtime.Close() }()
 
 	providerLabel := "ready"
-	if endpoint, epErr := provider.ResolveEndpointConfig(docs.Merged); epErr == nil {
+	if endpoint, epErr := provider.ResolveEndpointConfig(docs.Merged()); epErr == nil {
 		providerLabel = config.ProviderDisplayID(endpoint.ProviderID)
 	}
 
@@ -535,12 +535,12 @@ func runInteractive(screenReader bool, debug bool, opts runnerOptions) int {
 	}
 	defer func() { _ = runtime.Close() }()
 
-	needsOnboarding := agent.NeedsProviderSetup(ctx, docs.Merged)
+	needsOnboarding := agent.NeedsProviderSetup(ctx, docs.Merged())
 
 	var endpoint provider.EndpointConfig
 	var endpointErr error
 	if !needsOnboarding {
-		endpoint, endpointErr = provider.ResolveEndpointConfig(docs.Merged)
+		endpoint, endpointErr = provider.ResolveEndpointConfig(docs.Merged())
 		if endpointErr != nil {
 			writeStartupError(endpointErr)
 			return 1
@@ -571,7 +571,7 @@ func runInteractive(screenReader bool, debug bool, opts runnerOptions) int {
 		}
 	}
 
-	uiCfg := docs.Merged.UI()
+	uiCfg := docs.Merged().UI()
 	termUI := bubbletea.NewTerminal(ui.Options{
 		ScreenReader:      screenReader,
 		BannerTitle:       "Sagittarius",
@@ -625,7 +625,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		return nil, nil, nil, "", "", err
 	}
 	// settings is the merged view (project wins); dialogs still mutate docs.Global.
-	settings := docs.Merged
+	settings := docs.Merged()
 
 	needsSetup := interactive && agent.NeedsProviderSetup(ctx, settings)
 

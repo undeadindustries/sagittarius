@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 // SettingScope identifies which settings file a change should be applied to.
@@ -35,10 +36,17 @@ type Documents struct {
 	// Project is the <workDir>/.sagittarius/settings.json document.
 	// Nil when the file does not exist or no working directory was given.
 	Project *Settings
-	// Merged is the effective settings computed by overlaying Project onto
+	// merged is the effective settings computed by overlaying Project onto
 	// Global (project wins). Read-only for runtime decisions; recomputed via
-	// ReloadMerged after any write.
-	Merged  *Settings
+	// ReloadMerged after any write. Access it through Merged() so the pointer
+	// swap is synchronized with the persistence writers that recompute it from
+	// background goroutines (plan 04 moved live UI-pref saves off the UI thread).
+	merged *Settings
+	// mu serializes the persistence read-modify-write sequence (mutate Global →
+	// Save → recompute merged) and the merged pointer swap/read, so concurrent
+	// MutateGlobal calls from background tea.Cmd goroutines cannot interleave on
+	// Global's map or lose the merged recompute.
+	mu      sync.RWMutex
 	workDir string
 	loader  *Loader
 }
@@ -74,8 +82,17 @@ func LoadDocuments(workDir string) (*Documents, error) {
 		workDir: workDir,
 		loader:  loader,
 	}
-	d.Merged = mergeSettings(global, project)
+	d.merged = mergeSettings(global, project)
 	return d, nil
+}
+
+// Merged returns the effective (global+project) settings view. It is safe to call
+// concurrently with the persistence writers; the returned *Settings is read-only
+// for runtime decisions (never mutate or persist through it).
+func (d *Documents) Merged() *Settings {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.merged
 }
 
 // Loader returns the global-file Loader (for backward-compatible saves via
@@ -91,47 +108,60 @@ func (d *Documents) WorkDir() string {
 
 // Save writes the specified scope's Settings to disk and reloads Merged.
 func (d *Documents) Save(scope SettingScope) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.saveLocked(scope)
+}
+
+// saveLocked is Save's body; callers must hold d.mu.
+func (d *Documents) saveLocked(scope SettingScope) error {
 	switch scope {
 	case ScopeGlobal:
 		if err := d.loader.Save(d.Global); err != nil {
 			return err
 		}
 	case ScopeProject:
-		if err := d.saveProject(); err != nil {
+		if err := d.saveProjectLocked(); err != nil {
 			return err
 		}
 	default:
 		return fmt.Errorf("unknown scope %d", scope)
 	}
-	d.Merged = mergeSettings(d.Global, d.Project)
+	d.merged = mergeSettings(d.Global, d.Project)
 	return nil
 }
 
 // MutateGlobal applies fn to the global document, persists it, and refreshes
 // Merged. It is the single entry point for global scalar settings writes, so a
 // write can never leave Merged stale (the root cause of the dual-scope bugs).
+// The mutate→save→recompute sequence runs under the lock so concurrent callers
+// (e.g. background Ctrl+T/Alt+T persists) cannot interleave on Global's map.
 func (d *Documents) MutateGlobal(fn func(*Settings) error) error {
 	if fn == nil {
 		return fmt.Errorf("mutate global settings: nil mutator")
 	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	if err := fn(d.Global); err != nil {
 		return err
 	}
-	return d.Save(ScopeGlobal) // Save already recomputes Merged
+	return d.saveLocked(ScopeGlobal) // saveLocked recomputes merged
 }
 
 // SaveProject writes the project Settings to disk and reloads Merged. It
 // creates the project directory if needed. If d.Project is nil a new empty
 // Settings is initialised first.
 func (d *Documents) SaveProject() error {
-	if err := d.saveProject(); err != nil {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if err := d.saveProjectLocked(); err != nil {
 		return err
 	}
-	d.Merged = mergeSettings(d.Global, d.Project)
+	d.merged = mergeSettings(d.Global, d.Project)
 	return nil
 }
 
-func (d *Documents) saveProject() error {
+func (d *Documents) saveProjectLocked() error {
 	if d.workDir == "" {
 		return fmt.Errorf("save project settings: no working directory")
 	}
@@ -169,7 +199,9 @@ func (d *Documents) saveProject() error {
 // Call this after any in-memory mutation to Global or Project before the next
 // read of Merged.
 func (d *Documents) ReloadMerged() {
-	d.Merged = mergeSettings(d.Global, d.Project)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.merged = mergeSettings(d.Global, d.Project)
 }
 
 // TargetSettings returns the mutable *Settings for the given scope. For

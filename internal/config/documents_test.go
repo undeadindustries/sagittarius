@@ -2,8 +2,10 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -35,7 +37,7 @@ func TestLoadDocuments_NoProjectFile(t *testing.T) {
 	if docs.Project != nil {
 		t.Fatal("Project must be nil when no file exists")
 	}
-	if docs.Merged == nil {
+	if docs.Merged() == nil {
 		t.Fatal("Merged must not be nil")
 	}
 }
@@ -62,13 +64,14 @@ func TestLoadDocuments_WithProjectFile(t *testing.T) {
 		t.Fatal("Project must not be nil when file exists")
 	}
 	// Merged should have the project personality.
-	if docs.Merged.Sagittarius == nil || docs.Merged.Sagittarius.SystemPrompt == nil {
+	merged := docs.Merged()
+	if merged.Sagittarius == nil || merged.Sagittarius.SystemPrompt == nil {
 		t.Fatal("Merged.Sagittarius.SystemPrompt must not be nil")
 	}
-	if got := docs.Merged.Sagittarius.SystemPrompt.Personality; got != "sysadmin" {
+	if got := merged.Sagittarius.SystemPrompt.Personality; got != "sysadmin" {
 		t.Fatalf("Merged personality = %q, want %q", got, "sysadmin")
 	}
-	if got := docs.Merged.Sagittarius.SystemPrompt.Variant; got != "lite" {
+	if got := merged.Sagittarius.SystemPrompt.Variant; got != "lite" {
 		t.Fatalf("Merged variant = %q, want %q", got, "lite")
 	}
 }
@@ -342,8 +345,8 @@ func TestDocuments_MutateGlobalRefreshesMerged(t *testing.T) {
 	}
 
 	// Merged must reflect the global mutation without a manual ReloadMerged.
-	if docs.Merged == nil || docs.Merged.Sagittarius == nil ||
-		docs.Merged.Sagittarius.DefaultModel != "global-mutated" {
+	if m := docs.Merged(); m == nil || m.Sagittarius == nil ||
+		m.Sagittarius.DefaultModel != "global-mutated" {
 		t.Fatal("Merged not refreshed after MutateGlobal")
 	}
 
@@ -375,6 +378,63 @@ func TestDocuments_MutateGlobalPropagatesError(t *testing.T) {
 type errSentinel string
 
 func (e errSentinel) Error() string { return string(e) }
+
+// TestDocuments_MutateGlobalConcurrent asserts that concurrent global writes do
+// not interleave on Global.Raw (no lost writes, no concurrent-map panic) and
+// that Merged() reads are safe alongside the writers. It is the regression for
+// the post-plan-04 race where live UI-pref persists run on background goroutines.
+// Run with -race.
+func TestDocuments_MutateGlobalConcurrent(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SAGITTARIUS_HOME", home)
+
+	docs, err := LoadDocuments(t.TempDir())
+	if err != nil {
+		t.Fatalf("LoadDocuments: %v", err)
+	}
+
+	const n = 64
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		i := i
+		go func() {
+			defer wg.Done()
+			key := fmt.Sprintf("concurrent_key_%d", i)
+			if err := docs.MutateGlobal(func(s *Settings) error {
+				s.Raw[key] = json.RawMessage(`true`)
+				return nil
+			}); err != nil {
+				t.Errorf("MutateGlobal(%s): %v", key, err)
+			}
+		}()
+	}
+
+	// Hammer the merged-view reader concurrently with the writers.
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			default:
+				_ = docs.Merged()
+			}
+		}
+	}()
+
+	wg.Wait()
+	close(done)
+
+	// Every write must have landed; the serialized read-modify-write must not
+	// have dropped any.
+	for i := 0; i < n; i++ {
+		key := fmt.Sprintf("concurrent_key_%d", i)
+		if _, ok := docs.Global.Raw[key]; !ok {
+			t.Errorf("lost write: %s missing from Global.Raw", key)
+		}
+	}
+}
 
 // SaveProject --------------------------------------------------------------
 
@@ -412,9 +472,9 @@ func TestDocuments_SaveProject(t *testing.T) {
 	}
 
 	// Merged should reflect the new project value.
-	if docs.Merged == nil || docs.Merged.Sagittarius == nil ||
-		docs.Merged.Sagittarius.SystemPrompt == nil ||
-		docs.Merged.Sagittarius.SystemPrompt.Personality != "sysadmin" {
+	if m := docs.Merged(); m == nil || m.Sagittarius == nil ||
+		m.Sagittarius.SystemPrompt == nil ||
+		m.Sagittarius.SystemPrompt.Personality != "sysadmin" {
 		t.Fatal("Merged not updated after SaveProject")
 	}
 }

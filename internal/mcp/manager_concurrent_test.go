@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -201,6 +202,62 @@ func TestApplyToolFiltersNoReconnect(t *testing.T) {
 	if got := atomic.LoadInt32(&conn.connects); got != connectsAfterReload {
 		t.Fatalf("connector dialed %d more times during filter toggles; want 0", got-connectsAfterReload)
 	}
+}
+
+// TestReloadVsToolInventoryNoUseAfterClose is the regression for the MCP client
+// use-after-close race: Reload tears down and replaces the clients (closing each
+// old session) while ToolInventory/States read those same *Client pointers
+// off-lock. Before the fix, Client.session was read by ListAllTools concurrently
+// with Close() niling it. Must be clean under -race.
+func TestReloadVsToolInventoryNoUseAfterClose(t *testing.T) {
+	conn := &latencyConnector{defaultDelay: time.Millisecond}
+	m := NewManager(ManagerConfig{Connector: conn})
+	servers := mockServers(4)
+	if err := m.Reload(context.Background(), servers); err != nil {
+		t.Fatalf("initial Reload() error = %v", err)
+	}
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+
+	// Readers: ToolInventory copies clients under the lock then calls
+	// ListAllTools off-lock; States reads each client's status/lastErr.
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				_ = m.ToolInventory(context.Background())
+				_ = m.States()
+			}
+		}()
+	}
+
+	// Writer: repeated reloads close+replace the clients beneath the readers.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 25; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			if err := m.Reload(context.Background(), servers); err != nil {
+				t.Errorf("Reload() error = %v", err)
+				return
+			}
+		}
+	}()
+
+	time.Sleep(60 * time.Millisecond)
+	close(stop)
+	wg.Wait()
 }
 
 // countingConnector records how many times Connect is called so a test can prove

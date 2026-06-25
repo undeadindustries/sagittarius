@@ -191,7 +191,7 @@ func TestBuildRunnerAllowsMissingProviderWhenInteractive(t *testing.T) {
 	}
 	defer func() { _ = runtime.Close() }()
 
-	if !agent.NeedsProviderSetup(context.Background(), docs.Merged) {
+	if !agent.NeedsProviderSetup(context.Background(), docs.Merged()) {
 		t.Fatal("expected setup to be needed with empty settings")
 	}
 	if runner.Model() != agent.PlaceholderModel() {
