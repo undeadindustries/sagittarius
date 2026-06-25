@@ -34,10 +34,16 @@ type fileStore struct {
 }
 
 var (
-	sharedFileStore           *fileStore
-	sharedFileStoreErr        error
-	sharedFileStoreOnce       sync.Once
-	fileStoreMu               sync.Mutex
+	sharedFileStore     *fileStore
+	sharedFileStoreErr  error
+	sharedFileStoreOnce sync.Once
+	// fileStoreMu serializes access to the shared on-disk credentials file.
+	// fileStore instances are created per call (sharedEncryptedFileStore returns
+	// a fresh struct sharing the same path), so the guard must be package-global,
+	// not per-instance, to serialize concurrent writers of the same file. It is
+	// an RWMutex so concurrent reads (Get) no longer block behind one another's
+	// disk I/O; writers (Set/Delete) still take the exclusive lock.
+	fileStoreMu               sync.RWMutex
 	credentialsPathForTesting string
 )
 
@@ -106,8 +112,8 @@ func currentUsername() (string, error) {
 }
 
 func (f *fileStore) Get(_ context.Context, account string) (string, error) {
-	fileStoreMu.Lock()
-	defer fileStoreMu.Unlock()
+	fileStoreMu.RLock()
+	defer fileStoreMu.RUnlock()
 
 	data, err := f.loadData()
 	if err != nil {

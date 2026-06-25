@@ -9,7 +9,12 @@ import (
 )
 
 func TestNeedsProviderSetup(t *testing.T) {
-	t.Parallel()
+	// Not parallel: this test mutates the process-global credential store
+	// factory (via withEmptyCredentials and SetStoreFactoryForTesting). Hold the
+	// credentials test guard for the whole test so a sibling cannot interleave;
+	// register via t.Cleanup (before any ResetForTesting cleanup) so the unlock
+	// runs last under LIFO and the lock covers the resets.
+	t.Cleanup(credentials.LockTestGlobals())
 	ctx := context.Background()
 
 	if !NeedsProviderSetup(ctx, nil) {

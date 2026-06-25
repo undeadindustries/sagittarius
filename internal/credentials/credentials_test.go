@@ -101,6 +101,7 @@ func useMemoryStores(t *testing.T) map[string]*memoryStore {
 }
 
 func TestEnvOverridesKeychain(t *testing.T) {
+	t.Cleanup(LockTestGlobals())
 	ctx := testContext(t)
 	stores := useMemoryStores(t)
 
@@ -125,6 +126,7 @@ func TestEnvOverridesKeychain(t *testing.T) {
 }
 
 func TestKeychainRoundTrip(t *testing.T) {
+	t.Cleanup(LockTestGlobals())
 	ctx := testContext(t)
 	useMemoryStores(t)
 
@@ -156,6 +158,7 @@ func TestKeychainRoundTrip(t *testing.T) {
 }
 
 func TestFileFallbackWhenNoKeyring(t *testing.T) {
+	t.Cleanup(LockTestGlobals())
 	ctx := testContext(t)
 
 	dir := t.TempDir()
@@ -205,6 +208,7 @@ func TestFileFallbackWhenNoKeyring(t *testing.T) {
 }
 
 func TestCacheTTL(t *testing.T) {
+	t.Cleanup(LockTestGlobals())
 	ctx := testContext(t)
 	stores := useMemoryStores(t)
 	SetCacheTTLForTesting(20 * time.Millisecond)
@@ -239,6 +243,7 @@ func TestCacheTTL(t *testing.T) {
 }
 
 func TestGeminiAPIKeyResolution(t *testing.T) {
+	t.Cleanup(LockTestGlobals())
 	tests := []struct {
 		name       string
 		setupEnv   func(t *testing.T)

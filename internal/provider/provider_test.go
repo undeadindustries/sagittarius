@@ -78,6 +78,11 @@ func testContext(t *testing.T) context.Context {
 
 func withEmptyCredentials(t *testing.T) {
 	t.Helper()
+	// Serialize against any sibling test that touches credential globals, and
+	// hold the lock across the ResetForTesting cleanup below (registered after,
+	// so it runs before the unlock under t.Cleanup's LIFO order). Callers must
+	// therefore not be parallel.
+	t.Cleanup(credentials.LockTestGlobals())
 	credentials.SetStoreFactoryForTesting(func(string) credentials.Store {
 		return newMemoryStore()
 	})

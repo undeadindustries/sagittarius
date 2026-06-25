@@ -1,6 +1,7 @@
 package bgproc
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -28,26 +29,39 @@ type Process struct {
 	LogPath   string
 }
 
+// reaperInterval is how often the single reaper polls tracked PIDs for exit.
+const reaperInterval = time.Second
+
 // Manager tracks processes backgrounded during a session.
 type Manager struct {
 	mu        sync.RWMutex
 	processes map[int]*Process
 	ordered   []int
+
+	// One reaper goroutine watches every tracked PID, started lazily on the
+	// first Register and cancelled by Close — replacing the previous
+	// goroutine-per-PID pollers that never shut down on session teardown.
+	ctx  context.Context
+	stop context.CancelFunc
+	once sync.Once
 }
 
 // NewManager creates a new background process manager.
 func NewManager() *Manager {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Manager{
 		processes: make(map[int]*Process),
+		ctx:       ctx,
+		stop:      cancel,
 	}
 }
 
 // Register adds or updates a process in the registry.
 func (m *Manager) Register(pid, pgid int, command, logPath string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if p, ok := m.processes[pid]; ok {
 		p.Status = StatusRunning
+		m.mu.Unlock()
 		return
 	}
 	p := &Process{
@@ -60,28 +74,61 @@ func (m *Manager) Register(pid, pgid int, command, logPath string) {
 	}
 	m.processes[pid] = p
 	m.ordered = append(m.ordered, pid)
-	
-	// Start a reaper to watch for process exit
-	go m.reaper(pid)
+	m.mu.Unlock()
+
+	m.ensureReaper()
 }
 
-// reaper waits for the process to exit and updates its status.
-// We use os.FindProcess and Wait if it's our direct child, but if it's a
-// grandchild, Wait might fail. So we poll with kill(pid, 0).
-func (m *Manager) reaper(pid int) {
+// ensureReaper starts the single reaper goroutine exactly once.
+func (m *Manager) ensureReaper() {
+	m.once.Do(func() { go m.reapLoop() })
+}
+
+// reapLoop polls all tracked PIDs until the manager is closed. A single
+// goroutine watches every process (we poll with kill(pid, 0) because a
+// backgrounded grandchild is not our direct child and cannot be Wait()ed).
+func (m *Manager) reapLoop() {
+	t := time.NewTicker(reaperInterval)
+	defer t.Stop()
 	for {
-		if err := syscall.Kill(pid, 0); err != nil {
-			// Process is gone
-			m.mu.Lock()
-			if p, ok := m.processes[pid]; ok {
-				p.Status = StatusExited
-				p.ExitCode = -1 // We don't have the real exit code for grandchildren
-			}
-			m.mu.Unlock()
+		select {
+		case <-m.ctx.Done():
 			return
+		case <-t.C:
+			m.reapOnce()
 		}
-		time.Sleep(1 * time.Second)
 	}
+}
+
+// reapOnce marks any running process whose PID has disappeared as exited.
+func (m *Manager) reapOnce() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, pid := range m.ordered {
+		p, ok := m.processes[pid]
+		if !ok || p.Status != StatusRunning {
+			continue
+		}
+		if syscall.Kill(pid, 0) != nil {
+			p.markExited()
+		}
+	}
+}
+
+// markExited records a vanished process. The real exit code is unavailable for
+// grandchildren, so -1 is used (unchanged from the previous per-PID reaper).
+func (p *Process) markExited() {
+	p.Status = StatusExited
+	p.ExitCode = -1
+}
+
+// Close stops the reaper goroutine. Safe to call multiple times; tracked
+// process records remain readable after close.
+func (m *Manager) Close() error {
+	if m.stop != nil {
+		m.stop()
+	}
+	return nil
 }
 
 // List returns a snapshot of all tracked processes.
@@ -110,17 +157,25 @@ func (m *Manager) Get(pid int) (Process, bool) {
 
 // Kill attempts to terminate a tracked process.
 func (m *Manager) Kill(pid int) error {
+	// Copy the fields under the lock: the reaper mutates Status concurrently, so
+	// reading p.* after releasing the lock would race.
 	m.mu.RLock()
 	p, ok := m.processes[pid]
+	var status ProcessStatus
+	var pgid int
+	if ok {
+		status = p.Status
+		pgid = p.PGID
+	}
 	m.mu.RUnlock()
 	if !ok {
 		return fmt.Errorf("process %d not found", pid)
 	}
-	if p.Status != StatusRunning {
+	if status != StatusRunning {
 		return nil
 	}
-	if p.PGID > 0 {
-		return syscall.Kill(-p.PGID, syscall.SIGKILL)
+	if pgid > 0 {
+		return syscall.Kill(-pgid, syscall.SIGKILL)
 	}
 	return syscall.Kill(pid, syscall.SIGKILL)
 }
@@ -129,11 +184,15 @@ func (m *Manager) Kill(pid int) error {
 func (m *Manager) Output(pid int) string {
 	m.mu.RLock()
 	p, ok := m.processes[pid]
+	var logPath string
+	if ok {
+		logPath = p.LogPath
+	}
 	m.mu.RUnlock()
-	if !ok || p.LogPath == "" {
+	if !ok || logPath == "" {
 		return ""
 	}
-	data, err := os.ReadFile(p.LogPath)
+	data, err := os.ReadFile(logPath)
 	if err != nil {
 		return ""
 	}

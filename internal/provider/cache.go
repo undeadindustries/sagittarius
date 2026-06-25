@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/undeadindustries/sagittarius/internal/config"
 )
 
@@ -37,6 +39,11 @@ type generatorCacheKey struct {
 type GeneratorCache struct {
 	mu      sync.Mutex
 	entries map[generatorCacheKey]ContentGenerator
+	// group collapses concurrent misses for the same key into one construction,
+	// so two goroutines racing on a /mode switch don't each build a client
+	// (duplicate DNS/TLS/genai.NewClient). It is not a data race (the map is
+	// locked) — purely a thundering-herd guard.
+	group singleflight.Group
 }
 
 // NewGeneratorCache returns an empty, ready-to-use cache.
@@ -92,16 +99,31 @@ func (c *GeneratorCache) GetOrCreate(ctx context.Context, settings *config.Setti
 	}
 
 	// Cache miss: construct the generator (potentially slow for Gemini due to
-	// genai.NewClient initialisation) and store it.
-	gen, err = NewContentGenerator(ctx, settings)
+	// genai.NewClient initialisation) under singleflight so concurrent misses
+	// for the same key share one construction.
+	v, err, _ := c.group.Do(fmt.Sprintf("%#v", key), func() (any, error) {
+		// Re-check under the lock: a prior in-flight build for this key may have
+		// completed and populated the map between our miss and acquiring the slot.
+		c.mu.Lock()
+		if cached, ok := c.entries[key]; ok {
+			c.mu.Unlock()
+			return cached, nil
+		}
+		c.mu.Unlock()
+
+		built, bErr := NewContentGenerator(ctx, settings)
+		if bErr != nil {
+			return nil, bErr
+		}
+		c.mu.Lock()
+		c.entries[key] = built
+		c.mu.Unlock()
+		return built, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	c.mu.Lock()
-	c.entries[key] = gen
-	c.mu.Unlock()
-	return gen, nil
+	return v.(ContentGenerator), nil
 }
 
 // InvalidateAll discards every cached entry, forcing fresh construction on the

@@ -273,41 +273,51 @@ func (m *Manager) Undo(n int) ([]string, error) {
 	if n <= 0 {
 		n = 1
 	}
+	// Phase 1: take a consistent batch off the top of the stack under the lock.
 	m.mu.Lock()
-	defer m.mu.Unlock()
-
 	if len(m.stack) == 0 {
+		m.mu.Unlock()
 		return nil, fmt.Errorf("nothing to undo")
 	}
+	batch := m.popUndoBatchLocked(n)
+	m.mu.Unlock()
 
+	// Phase 2: restore files off-lock so concurrent CaptureWrite/CommitWrite are
+	// not blocked behind filesystem I/O. A restore failure stops the LIFO walk:
+	// the failed entry and every older entry still in the batch must go back on
+	// the stack untouched so a later /undo can retry them in order.
 	var restored []string
 	var failures []string
-	for i := 0; i < n && len(m.stack) > 0; i++ {
-		c := m.stack[len(m.stack)-1]
+	var pushBack []change
+	for i, c := range batch {
 		if c.Skipped {
 			failures = append(failures, c.Rel+" (too large to snapshot)")
-			m.stack = m.stack[:len(m.stack)-1]
-			m.recomputeTracking(c.Rel)
 			continue
 		}
 		if err := m.restore(c); err != nil {
-			// Transient failure (permissions, disk full, ...). Leave the change
-			// on the stack so the user can retry /undo after fixing the cause,
-			// and stop here: the stack is LIFO, so older entries sit underneath
-			// this one and must not be reverted ahead of it.
 			failures = append(failures, fmt.Sprintf("%s (%v)", c.Rel, err))
+			pushBack = batch[i:]
 			break
 		}
-		m.stack = m.stack[:len(m.stack)-1]
-		m.recomputeTracking(c.Rel)
 		restored = append(restored, c.Rel)
 	}
+	processed := batch[:len(batch)-len(pushBack)]
 
+	// Phase 3: re-lock to re-attach un-restored entries, refresh per-file diff
+	// tracking for everything we removed, and persist the trimmed stack.
+	m.mu.Lock()
+	for i := len(pushBack) - 1; i >= 0; i-- {
+		m.stack = append(m.stack, pushBack[i])
+	}
+	for _, c := range processed {
+		m.recomputeTracking(c.Rel)
+	}
 	if len(restored) > 0 {
 		// Persist the trimmed stack so a later process (same session id) replays
 		// the post-undo state rather than re-applying reverted changes.
-		m.rewriteIndex()
+		m.rewriteIndexLocked()
 	}
+	m.mu.Unlock()
 
 	if len(failures) > 0 {
 		return restored, fmt.Errorf("could not revert: %s", strings.Join(failures, "; "))
@@ -315,10 +325,25 @@ func (m *Manager) Undo(n int) ([]string, error) {
 	return restored, nil
 }
 
-// rewriteIndex rewrites the on-disk index from the current undo stack so it
-// reflects post-undo state. Best-effort: a write failure leaves the in-memory
+// popUndoBatchLocked removes up to n entries from the top of the undo stack and
+// returns them in LIFO (top-first) order so the caller can restore them off the
+// lock. Caller holds m.mu.
+func (m *Manager) popUndoBatchLocked(n int) []change {
+	if n > len(m.stack) {
+		n = len(m.stack)
+	}
+	batch := make([]change, n)
+	for i := 0; i < n; i++ {
+		batch[i] = m.stack[len(m.stack)-1-i]
+	}
+	m.stack = m.stack[:len(m.stack)-n]
+	return batch
+}
+
+// rewriteIndexLocked rewrites the on-disk index from the current undo stack so
+// it reflects post-undo state. Best-effort: a write failure leaves the in-memory
 // state authoritative for this process. Caller holds m.mu.
-func (m *Manager) rewriteIndex() {
+func (m *Manager) rewriteIndexLocked() {
 	f, err := os.OpenFile(m.indexPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return
