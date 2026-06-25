@@ -212,10 +212,9 @@ func TestNoLocalMaskingOnResponsesPath(t *testing.T) {
 }
 
 func TestFactorySelectsOpenAIResponses(t *testing.T) {
-	t.Parallel()
-
+	// Not parallel: t.Setenv mutates the process environment.
 	ctx := testContext(t)
-	withEnv(t, "OPENAI_API_KEY", "sk-test")
+	t.Setenv("OPENAI_API_KEY", "sk-test")
 
 	settings := &config.Settings{
 		Providers: &config.ProvidersSettings{
