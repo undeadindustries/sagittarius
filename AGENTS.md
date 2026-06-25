@@ -261,6 +261,31 @@ isolation / without keys.
 
 ## Recent decisions
 
+- **2026-06-25 — Provider streaming hardening (AD-058):** Plan 02 of the
+concurrency-cohesion audit. (A) **No goroutine leak on cancel:** every Gemini
+adapter channel send now routes through a shared ctx-aware `sendOrDone(ctx, ch, sr)
+bool` (returns false on `ctx.Done()`, producer returns) — previously the bare
+`ch <- ...` blocked forever on a stopped consumer until the provider timeout
+(this also fixes the AD-056 ReasoningDelta/TextDelta sends, which had inherited
+the blocking pattern). The openai-chat and openai-responses SSE callbacks and
+the chat non-stream retry loop use the same helper. (B) **Per-instance Responses
+chaining id:** `lastResponseID` moved from the process-global `defaultSession`
+onto `OpenAIResponsesGenerator` (new `chainMu sync.Mutex` + `setLastResponseID`/
+`lastID`); the global `SetLastResponseID`/`LastResponseID`/`ClearLastResponseID`
+trio and the `ClearLastResponseID()` calls in `SelectCurrentModel`/
+`SaveActiveProvider` were removed (a provider switch builds a fresh generator,
+which invalidates the id automatically). This stops cross-session/cross-provider
+chaining off a stale `previous_response_id`. The `/reasoning` session override
+is still a process global (`defaultSession.reasoningOverride`) with a `// TODO`
+linking the plan — the clean per-generator rewire crosses the
+slash→app→runner→generator seam and risks losing the override on rebuild, so it
+is deferred. (C) **Shared transport:** extracted `internal/provider/openai_http.go`
+with `postSSE(ctx, client, url, bearer, body)` (the byte-identical `doRequest`
+from both openai adapters) and the shared `sendOrDone`; per-adapter SSE parsing
+stays separate. Tests: `gemini_cancel_test.go` (infinite streamer + cancel,
+asserts the goroutine exits) and `responses_chaining_test.go` (two generators
+don't share `lastResponseID`).
+
 - **2026-06-25 — Runner shared-state synchronization (AD-057):** Hardened the
 runner/app turn hot path against data races (plan 01 of the
 concurrency-cohesion audit). (1) A new `historyMu sync.RWMutex` guards

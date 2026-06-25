@@ -128,7 +128,7 @@ func (g *OpenAIChatGenerator) streamOnce(ctx context.Context, body []byte, ch ch
 		defer cancel()
 	}
 
-	resp, err := g.doRequest(streamCtx, body)
+	resp, err := postSSE(streamCtx, g.client, g.url, g.bearer, body)
 	if err != nil {
 		return err
 	}
@@ -146,12 +146,7 @@ func (g *OpenAIChatGenerator) streamOnce(ctx context.Context, body []byte, ch ch
 	}
 
 	needsRetry, parseErr := parseSSEStream(resp.Body, g.toolCallParsing, func(chunk StreamResponse) bool {
-		select {
-		case <-streamCtx.Done():
-			return false
-		case ch <- chunk:
-			return true
-		}
+		return sendOrDone(streamCtx, ch, chunk)
 	})
 	if parseErr != nil {
 		return parseErr
@@ -167,7 +162,7 @@ func (g *OpenAIChatGenerator) retryNonStreaming(ctx context.Context, streamBody 
 	if err != nil {
 		return err
 	}
-	resp, err := g.doRequest(ctx, retryBody)
+	resp, err := postSSE(ctx, g.client, g.url, g.bearer, retryBody)
 	if err != nil {
 		return err
 	}
@@ -184,28 +179,9 @@ func (g *OpenAIChatGenerator) retryNonStreaming(ctx context.Context, streamBody 
 		return fmt.Errorf("decode non-stream retry: %w", err)
 	}
 	for _, chunk := range chunks {
-		select {
-		case <-ctx.Done():
+		if !sendOrDone(ctx, ch, chunk) {
 			return ctx.Err()
-		case ch <- chunk:
 		}
 	}
 	return nil
-}
-
-func (g *OpenAIChatGenerator) doRequest(ctx context.Context, body []byte) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, g.url, strings.NewReader(string(body)))
-	if err != nil {
-		return nil, fmt.Errorf("create openai request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-	if g.bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+g.bearer)
-	}
-	resp, err := g.client.Do(req)
-	if err != nil {
-		return nil, mapOpenAITransportError(err)
-	}
-	return resp, nil
 }

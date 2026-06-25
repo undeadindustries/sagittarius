@@ -23,10 +23,17 @@ var ValidReasoningLevels = []ReasoningEffortLevel{
 	ReasoningHigh,
 }
 
+// sessionState holds the process-wide reasoning override.
+//
+// TODO(plan 02 — docs/plans/concurrency-cohesion-2026-06/02-provider-streaming-session.md):
+// the /reasoning override is still a hidden process global. The clean version
+// injects it onto the live generator (construction + a setter the slash command
+// drives), but that rewire crosses the slash→app→runner→generator seam and risks
+// losing the override on generator rebuild, so it is deferred. The Responses
+// chaining id (the actual cross-session-bleed bug) is now per-generator.
 type sessionState struct {
 	mu                sync.RWMutex
 	reasoningOverride string
-	lastResponseID    string
 }
 
 var defaultSession = &sessionState{}
@@ -50,27 +57,6 @@ func SessionReasoningOverride() string {
 	defaultSession.mu.RLock()
 	defer defaultSession.mu.RUnlock()
 	return defaultSession.reasoningOverride
-}
-
-// SetLastResponseID stores the trailing response id for chaining.
-func SetLastResponseID(id string) {
-	defaultSession.mu.Lock()
-	defer defaultSession.mu.Unlock()
-	defaultSession.lastResponseID = strings.TrimSpace(id)
-}
-
-// LastResponseID returns the stored response id for chaining.
-func LastResponseID() string {
-	defaultSession.mu.RLock()
-	defer defaultSession.mu.RUnlock()
-	return defaultSession.lastResponseID
-}
-
-// ClearLastResponseID clears the stored response id after errors.
-func ClearLastResponseID() {
-	defaultSession.mu.Lock()
-	defer defaultSession.mu.Unlock()
-	defaultSession.lastResponseID = ""
 }
 
 // ResolveReasoningEffort returns session override, then persisted provider value.

@@ -158,7 +158,7 @@ func (g *GeminiGenerator) GenerateContentStream(
 		acc := newModelPartsAccumulator()
 		for resp, err := range stream {
 			if err != nil {
-				ch <- StreamResponse{Error: MapAPIError(err)}
+				sendOrDone(streamCtx, ch, StreamResponse{Error: MapAPIError(err)})
 				return
 			}
 			if resp == nil {
@@ -196,14 +196,20 @@ func (g *GeminiGenerator) GenerateContentStream(
 					continue
 				}
 				if p.Thought && p.Text != "" {
-					ch <- StreamResponse{ReasoningDelta: p.Text}
+					if !sendOrDone(streamCtx, ch, StreamResponse{ReasoningDelta: p.Text}) {
+						return
+					}
 				} else if !p.Thought && p.Text != "" {
-					ch <- StreamResponse{TextDelta: p.Text}
+					if !sendOrDone(streamCtx, ch, StreamResponse{TextDelta: p.Text}) {
+						return
+					}
 				}
 			}
 		}
 		if calls := ToolCallsFromGenaiResponse(resp); len(calls) > 0 {
-			ch <- StreamResponse{ToolCalls: calls}
+			if !sendOrDone(streamCtx, ch, StreamResponse{ToolCalls: calls}) {
+				return
+			}
 		}
 		}
 		// Emit provider-reported usage before Done (cost is not available from
@@ -218,9 +224,11 @@ func (g *GeminiGenerator) GenerateContentStream(
 			}
 		}
 		if final.Usage != nil || len(final.ModelParts) > 0 {
-			ch <- final
+			if !sendOrDone(streamCtx, ch, final) {
+				return
+			}
 		}
-		ch <- StreamResponse{Done: true}
+		sendOrDone(streamCtx, ch, StreamResponse{Done: true})
 	}()
 
 	return ch, nil
