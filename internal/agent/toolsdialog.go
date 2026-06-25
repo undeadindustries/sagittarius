@@ -81,8 +81,10 @@ func (d *toolsDialogDeps) SetToolEnabled(ctx context.Context, server, tool strin
 	if err := d.app.deps.Loader.Save(d.app.deps.Settings); err != nil {
 		return err
 	}
-	_, err = d.app.deps.Hooks.ReloadMCP(ctx)
-	return err
+	// A filter toggle changes only which discovered tools are exposed; the MCP
+	// connections are unchanged, so rebuild the registry from the cached tool
+	// set instead of forcing a full reconnect.
+	return d.app.rebuildToolRegistry()
 }
 
 func (d *toolsDialogDeps) ReloadTools(ctx context.Context) error {

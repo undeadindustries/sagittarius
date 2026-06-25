@@ -581,6 +581,27 @@ func (h *appHooks) ReloadMCP(ctx context.Context) (string, error) {
 	return formatMCPReloadSummary(h.app.runtime.Catalog.MCPManager().States()), nil
 }
 
+// rebuildToolRegistry re-applies MCP tool include/exclude filters from the
+// current settings to the already-connected tool cache and installs the rebuilt
+// registry on the runner, WITHOUT reconnecting any MCP server. Tool-filter
+// toggles change only policy, so this avoids the connect/list churn (and the
+// child-process respawn) of a full ReloadMCP.
+func (a *App) rebuildToolRegistry() error {
+	if a == nil || a.runtime == nil || a.runner == nil {
+		return fmt.Errorf("runtime not available")
+	}
+	if a.docs != nil {
+		a.docs.ReloadMerged()
+		a.runtime.SetSettings(a.docs.Merged)
+	}
+	reg, err := a.runtime.RebuildToolRegistry()
+	if err != nil {
+		return err
+	}
+	a.runner.SetRegistry(reg)
+	return nil
+}
+
 // ForceCompressHistory manually compresses the live conversation context and
 // returns a human-readable summary of the outcome.
 func (h *appHooks) ForceCompressHistory(ctx context.Context) (string, error) {
