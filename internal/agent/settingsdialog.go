@@ -12,15 +12,10 @@ import (
 
 // SettingsDialogDeps returns the side-effect adapter the /settings browser uses.
 func (a *App) SettingsDialogDeps() settingsdialog.Deps {
-	return &settingsDialogDeps{app: a}
+	return &settingsDialogDeps{baseDialogDeps{app: a}}
 }
 
-type settingsDialogDeps struct{ app *App }
-
-func (d *settingsDialogDeps) ProjectAvailable() bool {
-	docs := d.app.docs
-	return docs != nil && docs.WorkDir() != ""
-}
+type settingsDialogDeps struct{ baseDialogDeps }
 
 func (d *settingsDialogDeps) docs() *config.Documents { return d.app.docs }
 
