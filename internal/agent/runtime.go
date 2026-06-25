@@ -110,6 +110,16 @@ func (r *Runtime) ReloadTools(ctx context.Context) (*tools.Registry, error) {
 	return r.Catalog.Reload(ctx)
 }
 
+// RebuildToolRegistry re-applies MCP tool include/exclude filters from the
+// current settings to the cached tool set and returns a fresh registry without
+// reconnecting any MCP server. Use for tool-filter toggles.
+func (r *Runtime) RebuildToolRegistry() (*tools.Registry, error) {
+	if r == nil || r.Catalog == nil {
+		return nil, fmt.Errorf("runtime catalog unavailable")
+	}
+	return r.Catalog.RebuildRegistryWithFilters()
+}
+
 // ReloadSkills rediscovers skills and rebuilds activate_skill declarations.
 func (r *Runtime) ReloadSkills(ctx context.Context) (*tools.Registry, error) {
 	if r == nil || r.Catalog == nil {

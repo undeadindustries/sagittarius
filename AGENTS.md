@@ -261,6 +261,36 @@ isolation / without keys.
 
 ## Recent decisions
 
+- **2026-06-25 — MCP concurrency + cache-backed filter toggles (AD-059):** Plan
+03 of the concurrency-cohesion audit, in `internal/mcp` + `internal/agent`. (A)
+**`Manager.Reload` no longer holds the manager mutex across network I/O:** it now
+tears down old clients under a short lock, connects + lists tools concurrently
+off-lock via `golang.org/x/sync/errgroup` (promoted to a direct require) with
+`SetLimit(maxConcurrentMCPConnects=8)`, then re-acquires the lock briefly to
+publish the new maps. The per-server body is a pure, lock-free
+`connectOne(ctx, name, cfg, connector) serverResult` helper; per-server failures
+are recorded in `ServerState` and never abort siblings (closures return nil,
+errgroup is used only for lifecycle/bounding). Results are name-sorted before
+publish so `States()`/tool ordering stays deterministic. N servers now reload in
+~max(latency), not ~sum. (B) **`ToolInventory` parallelized:** the per-server
+`ListAllTools` loop runs under the same bounded errgroup, writing into an
+index-addressed slice so order is preserved without a post-sort (keeping the
+existing copy-under-lock-then-IO pattern). (C) **Tool-filter toggles no longer
+reconnect:** filtering moved off the connect path — `Reload`/`connectOne` now
+cache the *unfiltered* discovery in `Manager.allTools` (via `ListAllTools`), and
+a shared `applyToolFiltersLocked` re-derives the active `tools` set + per-server
+`ToolCount` from that cache. New `Manager.ApplyToolFilters(servers)` (no network,
+no reconnect), `Catalog.RebuildRegistryWithFilters`, `Runtime.RebuildToolRegistry`,
+and `App.rebuildToolRegistry` let `toolsdialog.SetToolEnabled` persist the filter
+and rebuild the registry from cache instead of calling `ReloadMCP`. This is a
+correct realization of the plan's "rebuild from cache" intent: because the cache
+is now unfiltered, re-enabling a previously-excluded tool works without a network
+round trip. (Server enable/disable still calls `ReloadMCP`; its async
+`tea.Cmd`/spinner wiring is deferred to plan 04.) New
+`internal/mcp/manager_concurrent_test.go` asserts concurrent fan-out
+(~max not ~sum latency), deterministic ordering, failure isolation, and that
+filter toggles dial the connector zero extra times.
+
 - **2026-06-25 — Provider streaming hardening (AD-058):** Plan 02 of the
 concurrency-cohesion audit. (A) **No goroutine leak on cancel:** every Gemini
 adapter channel send now routes through a shared ctx-aware `sendOrDone(ctx, ch, sr)

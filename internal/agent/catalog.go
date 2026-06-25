@@ -76,6 +76,19 @@ func (c *Catalog) BuildRegistry() *tools.Registry {
 	return reg
 }
 
+// RebuildRegistryWithFilters re-applies each MCP server's include/exclude tool
+// filter from the current settings to the already-discovered tool cache (no
+// reconnect, no network) and returns a fresh registry. Use for tool-filter
+// toggles, where only policy changed and the live connections are unchanged.
+func (c *Catalog) RebuildRegistryWithFilters() (*tools.Registry, error) {
+	servers, err := c.mergeMCPServers()
+	if err != nil {
+		return nil, err
+	}
+	c.mcp.ApplyToolFilters(servers)
+	return c.BuildRegistry(), nil
+}
+
 // Reload refreshes extensions, MCP servers, skills, and returns an assembled registry.
 func (c *Catalog) Reload(ctx context.Context) (*tools.Registry, error) {
 	if err := c.extensions.Reload(c.settings); err != nil {
