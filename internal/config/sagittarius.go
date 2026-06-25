@@ -85,25 +85,25 @@ type SagittariusSettings struct {
 	Snapshots *SagittariusSnapshotConfig `json:"snapshots,omitempty"`
 	// Verify configures the code-quality verify workflow (run_project_checks fix
 	// gating and the optional post-write reminder).
-	Verify *SagittariusVerifyConfig   `json:"verify,omitempty"`
+	Verify *SagittariusVerifyConfig `json:"verify,omitempty"`
 	// Web configures the built-in google_web_search and web_fetch tools.
 	Web *SagittariusWebConfig `json:"web,omitempty"`
 	// MaxToolRounds caps how many tool-call/response cycles the agent may
 	// execute per turn. Nil means use the compiled-in default (100).
 	// Set higher for tasks that write many files; set lower to cap runaway loops.
-	MaxToolRounds *int                     `json:"maxToolRounds,omitempty"`
+	MaxToolRounds *int                       `json:"maxToolRounds,omitempty"`
 	Extra         map[string]json.RawMessage `json:"-"`
 }
 
 // SagittariusWebConfig configures the built-in google_web_search and web_fetch tools.
 // Pointers distinguish unset from explicit values.
 type SagittariusWebConfig struct {
-	SearchEnabled    *bool  `json:"searchEnabled,omitempty"`
-	FetchEnabled     *bool  `json:"fetchEnabled,omitempty"`
-	DirectWebFetch   *bool  `json:"directWebFetch,omitempty"`
-	UtilityModel     string `json:"utilityModel,omitempty"`
-	RetryFetchErrors *bool  `json:"retryFetchErrors,omitempty"`
-	MaxFetchBytes    *int   `json:"maxFetchBytes,omitempty"`
+	SearchEnabled    *bool                      `json:"searchEnabled,omitempty"`
+	FetchEnabled     *bool                      `json:"fetchEnabled,omitempty"`
+	DirectWebFetch   *bool                      `json:"directWebFetch,omitempty"`
+	UtilityModel     string                     `json:"utilityModel,omitempty"`
+	RetryFetchErrors *bool                      `json:"retryFetchErrors,omitempty"`
+	MaxFetchBytes    *int                       `json:"maxFetchBytes,omitempty"`
 	Extra            map[string]json.RawMessage `json:"-"`
 }
 

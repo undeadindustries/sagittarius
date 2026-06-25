@@ -585,4 +585,3 @@ func mergeSecurity(global, project *SecuritySettings) *SecuritySettings {
 	merged.Extra = mergeRaw(global.Extra, project.Extra)
 	return &merged
 }
-

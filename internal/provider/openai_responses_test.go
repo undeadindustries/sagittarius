@@ -235,7 +235,7 @@ func TestMapResponsesSseEventTable(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
+		name          string
 		events        []ResponsesSseEvent
 		wantText      string
 		wantReasoning string

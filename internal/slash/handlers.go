@@ -11,7 +11,6 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/version"
 )
 
-
 func helpCommand() Command {
 	return Command{
 		Name:        "help",

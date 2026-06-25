@@ -145,7 +145,7 @@ func TestFooterDetailShowsScrollHints(t *testing.T) {
 
 	app := footerMetricsApp{
 		stats: ui.SessionStats{
-			LastInputTokens: 100,
+			LastInputTokens:  100,
 			LastOutputTokens: 40,
 			InputTokens:      100,
 			OutputTokens:     40,

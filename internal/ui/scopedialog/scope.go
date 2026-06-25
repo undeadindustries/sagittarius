@@ -184,4 +184,3 @@ func SaveToLabel(scope config.SettingScope, globalPath, projectPath string) stri
 func KeyHint() string {
 	return "Tab · scope"
 }
-

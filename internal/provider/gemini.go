@@ -181,36 +181,36 @@ func (g *GeminiGenerator) GenerateContentStream(
 				lastUsageMeta = resp.UsageMetadata
 			}
 
-		// Accumulate the full model turn (text + functionCall parts with
-		// their thoughtSignatures) so the runner can store it verbatim for
-		// Gemini 3 multi-step tool calling.
-		acc.add(resp)
+			// Accumulate the full model turn (text + functionCall parts with
+			// their thoughtSignatures) so the runner can store it verbatim for
+			// Gemini 3 multi-step tool calling.
+			acc.add(resp)
 
-		// Emit reasoning deltas for thought parts and text deltas for answer
-		// parts separately, so the UI thinking box receives the right stream.
-		// We iterate parts directly instead of using resp.Text() because that
-		// helper silently skips thought parts.
-		if len(resp.Candidates) > 0 && resp.Candidates[0] != nil && resp.Candidates[0].Content != nil {
-			for _, p := range resp.Candidates[0].Content.Parts {
-				if p == nil {
-					continue
-				}
-				if p.Thought && p.Text != "" {
-					if !sendOrDone(streamCtx, ch, StreamResponse{ReasoningDelta: p.Text}) {
-						return
+			// Emit reasoning deltas for thought parts and text deltas for answer
+			// parts separately, so the UI thinking box receives the right stream.
+			// We iterate parts directly instead of using resp.Text() because that
+			// helper silently skips thought parts.
+			if len(resp.Candidates) > 0 && resp.Candidates[0] != nil && resp.Candidates[0].Content != nil {
+				for _, p := range resp.Candidates[0].Content.Parts {
+					if p == nil {
+						continue
 					}
-				} else if !p.Thought && p.Text != "" {
-					if !sendOrDone(streamCtx, ch, StreamResponse{TextDelta: p.Text}) {
-						return
+					if p.Thought && p.Text != "" {
+						if !sendOrDone(streamCtx, ch, StreamResponse{ReasoningDelta: p.Text}) {
+							return
+						}
+					} else if !p.Thought && p.Text != "" {
+						if !sendOrDone(streamCtx, ch, StreamResponse{TextDelta: p.Text}) {
+							return
+						}
 					}
 				}
 			}
-		}
-		if calls := ToolCallsFromGenaiResponse(resp); len(calls) > 0 {
-			if !sendOrDone(streamCtx, ch, StreamResponse{ToolCalls: calls}) {
-				return
+			if calls := ToolCallsFromGenaiResponse(resp); len(calls) > 0 {
+				if !sendOrDone(streamCtx, ch, StreamResponse{ToolCalls: calls}) {
+					return
+				}
 			}
-		}
 		}
 		// Emit provider-reported usage before Done (cost is not available from
 		// the Gemini API natively so CostKnown remains false). The complete

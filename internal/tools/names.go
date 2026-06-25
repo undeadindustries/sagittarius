@@ -3,14 +3,14 @@ package tools
 // Wire names and parameter keys match the frozen gemini-cli fork (base-declarations.ts).
 
 const (
-	ReadFileToolName      = "read_file"
-	WriteFileToolName     = "write_file"
-	ListDirectoryToolName = "list_directory"
-	ShellToolName         = "run_shell_command"
-	GrepToolName          = "grep_search"
-	ProjectChecksToolName = "run_project_checks"
+	ReadFileToolName        = "read_file"
+	WriteFileToolName       = "write_file"
+	ListDirectoryToolName   = "list_directory"
+	ShellToolName           = "run_shell_command"
+	GrepToolName            = "grep_search"
+	ProjectChecksToolName   = "run_project_checks"
 	GoogleWebSearchToolName = "google_web_search"
-	WebFetchToolName      = "web_fetch"
+	WebFetchToolName        = "web_fetch"
 )
 
 const (

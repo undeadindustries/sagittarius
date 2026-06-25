@@ -239,7 +239,6 @@ func TestShellForegroundAutoBackground(t *testing.T) {
 	}
 }
 
-
 // TestShellForegroundCompletesUnderThreshold confirms that a normal foreground
 // command finishing before the threshold returns synchronously with full output
 // and background=false (no behavior change for ordinary commands).
