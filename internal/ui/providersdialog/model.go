@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/undeadindustries/sagittarius/internal/config"
+	"github.com/undeadindustries/sagittarius/internal/ui/overlay"
 	"github.com/undeadindustries/sagittarius/internal/ui/theme"
 )
 
@@ -197,11 +198,7 @@ func (m *Model) syncInputWidth() {
 }
 
 func (m Model) contentWidth() int {
-	w := m.width - 4 // rounded border (2) + horizontal padding (2)
-	if w < 20 {
-		return 20
-	}
-	return w
+	return overlay.ContentWidth(m.width, overlay.DefaultMinWidth)
 }
 
 // Update advances the dialog state machine for one message.

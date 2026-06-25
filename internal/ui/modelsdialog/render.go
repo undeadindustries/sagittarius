@@ -4,9 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
-
 	"github.com/undeadindustries/sagittarius/internal/ui"
+	"github.com/undeadindustries/sagittarius/internal/ui/overlay"
 )
 
 // View renders the per-model settings editor.
@@ -24,12 +23,7 @@ func (m Model) View() string {
 	}
 	b.WriteString("\n\n" + dim.Render(m.footerHint()))
 
-	box := m.boxStyle()
-	body := b.String()
-	if m.width > 0 {
-		return box.Width(m.contentWidth()).Render(body)
-	}
-	return box.Render(body)
+	return overlay.Frame(m.th, m.width, overlay.DefaultMinWidth, b.String())
 }
 
 func (m Model) footerHint() string {
@@ -43,16 +37,8 @@ func (m Model) footerHint() string {
 	}
 }
 
-func (m Model) boxStyle() lipgloss.Style {
-	s := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
-	if m.th.Colored {
-		s = s.BorderForeground(m.th.FocusBorderColor)
-	}
-	return s
-}
-
 func (m Model) wrap(s string) string {
-	return ui.WrapText(s, m.contentWidth())
+	return ui.WrapText(s, overlay.ContentWidth(m.width, overlay.DefaultMinWidth))
 }
 
 func (m Model) body() string {
@@ -99,8 +85,5 @@ func (m Model) renderSettings() string {
 }
 
 func (m Model) renderRow(label string, selected bool) string {
-	if selected {
-		return m.th.Accent.Render("> " + label)
-	}
-	return "  " + label
+	return overlay.Row(m.th, label, selected)
 }

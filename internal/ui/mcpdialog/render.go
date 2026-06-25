@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
-
 	"github.com/undeadindustries/sagittarius/internal/ui"
+	"github.com/undeadindustries/sagittarius/internal/ui/overlay"
 )
+
+// minContentWidth is the MCP wizard's minimum inner width (wider than the shared
+// default because its forms need room for URLs and headers).
+const minContentWidth = 24
 
 // View renders the MCP server wizard overlay.
 func (m Model) View() string {
@@ -42,11 +45,7 @@ func (m Model) View() string {
 }
 
 func (m Model) wrapBox(body string) string {
-	box := m.boxStyle()
-	if m.width > 0 {
-		return box.Width(m.contentWidth()).Render(body)
-	}
-	return box.Render(body)
+	return overlay.Frame(m.th, m.width, minContentWidth, body)
 }
 
 func (m Model) viewSaving() string {
@@ -207,28 +206,9 @@ func (m Model) viewDelete() string {
 }
 
 func (m Model) renderRow(label string, selected bool) string {
-	if selected {
-		return m.th.Accent.Render("> " + label)
-	}
-	return "  " + label
-}
-
-func (m Model) boxStyle() lipgloss.Style {
-	s := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
-	if m.th.Colored {
-		s = s.BorderForeground(m.th.FocusBorderColor)
-	}
-	return s
+	return overlay.Row(m.th, label, selected)
 }
 
 func (m Model) wrap(s string) string {
-	return ui.WrapText(s, m.contentWidth())
-}
-
-func (m Model) contentWidth() int {
-	w := m.width - 4
-	if w < 24 {
-		return 24
-	}
-	return w
+	return ui.WrapText(s, overlay.ContentWidth(m.width, minContentWidth))
 }

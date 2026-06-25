@@ -4,9 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
-
 	"github.com/undeadindustries/sagittarius/internal/ui"
+	"github.com/undeadindustries/sagittarius/internal/ui/overlay"
 )
 
 // View renders the settings browser overlay.
@@ -34,12 +33,7 @@ func (m Model) View() string {
 		b.WriteString("\n\n" + dim.Render(m.footerHint()))
 	}
 
-	box := m.boxStyle()
-	body := b.String()
-	if m.width > 0 {
-		return box.Width(m.contentWidth()).Render(body)
-	}
-	return box.Render(body)
+	return overlay.Frame(m.th, m.width, overlay.DefaultMinWidth, b.String())
 }
 
 func (m Model) viewList() string {
@@ -95,22 +89,6 @@ func (m Model) footerHint() string {
 	return base
 }
 
-func (m Model) boxStyle() lipgloss.Style {
-	s := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
-	if m.th.Colored {
-		s = s.BorderForeground(m.th.FocusBorderColor)
-	}
-	return s
-}
-
 func (m Model) wrap(s string) string {
-	return ui.WrapText(s, m.contentWidth())
-}
-
-func (m Model) contentWidth() int {
-	w := m.width - 4
-	if w < 20 {
-		return 20
-	}
-	return w
+	return ui.WrapText(s, overlay.ContentWidth(m.width, overlay.DefaultMinWidth))
 }

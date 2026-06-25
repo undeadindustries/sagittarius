@@ -3,9 +3,8 @@ package systempromptdialog
 import (
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
-
 	"github.com/undeadindustries/sagittarius/internal/ui"
+	"github.com/undeadindustries/sagittarius/internal/ui/overlay"
 )
 
 // View renders the project system-prompt picker.
@@ -15,12 +14,7 @@ func (m Model) View() string {
 	b.WriteString(m.th.Title.Render("System Prompt") + "\n\n")
 	b.WriteString(dim.Render("Project-wide personality for this workspace (.sagittarius/settings.json)") + "\n\n")
 	for i, p := range m.options {
-		label := p.label
-		if i == m.cursor {
-			b.WriteString(m.th.Accent.Render("> "+label) + "\n")
-		} else {
-			b.WriteString("  " + label + "\n")
-		}
+		b.WriteString(overlay.Row(m.th, p.label, i == m.cursor) + "\n")
 	}
 	if m.info != "" {
 		line := m.info
@@ -34,25 +28,9 @@ func (m Model) View() string {
 	}
 	b.WriteString("\n\n" + dim.Render("↑/↓ move • Enter apply • Esc close"))
 
-	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
-	if m.th.Colored {
-		box = box.BorderForeground(m.th.FocusBorderColor)
-	}
-	body := b.String()
-	if m.width > 0 {
-		return box.Width(m.contentWidth()).Render(body)
-	}
-	return box.Render(body)
-}
-
-func (m Model) contentWidth() int {
-	w := m.width - 4
-	if w < 20 {
-		return 20
-	}
-	return w
+	return overlay.Frame(m.th, m.width, overlay.DefaultMinWidth, b.String())
 }
 
 func (m Model) wrap(s string) string {
-	return ui.WrapText(s, m.contentWidth())
+	return ui.WrapText(s, overlay.ContentWidth(m.width, overlay.DefaultMinWidth))
 }
