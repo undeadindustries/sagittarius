@@ -65,8 +65,12 @@ func NewRecorder(chatsDir, sessionID, projectHash string) *Recorder {
 	return r
 }
 
-// SessionID returns the session identifier being recorded.
+// SessionID returns the session identifier being recorded. Guarded by r.mu
+// because Rotate() writes r.sessionID concurrently (e.g. /clear or /chat resume
+// rotating the recorder while the agent loop reads the id).
 func (r *Recorder) SessionID() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	return r.sessionID
 }
 

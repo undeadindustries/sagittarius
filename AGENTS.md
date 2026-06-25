@@ -253,13 +253,41 @@ distinct role preamble over the shared lite core; full bespoke prompt bodies
 are still to be authored. No `/personality` command yet (config/preset-driven).
 - **Snapshots:** `write_file` only (not `run_shell_command`); MCP writes are not
 boundary-checked.
-- **Known flakes:** a pre-existing data race in `internal/provider` credential
-globals surfaces under `-race` with ambient stored keys; tests pass in
-isolation / without keys.
 
 ---
 
 ## Recent decisions
+
+- **2026-06-25 — Credentials & misc concurrency hardening (AD-060):** Plan 06 of
+the concurrency-cohesion audit, a set of small independent fixes. (6.1) The
+historical credential-globals `-race` flake is removed via test serialization: a
+package-global `credTestMu` in `internal/credentials` with an exported
+`LockTestGlobals() func()` helper (mutex stays unexported; helper is in non-test
+code because Go can't share `_test.go` symbols across packages). Every test in
+`credentials`, `provider`, and `agent` that mutates credential globals
+(`SetStoreFactoryForTesting`/`SetActiveBackendForTesting`/`SetCredentialsPathForTesting`/
+`SetCacheTTLForTesting`/`ResetForTesting`) now registers the unlock via
+`t.Cleanup(LockTestGlobals())` (before the `ResetForTesting` cleanup, so LIFO
+keeps the lock held across it) and does not run in parallel; the rule is
+documented in `internal/credentials/doc.go`. The "Known flakes" note was removed.
+(6.2) `fileStore`'s package-global lock became an `RWMutex` so concurrent
+credential reads no longer serialize behind disk I/O (writers still exclusive;
+the guard stays package-global because `fileStore` instances are per-call but
+share one file). (6.3) `bgproc.Manager` now runs a single `context`-cancellable
+reaper (ticker over the tracked PID set, started via `sync.Once`) instead of one
+polling goroutine per PID that never shut down; `Manager.Close()` cancels it and
+is wired into `Runtime.Close()`. Exited processes stay in the map (`markExited`
+semantics preserved). `Kill`/`Output` now copy `Process` fields under the lock
+(fixing a pre-existing read-outside-lock race the reaper exposed). (6.4)
+`snapshot.Manager.Undo` restores files off-lock: it pops the target batch under
+the lock (`popUndoBatchLocked`), restores off-lock, then re-locks to re-attach
+un-restored entries, refresh diff tracking, and `rewriteIndexLocked` — so
+`/undo` no longer blocks `CaptureWrite`/`CommitWrite` across filesystem I/O.
+(6.5) `GeneratorCache` uses `golang.org/x/sync/singleflight` so concurrent misses
+for one key share a single client construction (no duplicate DNS/TLS/`genai.NewClient`).
+(6.6) `session.Recorder.SessionID()` now reads under `r.mu` (matches `Rotate()`'s
+write). New `internal/bgproc` test asserts a single reaper goroutine
+(`runtime.NumGoroutine` delta) regardless of N and that `Close()` stops it.
 
 - **2026-06-25 — MCP concurrency + cache-backed filter toggles (AD-059):** Plan
 03 of the concurrency-cohesion audit, in `internal/mcp` + `internal/agent`. (A)

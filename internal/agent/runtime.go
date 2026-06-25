@@ -145,9 +145,15 @@ func (r *Runtime) ReloadAgents(ctx context.Context) (agents.ReloadSummary, error
 	return r.Agents.Reload(ctx, r.Catalog.ExtensionLoader().ActiveAgents())
 }
 
-// Close releases MCP connections.
+// Close releases MCP connections and stops the background-process reaper.
 func (r *Runtime) Close() error {
-	if r == nil || r.Catalog == nil {
+	if r == nil {
+		return nil
+	}
+	if r.BgMgr != nil {
+		_ = r.BgMgr.Close()
+	}
+	if r.Catalog == nil {
 		return nil
 	}
 	return r.Catalog.Close()
