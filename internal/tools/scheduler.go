@@ -147,6 +147,14 @@ func (s *Scheduler) executeOne(
 		return errorResponse(call, errText), nil
 	}
 
+	if canonicalToolName(name) == WriteFileToolName {
+		if err := validateWriteFileArgs(args); err != nil {
+			errText := err.Error()
+			emit(ui.StreamEvent{Type: ui.StreamToolResult, ToolName: name, Text: errText})
+			return errorResponse(call, errText), nil
+		}
+	}
+
 	if s.policy.NeedsConfirmation(tool) && !s.sessionGranted(tool.Name()) {
 		approved, err := s.requestApproval(ctx, tool.Name(), args, emit)
 		if err != nil {

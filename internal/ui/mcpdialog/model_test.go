@@ -125,12 +125,37 @@ func TestDeleteFlow(t *testing.T) {
 	}
 }
 
-func TestReloadFromList(t *testing.T) {
+func TestReloadShowsSpinnerWhileAsync(t *testing.T) {
 	deps := newFake()
 	m := New(context.Background(), deps)
-	m, _ = m.Update(keyRunes("r"))
-	if deps.reloads != 1 {
-		t.Fatalf("reloads = %d, want 1", deps.reloads)
+	m, cmd := m.Update(keyRunes("r"))
+	if !m.reloading {
+		t.Fatal("expected reloading=true after pressing r")
+	}
+	if cmd == nil {
+		t.Fatal("expected spinner tick command while reloading")
+	}
+	if deps.reloads != 0 {
+		t.Fatalf("reload should be async; reloads = %d before completion", deps.reloads)
+	}
+	view := m.View()
+	if !strings.Contains(view, "Reconnecting MCP servers") {
+		t.Fatalf("view should show reload spinner line, got %q", view)
+	}
+
+	m2, cmd2 := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if !m2.reloading || cmd2 != nil {
+		t.Fatal("input should be ignored while reloading")
+	}
+
+	// Simulate async reload completion.
+	deps.reloads++
+	m, _ = m.Update(reloadResultMsg{status: "reloaded"})
+	if m.reloading {
+		t.Fatal("reloading should clear after reloadResultMsg")
+	}
+	if m.info != "reloaded" {
+		t.Fatalf("info = %q, want reloaded", m.info)
 	}
 }
 

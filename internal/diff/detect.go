@@ -15,14 +15,22 @@ func LooksLikeUnifiedDiff(text string) bool {
 		return true
 	}
 	adds, dels := countDiffPrefixLines(text)
-	return adds >= 1 && dels >= 1
+	if adds >= 1 && dels >= 1 {
+		return true
+	}
+	// Many single-sided +/- lines (common pseudo-diff edits).
+	if adds+dels >= 4 {
+		return true
+	}
+	return false
 }
 
 // LooksLikeEjectionMarker reports content that matches the context-management
 // write_file ejection tag models sometimes copy from history into write_file.
 func LooksLikeEjectionMarker(text string) bool {
 	trimmed := strings.TrimSpace(text)
-	return strings.HasPrefix(trimmed, "<file_written ") ||
+	return strings.HasPrefix(trimmed, "[sagittarius omitted write_file content") ||
+		strings.HasPrefix(trimmed, "<file_written ") ||
 		strings.HasPrefix(trimmed, "<file_written>")
 }
 

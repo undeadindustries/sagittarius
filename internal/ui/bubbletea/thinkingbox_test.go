@@ -43,6 +43,28 @@ func TestThinkingBoxHiddenByDefault(t *testing.T) {
 	}
 }
 
+func TestThinkingBoxShowsWhileBusyBeforeReasoning(t *testing.T) {
+	t.Parallel()
+	m := newTestModel()
+	m.showThinking = true
+	m.thinkingToggled = true
+	m.busy = true
+
+	if !m.thinkingBoxVisible() {
+		t.Fatal("box should be visible while busy even before reasoning tokens arrive")
+	}
+	out := stripANSI(m.renderThinkingBox())
+	if !strings.Contains(out, "Thinking") {
+		t.Fatalf("thinking box missing spinner label:\n%s", out)
+	}
+	if !strings.Contains(out, "Listening for reasoning") {
+		t.Fatalf("thinking box should show waiting placeholder:\n%s", out)
+	}
+	if m.showWorkingIndicator() {
+		t.Fatal("standalone working line should be hidden while thinking box is enabled")
+	}
+}
+
 func TestThinkingBoxShowsWhenEnabled(t *testing.T) {
 	t.Parallel()
 	m := newTestModel()

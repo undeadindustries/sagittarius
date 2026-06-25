@@ -200,6 +200,9 @@ func (t *shellTool) run(ctx context.Context, command string, explicitBackground 
 		}()
 	}
 
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+
 	select {
 	case err = <-waitErr:
 		<-ioDone // wait for remaining output to flush
@@ -223,15 +226,30 @@ func (t *shellTool) run(ctx context.Context, command string, explicitBackground 
 		_ = syscall.Kill(-pid, syscall.SIGKILL)
 		_ = os.Remove(logPath)
 		return nil, ctx.Err()
-	case <-time.After(grace):
-		isDone.Store(true)
-		if tailCancel != nil {
-			tailCancel()
+	case <-timer.C:
+		// Prefer a concurrent exit over backgrounding when both are ready.
+		select {
+		case err = <-waitErr:
+			<-ioDone
+			isDone.Store(true)
+			if tailCancel != nil {
+				tailCancel()
+			}
+			if sink != nil {
+				sink(renderEmulator(term))
+			}
+			t.captureJobs(jobsPath, command, logPath)
+			return t.completedResult(logPath, err)
+		default:
+			isDone.Store(true)
+			if tailCancel != nil {
+				tailCancel()
+			}
+			if t.bgMgr != nil {
+				t.bgMgr.Register(pid, pid, command, logPath)
+			}
+			return backgroundedResult(pid, logPath, explicitBackground, grace), nil
 		}
-		if t.bgMgr != nil {
-			t.bgMgr.Register(pid, pid, command, logPath)
-		}
-		return backgroundedResult(pid, logPath, explicitBackground, grace), nil
 	}
 }
 

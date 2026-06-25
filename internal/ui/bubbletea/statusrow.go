@@ -2,6 +2,7 @@ package bubbletea
 
 import (
 	"fmt"
+	"runtime"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -59,14 +60,40 @@ func plural(n int, one, many string) string {
 	return many
 }
 
+// scrollShortcutHints is the compact legend for scrollback keys on the composer
+// status row. Page keys differ by OS; Alt+M toggles mouse-wheel scrolling on all.
+func scrollShortcutHints() string {
+	return scrollShortcutHintsForGOOS(runtime.GOOS)
+}
+
+func scrollShortcutHintsForGOOS(goos string) string {
+	mouse := "Alt+M"
+	switch goos {
+	case "darwin":
+		// Mac keyboards usually lack PgUp/PgDn; Fn+arrow sends them in most terminals.
+		return "Fn↑ Fn↓ · " + mouse
+	case "windows":
+		return "Pg↑ Pg↓ · " + mouse
+	default:
+		// Linux and other Unix: PgUp/PgDown keys or terminal bindings.
+		return "Pg↑ Pg↓ · " + mouse
+	}
+}
+
 // statusRowLine builds the unstyled (left, right) halves of the composer status
-// row. Either half may be empty.
+// row. The right side always includes scroll shortcuts; AGENTS.md/skill counts
+// append when present.
 func (m *model) statusRowParts() (left, right string) {
 	cs, ok := m.composerStatus()
 	if ok {
 		left = approvalHint(cs.ApprovalMode)
 	}
-	right = contextSummary(len(m.opts.LoadedMemoryFiles), cs.SkillCount)
+	var rightParts []string
+	rightParts = append(rightParts, scrollShortcutHints())
+	if summary := contextSummary(len(m.opts.LoadedMemoryFiles), cs.SkillCount); summary != "" {
+		rightParts = append(rightParts, summary)
+	}
+	right = strings.Join(rightParts, " · ")
 	return left, right
 }
 
@@ -75,9 +102,6 @@ func (m *model) statusRowParts() (left, right string) {
 // its reserved height) collapses entirely.
 func (m *model) renderStatusRow() string {
 	left, right := m.statusRowParts()
-	if left == "" && right == "" {
-		return ""
-	}
 	return renderStatusRowLine(left, right, m.th, m.width)
 }
 
@@ -89,12 +113,8 @@ func renderStatusRowLine(left, right string, th theme.Theme, width int) string {
 	return th.Dim.Render(left) + strings.Repeat(" ", gap) + th.Dim.Render(right)
 }
 
-// statusRowRows is the height (0 or 1) the composer status row occupies, so the
-// scrollback viewport can shrink to make room for it.
+// statusRowRows is the height (always 1) the composer status row occupies, so the
+// scrollback viewport can shrink to make room for scroll shortcut hints.
 func (m *model) statusRowRows() int {
-	left, right := m.statusRowParts()
-	if left == "" && right == "" {
-		return 0
-	}
 	return 1
 }

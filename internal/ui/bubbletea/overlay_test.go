@@ -144,7 +144,8 @@ func TestOverlayRoutesStreamDone(t *testing.T) {
 	// A StreamDone arriving while the overlay is open must still reset busy
 	// state rather than being swallowed by the overlay.
 	m.busy = true
-	updated, _ := m.Update(streamEventMsg{event: ui.StreamEvent{Type: ui.StreamDone}})
+	m.activeStreamGen = 1
+	updated, _ := m.Update(streamEventMsg{gen: 1, event: ui.StreamEvent{Type: ui.StreamDone}})
 	mm := updated.(*model)
 	if mm.busy {
 		t.Fatal("StreamDone should clear busy even with overlay open")

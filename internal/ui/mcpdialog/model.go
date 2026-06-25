@@ -80,14 +80,20 @@ type Model struct {
 	errMsg    string
 	info      string
 
-	saving bool
-	spin   spinner.Model
+	saving    bool
+	reloading bool
+	spin      spinner.Model
 }
 
 type saveResultMsg struct {
 	err    error
 	adding bool
 	name   string
+}
+
+type reloadResultMsg struct {
+	err    error
+	status string
 }
 
 // New constructs the MCP server wizard.
@@ -130,7 +136,7 @@ func (m Model) SetTheme(th theme.Theme) Model {
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case spinner.TickMsg:
-		if !m.saving {
+		if !m.busy() {
 			return m, nil
 		}
 		var cmd tea.Cmd
@@ -138,9 +144,11 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, cmd
 	case saveResultMsg:
 		return m.handleSaveResult(msg)
+	case reloadResultMsg:
+		return m.handleReloadResult(msg)
 	}
 
-	if m.saving {
+	if m.busy() {
 		return m, nil
 	}
 
@@ -269,16 +277,37 @@ func (m Model) toggleDisabled() (Model, tea.Cmd) {
 }
 
 func (m Model) reload() (Model, tea.Cmd) {
-	status, err := m.deps.Reload(m.ctx)
-	if err != nil {
-		m.errMsg = err.Error()
+	if m.busy() {
 		return m, nil
 	}
-	m.info = status
+	m.reloading = true
+	m.errMsg = ""
+	return m, tea.Batch(
+		m.spin.Tick,
+		reloadServerCmd(m.ctx, m.deps),
+	)
+}
+
+func reloadServerCmd(ctx context.Context, deps Deps) tea.Cmd {
+	return func() tea.Msg {
+		status, err := deps.Reload(ctx)
+		return reloadResultMsg{err: err, status: status}
+	}
+}
+
+func (m Model) handleReloadResult(msg reloadResultMsg) (Model, tea.Cmd) {
+	m.reloading = false
+	if msg.err != nil {
+		m.errMsg = msg.err.Error()
+		return m, nil
+	}
+	m.info = msg.status
 	m.errMsg = ""
 	m.servers = m.deps.ListServers()
 	return m, nil
 }
+
+func (m Model) busy() bool { return m.saving || m.reloading }
 
 func (m Model) updateForm(key tea.KeyMsg) (Model, tea.Cmd) {
 	switch key.String() {

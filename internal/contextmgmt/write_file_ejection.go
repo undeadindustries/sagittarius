@@ -9,6 +9,11 @@ import (
 // never ejected twice.
 const WriteFileEjectionTag = "file_written"
 
+// writeFileOmittedPrefix marks ejected write_file payloads in history. It must
+// not resemble file content or XML tool tags — models were copying the old
+// "<file_written path=…>" marker into write_file literally.
+const writeFileOmittedPrefix = "[sagittarius omitted write_file content"
+
 // ejection bounds ported from the fork.
 const (
 	minEjectionAgeTurns = 1
@@ -96,7 +101,7 @@ func ejectParts(parts []Part, opts WriteFileEjectionOptions, estimate EstimateFn
 			continue
 		}
 		content, ok := stringArg(fc.Args, WriteFileParamContent)
-		if !ok || strings.HasPrefix(content, "<"+WriteFileEjectionTag) {
+		if !ok || isEjectedWriteFileContent(content) {
 			continue
 		}
 		contentTokens := estimate([]Part{{Text: content}})
@@ -131,8 +136,13 @@ func buildEjectionMarker(args map[string]any, content string, contentTokens int)
 		filePath = p
 	}
 	lines := strings.Count(content, "\n") + 1
-	return fmt.Sprintf("<%s path=\"%s\" lines=%d tokens=%d cached=true>",
-		WriteFileEjectionTag, escapeAttr(filePath), lines, contentTokens)
+	return fmt.Sprintf("%s path=\"%s\" lines=%d tokens=%d]",
+		writeFileOmittedPrefix, escapeAttr(filePath), lines, contentTokens)
+}
+
+func isEjectedWriteFileContent(content string) bool {
+	return strings.HasPrefix(content, writeFileOmittedPrefix) ||
+		strings.HasPrefix(content, "<"+WriteFileEjectionTag)
 }
 
 func stringArg(args map[string]any, key string) (string, bool) {

@@ -80,8 +80,8 @@ func TestEjectStaleContent(t *testing.T) {
 		t.Fatalf("EjectedCount = %d, want 1", res.EjectedCount)
 	}
 	got := callContent(res.NewHistory[2])
-	if !strings.Contains(got, WriteFileEjectionTag) {
-		t.Errorf("content = %q, want marker tag", got)
+	if !strings.Contains(got, "omitted write_file content") {
+		t.Errorf("content = %q, want omission marker", got)
 	}
 	if path := res.NewHistory[2].Parts[0].FunctionCall.Args["file_path"]; path != "/foo.ts" {
 		t.Errorf("file_path = %v, want /foo.ts", path)
