@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"iter"
-	"os"
 	"sync"
 	"testing"
 	"time"
@@ -75,34 +74,6 @@ func testContext(t *testing.T) context.Context {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	t.Cleanup(cancel)
 	return ctx
-}
-
-func withEnv(t *testing.T, key, value string) {
-	t.Helper()
-	prev, had := os.LookupEnv(key)
-	if err := os.Setenv(key, value); err != nil {
-		t.Fatalf("Setenv(%q): %v", key, err)
-	}
-	t.Cleanup(func() {
-		if had {
-			_ = os.Setenv(key, prev)
-		} else {
-			_ = os.Unsetenv(key)
-		}
-	})
-}
-
-func withoutEnv(t *testing.T, key string) {
-	t.Helper()
-	prev, had := os.LookupEnv(key)
-	if err := os.Unsetenv(key); err != nil {
-		t.Fatalf("Unsetenv(%q): %v", key, err)
-	}
-	t.Cleanup(func() {
-		if had {
-			_ = os.Setenv(key, prev)
-		}
-	})
 }
 
 func withEmptyCredentials(t *testing.T) {
@@ -231,12 +202,13 @@ func TestGeminiStreamTextDelta(t *testing.T) {
 }
 
 func TestGeminiInvalidKey(t *testing.T) {
-	t.Parallel()
-
+	// Not parallel: t.Setenv and withEmptyCredentials mutate process-global state
+	// (environment + credential store factory); a parallel sibling could observe
+	// or clobber it mid-resolution.
 	ctx := testContext(t)
 	withEmptyCredentials(t)
-	withoutEnv(t, "GEMINI_API_KEY")
-	withoutEnv(t, "GOOGLE_API_KEY")
+	t.Setenv("GEMINI_API_KEY", "")
+	t.Setenv("GOOGLE_API_KEY", "")
 
 	settings := &config.Settings{
 		Providers: &config.ProvidersSettings{Active: geminiProviderID},
@@ -252,10 +224,9 @@ func TestGeminiInvalidKey(t *testing.T) {
 }
 
 func TestFactorySelectsGeminiAPIKey(t *testing.T) {
-	t.Parallel()
-
+	// Not parallel: t.Setenv mutates the process environment.
 	ctx := testContext(t)
-	withEnv(t, "GEMINI_API_KEY", "test-key")
+	t.Setenv("GEMINI_API_KEY", "test-key")
 
 	settings := &config.Settings{
 		Providers: &config.ProvidersSettings{

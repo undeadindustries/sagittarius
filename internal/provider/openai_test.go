@@ -377,10 +377,9 @@ func TestModelDiscoveryEmptyOnFailure(t *testing.T) {
 }
 
 func TestFactorySelectsOpenAI(t *testing.T) {
-	t.Parallel()
-
+	// Not parallel: t.Setenv mutates the process environment.
 	ctx := testContext(t)
-	withEnv(t, "OPENAI_API_KEY", "sk-test")
+	t.Setenv("OPENAI_API_KEY", "sk-test")
 
 	settings := &config.Settings{
 		Providers: &config.ProvidersSettings{
@@ -600,10 +599,11 @@ func mustMarshalJSON(t *testing.T, v any) json.RawMessage {
 
 func TestOpenAIFactoryMissingKey(t *testing.T) {
 	// Not parallel: withEmptyCredentials overrides the process-global credential
-	// store factory; a raced sibling cleanup could expose the real keychain.
+	// store factory and t.Setenv mutates the environment; a raced sibling cleanup
+	// could expose the real keychain or key.
 	ctx := testContext(t)
 	withEmptyCredentials(t)
-	withoutEnv(t, "OPENAI_API_KEY")
+	t.Setenv("OPENAI_API_KEY", "")
 
 	settings := &config.Settings{
 		Providers: &config.ProvidersSettings{
