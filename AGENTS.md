@@ -169,9 +169,15 @@ User commands must appear in `/help` with a description (no hidden commands).
 
 Key seams to preserve:
 
-- **UI is swappable.** Agent/core packages must not import Bubble Tea; only
-`internal/ui/bubbletea` imports the charm libraries. Everything crosses the
-`internal/ui.UI` interface (and optional `ui.Completer`/`ui.MetricsProvider`).
+- **UI is swappable.** The charm libraries (`bubbletea`, `bubbles`, `lipgloss`,
+`x/vt`, `x/ansi`) are allowed **only** under `internal/ui/*` (the Bubble Tea
+implementation plus its dialog/theme/overlay leaves) and in `internal/tools/`
+(`shell.go`/`ptyrun.go` use `x/vt`+`x/ansi` for PTY emulation). They are
+**strictly forbidden** in `internal/agent` and `internal/slash` (and elsewhere
+in core) so the agent core never depends on a concrete UI toolkit. Everything
+crosses the `internal/ui.UI` interface (and optional
+`ui.Completer`/`ui.MetricsProvider`). `internal/archtest/imports_test.go`
+enforces this boundary on every `go test ./...`.
 - **One openai-chat adapter** for all URL-based providers; Gemini-native and
 OpenAI-Responses are separate wire paths. Client-side context management is
 gated to `openai-chat` only — Gemini and Responses are never masked/compressed
@@ -200,8 +206,9 @@ internal/session/         # JSONL session persistence, resume/list
 internal/storage/         # global home + project slug registry
 internal/mcp/ skills/ agents/ extensions/   # MCP + skills (full); agents/extensions partial
 internal/ui/              # ui.UI interface (primitives only)
-internal/ui/bubbletea/    # Bubble Tea implementation (only charm importer)
-internal/ui/theme/ providersdialog/ modelsdialog/ modelpickdialog/ modesdialog/ systempromptdialog/ mcpdialog/ toolsdialog/  # TUI leaves
+internal/ui/bubbletea/    # Bubble Tea implementation
+internal/ui/overlay/ theme/ scopedialog/ providersdialog/ modelsdialog/ modelpickdialog/ modesdialog/ systempromptdialog/ mcpdialog/ toolsdialog/  # TUI leaves (charm-owning)
+internal/archtest/        # architecture-boundary tests (charm seam enforcement)
 internal/version/ internal/log/
 tests/parity/             # comparison harness (gated by SAGITTARIUS_PARITY_FORK)
 tests/e2e/                # subprocess E2E: live (SAGITTARIUS_E2E_LIVE) + mock (SAGITTARIUS_E2E_MOCK)
