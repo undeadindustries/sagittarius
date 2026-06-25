@@ -37,9 +37,10 @@ var skipDirs = map[string]bool{
 type Index struct {
 	ws *tools.Workspace
 
-	mu       sync.Mutex
-	cached   []string
-	cachedAt time.Time
+	mu         sync.Mutex
+	cached     []string
+	cachedAt   time.Time
+	refreshing bool
 }
 
 // NewIndex builds a completion index over ws. It returns nil when ws is nil so
@@ -119,17 +120,34 @@ func (idx *Index) match(partial string) []string {
 	return out
 }
 
-// files returns the cached workspace file listing, rewalking when the cache has
-// expired.
+// files returns the current cache without blocking, kicking off a background
+// refresh when the cache is stale. Callers (including the per-keystroke TUI
+// completer on the Bubble Tea Update goroutine) always get an immediate, possibly
+// stale, answer; the next keystroke after a refresh completes sees fresh data.
+// The expensive walk runs off-lock — only the cache swap holds the lock — so a
+// large tree never freezes input. First call returns nil (one frame of no
+// suggestions) until the initial walk lands.
 func (idx *Index) files() []string {
 	idx.mu.Lock()
-	defer idx.mu.Unlock()
-	if idx.cached != nil && time.Since(idx.cachedAt) < indexTTL {
-		return idx.cached
+	cached := idx.cached
+	stale := cached == nil || time.Since(idx.cachedAt) >= indexTTL
+	startRefresh := stale && !idx.refreshing
+	if startRefresh {
+		idx.refreshing = true
 	}
-	idx.cached = walkFiles(idx.ws.Root())
-	idx.cachedAt = time.Now()
-	return idx.cached
+	idx.mu.Unlock()
+
+	if startRefresh {
+		go func() {
+			files := walkFiles(idx.ws.Root())
+			idx.mu.Lock()
+			idx.cached = files
+			idx.cachedAt = time.Now()
+			idx.refreshing = false
+			idx.mu.Unlock()
+		}()
+	}
+	return cached
 }
 
 // walkFiles lists workspace-relative file paths (forward-slashed), skipping

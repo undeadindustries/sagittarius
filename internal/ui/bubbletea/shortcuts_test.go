@@ -118,10 +118,17 @@ func TestCycleThemeAppliesAndPersists(t *testing.T) {
 	app := &shortcutApp{themeReturn: "default"}
 	m := newShortcutModel(app)
 	before := len(m.blocks)
-	m.cycleTheme()
+	// cycleTheme defers the compute+persist to a Cmd; executing it yields the
+	// themeCycledMsg which Update applies (theme swap + info block).
+	_, cmd := m.cycleTheme()
+	if cmd == nil {
+		t.Fatal("cycleTheme should return a command")
+	}
+	msg := cmd()
 	if app.themeCalls != 1 {
 		t.Fatalf("CycleTheme calls = %d, want 1", app.themeCalls)
 	}
+	m.Update(msg)
 	if len(m.blocks) != before+1 {
 		t.Fatalf("cycleTheme should add one info block, got %d new", len(m.blocks)-before)
 	}
@@ -134,12 +141,21 @@ func TestAltTKeyCyclesTheme(t *testing.T) {
 	t.Parallel()
 	app := &shortcutApp{themeReturn: "greyscale"}
 	m := newShortcutModel(app)
-	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}, Alt: true})
+	// The key handler returns the cycle Cmd; execute it to drive CycleTheme.
+	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}, Alt: true})
+	if cmd == nil {
+		t.Fatal("Alt+T should return a command")
+	}
+	cmd()
 	if app.themeCalls != 1 {
 		t.Fatalf("Alt+T should call CycleTheme once, got %d", app.themeCalls)
 	}
 
-	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'†'}})
+	_, cmd = m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'†'}})
+	if cmd == nil {
+		t.Fatal("Mac Option+T (†) should return a command")
+	}
+	cmd()
 	if app.themeCalls != 2 {
 		t.Fatalf("Mac Option+T (†) should call CycleTheme, got %d", app.themeCalls)
 	}

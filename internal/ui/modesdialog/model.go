@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/undeadindustries/sagittarius/internal/config"
@@ -40,11 +41,21 @@ type Model struct {
 	pickCursor int
 
 	// scopeSel controls which settings file the override is written to.
-	scopeSel    scopedialog.ScopeSelector
+	scopeSel     scopedialog.ScopeSelector
 	scopeFocused bool
+
+	spin     spinner.Model
+	applying bool
 
 	errMsg string
 	info   string
+}
+
+// applyResultMsg carries the outcome of an off-Update mode-override write (which
+// rebuilds the runner) so a cold provider switch never blocks the UI loop.
+type applyResultMsg struct {
+	info string
+	err  error
 }
 
 // New constructs the modes-override editor.
@@ -59,9 +70,15 @@ func New(ctx context.Context, deps Deps) Model {
 		th:       theme.Default(),
 		screen:   screenModes,
 		scopeSel: sel,
+		spin:     newDialogSpinner(),
 	}
 	m.modes = deps.ListModes()
 	return m
+}
+
+// newDialogSpinner returns the small braille-dot spinner used while an apply runs.
+func newDialogSpinner() spinner.Model {
+	return spinner.New(spinner.WithSpinner(spinner.MiniDot))
 }
 
 // Done reports whether the dialog has finished.
@@ -85,6 +102,22 @@ func (m Model) SetTheme(th theme.Theme) Model {
 
 // Update advances the editor for one message.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case spinner.TickMsg:
+		if !m.applying {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.spin, cmd = m.spin.Update(msg)
+		return m, cmd
+	case applyResultMsg:
+		return m.handleApplyResult(msg)
+	}
+	// While an apply is in flight, swallow input so the selection can't change
+	// mid-rebuild (the spinner keeps animating via the TickMsg case above).
+	if m.applying {
+		return m, nil
+	}
 	// Scope-changed messages are handled by updating the embedded selector.
 	if _, ok := msg.(scopedialog.ScopeChangedMsg); ok {
 		return m, nil
@@ -202,17 +235,25 @@ func (m Model) applyOverride() (Model, tea.Cmd) {
 		return m.clearCurrentOverride()
 	}
 	scope := m.scopeSel.Scope
-	if err := m.deps.SetModeOverride(m.ctx, m.targetMode, e.ProviderID, e.Model, scope); err != nil {
-		m.errMsg = err.Error()
-		return m, nil
-	}
-	m.modes = m.deps.ListModes()
-	m.info = fmt.Sprintf("%s mode → %s/%s. (%s)", m.targetMode, e.DisplayID, e.Model, scope)
-	m.status = m.info
+	mode := m.targetMode
+	ctx := m.ctx
+	deps := m.deps
+	m.applying = true
+	m.errMsg = ""
+	m.info = fmt.Sprintf("Setting %s mode → %s/%s…", mode, e.DisplayID, e.Model)
 	m.scopeFocused = false
 	m.scopeSel.Blur()
 	m.screen = screenModes
-	return m, nil
+	return m, tea.Batch(
+		m.spin.Tick,
+		func() tea.Msg {
+			err := deps.SetModeOverride(ctx, mode, e.ProviderID, e.Model, scope)
+			return applyResultMsg{
+				info: fmt.Sprintf("%s mode → %s/%s. (%s)", mode, e.DisplayID, e.Model, scope),
+				err:  err,
+			}
+		},
+	)
 }
 
 func (m Model) clearCurrentOverride() (Model, tea.Cmd) {
@@ -221,13 +262,36 @@ func (m Model) clearCurrentOverride() (Model, tea.Cmd) {
 	}
 	mode := m.modes[m.modeCursor].Mode
 	scope := m.scopeSel.Scope
-	if err := m.deps.ClearModeOverride(m.ctx, mode, scope); err != nil {
-		m.errMsg = err.Error()
+	ctx := m.ctx
+	deps := m.deps
+	m.applying = true
+	m.errMsg = ""
+	m.info = fmt.Sprintf("Clearing %s mode override…", mode)
+	m.scopeFocused = false
+	m.scopeSel.Blur()
+	m.screen = screenModes
+	return m, tea.Batch(
+		m.spin.Tick,
+		func() tea.Msg {
+			err := deps.ClearModeOverride(ctx, mode, scope)
+			return applyResultMsg{
+				info: fmt.Sprintf("%s mode override cleared (uses default).", mode),
+				err:  err,
+			}
+		},
+	)
+}
+
+func (m Model) handleApplyResult(msg applyResultMsg) (Model, tea.Cmd) {
+	m.applying = false
+	if msg.err != nil {
+		m.errMsg = msg.err.Error()
+		m.info = ""
 		return m, nil
 	}
 	m.modes = m.deps.ListModes()
-	m.info = fmt.Sprintf("%s mode override cleared (uses default).", mode)
-	m.status = m.info
+	m.info = msg.info
+	m.status = msg.info
 	m.errMsg = ""
 	return m, nil
 }

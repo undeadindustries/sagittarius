@@ -123,18 +123,28 @@ func TestToggleThinkingFlipsAndPersists(t *testing.T) {
 	m := newModel(ui.Options{ThemeName: "greyscale"}, app, NewTerminal(ui.Options{}))
 	m.width, m.height = 80, 24
 
-	m.toggleThinking()
+	// The visual flip is synchronous; persistence runs in the returned Cmd so the
+	// disk write never blocks the Update goroutine. Execute the Cmd to drive it.
+	_, cmd := m.toggleThinking()
 	if !m.showThinking || !m.thinkingToggled {
 		t.Fatalf("toggle on: show=%v toggled=%v", m.showThinking, m.thinkingToggled)
 	}
+	if cmd == nil {
+		t.Fatal("toggleThinking should return a persistence command")
+	}
+	cmd()
 	if !app.lastSet || app.calls != 1 {
 		t.Fatalf("toggle on should persist true once: set=%v calls=%d", app.lastSet, app.calls)
 	}
 
-	m.toggleThinking()
+	_, cmd = m.toggleThinking()
 	if m.showThinking {
 		t.Fatal("second toggle should turn the box off")
 	}
+	if cmd == nil {
+		t.Fatal("toggleThinking should return a persistence command")
+	}
+	cmd()
 	if app.lastSet || app.calls != 2 {
 		t.Fatalf("toggle off should persist false: set=%v calls=%d", app.lastSet, app.calls)
 	}

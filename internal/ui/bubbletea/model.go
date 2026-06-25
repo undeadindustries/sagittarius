@@ -179,12 +179,12 @@ type model struct {
 	// abandoned stream channel drains, so HandleInput cannot overlap on Runner.
 	// streamGen/activeStreamGen tag streamEventMsg values so stale events queued
 	// before force-abandon cannot apply to a later turn.
-	turnCancel       context.CancelFunc
-	turnStart        time.Time
-	turnCanceled     bool
-	turnInFlight     bool
-	streamGen        uint64
-	activeStreamGen  uint64
+	turnCancel      context.CancelFunc
+	turnStart       time.Time
+	turnCanceled    bool
+	turnInFlight    bool
+	streamGen       uint64
+	activeStreamGen uint64
 	// spin drives the animated working/thinking indicator shown above the input
 	// while a turn is in flight. It only ticks while busy.
 	spin spinner.Model
@@ -403,6 +403,19 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case clipboardResultMsg:
 		return m, m.handleClipboardResult(msg)
+	case thinkingSavedMsg:
+		if msg.err != nil {
+			_ = m.term.ShowError(msg.err)
+		}
+		return m, nil
+	case themeCycledMsg:
+		if msg.err != nil {
+			_ = m.term.ShowError(msg.err)
+			return m, nil
+		}
+		m.addBlock(roleInfo, "Theme → "+msg.name+" (Alt+T).")
+		m.setTheme(msg.name)
+		return m, nil
 	case statusMsg:
 		m.status = msg.status
 		return m, nil
@@ -1880,24 +1893,36 @@ func (m *model) effectiveShowThinking() bool {
 	return m.showThinking
 }
 
-// toggleThinking flips the thinking-box visibility, records the session override,
-// and persists the global setting via the app's ThinkingController capability.
+// thinkingSavedMsg reports the result of persisting the thinking-box toggle off
+// the Update goroutine (fire-and-forget; only errors are surfaced).
+type thinkingSavedMsg struct{ err error }
+
+// themeCycledMsg carries the new theme name (and any save error) back from the
+// async ThemeController call so it is applied on the Update goroutine.
+type themeCycledMsg struct {
+	name string
+	err  error
+}
+
+// toggleThinking flips the thinking-box visibility instantly (in-memory) and
+// persists the global setting off the Update goroutine via a tea.Cmd so the disk
+// write never blocks input. The visual change is applied here; only the save is
+// async.
 func (m *model) toggleThinking() (tea.Model, tea.Cmd) {
 	newVal := !m.effectiveShowThinking()
 	m.showThinking = newVal
 	m.thinkingToggled = true
-	if tc, ok := m.app.(ui.ThinkingController); ok {
-		if err := tc.SetShowThinking(newVal); err != nil {
-			_ = m.term.ShowError(err)
-		}
-	}
 	state := "hidden"
 	if newVal {
 		state = "shown"
 	}
 	m.addBlock(roleInfo, "Thinking box "+state+" (Ctrl+T).")
 	m.syncViewportContent()
-	return m, nil
+	tc, ok := m.app.(ui.ThinkingController)
+	if !ok {
+		return m, nil
+	}
+	return m, func() tea.Msg { return thinkingSavedMsg{err: tc.SetShowThinking(newVal)} }
 }
 
 // streamContext returns the live turn context, falling back to a background
@@ -1942,21 +1967,18 @@ func (m *model) startModeSwitch(name string) (tea.Model, tea.Cmd) {
 }
 
 // cycleTheme toggles the color theme via the app's ThemeController capability
-// and applies it live (Alt+T). It is a no-op when the app does not implement the
-// capability (e.g. in tests).
+// (Alt+T). The compute+persist call runs off the Update goroutine in a tea.Cmd
+// (it touches disk); the new theme is applied live when the themeCycledMsg lands.
+// It is a no-op when the app does not implement the capability (e.g. in tests).
 func (m *model) cycleTheme() (tea.Model, tea.Cmd) {
 	tc, ok := m.app.(ui.ThemeController)
 	if !ok {
 		return m, nil
 	}
-	name, err := tc.CycleTheme()
-	if err != nil {
-		_ = m.term.ShowError(err)
-		return m, nil
+	return m, func() tea.Msg {
+		name, err := tc.CycleTheme()
+		return themeCycledMsg{name: name, err: err}
 	}
-	m.addBlock(roleInfo, "Theme → "+name+" (Alt+T).")
-	m.setTheme(name)
-	return m, nil
 }
 
 // setMouse turns mouse-wheel reporting on or off at runtime and returns the tea

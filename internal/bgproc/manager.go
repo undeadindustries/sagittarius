@@ -3,12 +3,17 @@ package bgproc
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 )
+
+// tailBytes bounds how much of a process log the viewer loads — only the last
+// chunk is interesting and reading a multi-MiB log inline would stall the UI.
+const tailBytes = 64 << 10
 
 // ProcessStatus represents the state of a background process.
 type ProcessStatus string
@@ -180,7 +185,10 @@ func (m *Manager) Kill(pid int) error {
 	return syscall.Kill(pid, syscall.SIGKILL)
 }
 
-// Output reads the tail of the log file for the given process.
+// Output reads the tail (last tailBytes) of the log file for the given process.
+// LogPath is copied under the lock and the file I/O runs off-lock (AD-060), so
+// the reaper never blocks on disk. Callers should invoke this from a tea.Cmd,
+// not inline on the Bubble Tea Update goroutine.
 func (m *Manager) Output(pid int) string {
 	m.mu.RLock()
 	p, ok := m.processes[pid]
@@ -192,12 +200,19 @@ func (m *Manager) Output(pid int) string {
 	if !ok || logPath == "" {
 		return ""
 	}
-	data, err := os.ReadFile(logPath)
+	f, err := os.Open(logPath)
 	if err != nil {
 		return ""
 	}
-	// Note: We might want to strip ANSI here if needed, but for the viewer,
-	// raw strings might be okay, or we can just return it. 
-	// The dialog can handle it.
+	defer f.Close()
+	if fi, statErr := f.Stat(); statErr == nil && fi.Size() > tailBytes {
+		if _, seekErr := f.Seek(-tailBytes, io.SeekEnd); seekErr != nil {
+			return ""
+		}
+	}
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return ""
+	}
 	return strings.TrimSpace(string(data))
 }

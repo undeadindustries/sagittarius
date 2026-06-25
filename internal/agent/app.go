@@ -56,9 +56,9 @@ type AppConfig struct {
 // App implements the optional ui.Completer, ui.MentionCompleter, and
 // ui.MetricsProvider interfaces.
 var (
-	_ ui.Completer             = (*App)(nil)
-	_ ui.MentionCompleter      = (*App)(nil)
-	_ ui.MetricsProvider       = (*App)(nil)
+	_ ui.Completer              = (*App)(nil)
+	_ ui.MentionCompleter       = (*App)(nil)
+	_ ui.MetricsProvider        = (*App)(nil)
 	_ ui.ComposerStatusProvider = (*App)(nil)
 )
 
@@ -407,63 +407,72 @@ func (a *App) cycleModel(ctx context.Context, step int) (<-chan ui.StreamEvent, 
 }
 
 func (a *App) handleSlash(ctx context.Context, input string) (<-chan ui.StreamEvent, error) {
-	result := a.processor.Process(ctx, input, a.deps)
-	out := make(chan ui.StreamEvent, 4)
-
+	out := make(chan ui.StreamEvent, 8)
 	go func() {
 		defer close(out)
-		if result.Quit {
-			out <- ui.StreamEvent{Type: ui.StreamQuit}
+		// Process runs here, off the Bubble Tea Update goroutine, so disk/network
+		// slash handlers (/mcp reload, /compress, /model, /tools…) never freeze the
+		// UI; the spinner animates and Esc cancels via ctx while it runs.
+		result := a.processor.Process(ctx, input, a.deps)
+		a.emitSlashResult(ctx, result, out)
+	}()
+	return out, nil
+}
+
+// emitSlashResult translates a processed slash Result into the UI event stream.
+// It runs on handleSlash's goroutine (never the Update goroutine). UI-thread-only
+// effects (clipboard, theme, scrollback) are emitted as events so the TUI applies
+// them safely on its own loop.
+func (a *App) emitSlashResult(ctx context.Context, result slash.Result, out chan<- ui.StreamEvent) {
+	if result.Quit {
+		out <- ui.StreamEvent{Type: ui.StreamQuit}
+		out <- ui.StreamEvent{Type: ui.StreamDone}
+		return
+	}
+	if result.ClearScrollback {
+		out <- ui.StreamEvent{Type: ui.StreamClearScrollback}
+	}
+	for _, entry := range result.Scrollback {
+		out <- ui.StreamEvent{
+			Type:           ui.StreamScrollback,
+			Text:           entry.Text,
+			ScrollbackRole: mapScrollRole(entry.Role),
+		}
+	}
+	for _, msg := range result.Messages {
+		out <- ui.StreamEvent{Type: ui.StreamInfo, Text: msg + "\n"}
+	}
+	if result.Err != nil {
+		out <- ui.StreamEvent{Type: ui.StreamError, Err: result.Err}
+	}
+	if result.OpenDialog != "" {
+		out <- ui.StreamEvent{Type: ui.StreamOpenDialog, Dialog: mapDialogKind(result.OpenDialog)}
+	}
+	if result.Clipboard != "" {
+		out <- ui.StreamEvent{Type: ui.StreamCopyToClipboard, Text: result.Clipboard}
+	}
+	if result.ThemeName != "" {
+		out <- ui.StreamEvent{Type: ui.StreamSetTheme, Text: result.ThemeName}
+	}
+	if result.MouseMode != "" {
+		out <- ui.StreamEvent{Type: ui.StreamSetMouse, Text: result.MouseMode}
+	}
+	if result.SubmitPrompt != "" {
+		// Hand off to a real model turn (e.g. /init analyzing the project) by
+		// merging RunTurn's events into this stream. RunTurn emits its own
+		// terminal StreamDone, so we do not emit one here.
+		turnEvents, err := a.runner.RunTurn(ctx, result.SubmitPrompt)
+		if err != nil {
+			out <- ui.StreamEvent{Type: ui.StreamError, Err: err}
 			out <- ui.StreamEvent{Type: ui.StreamDone}
 			return
 		}
-		if result.ClearScrollback {
-			out <- ui.StreamEvent{Type: ui.StreamClearScrollback}
+		for ev := range turnEvents {
+			out <- ev
 		}
-		for _, entry := range result.Scrollback {
-			out <- ui.StreamEvent{
-				Type:           ui.StreamScrollback,
-				Text:           entry.Text,
-				ScrollbackRole: mapScrollRole(entry.Role),
-			}
-		}
-		for _, msg := range result.Messages {
-			out <- ui.StreamEvent{Type: ui.StreamInfo, Text: msg + "\n"}
-		}
-		if result.Err != nil {
-			out <- ui.StreamEvent{Type: ui.StreamError, Err: result.Err}
-		}
-		if result.OpenDialog != "" {
-			out <- ui.StreamEvent{Type: ui.StreamOpenDialog, Dialog: mapDialogKind(result.OpenDialog)}
-		}
-		if result.Clipboard != "" {
-			out <- ui.StreamEvent{Type: ui.StreamCopyToClipboard, Text: result.Clipboard}
-		}
-		if result.ThemeName != "" {
-			out <- ui.StreamEvent{Type: ui.StreamSetTheme, Text: result.ThemeName}
-		}
-		if result.MouseMode != "" {
-			out <- ui.StreamEvent{Type: ui.StreamSetMouse, Text: result.MouseMode}
-		}
-		if result.SubmitPrompt != "" {
-			// Hand off to a real model turn (e.g. /init analyzing the project) by
-			// merging RunTurn's events into this stream. RunTurn emits its own
-			// terminal StreamDone, so we do not emit one here.
-			turnEvents, err := a.runner.RunTurn(ctx, result.SubmitPrompt)
-			if err != nil {
-				out <- ui.StreamEvent{Type: ui.StreamError, Err: err}
-				out <- ui.StreamEvent{Type: ui.StreamDone}
-				return
-			}
-			for ev := range turnEvents {
-				out <- ev
-			}
-			return
-		}
-		out <- ui.StreamEvent{Type: ui.StreamDone}
-	}()
-
-	return out, nil
+		return
+	}
+	out <- ui.StreamEvent{Type: ui.StreamDone}
 }
 
 type appHooks struct {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/undeadindustries/sagittarius/internal/config"
@@ -32,8 +33,21 @@ type Model struct {
 	done         bool
 	status       string
 
+	spin     spinner.Model
+	applying bool
+
 	errMsg string
 	info   string
+}
+
+// applyResultMsg carries the outcome of an off-Update SelectCurrentModel call so
+// a cold provider switch (DNS/TLS/genai client build) never blocks the UI loop.
+type applyResultMsg struct {
+	providerID string
+	displayID  string
+	model      string
+	scope      config.SettingScope
+	err        error
 }
 
 // New constructs the global model picker.
@@ -47,6 +61,7 @@ func New(ctx context.Context, deps Deps) Model {
 		ctx:      ctx,
 		th:       theme.Default(),
 		scopeSel: sel,
+		spin:     newDialogSpinner(),
 	}
 	m.entries = deps.AllActiveModels()
 	m.curProvider = deps.CurrentProviderID()
@@ -79,6 +94,22 @@ func (m Model) SetTheme(th theme.Theme) Model {
 
 // Update advances the picker for one message.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case spinner.TickMsg:
+		if !m.applying {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.spin, cmd = m.spin.Update(msg)
+		return m, cmd
+	case applyResultMsg:
+		return m.handleApplyResult(msg)
+	}
+	// While an apply is in flight, swallow input so the selection can't change
+	// mid-rebuild (spinner keeps animating via the TickMsg case above).
+	if m.applying {
+		return m, nil
+	}
 	if _, ok := msg.(scopedialog.ScopeChangedMsg); ok {
 		return m, nil
 	}
@@ -123,18 +154,46 @@ func (m Model) selectCurrent() (Model, tea.Cmd) {
 	}
 	e := m.entries[m.cursor]
 	scope := m.scopeSel.Scope
-	if err := m.deps.SelectCurrentModel(m.ctx, e.ProviderID, e.Model, scope); err != nil {
-		m.errMsg = err.Error()
-		return m, nil
-	}
-	m.curProvider = e.ProviderID
-	m.curModel = e.Model
-	m.status = fmt.Sprintf("Model → %s/%s. (%s)", e.DisplayID, e.Model, scope)
-	m.info = m.status
+	ctx := m.ctx
+	deps := m.deps
+	m.applying = true
 	m.errMsg = ""
+	m.info = fmt.Sprintf("Switching to %s/%s…", e.DisplayID, e.Model)
 	m.scopeFocused = false
 	m.scopeSel.Blur()
+	return m, tea.Batch(
+		m.spin.Tick,
+		func() tea.Msg {
+			err := deps.SelectCurrentModel(ctx, e.ProviderID, e.Model, scope)
+			return applyResultMsg{
+				providerID: e.ProviderID,
+				displayID:  e.DisplayID,
+				model:      e.Model,
+				scope:      scope,
+				err:        err,
+			}
+		},
+	)
+}
+
+func (m Model) handleApplyResult(msg applyResultMsg) (Model, tea.Cmd) {
+	m.applying = false
+	if msg.err != nil {
+		m.errMsg = msg.err.Error()
+		m.info = ""
+		return m, nil
+	}
+	m.curProvider = msg.providerID
+	m.curModel = msg.model
+	m.status = fmt.Sprintf("Model → %s/%s. (%s)", msg.displayID, msg.model, msg.scope)
+	m.info = m.status
+	m.errMsg = ""
 	return m, nil
+}
+
+// newDialogSpinner returns the small braille-dot spinner used while an apply runs.
+func newDialogSpinner() spinner.Model {
+	return spinner.New(spinner.WithSpinner(spinner.MiniDot))
 }
 
 func currentIndex(entries []ModelEntry, providerID, model string) int {
