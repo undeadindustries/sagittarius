@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/tools"
 	"github.com/undeadindustries/sagittarius/internal/ui/toolsdialog"
 )
@@ -63,22 +64,23 @@ func (d *toolsDialogDeps) ServerTools(ctx context.Context) []toolsdialog.ServerG
 }
 
 func (d *toolsDialogDeps) SetToolEnabled(ctx context.Context, server, tool string, enabled bool) error {
-	if d.app.deps.Loader == nil || d.app.deps.Settings == nil {
+	if d.app.deps.Settings == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	servers, err := d.app.deps.Settings.MCPServers()
-	if err != nil {
-		return err
-	}
-	cfg, ok := servers[server]
-	if !ok {
-		return fmt.Errorf("server %q is not settings-managed; edit its source to change tools", server)
-	}
-	include, exclude := toggleToolFilter(cfg.IncludeTools, cfg.ExcludeTools, tool, enabled)
-	if err := d.app.deps.Settings.SetMCPServerToolFilter(server, include, exclude); err != nil {
-		return err
-	}
-	if err := d.app.deps.Loader.Save(d.app.deps.Settings); err != nil {
+	// Route the filter write through persistGlobal so docs.Merged is refreshed
+	// atomically with the on-disk save (a tool filter is a global-scoped scalar).
+	if err := d.app.persistGlobal(func(s *config.Settings) error {
+		servers, err := s.MCPServers()
+		if err != nil {
+			return err
+		}
+		cfg, ok := servers[server]
+		if !ok {
+			return fmt.Errorf("server %q is not settings-managed; edit its source to change tools", server)
+		}
+		include, exclude := toggleToolFilter(cfg.IncludeTools, cfg.ExcludeTools, tool, enabled)
+		return s.SetMCPServerToolFilter(server, include, exclude)
+	}); err != nil {
 		return err
 	}
 	// A filter toggle changes only which discovered tools are exposed; the MCP
