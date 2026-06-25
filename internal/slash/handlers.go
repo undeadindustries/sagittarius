@@ -516,16 +516,25 @@ func handleMemoryReload(ctx *Context) Result {
 	return InfoResult("Memory reloaded from AGENTS.md.")
 }
 
-func handleSkillsReload(ctx *Context) Result {
-	if ctx.Deps.Hooks == nil {
-		return InfoResult("Skills reload unavailable.")
+// reloadHandler builds a slash handler that runs a reload hook and renders its
+// result uniformly: `unavailable` shows when no hooks are wired, `label` tags any
+// error, and `reload` performs the reload and returns the success message. It
+// deduplicates the otherwise-identical /skills, /mcp, and /agents reload paths.
+func reloadHandler(unavailable, label string, reload func(*Context) (string, error)) func(*Context) Result {
+	return func(ctx *Context) Result {
+		if ctx.Deps.Hooks == nil {
+			return InfoResult(unavailable)
+		}
+		msg, err := reload(ctx)
+		if err != nil {
+			return ErrorResult(fmt.Errorf("%s: %w", label, err))
+		}
+		return InfoResult(msg)
 	}
-	msg, err := ctx.Deps.Hooks.ReloadSkills(ctx.Ctx)
-	if err != nil {
-		return ErrorResult(fmt.Errorf("reload skills: %w", err))
-	}
-	return InfoResult(msg)
 }
+
+var handleSkillsReload = reloadHandler("Skills reload unavailable.", "reload skills",
+	func(ctx *Context) (string, error) { return ctx.Deps.Hooks.ReloadSkills(ctx.Ctx) })
 
 func handleSkillsList(ctx *Context) Result {
 	if ctx.Deps.Hooks == nil {
@@ -542,16 +551,8 @@ func handleSkillsList(ctx *Context) Result {
 	return InfoResult(strings.Join(lines, "\n"))
 }
 
-func handleMCPReload(ctx *Context) Result {
-	if ctx.Deps.Hooks == nil {
-		return InfoResult("MCP reload unavailable.")
-	}
-	msg, err := ctx.Deps.Hooks.ReloadMCP(ctx.Ctx)
-	if err != nil {
-		return ErrorResult(fmt.Errorf("reload mcp: %w", err))
-	}
-	return InfoResult(msg)
-}
+var handleMCPReload = reloadHandler("MCP reload unavailable.", "reload mcp",
+	func(ctx *Context) (string, error) { return ctx.Deps.Hooks.ReloadMCP(ctx.Ctx) })
 
 func handleMCPList(ctx *Context) Result {
 	if ctx.Deps.Hooks == nil {
@@ -572,16 +573,14 @@ func handleMCPList(ctx *Context) Result {
 	return InfoResult(strings.Join(lines, "\n"))
 }
 
-func handleAgentsReload(ctx *Context) Result {
-	if ctx.Deps.Hooks == nil {
-		return InfoResult("Agents reload unavailable.")
-	}
-	summary, err := ctx.Deps.Hooks.ReloadAgents(ctx.Ctx)
-	if err != nil {
-		return ErrorResult(fmt.Errorf("reload agents: %w", err))
-	}
-	return InfoResult(agents.FormatSummary(summary))
-}
+var handleAgentsReload = reloadHandler("Agents reload unavailable.", "reload agents",
+	func(ctx *Context) (string, error) {
+		summary, err := ctx.Deps.Hooks.ReloadAgents(ctx.Ctx)
+		if err != nil {
+			return "", err
+		}
+		return agents.FormatSummary(summary), nil
+	})
 
 func handleAgentsList(ctx *Context) Result {
 	if ctx.Deps.Hooks == nil {
