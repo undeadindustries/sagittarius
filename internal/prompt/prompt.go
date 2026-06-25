@@ -1,9 +1,13 @@
 // Package prompt builds Sagittarius system prompts. It ports the gemini-cli
 // programmer prompt (full + lite variants) adapted to Sagittarius's real tool
 // set, behind a personality abstraction so additional personalities
-// (sysadmin, assistant, ...) can be added later. The package is a leaf: it
-// imports only internal/config (resolution) and internal/tools (wire-name
-// constants); nothing imports it back.
+// (sysadmin, assistant, ...) can be added later. The package is a leaf used only
+// for prompt *construction*: it imports internal/config (personality constants +
+// canonicalization) and internal/tools (wire-name constants), and nothing imports
+// it back. Personality/variant *resolution* lives in internal/config
+// (config.ResolvePersonality / config.ResolveVariant) so internal/provider and the
+// runner can share it without importing prompt; callers convert the resolved
+// config strings into prompt.Personality/prompt.Variant when building Options.
 //
 // Layout: prompt.go (types + shared core sections), personas.go (registry +
 // stub assembly), programmer.go (programmer full/lite bodies).

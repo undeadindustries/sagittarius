@@ -751,8 +751,8 @@ func (r *Runner) rebuildBasePrompt() {
 	providerID := r.activeProviderID()
 
 	base := prompt.Build(prompt.Options{
-		Personality: prompt.ResolvePersonality(settings, providerID, model),
-		Variant:     prompt.ResolveVariant(settings, providerID, model),
+		Personality: prompt.Personality(config.ResolvePersonality(settings, providerID, model)),
+		Variant:     prompt.Variant(config.ResolveVariant(settings, providerID, model)),
 		Identity: prompt.Identity{
 			Model:        model,
 			ProviderName: r.providerDisplayName(providerID),
