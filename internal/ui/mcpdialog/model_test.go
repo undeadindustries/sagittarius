@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/undeadindustries/sagittarius/internal/config"
 )
 
 type fakeDeps struct {
@@ -23,10 +25,12 @@ func (f *fakeDeps) GetServer(name string) (ServerForm, bool) {
 	return form, ok
 }
 
-func (f *fakeDeps) SaveServer(_ context.Context, _ string, form ServerForm) error {
+func (f *fakeDeps) SaveServer(_ context.Context, _ string, form ServerForm, _ config.SettingScope) error {
 	f.saved = append(f.saved, form)
 	return nil
 }
+
+func (f *fakeDeps) ProjectAvailable() bool { return true }
 
 func (f *fakeDeps) RemoveServer(_ context.Context, name string) error {
 	f.removed = append(f.removed, name)

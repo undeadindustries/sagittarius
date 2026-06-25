@@ -299,16 +299,13 @@ func runDeleteSession(identifier string) int {
 // in settings and fails with a clear error if the feature is not enabled.
 // Full git worktree setup is deferred to a later phase (AD-020).
 func runWorktreeStub(name string) int {
-	_, loader, err := loadSettings()
+	wd, _ := os.Getwd()
+	docs, err := config.LoadDocuments(wd)
 	if err != nil {
 		writeStartupError(err)
 		return 1
 	}
-	settings, err := loader.Load()
-	if err != nil && !errors.Is(err, config.ErrSecretsInSettings) {
-		writeStartupError(fmt.Errorf("load settings: %w", err))
-		return 1
-	}
+	settings := docs.Merged
 
 	// Check experimental.worktrees in raw settings JSON.
 	if settings != nil {
@@ -341,7 +338,7 @@ func runHeadless(prompt string, opts runnerOptions, fmt_ outputFormat) int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	runner, _, _, runtime, _, _, err := buildRunner(ctx, opts)
+	runner, _, runtime, _, _, err := buildRunner(ctx, opts)
 	if err != nil {
 		writeStartupError(err)
 		return 1
@@ -377,7 +374,7 @@ func runSlash(command string, opts runnerOptions) int {
 		command = "/" + command
 	}
 
-	runner, loader, settings, runtime, sessID, baseProviderID, err := buildRunner(ctx, opts)
+	runner, docs, runtime, sessID, baseProviderID, err := buildRunner(ctx, opts)
 	if err != nil {
 		writeStartupError(err)
 		return 1
@@ -385,7 +382,7 @@ func runSlash(command string, opts runnerOptions) int {
 	defer func() { _ = runtime.Close() }()
 
 	providerLabel := "ready"
-	if endpoint, epErr := provider.ResolveEndpointConfig(settings); epErr == nil {
+	if endpoint, epErr := provider.ResolveEndpointConfig(docs.Merged); epErr == nil {
 		providerLabel = config.ProviderDisplayID(endpoint.ProviderID)
 	}
 
@@ -394,8 +391,9 @@ func runSlash(command string, opts runnerOptions) int {
 		Runtime:        runtime,
 		ProviderLabel:  providerLabel,
 		Model:          runner.Model(),
-		Loader:         loader,
-		Settings:       settings,
+		Loader:         docs.Loader(),
+		Settings:       docs.Global,
+		Documents:      docs,
 		SessionID:      sessID,
 		BaseProviderID: baseProviderID,
 	})
@@ -530,19 +528,19 @@ func runInteractive(screenReader bool, debug bool, opts runnerOptions) int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	runner, loader, settings, runtime, sessID, baseProviderID, err := buildRunner(ctx, opts)
+	runner, docs, runtime, sessID, baseProviderID, err := buildRunner(ctx, opts)
 	if err != nil {
 		writeStartupError(err)
 		return 1
 	}
 	defer func() { _ = runtime.Close() }()
 
-	needsOnboarding := agent.NeedsProviderSetup(ctx, settings)
+	needsOnboarding := agent.NeedsProviderSetup(ctx, docs.Merged)
 
 	var endpoint provider.EndpointConfig
 	var endpointErr error
 	if !needsOnboarding {
-		endpoint, endpointErr = provider.ResolveEndpointConfig(settings)
+		endpoint, endpointErr = provider.ResolveEndpointConfig(docs.Merged)
 		if endpointErr != nil {
 			writeStartupError(endpointErr)
 			return 1
@@ -559,8 +557,9 @@ func runInteractive(screenReader bool, debug bool, opts runnerOptions) int {
 		Runtime:        runtime,
 		ProviderLabel:  providerLabel,
 		Model:          runner.Model(),
-		Loader:         loader,
-		Settings:       settings,
+		Loader:         docs.Loader(),
+		Settings:       docs.Global,
+		Documents:      docs,
 		SessionID:      sessID,
 		BaseProviderID: baseProviderID,
 	})
@@ -572,7 +571,7 @@ func runInteractive(screenReader bool, debug bool, opts runnerOptions) int {
 		}
 	}
 
-	uiCfg := settings.UI()
+	uiCfg := docs.Merged.UI()
 	termUI := bubbletea.NewTerminal(ui.Options{
 		ScreenReader:      screenReader,
 		BannerTitle:       "Sagittarius",
@@ -615,20 +614,18 @@ type runnerOptions struct {
 // The returned session ID keys snapshots, context-manager state, and UI telemetry.
 // baseProviderID is the canonical provider id that was active before any mode-driven
 // startup override; callers should seed App.BaseProviderID with it.
-func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *config.Loader, *config.Settings, *agent.Runtime, string, string, error) {
+func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *config.Documents, *agent.Runtime, string, string, error) {
 	modelOverride := opts.modelOverride
 	interactive := opts.interactive
 	resume := opts.resume
 
-	settings, loader, err := loadSettings()
+	wd, _ := os.Getwd() // empty on failure — LoadDocuments degrades gracefully
+	docs, err := config.LoadDocuments(wd)
 	if err != nil {
-		return nil, nil, nil, nil, "", "", err
+		return nil, nil, nil, "", "", err
 	}
-	if wd, wdErr := os.Getwd(); wdErr == nil {
-		if mergeErr := config.MergeProjectSystemPrompt(settings, wd); mergeErr != nil {
-			slog.Warn("could not merge project system prompt", "error", mergeErr)
-		}
-	}
+	// settings is the merged view (project wins); dialogs still mutate docs.Global.
+	settings := docs.Merged
 
 	needsSetup := interactive && agent.NeedsProviderSetup(ctx, settings)
 
@@ -658,7 +655,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 	if !needsSetup {
 		endpoint, endpointErr = provider.ResolveEndpointConfig(settings)
 		if endpointErr != nil {
-			return nil, nil, nil, nil, "", "", endpointErr
+			return nil, nil, nil, "", "", endpointErr
 		}
 	}
 
@@ -674,7 +671,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 	gen, genErr := provider.NewContentGenerator(ctx, settings)
 	if genErr != nil {
 		if !needsSetup && (!interactive || !errors.Is(genErr, credentials.ErrAPIKeyMissing)) {
-			return nil, nil, nil, nil, "", "", genErr
+			return nil, nil, nil, "", "", genErr
 		}
 	}
 
@@ -690,7 +687,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		AllowFix:      allowFix,
 	})
 	if err != nil {
-		return nil, nil, nil, nil, "", "", err
+		return nil, nil, nil, "", "", err
 	}
 
 	// Resolve session (resume or fresh).
@@ -698,27 +695,28 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 	var initialHistory []provider.Message
 	var initialGrants []string
 
-	projectRoot, wdErr := os.Getwd()
-	if wdErr != nil {
+	projectRoot := wd
+	if projectRoot == "" {
 		// A failed working-directory lookup is fatal when the user explicitly
 		// asked to resume — silently starting a fresh session would discard the
 		// request. Otherwise it only disables recording, which we log and skip.
 		if resume != "" {
 			_ = runtime.Close()
-			return nil, nil, nil, nil, "", "", fmt.Errorf("resume session: resolve working directory: %w", wdErr)
+			return nil, nil, nil, "", "", fmt.Errorf("resume session: resolve working directory: cannot determine cwd")
 		}
-		slog.Warn("session recording disabled: cannot determine working directory", "err", wdErr)
-	} else if resume != "" {
+		slog.Warn("session recording disabled: cannot determine working directory")
+	}
+	if projectRoot != "" && resume != "" {
 		chatsDir, cdErr := session.ChatsDir(projectRoot)
 		if cdErr != nil {
 			_ = runtime.Close()
-			return nil, nil, nil, nil, "", "", fmt.Errorf("resume session: %w", cdErr)
+			return nil, nil, nil, "", "", fmt.Errorf("resume session: %w", cdErr)
 		}
 		sel := session.NewSelector(chatsDir, sessID)
 		result, selErr := sel.ResolveSession(resume)
 		if selErr != nil {
 			_ = runtime.Close()
-			return nil, nil, nil, nil, "", "", fmt.Errorf("resume session: %w", selErr)
+			return nil, nil, nil, "", "", fmt.Errorf("resume session: %w", selErr)
 		}
 		if id := strings.TrimSpace(result.Record.SessionID); id != "" {
 			sessID = id
@@ -732,7 +730,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		} else {
 			sessRecorder = mgr.Recorder()
 		}
-	} else {
+	} else if projectRoot != "" {
 		hash := session.ProjectHash(projectRoot)
 		chatsDir, cdErr := session.ChatsDir(projectRoot)
 		if cdErr != nil {
@@ -742,8 +740,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		}
 	}
 
-	// Resolve project-boundary + snapshot policy (project settings override
-	// global) and build the per-session snapshot manager when enabled.
+	// Resolve project-boundary + snapshot policy from the already-merged settings.
 	boundary, snapMgr := resolveBoundaryAndSnapshots(settings, projectRoot, sessID)
 
 	runner, err := agent.NewRunner(agent.RunnerConfig{
@@ -764,7 +761,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 	})
 	if err != nil {
 		_ = runtime.Close()
-		return nil, nil, nil, nil, "", "", err
+		return nil, nil, nil, "", "", err
 	}
 	// Build the context manager after the runner so its summarizer reads the
 	// runner's live (mode-resolved) model rather than the startup default.
@@ -780,32 +777,22 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 	if genErr != nil {
 		runner.SetGeneratorError(genErr)
 	}
-	return runner, loader, settings, runtime, sessID, baseProviderID, nil
+	return runner, docs, runtime, sessID, baseProviderID, nil
 }
 
-// resolveBoundaryAndSnapshots merges the project settings.json over the global
-// one for the boundary + snapshot policy and constructs the snapshot manager
-// when snapshots are enabled. projectRoot may be "" (working dir unknown), in
-// which case snapshots are disabled and the global boundary flag still applies.
-func resolveBoundaryAndSnapshots(global *config.Settings, projectRoot, sessID string) (bool, *snapshot.Manager) {
-	var projectSettings *config.Settings
-	if projectRoot != "" {
-		ps, err := config.LoadProjectSettings(projectRoot)
-		if err != nil {
-			slog.Warn("could not load project settings", "error", err)
-		} else {
-			projectSettings = ps
-		}
-	}
+// resolveBoundaryAndSnapshots reads the boundary + snapshot policy from the
+// already-merged settings and constructs the per-session snapshot manager.
+// projectRoot may be "" (working dir unknown), in which case snapshots are
+// disabled and the merged boundary flag still applies.
+func resolveBoundaryAndSnapshots(merged *config.Settings, projectRoot, sessID string) (bool, *snapshot.Manager) {
+	boundary := config.ProjectBoundaryEnforced(merged, nil)
 
-	boundary := config.ProjectBoundaryEnforced(global, projectSettings)
-
-	if projectRoot == "" || !config.SnapshotsEnabled(global, projectSettings) {
+	if projectRoot == "" || !config.SnapshotsEnabled(merged, nil) {
 		return boundary, nil
 	}
 
 	mgr, err := snapshot.NewManager(projectRoot, sessID, snapshot.Options{
-		MaxFileBytes: config.SnapshotMaxFileBytes(global, projectSettings),
+		MaxFileBytes: config.SnapshotMaxFileBytes(merged, nil),
 	})
 	if err != nil {
 		slog.Warn("file snapshots disabled", "error", err)
@@ -814,18 +801,11 @@ func resolveBoundaryAndSnapshots(global *config.Settings, projectRoot, sessID st
 	return boundary, mgr
 }
 
-// resolveVerifyFlags merges project settings over global for the verify-workflow
-// flags (run_project_checks fix gating and the post-write reminder). Project
-// settings are read from the working directory; both flags default to false.
-func resolveVerifyFlags(global *config.Settings) (allowFix, suggestAfterWrite bool) {
-	var projectSettings *config.Settings
-	if root, err := os.Getwd(); err == nil && root != "" {
-		if ps, psErr := config.LoadProjectSettings(root); psErr == nil {
-			projectSettings = ps
-		}
-	}
-	return config.VerifyAllowFix(global, projectSettings),
-		config.VerifySuggestAfterWrite(global, projectSettings)
+// resolveVerifyFlags reads the verify-workflow flags from the already-merged
+// settings. Both flags default to false.
+func resolveVerifyFlags(merged *config.Settings) (allowFix, suggestAfterWrite bool) {
+	return config.VerifyAllowFix(merged, nil),
+		config.VerifySuggestAfterWrite(merged, nil)
 }
 
 // persistentSessionID returns a stable per-process identifier.
@@ -871,17 +851,6 @@ func historyToScrollback(history []provider.Message) []ui.ScrollbackEntry {
 	return entries
 }
 
-func loadSettings() (*config.Settings, *config.Loader, error) {
-	loader, err := config.NewLoader()
-	if err != nil {
-		return nil, nil, fmt.Errorf("load settings: %w", err)
-	}
-	settings, err := loader.Load()
-	if err != nil && !errors.Is(err, config.ErrSecretsInSettings) {
-		return nil, nil, fmt.Errorf("load settings: %w", err)
-	}
-	return settings, loader, nil
-}
 
 func writeStartupError(err error) {
 	if errors.Is(err, credentials.ErrAPIKeyMissing) {

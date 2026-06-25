@@ -185,13 +185,13 @@ func TestBuildRunnerAllowsMissingProviderWhenInteractive(t *testing.T) {
 	t.Setenv("SAGITTARIUS_HOME", home)
 	withEmptyCredentials(t)
 
-	runner, _, settings, runtime, sessID, _, err := buildRunner(context.Background(), runnerOptions{interactive: true})
+	runner, docs, runtime, sessID, _, err := buildRunner(context.Background(), runnerOptions{interactive: true})
 	if err != nil {
 		t.Fatalf("buildRunner: %v", err)
 	}
 	defer func() { _ = runtime.Close() }()
 
-	if !agent.NeedsProviderSetup(context.Background(), settings) {
+	if !agent.NeedsProviderSetup(context.Background(), docs.Merged) {
 		t.Fatal("expected setup to be needed with empty settings")
 	}
 	if runner.Model() != agent.PlaceholderModel() {
@@ -220,7 +220,7 @@ func TestBuildRunnerResumeUsesResumedSessionID(t *testing.T) {
 	rec := session.NewRecorder(chatsDir, resumedID, session.ProjectHash(project))
 	rec.RecordUserMessage("hello from prior session")
 
-	runner, _, _, runtime, sessID, _, err := buildRunner(context.Background(), runnerOptions{
+	runner, _, runtime, sessID, _, err := buildRunner(context.Background(), runnerOptions{
 		interactive: true,
 		resume:      session.ResumeLatest,
 	})

@@ -111,6 +111,15 @@ func (c *Catalog) mergeMCPServers() (map[string]config.MCPServerConfig, error) {
 	return servers, nil
 }
 
+// SetSettings updates the settings pointer used by Reload and mergeMCPServers.
+// Call before ReloadTools when the active settings document has changed (e.g.
+// after a scoped save that updates the merged view).
+func (c *Catalog) SetSettings(s *config.Settings) {
+	if c != nil {
+		c.settings = s
+	}
+}
+
 // MCPManager exposes the underlying MCP manager for slash status output.
 func (c *Catalog) MCPManager() *mcp.Manager { return c.mcp }
 

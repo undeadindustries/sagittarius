@@ -69,7 +69,7 @@ func (m Model) footerHint() string {
 	case screenModels:
 		return "↑/↓ move • Space toggle • A all/none • a add • Enter save • Esc back"
 	default:
-		return "↑/↓ move • Enter select • Esc back"
+		return "↑/↓ move • Enter select • Esc back\nProvider keys and definitions are always saved globally"
 	}
 }
 

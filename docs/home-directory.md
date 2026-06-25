@@ -62,18 +62,48 @@ Per-project configuration lives in `<repo>/.sagittarius/`:
 The sibling `<repo>/.agents/skills/` and `~/.agents/skills/` skill roots are
 still read when present.
 
-### Project settings merge
+### Project settings merge (dual-scope model)
 
-At startup Sagittarius reads `<repo>/.sagittarius/settings.json` (when present)
-and merges a small, safe subset over the global `~/.sagittarius/settings.json`
-for the current session only. The merged document is never written back, so a
-project file cannot leak into the global one. Today the merge covers:
+Sagittarius uses a dual-scope settings model: a **global** file at
+`~/.sagittarius/settings.json` and an optional **project** file at
+`<repo>/.sagittarius/settings.json`. At startup both files are loaded and merged
+into a single effective `Merged` view. The merged document is never written back,
+so the project file can never leak into the global one.
 
-- `security.projectBoundary.enforce`
-- `sagittarius.snapshots.enabled` / `sagittarius.snapshots.maxFileBytes`
+**Merge rules (project wins):**
 
-For each key the project value wins when set; otherwise the global value (or the
-built-in default) applies. See [snapshots-and-undo.md](snapshots-and-undo.md).
+| Path pattern | Strategy |
+|---|---|
+| Scalars (`ui.theme`, `providers.active`, mode routing strings) | Project value replaces global when set |
+| `mcpServers` | Shallow merge by server name (project adds/overrides; global is the base) |
+| `providers.<id>.models` | Shallow merge by model id |
+| `providers.<id>.activeModels` | Project replaces entirely when set |
+| `sagittarius.modes.*` | Project value replaces global when set |
+| `sagittarius.systemPrompt` | Project value replaces global when set |
+| Credentials / API keys | Never in either file |
+
+**What you can store per scope:**
+
+| Setting | Default scope | Notes |
+|---|---|---|
+| Mode overrides (`/modes`) | **Project** | Per-repo agent/plan/ask/debug routing |
+| Active model set (`/model`) | **Project** | Which models are active for this repo |
+| MCP server definitions (`/mcp`) | **Project** | Servers can be global or project; scope is chosen in the wizard |
+| System prompt preset (`/system-prompt`) | **Project** | Already writes project |
+| UI preferences (`/settings` → UI) | **Global** | Personal prefs (theme, showThinking) |
+| Provider definitions and API keys (`/providers`) | **Global** | Shared across all repos |
+| Security / snapshot / verify settings (`/settings`) | Either | Use the scope radio in `/settings` |
+
+**Saving to a scope:**
+- In the TUI, overlay dialogs that write settings show an "Apply to" scope
+  selector (Tab to focus, arrows to change between Global and Project).
+- Headlessly, use `/modes override` and `/modes clear` with an optional
+  `global|project` trailing argument (default: project).
+- The `/settings` browser lets you view any key in the selected scope file,
+  toggle booleans, edit values, and `Ctrl+L` to clear a key from that scope only
+  (falling back to the other scope or the built-in default).
+
+For snapshots and undo specifically see [snapshots-and-undo.md](snapshots-and-undo.md).
 
 ## Memory files: AGENTS.md
 

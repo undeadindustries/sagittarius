@@ -144,9 +144,40 @@ and resets to off on the next launch.
 - **Menu-first:** `/modes` (also reachable via `/mode settings`) shows each mode
   with its current `{Provider}/{Model}` override, or "default" when none is set.
   Selecting a mode opens a model picker; selecting "Clear override" resets it.
+- **Scope:** The TUI shows an "Apply to" scope row (Tab to focus). Overrides
+  default to **project** scope so each repo can have its own routing config.
 - **Effect:** A provider-qualified override (`provider + model`) causes Sagittarius
   to rebuild the generator for the new provider when the mode activates, then revert
   when leaving that mode.
+
+#### Headless mode-override subcommands
+
+- `/modes override <agent|plan|ask|debug> <Provider/Model> [global|project]`
+  — Persist a mode routing override to the specified scope (defaults to project).
+  Example: `--slash "/modes override plan openrouter/qwen/qwen3-235b-a22b project"`
+- `/modes clear <agent|plan|ask|debug> [global|project]`
+  — Remove the override for that mode from the specified scope.
+
+### `/settings`
+
+- **Description:** Browse and edit **global and project settings** in a curated
+  list grouped by category.
+- **Scope radio:** Tab switches focus to the scope selector; arrow keys change
+  between Global (`~/.sagittarius/settings.json`) and Project
+  (`<repo>/.sagittarius/settings.json`). Values shown are from the selected scope
+  file only (not merged), with a `*` on any key explicitly set in that scope.
+- **Editing:**
+  - **Bool** — Enter or Space toggles the value in-place.
+  - **Enum** — Enter cycles through the allowed choices.
+  - **String / Int** — Enter opens a text editor; Esc cancels; Enter again saves.
+  - `Ctrl+L` — Clears the key from the selected scope only; the other scope or
+    the built-in default takes over.
+- **Categories:** General (`sagittarius.maxToolRounds`), UI (`ui.theme`,
+  `ui.showThinking`, `ui.hideBanner`), Security (`security.projectBoundary.enforce`),
+  Snapshots (`sagittarius.snapshots.*`), Verify (`sagittarius.verify.*`).
+- **Persistence:** Changes are saved immediately to the target scope file and take
+  effect in the current session. Provider API keys and definitions are always global
+  (edit them in `/providers`).
 
 ### `/memory`
 
@@ -178,6 +209,10 @@ and resets to off on the next launch.
   and reload servers. Extension-provided servers are shown read-only. Bearer
   tokens entered in the wizard are stored in the credentials layer, never in
   `settings.json`.
+- **Scope:** When adding or editing a server, an "Apply to" scope row (Tab to
+  focus) lets you save the server to the **project** file (default) or the
+  **global** file. The server list shows merged results from both scopes; each
+  row's scope is resolved automatically when editing or removing.
 
 #### Sub-commands
 
@@ -291,12 +326,16 @@ incrementally; track gaps in `AGENTS.md`.
 
 | Command | Planned phase |
 |---------|----------------|
-| `/about`, `/bug`, `/chat`, `/clear`, `/compress`, `/copy` | Post-parity / incremental |
-| `/commands`, `/directory`, `/extensions` | Post-parity / incremental |
+| `/bug`, `/commands`, `/directory`, `/extensions` | Post-parity / incremental |
 | `/mcp auth`, `/mcp enable`/`disable` | Phase 12+ incremental |
 | `/skills enable`/`disable`/`link` | Phase 12+ incremental |
 | `/agents enable`/`disable`/`config` | Phase 12+ incremental |
 | `/auth signin` / OAuth dialogs | Deferred auth paths |
 | ACP headless registry | Post-parity |
 
-Implemented in Phase 12: `/mcp` (list, reload), `/skills` (list, reload), `/agents` (list, reload), `activate_skill` tool.
+Implemented: `/about`, `/chat`, `/clear`, `/compress`, `/copy`, `/diff`, `/init`,
+`/memory reload`, `/mcp` (list, reload, add/edit/remove wizard), `/modes` (override,
+clear headlessly), `/model`, `/models`, `/mouse`, `/reasoning`, `/resume`,
+`/settings` (curated browser), `/skills` (list, reload), `/agents` (list, reload),
+`/stats`, `/system-prompt`, `/theme`, `/tools` (list, desc, enable/disable),
+`/undo`, `activate_skill` tool.

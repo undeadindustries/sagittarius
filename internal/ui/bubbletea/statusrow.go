@@ -66,34 +66,37 @@ func scrollShortcutHints() string {
 	return scrollShortcutHintsForGOOS(runtime.GOOS)
 }
 
+// mouseScrollHint labels the mouse-wheel toggle for both PC (Alt) and Mac
+// (Option/⌥) keyboards. Shown on every OS so Mac users SSH'd into Linux still
+// see the key they actually press.
+const mouseScrollHint = "Alt+M · ⌥M"
+
 func scrollShortcutHintsForGOOS(goos string) string {
-	mouse := "Alt+M"
 	switch goos {
 	case "darwin":
-		// Mac keyboards usually lack PgUp/PgDn; Fn+arrow sends them in most terminals.
-		return "Fn↑ Fn↓ · " + mouse
+		return "Fn↑ Fn↓ · " + mouseScrollHint
 	case "windows":
-		return "Pg↑ Pg↓ · " + mouse
+		return "Pg↑ Pg↓ · " + mouseScrollHint
 	default:
-		// Linux and other Unix: PgUp/PgDown keys or terminal bindings.
-		return "Pg↑ Pg↓ · " + mouse
+		return "Pg↑ Pg↓ · " + mouseScrollHint
 	}
 }
 
 // statusRowLine builds the unstyled (left, right) halves of the composer status
-// row. The right side always includes scroll shortcuts; AGENTS.md/skill counts
-// append when present.
+// row. Scroll shortcuts sit on the left (beside the tool-policy hint) so they
+// stay visible on narrow terminals; AGENTS.md/skill counts stay on the right.
 func (m *model) statusRowParts() (left, right string) {
 	cs, ok := m.composerStatus()
+	hints := scrollShortcutHints()
 	if ok {
 		left = approvalHint(cs.ApprovalMode)
 	}
-	var rightParts []string
-	rightParts = append(rightParts, scrollShortcutHints())
-	if summary := contextSummary(len(m.opts.LoadedMemoryFiles), cs.SkillCount); summary != "" {
-		rightParts = append(rightParts, summary)
+	if left != "" {
+		left = left + "  ·  " + hints
+	} else {
+		left = hints
 	}
-	right = strings.Join(rightParts, " · ")
+	right = contextSummary(len(m.opts.LoadedMemoryFiles), cs.SkillCount)
 	return left, right
 }
 

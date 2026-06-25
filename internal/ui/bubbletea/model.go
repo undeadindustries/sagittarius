@@ -26,6 +26,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/ui/modesdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/onboardingdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/providersdialog"
+	"github.com/undeadindustries/sagittarius/internal/ui/settingsdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/systempromptdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/theme"
 	"github.com/undeadindustries/sagittarius/internal/ui/toolsdialog"
@@ -72,6 +73,12 @@ type mcpDialogHost interface {
 // dependencies.
 type toolsDialogHost interface {
 	ToolsDialogDeps() toolsdialog.Deps
+}
+
+// settingsDialogHost is implemented by an App that can supply the curated
+// settings browser dependencies.
+type settingsDialogHost interface {
+	SettingsDialogDeps() settingsdialog.Deps
 }
 
 // onboardingHost is implemented by an App that can supply first-run setup deps.
@@ -239,6 +246,8 @@ type model struct {
 	toolsOverlay *toolsdialog.Model
 	// bgProcOverlay holds the background process viewer.
 	bgProcOverlay *bgprocdialog.Model
+	// settingsOverlay holds the curated settings browser.
+	settingsOverlay *settingsdialog.Model
 	// onboardingOverlay holds the first-run provider setup wizard.
 	onboardingOverlay *onboardingdialog.Model
 }
@@ -247,7 +256,8 @@ type model struct {
 func (m *model) hasOverlay() bool {
 	return m.onboardingOverlay != nil || m.overlay != nil ||
 		m.modelsOverlay != nil || m.modelPickOverlay != nil || m.modesOverlay != nil ||
-		m.systemPromptOverlay != nil || m.mcpOverlay != nil || m.toolsOverlay != nil || m.bgProcOverlay != nil
+		m.systemPromptOverlay != nil || m.mcpOverlay != nil || m.toolsOverlay != nil ||
+		m.bgProcOverlay != nil || m.settingsOverlay != nil
 }
 
 // maxVisibleSuggestions caps the inline suggestion list height.
@@ -461,6 +471,10 @@ func (m *model) updateOverlay(msg tea.Msg) (tea.Model, tea.Cmd) {
 			next, _ := m.bgProcOverlay.Update(msg)
 			m.bgProcOverlay = next
 		}
+		if m.settingsOverlay != nil {
+			o := m.settingsOverlay.SetSize(msg.Width, msg.Height)
+			m.settingsOverlay = &o
+		}
 		return m, nil
 	case streamEventMsg:
 		return m.handleStreamGen(msg.gen, msg.event)
@@ -569,6 +583,16 @@ func (m *model) updateOverlay(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	if m.settingsOverlay != nil {
+		next, cmd := m.settingsOverlay.Update(msg)
+		if next.Done() {
+			m.closeOverlay(next.Status())
+			return m, cmd
+		}
+		m.settingsOverlay = &next
+		return m, cmd
+	}
+
 	return m, nil
 }
 
@@ -584,6 +608,7 @@ func (m *model) closeOverlay(status string) {
 	m.mcpOverlay = nil
 	m.toolsOverlay = nil
 	m.bgProcOverlay = nil
+	m.settingsOverlay = nil
 	if status != "" {
 		m.addBlock(roleInfo, status)
 	}
@@ -685,6 +710,16 @@ func (m *model) openDialog(kind ui.DialogKind) {
 		o = o.SetTheme(m.th)
 		o = o.SetSize(m.width, m.height)
 		m.toolsOverlay = &o
+	case ui.DialogSettings:
+		host, ok := m.app.(settingsDialogHost)
+		if !ok {
+			m.addBlock(roleInfo, "Settings browser is unavailable in this session.")
+			return
+		}
+		o := settingsdialog.New(ctx, host.SettingsDialogDeps())
+		o = o.SetTheme(m.th)
+		o = o.SetSize(m.width, m.height)
+		m.settingsOverlay = &o
 	case ui.DialogBackground:
 		host, ok := m.app.(interface {
 			ListBackgroundProcesses() []bgproc.Process
@@ -731,6 +766,9 @@ func (m *model) View() string {
 	}
 	if m.bgProcOverlay != nil {
 		return m.bgProcOverlay.View()
+	}
+	if m.settingsOverlay != nil {
+		return m.settingsOverlay.View()
 	}
 	m.syncInputLayout()
 
@@ -2241,6 +2279,7 @@ func (m *model) statusWithMetrics() ui.StatusBar {
 	status := m.status
 	mp, ok := m.app.(ui.MetricsProvider)
 	if !ok {
+		status.Detail = footerDetailWithShortcuts(status.Detail)
 		return status
 	}
 	stats := mp.SessionMetrics()
@@ -2285,7 +2324,19 @@ func (m *model) statusWithMetrics() ui.StatusBar {
 		}
 	}
 
+	status.Detail = footerDetailWithShortcuts(status.Detail)
 	return status
+}
+
+// footerDetailWithShortcuts prepends OS-specific scroll hints to the footer
+// detail line (the bottom row) so shortcuts stay visible even when the status
+// row above the input is clipped or overlooked.
+func footerDetailWithShortcuts(detail string) string {
+	hints := scrollShortcutHints()
+	if strings.TrimSpace(detail) == "" {
+		return hints
+	}
+	return hints + "  ·  " + detail
 }
 
 func renderFooter(status ui.StatusBar, th theme.Theme, width int) string {

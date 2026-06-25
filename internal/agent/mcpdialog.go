@@ -25,14 +25,52 @@ type mcpDialogDeps struct{ app *App }
 
 func (d *mcpDialogDeps) settings() *config.Settings { return d.app.deps.Settings }
 func (d *mcpDialogDeps) loader() *config.Loader     { return d.app.deps.Loader }
+func (d *mcpDialogDeps) docs() *config.Documents    { return d.app.docs }
+
+func (d *mcpDialogDeps) ProjectAvailable() bool {
+	docs := d.docs()
+	return docs != nil && docs.WorkDir() != ""
+}
+
+// serverScope returns the scope that owns the named server: Project if it is
+// defined in the project settings file, Global otherwise.
+func (d *mcpDialogDeps) serverScope(name string) config.SettingScope {
+	docs := d.docs()
+	if docs != nil && docs.Project != nil {
+		if servers, err := docs.Project.MCPServers(); err == nil {
+			if _, ok := servers[name]; ok {
+				return config.ScopeProject
+			}
+		}
+	}
+	return config.ScopeGlobal
+}
 
 func (d *mcpDialogDeps) ListServers() []mcpdialog.ServerEntry {
+	// Read merged settings (project overrides global via shallow merge).
+	docs := d.docs()
+	merged := d.settings()
+	if docs != nil {
+		merged = docs.Merged
+	}
+
 	settingsServers := map[string]config.MCPServerConfig{}
-	if s := d.settings(); s != nil {
-		if got, err := s.MCPServers(); err == nil {
+	if merged != nil {
+		if got, err := merged.MCPServers(); err == nil {
 			settingsServers = got
 		}
 	}
+
+	// Build a project-server set so we can badge entries with their scope.
+	projectServers := map[string]struct{}{}
+	if docs != nil && docs.Project != nil {
+		if got, err := docs.Project.MCPServers(); err == nil {
+			for name := range got {
+				projectServers[name] = struct{}{}
+			}
+		}
+	}
+
 	extServers := map[string]config.MCPServerConfig{}
 	statusByName := map[string]mcp.ServerState{}
 	if d.app.runtime != nil && d.app.runtime.Catalog != nil {
@@ -44,7 +82,13 @@ func (d *mcpDialogDeps) ListServers() []mcpdialog.ServerEntry {
 
 	entries := make([]mcpdialog.ServerEntry, 0, len(settingsServers)+len(extServers))
 	for name, cfg := range settingsServers {
-		entries = append(entries, mcpServerEntry(name, cfg, statusByName[name], true, "settings"))
+		scope := config.ScopeGlobal
+		if _, inProject := projectServers[name]; inProject {
+			scope = config.ScopeProject
+		}
+		e := mcpServerEntry(name, cfg, statusByName[name], true, "settings")
+		e.Scope = scope
+		entries = append(entries, e)
 	}
 	for name, cfg := range extServers {
 		if _, ok := settingsServers[name]; ok {
@@ -70,7 +114,12 @@ func mcpServerEntry(name string, cfg config.MCPServerConfig, state mcp.ServerSta
 }
 
 func (d *mcpDialogDeps) GetServer(name string) (mcpdialog.ServerForm, bool) {
+	// Read from merged so project-scoped servers are visible too.
+	docs := d.docs()
 	s := d.settings()
+	if docs != nil {
+		s = docs.Merged
+	}
 	if s == nil {
 		return mcpdialog.ServerForm{}, false
 	}
@@ -85,8 +134,9 @@ func (d *mcpDialogDeps) GetServer(name string) (mcpdialog.ServerForm, bool) {
 	return formFromConfig(name, cfg), true
 }
 
-func (d *mcpDialogDeps) SaveServer(ctx context.Context, originalName string, form mcpdialog.ServerForm) error {
-	if d.loader() == nil || d.settings() == nil {
+func (d *mcpDialogDeps) SaveServer(ctx context.Context, originalName string, form mcpdialog.ServerForm, scope config.SettingScope) error {
+	docs := d.docs()
+	if docs == nil {
 		return fmt.Errorf("settings not loaded")
 	}
 	name := strings.TrimSpace(form.Name)
@@ -98,13 +148,17 @@ func (d *mcpDialogDeps) SaveServer(ctx context.Context, originalName string, for
 		return err
 	}
 	renamed := originalName != "" && originalName != name
+	target := docs.TargetSettings(scope)
 	if renamed {
-		_ = d.settings().RemoveMCPServer(originalName)
+		_ = target.RemoveMCPServer(originalName)
+		// If the original was in a different scope, clean it up there too.
+		other := docs.TargetSettings(1 - scope)
+		_ = other.RemoveMCPServer(originalName)
 	}
-	if err := d.settings().SetMCPServer(name, cfg); err != nil {
+	if err := target.SetMCPServer(name, cfg); err != nil {
 		return err
 	}
-	if err := d.loader().Save(d.settings()); err != nil {
+	if err := docs.Save(scope); err != nil {
 		return err
 	}
 	if err := d.persistMCPBearer(ctx, originalName, name, form.Bearer, renamed); err != nil {
@@ -139,13 +193,16 @@ func (d *mcpDialogDeps) persistMCPBearer(ctx context.Context, originalName, name
 }
 
 func (d *mcpDialogDeps) RemoveServer(ctx context.Context, name string) error {
-	if d.loader() == nil || d.settings() == nil {
+	docs := d.docs()
+	if docs == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	if err := d.settings().RemoveMCPServer(name); err != nil {
+	scope := d.serverScope(name)
+	target := docs.TargetSettings(scope)
+	if err := target.RemoveMCPServer(name); err != nil {
 		return err
 	}
-	if err := d.loader().Save(d.settings()); err != nil {
+	if err := docs.Save(scope); err != nil {
 		return err
 	}
 	_ = credentials.DeleteMCPServerBearer(ctx, name)
@@ -154,13 +211,16 @@ func (d *mcpDialogDeps) RemoveServer(ctx context.Context, name string) error {
 }
 
 func (d *mcpDialogDeps) SetDisabled(ctx context.Context, name string, disabled bool) error {
-	if d.loader() == nil || d.settings() == nil {
+	docs := d.docs()
+	if docs == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	if err := d.settings().SetMCPServerDisabled(name, disabled); err != nil {
+	scope := d.serverScope(name)
+	target := docs.TargetSettings(scope)
+	if err := target.SetMCPServerDisabled(name, disabled); err != nil {
 		return err
 	}
-	if err := d.loader().Save(d.settings()); err != nil {
+	if err := docs.Save(scope); err != nil {
 		return err
 	}
 	_, err := d.app.deps.Hooks.ReloadMCP(ctx)

@@ -179,6 +179,9 @@ func BuildGenerateContentConfig(req *GenerateRequest) *genai.GenerateContentConf
 	if tools := ToolDeclarationsToGenai(req.Tools); len(tools) > 0 {
 		cfg.Tools = tools
 	}
+	if req.IncludeThoughts {
+		cfg.ThinkingConfig = &genai.ThinkingConfig{IncludeThoughts: true}
+	}
 	return cfg
 }
 

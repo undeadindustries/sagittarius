@@ -26,6 +26,8 @@ const (
 	DialogMCP DialogKind = "mcp"
 	// DialogTools opens the tool inventory.
 	DialogTools DialogKind = "tools"
+	// DialogSettings opens the curated settings browser.
+	DialogSettings DialogKind = "settings"
 )
 
 // Result is the outcome of processing one slash command.

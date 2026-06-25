@@ -139,3 +139,24 @@ func TestFooterContextPercentStillShown(t *testing.T) {
 		t.Errorf("footer Right missing context%% gauge: %q", right)
 	}
 }
+
+func TestFooterDetailShowsScrollHints(t *testing.T) {
+	t.Parallel()
+
+	app := footerMetricsApp{
+		stats: ui.SessionStats{
+			LastInputTokens: 100,
+			LastOutputTokens: 40,
+			InputTokens:      100,
+			OutputTokens:     40,
+		},
+	}
+	m := newModel(ui.Options{ThemeName: "greyscale"}, app, NewTerminal(ui.Options{}))
+	m.width = 100
+	status := m.statusWithMetrics()
+	detail := stripANSI(status.Detail)
+	hints := scrollShortcutHints()
+	if !strings.Contains(detail, hints) {
+		t.Errorf("footer Detail missing scroll hints %q\n%s", hints, detail)
+	}
+}

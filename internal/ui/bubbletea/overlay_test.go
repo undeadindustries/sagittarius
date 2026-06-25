@@ -33,10 +33,13 @@ func (stubMCPDeps) ListServers() []mcpdialog.ServerEntry { return nil }
 func (stubMCPDeps) GetServer(string) (mcpdialog.ServerForm, bool) {
 	return mcpdialog.ServerForm{}, false
 }
-func (stubMCPDeps) SaveServer(context.Context, string, mcpdialog.ServerForm) error { return nil }
-func (stubMCPDeps) RemoveServer(context.Context, string) error                     { return nil }
-func (stubMCPDeps) SetDisabled(context.Context, string, bool) error                { return nil }
-func (stubMCPDeps) Reload(context.Context) (string, error)                         { return "", nil }
+func (stubMCPDeps) SaveServer(context.Context, string, mcpdialog.ServerForm, config.SettingScope) error {
+	return nil
+}
+func (stubMCPDeps) RemoveServer(context.Context, string) error      { return nil }
+func (stubMCPDeps) SetDisabled(context.Context, string, bool) error { return nil }
+func (stubMCPDeps) Reload(context.Context) (string, error)          { return "", nil }
+func (stubMCPDeps) ProjectAvailable() bool                          { return false }
 
 type stubToolsDeps struct{}
 

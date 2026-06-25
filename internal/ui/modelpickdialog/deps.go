@@ -5,7 +5,11 @@
 // so the dialog never imports the agent or slash packages (preserves AD-004).
 package modelpickdialog
 
-import "context"
+import (
+	"context"
+
+	"github.com/undeadindustries/sagittarius/internal/config"
+)
 
 // ModelEntry is one row in the global active-model list.
 type ModelEntry struct {
@@ -23,6 +27,9 @@ type Deps interface {
 	CurrentProviderID() string
 	// CurrentModel returns the currently-configured model for the active provider.
 	CurrentModel() string
-	// SelectCurrentModel switches to the given (provider, model) and rebuilds the runner.
-	SelectCurrentModel(ctx context.Context, providerID, model string) error
+	// SelectCurrentModel switches to the given (provider, model), saves to the
+	// specified scope, and rebuilds the runner.
+	SelectCurrentModel(ctx context.Context, providerID, model string, scope config.SettingScope) error
+	// ProjectAvailable reports whether the project scope is writable.
+	ProjectAvailable() bool
 }

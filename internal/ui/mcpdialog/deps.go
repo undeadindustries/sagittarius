@@ -5,7 +5,11 @@
 // packages (preserves AD-004).
 package mcpdialog
 
-import "context"
+import (
+	"context"
+
+	"github.com/undeadindustries/sagittarius/internal/config"
+)
 
 // Transport identifiers for the form transport toggle.
 const (
@@ -27,6 +31,9 @@ type ServerEntry struct {
 	Editable bool
 	// Source is "settings" or an extension descriptor for display.
 	Source string
+	// Scope indicates whether this server is defined in global or project settings.
+	// Only meaningful when Editable is true (Source == "settings").
+	Scope config.SettingScope
 }
 
 // ServerForm holds the editable string/bool fields for one server. Args, Env,
@@ -58,15 +65,17 @@ type Deps interface {
 	ListServers() []ServerEntry
 	// GetServer returns the editable form for a server, or ok=false if absent.
 	GetServer(name string) (ServerForm, bool)
-	// SaveServer adds or replaces a server. originalName is empty when adding;
-	// on edit it identifies the existing entry (rename is not supported in v1, so
-	// it equals form.Name). Persists settings, stores any bearer token, and
-	// reloads the runner registry.
-	SaveServer(ctx context.Context, originalName string, form ServerForm) error
-	// RemoveServer deletes a settings-owned server and any stored bearer token.
+	// SaveServer adds or replaces a server into the specified scope.
+	// originalName is empty when adding; on edit it identifies the existing
+	// entry. Persists settings, stores any bearer token, and reloads.
+	SaveServer(ctx context.Context, originalName string, form ServerForm, scope config.SettingScope) error
+	// RemoveServer deletes a settings-owned server. The implementation
+	// auto-detects which scope owns the server and removes it there.
 	RemoveServer(ctx context.Context, name string) error
-	// SetDisabled toggles a server's disabled flag and reloads.
+	// SetDisabled toggles a server's disabled flag in the scope that owns it.
 	SetDisabled(ctx context.Context, name string, disabled bool) error
 	// Reload reconnects servers and rediscovers tools, returning a status line.
 	Reload(ctx context.Context) (string, error)
+	// ProjectAvailable reports whether the project scope is writable.
+	ProjectAvailable() bool
 }

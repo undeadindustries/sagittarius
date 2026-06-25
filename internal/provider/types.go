@@ -57,6 +57,11 @@ type GenerateRequest struct {
 	Temperature       *float64
 	MaxOutputTokens   *int32
 	StopSequences     []string
+	// IncludeThoughts requests that the provider stream readable thought text
+	// alongside the answer. For the Gemini native adapter this sets
+	// ThinkingConfig.IncludeThoughts; for OpenAI-family adapters the field is
+	// ignored (they expose reasoning through their own wire fields).
+	IncludeThoughts bool
 }
 
 // Usage holds provider-reported token counts and optional cost for one request.
@@ -78,9 +83,10 @@ type StreamResponse struct {
 	TextDelta string
 	// ReasoningDelta carries incremental model reasoning ("thinking") text,
 	// kept separate from TextDelta so the UI can show it in a dedicated,
-	// optional thinking view rather than mixing it into the answer. Only the
-	// OpenAI-chat (OpenRouter reasoning/reasoning_content) and OpenAI-Responses
-	// (reasoning summary) wire paths populate it; Gemini has no readable thoughts.
+	// optional thinking view rather than mixing it into the answer. Populated by:
+	//   - Gemini native: Part.Thought text when IncludeThoughts is set
+	//   - OpenAI-chat / OpenRouter: reasoning or reasoning_content SSE fields
+	//   - OpenAI Responses: response.reasoning_summary_text.delta
 	ReasoningDelta string
 	ToolCalls      []ToolCall
 	Usage          *Usage

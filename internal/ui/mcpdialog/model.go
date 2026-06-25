@@ -8,6 +8,8 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/undeadindustries/sagittarius/internal/config"
+	"github.com/undeadindustries/sagittarius/internal/ui/scopedialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/theme"
 )
 
@@ -68,6 +70,10 @@ type Model struct {
 	fields       []fieldID
 	fieldCursor  int
 
+	// scopeSel is shown at the bottom of the add/edit form.
+	scopeSel     scopedialog.ScopeSelector
+	scopeFocused bool
+
 	// field editor state
 	input   textinput.Model
 	editing fieldID
@@ -98,12 +104,17 @@ type reloadResultMsg struct {
 
 // New constructs the MCP server wizard.
 func New(ctx context.Context, deps Deps) Model {
+	sel := scopedialog.NewScopeSelector(config.ScopeProject)
+	if !deps.ProjectAvailable() {
+		sel.Disabled = true
+	}
 	m := Model{
-		deps:   deps,
-		ctx:    ctx,
-		th:     theme.Default(),
-		screen: screenList,
-		spin:   newDialogSpinner(theme.Default()),
+		deps:     deps,
+		ctx:      ctx,
+		th:       theme.Default(),
+		screen:   screenList,
+		spin:     newDialogSpinner(theme.Default()),
+		scopeSel: sel,
 	}
 	m.servers = deps.ListServers()
 	return m
@@ -207,6 +218,10 @@ func (m *Model) startAdd() {
 	m.fieldCursor = 0
 	m.errMsg = ""
 	m.info = ""
+	// Default new servers to project scope.
+	m.scopeSel.Scope = config.ScopeProject
+	m.scopeFocused = false
+	m.scopeSel.Blur()
 	m.rebuildFields()
 	m.screen = screenForm
 }
@@ -234,6 +249,10 @@ func (m Model) startEdit() (Model, tea.Cmd) {
 	m.fieldCursor = 0
 	m.errMsg = ""
 	m.info = ""
+	// Pre-select the scope the server is currently stored in.
+	m.scopeSel.Scope = srv.Scope
+	m.scopeFocused = false
+	m.scopeSel.Blur()
 	m.rebuildFields()
 	m.screen = screenForm
 	return m, nil
@@ -310,6 +329,22 @@ func (m Model) handleReloadResult(msg reloadResultMsg) (Model, tea.Cmd) {
 func (m Model) busy() bool { return m.saving || m.reloading }
 
 func (m Model) updateForm(key tea.KeyMsg) (Model, tea.Cmd) {
+	// Tab toggles focus between the field list and the scope selector.
+	if key.String() == "tab" && !m.scopeSel.Disabled {
+		m.scopeFocused = !m.scopeFocused
+		if m.scopeFocused {
+			m.scopeSel.Focus()
+		} else {
+			m.scopeSel.Blur()
+		}
+		return m, nil
+	}
+	// When the scope selector has focus, route left/right to it.
+	if m.scopeFocused {
+		sel, cmd := m.scopeSel.Update(key)
+		m.scopeSel = sel
+		return m, cmd
+	}
 	switch key.String() {
 	case "esc":
 		m.screen = screenList
@@ -369,15 +404,16 @@ func (m Model) save() (Model, tea.Cmd) {
 	m.saving = true
 	m.errMsg = ""
 	form := m.form
+	scope := m.scopeSel.Scope
 	return m, tea.Batch(
 		m.spin.Tick,
-		saveServerCmd(m.ctx, m.deps, m.originalName, form, m.adding),
+		saveServerCmd(m.ctx, m.deps, m.originalName, form, m.adding, scope),
 	)
 }
 
-func saveServerCmd(ctx context.Context, deps Deps, originalName string, form ServerForm, adding bool) tea.Cmd {
+func saveServerCmd(ctx context.Context, deps Deps, originalName string, form ServerForm, adding bool, scope config.SettingScope) tea.Cmd {
 	return func() tea.Msg {
-		err := deps.SaveServer(ctx, originalName, form)
+		err := deps.SaveServer(ctx, originalName, form, scope)
 		return saveResultMsg{err: err, adding: adding, name: form.Name}
 	}
 }

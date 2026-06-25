@@ -38,6 +38,11 @@ func (a *modelPartsAccumulator) add(resp *genai.GenerateContentResponse) {
 		if p == nil {
 			continue
 		}
+		// Thought parts are display-only and must not be replayed in history;
+		// only their ThoughtSignature (carried by adjacent content parts) matters.
+		if p.Thought {
+			continue
+		}
 		switch {
 		case p.FunctionCall != nil:
 			part := Part{FunctionCall: functionCallFromGenai(p.FunctionCall)}
@@ -176,21 +181,30 @@ func (g *GeminiGenerator) GenerateContentStream(
 				lastUsageMeta = resp.UsageMetadata
 			}
 
-			// Accumulate the full model turn (text + functionCall parts with
-			// their thoughtSignatures) so the runner can store it verbatim for
-			// Gemini 3 multi-step tool calling.
-			acc.add(resp)
+		// Accumulate the full model turn (text + functionCall parts with
+		// their thoughtSignatures) so the runner can store it verbatim for
+		// Gemini 3 multi-step tool calling.
+		acc.add(resp)
 
-			chunk := StreamResponse{}
-			if text := resp.Text(); text != "" {
-				chunk.TextDelta = text
+		// Emit reasoning deltas for thought parts and text deltas for answer
+		// parts separately, so the UI thinking box receives the right stream.
+		// We iterate parts directly instead of using resp.Text() because that
+		// helper silently skips thought parts.
+		if len(resp.Candidates) > 0 && resp.Candidates[0] != nil && resp.Candidates[0].Content != nil {
+			for _, p := range resp.Candidates[0].Content.Parts {
+				if p == nil {
+					continue
+				}
+				if p.Thought && p.Text != "" {
+					ch <- StreamResponse{ReasoningDelta: p.Text}
+				} else if !p.Thought && p.Text != "" {
+					ch <- StreamResponse{TextDelta: p.Text}
+				}
 			}
-			if calls := ToolCallsFromGenaiResponse(resp); len(calls) > 0 {
-				chunk.ToolCalls = calls
-			}
-			if chunk.TextDelta != "" || len(chunk.ToolCalls) > 0 {
-				ch <- chunk
-			}
+		}
+		if calls := ToolCallsFromGenaiResponse(resp); len(calls) > 0 {
+			ch <- StreamResponse{ToolCalls: calls}
+		}
 		}
 		// Emit provider-reported usage before Done (cost is not available from
 		// the Gemini API natively so CostKnown remains false). The complete

@@ -36,6 +36,8 @@ func mapDialogKind(kind slash.DialogKind) ui.DialogKind {
 		return ui.DialogMCP
 	case slash.DialogTools:
 		return ui.DialogTools
+	case slash.DialogSettings:
+		return ui.DialogSettings
 	default:
 		return ""
 	}
@@ -693,11 +695,57 @@ func (d *modelPickDialogDeps) CurrentModel() string {
 	return endpoint.Model
 }
 
-func (d *modelPickDialogDeps) SelectCurrentModel(ctx context.Context, providerID, model string) error {
-	if d.app.deps.Loader == nil || d.settings() == nil {
+func (d *modelPickDialogDeps) ProjectAvailable() bool {
+	docs := d.app.docs
+	return docs != nil && docs.WorkDir() != ""
+}
+
+func (d *modelPickDialogDeps) SelectCurrentModel(ctx context.Context, providerID, model string, scope config.SettingScope) error {
+	docs := d.app.docs
+	if docs == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	_, err := d.app.deps.Hooks.SelectCurrentModel(ctx, providerID, model)
+	// For global scope, delegate through the standard hook (validates + saves + rebuilds).
+	if scope == config.ScopeGlobal {
+		_, err := d.app.deps.Hooks.SelectCurrentModel(ctx, providerID, model)
+		return err
+	}
+	// For project scope: validate against merged (sees custom providers from global),
+	// then write only providers.active and providers.<id>.model to the project tier.
+	merged := docs.Merged
+	providerID = config.NormalizeProviderID(providerID)
+	if _, ok := config.LookupBuiltInProvider(providerID); !ok {
+		if merged == nil || merged.Providers == nil || merged.Providers.Custom == nil {
+			return fmt.Errorf("select model: unknown provider %q", providerID)
+		}
+		if _, ok := merged.Providers.Custom[providerID]; !ok {
+			return fmt.Errorf("select model: unknown provider %q", providerID)
+		}
+	}
+	curated := provider.CuratedActiveModels(merged, providerID)
+	if len(curated) > 0 {
+		found := false
+		for _, m := range curated {
+			if m == model {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("select model: %q is not in the active set for %q", model, providerID)
+		}
+	}
+	target := docs.TargetSettings(scope)
+	if err := provider.SetActiveProvider(target, providerID); err != nil {
+		return err
+	}
+	if err := provider.SetProviderModel(target, providerID, model); err != nil {
+		return err
+	}
+	if err := docs.Save(scope); err != nil {
+		return err
+	}
+	_, _, err := d.app.deps.Hooks.RebuildRunner(ctx)
 	return err
 }
 
@@ -712,8 +760,20 @@ type modesDialogDeps struct {
 
 func (d *modesDialogDeps) settings() *config.Settings { return d.app.deps.Settings }
 
+func (d *modesDialogDeps) ProjectAvailable() bool {
+	docs := d.app.docs
+	return docs != nil && docs.WorkDir() != ""
+}
+
 func (d *modesDialogDeps) ListModes() []modesdialog.ModeEntry {
-	s := d.settings()
+	// Read from merged settings so project overrides are visible.
+	docs := d.app.docs
+	var s *config.Settings
+	if docs != nil {
+		s = docs.Merged
+	} else {
+		s = d.settings()
+	}
 	var modes *config.SagittariusModes
 	if s != nil && s.Sagittarius != nil {
 		modes = s.Sagittarius.Modes
@@ -769,11 +829,12 @@ func (d *modesDialogDeps) AllActiveModels() []modesdialog.ModelEntry {
 	return entries
 }
 
-func (d *modesDialogDeps) SetModeOverride(ctx context.Context, modeName, providerID, model string) error {
-	if d.app.deps.Loader == nil || d.settings() == nil {
+func (d *modesDialogDeps) SetModeOverride(ctx context.Context, modeName, providerID, model string, scope config.SettingScope) error {
+	docs := d.app.docs
+	if docs == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	s := d.settings()
+	s := docs.TargetSettings(scope)
 	if s.Sagittarius == nil {
 		s.Sagittarius = &config.SagittariusSettings{}
 	}
@@ -812,23 +873,24 @@ func (d *modesDialogDeps) SetModeOverride(ctx context.Context, modeName, provide
 	default:
 		return fmt.Errorf("unknown mode %q", modeName)
 	}
-	if err := d.app.deps.Loader.Save(s); err != nil {
+	if err := docs.Save(scope); err != nil {
 		return err
 	}
 	d.maybeRebuildActiveMode(ctx, modeName)
 	return nil
 }
 
-func (d *modesDialogDeps) ClearModeOverride(ctx context.Context, modeName string) error {
-	if d.app.deps.Loader == nil || d.settings() == nil {
+func (d *modesDialogDeps) ClearModeOverride(ctx context.Context, modeName string, scope config.SettingScope) error {
+	docs := d.app.docs
+	if docs == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	s := d.settings()
+	s := docs.TargetSettings(scope)
 	if s.Sagittarius == nil || s.Sagittarius.Modes == nil {
 		return nil
 	}
 	clearModeConfigOverride(s.Sagittarius.Modes, modeName)
-	if err := d.app.deps.Loader.Save(s); err != nil {
+	if err := docs.Save(scope); err != nil {
 		return err
 	}
 	d.maybeRebuildActiveMode(ctx, modeName)

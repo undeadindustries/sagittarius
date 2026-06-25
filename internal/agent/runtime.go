@@ -91,6 +91,17 @@ func (r *Runtime) Registry() *tools.Registry {
 	return r.Catalog.BuildRegistry()
 }
 
+// SetSettings updates the settings pointer used by ReloadTools and ReloadSkills.
+// Call this whenever the merged settings document changes so that MCP server
+// discovery and extension loading see the current configuration.
+func (r *Runtime) SetSettings(s *config.Settings) {
+	if r == nil {
+		return
+	}
+	r.Settings = s
+	r.Catalog.SetSettings(s)
+}
+
 // ReloadTools reloads extensions, MCP, skills, and returns a fresh registry.
 func (r *Runtime) ReloadTools(ctx context.Context) (*tools.Registry, error) {
 	if r == nil || r.Catalog == nil {
