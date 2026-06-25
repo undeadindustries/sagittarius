@@ -6,6 +6,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/undeadindustries/sagittarius/internal/config"
+	"github.com/undeadindustries/sagittarius/internal/ui/scopedialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/theme"
 )
 
@@ -24,9 +26,11 @@ type Model struct {
 	curProvider string
 	curModel    string
 
-	cursor int
-	done   bool
-	status string
+	cursor       int
+	scopeSel     scopedialog.ScopeSelector
+	scopeFocused bool
+	done         bool
+	status       string
 
 	errMsg string
 	info   string
@@ -34,10 +38,15 @@ type Model struct {
 
 // New constructs the global model picker.
 func New(ctx context.Context, deps Deps) Model {
+	sel := scopedialog.NewScopeSelector(config.ScopeProject)
+	if !deps.ProjectAvailable() {
+		sel.Disabled = true
+	}
 	m := Model{
-		deps: deps,
-		ctx:  ctx,
-		th:   theme.Default(),
+		deps:     deps,
+		ctx:      ctx,
+		th:       theme.Default(),
+		scopeSel: sel,
 	}
 	m.entries = deps.AllActiveModels()
 	m.curProvider = deps.CurrentProviderID()
@@ -70,8 +79,26 @@ func (m Model) SetTheme(th theme.Theme) Model {
 
 // Update advances the picker for one message.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
+	if _, ok := msg.(scopedialog.ScopeChangedMsg); ok {
+		return m, nil
+	}
+	// Delegate to scope selector when it's focused.
+	if m.scopeFocused {
+		sel, cmd := m.scopeSel.Update(msg)
+		m.scopeSel = sel
+		return m, cmd
+	}
 	key, ok := msg.(tea.KeyMsg)
 	if !ok {
+		return m, nil
+	}
+	if key.String() == "tab" && !m.scopeSel.Disabled {
+		m.scopeFocused = !m.scopeFocused
+		if m.scopeFocused {
+			m.scopeSel.Focus()
+		} else {
+			m.scopeSel.Blur()
+		}
 		return m, nil
 	}
 	switch key.String() {
@@ -95,15 +122,18 @@ func (m Model) selectCurrent() (Model, tea.Cmd) {
 		return m, nil
 	}
 	e := m.entries[m.cursor]
-	if err := m.deps.SelectCurrentModel(m.ctx, e.ProviderID, e.Model); err != nil {
+	scope := m.scopeSel.Scope
+	if err := m.deps.SelectCurrentModel(m.ctx, e.ProviderID, e.Model, scope); err != nil {
 		m.errMsg = err.Error()
 		return m, nil
 	}
 	m.curProvider = e.ProviderID
 	m.curModel = e.Model
-	m.status = fmt.Sprintf("Model → %s/%s.", e.DisplayID, e.Model)
+	m.status = fmt.Sprintf("Model → %s/%s. (%s)", e.DisplayID, e.Model, scope)
 	m.info = m.status
 	m.errMsg = ""
+	m.scopeFocused = false
+	m.scopeSel.Blur()
 	return m, nil
 }
 

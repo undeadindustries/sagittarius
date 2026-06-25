@@ -35,7 +35,11 @@ func (m Model) View() string {
 func (m Model) footerHint() string {
 	switch m.screen {
 	case screenPicker:
-		return "↑/↓ move • Enter assign (first row = clear) • Esc back"
+		hint := "↑/↓ move • Enter assign (first row = clear) • Esc back"
+		if !m.scopeSel.Disabled {
+			hint += " • Tab · scope"
+		}
+		return hint
 	default:
 		return "↑/↓ move • Enter assign model • r clear override • Esc close"
 	}
@@ -107,6 +111,9 @@ func (m Model) renderPicker() string {
 			label = fmt.Sprintf("%s/%s", e.DisplayID, e.Model)
 		}
 		b.WriteString(m.renderRow(label, i == m.pickCursor) + "\n")
+	}
+	if !m.scopeSel.Disabled {
+		b.WriteString("\n" + m.scopeSel.View(m.th))
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

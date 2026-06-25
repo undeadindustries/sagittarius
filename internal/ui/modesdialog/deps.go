@@ -5,7 +5,11 @@
 // the dialog never imports the agent or slash packages (preserves AD-004).
 package modesdialog
 
-import "context"
+import (
+	"context"
+
+	"github.com/undeadindustries/sagittarius/internal/config"
+)
 
 // ModelEntry is one row in the global active-model picker.
 // When IsClear is true the entry represents "(use default)" and carries no
@@ -26,12 +30,19 @@ type ModeEntry struct {
 
 // Deps performs the settings side effects the modes-override editor needs.
 type Deps interface {
-	// ListModes returns the four interaction modes with their current overrides.
+	// ListModes returns the four interaction modes with their current overrides
+	// from the merged (effective) settings.
 	ListModes() []ModeEntry
 	// AllActiveModels returns all (provider, model) pairs for the picker.
 	AllActiveModels() []ModelEntry
-	// SetModeOverride persists a (provider, model) override for the given mode name.
-	SetModeOverride(ctx context.Context, mode, providerID, model string) error
-	// ClearModeOverride removes the override for the given mode name.
-	ClearModeOverride(ctx context.Context, mode string) error
+	// SetModeOverride persists a (provider, model) override for the given mode
+	// name into the specified scope (Global or Project).
+	SetModeOverride(ctx context.Context, mode, providerID, model string, scope config.SettingScope) error
+	// ClearModeOverride removes the override for the given mode name from the
+	// specified scope.
+	ClearModeOverride(ctx context.Context, mode string, scope config.SettingScope) error
+	// ProjectAvailable reports whether a project scope is writable (workDir
+	// is set and is not the home directory). When false, the scope selector is
+	// hidden and saves always target Global.
+	ProjectAvailable() bool
 }

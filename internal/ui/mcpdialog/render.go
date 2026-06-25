@@ -112,7 +112,14 @@ func (m Model) viewForm() string {
 	for i, id := range m.fields {
 		b.WriteString(m.renderRow(m.fieldLabel(id), i == m.fieldCursor) + "\n")
 	}
-	b.WriteString("\n" + dim.Render("↑/↓ move • Enter edit/save • Space toggle • Esc back"))
+	if !m.scopeSel.Disabled {
+		b.WriteString("\n" + m.scopeSel.View(m.th))
+	}
+	footerHint := "↑/↓ move • Enter edit/save • Space toggle • Esc back"
+	if !m.scopeSel.Disabled {
+		footerHint += " • Tab · scope"
+	}
+	b.WriteString("\n" + dim.Render(footerHint))
 	return strings.TrimRight(b.String(), "\n")
 }
 

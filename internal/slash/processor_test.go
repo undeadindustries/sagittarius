@@ -90,6 +90,9 @@ func (m *mockHooks) ListSessions() ([]session.SessionInfo, error) { return nil, 
 
 func (m *mockHooks) ClearHistory() error { return nil }
 
+func (m *mockHooks) SetModeOverride(_ context.Context, _, _, _ string, _ config.SettingScope) error {
+	return nil
+}
 func (m *mockHooks) SetInteractionMode(context.Context, modes.Mode) (string, error) {
 	return "gpt-4o-mini", nil
 }

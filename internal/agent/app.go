@@ -36,6 +36,12 @@ type AppConfig struct {
 	Model         string
 	Loader        *config.Loader
 	Settings      *config.Settings
+	// Documents holds both settings tiers (global + optional project) and the
+	// merged view. When set, RebuildRunner reads from Documents.Merged for
+	// endpoint resolution so project-scoped mode overrides take effect after
+	// in-session mutations. Settings must equal Documents.Global when Documents
+	// is provided (so all mutation code continues to write to the correct file).
+	Documents *config.Documents
 	// SessionID keys the context manager's adaptive state and offload dirs. It
 	// is reused across provider switches so offload paths stay stable.
 	SessionID string
@@ -63,6 +69,11 @@ type App struct {
 	processor *slash.Processor
 	deps      slash.Deps
 	sessionID string
+	// docs holds both settings tiers and the merged view. RebuildRunner reads
+	// from docs.Merged so project-scoped overrides (modes, model routing) take
+	// effect after in-session saves. Nil when the caller did not supply Documents
+	// (e.g. tests that only set Loader/Settings directly).
+	docs *config.Documents
 	// generatorCache eliminates repeated client initialisation (DNS + TLS +
 	// genai.NewClient) on mode switches that involve a provider override. The
 	// cache is self-invalidating: any change to connection parameters or
@@ -98,6 +109,7 @@ func NewApp(cfg AppConfig) *App {
 		runtime:         cfg.Runtime,
 		processor:       slash.NewProcessor(),
 		sessionID:       cfg.SessionID,
+		docs:            cfg.Documents,
 		generatorCache:  provider.NewGeneratorCache(),
 		baseProviderID:  config.NormalizeProviderID(cfg.BaseProviderID),
 		providerDisplay: cfg.ProviderLabel,
@@ -108,9 +120,10 @@ func NewApp(cfg AppConfig) *App {
 			Mode:   mode.String(),
 		},
 		deps: slash.Deps{
-			Loader:   cfg.Loader,
-			Settings: cfg.Settings,
-			Hooks:    &appHooks{app: nil},
+			Loader:    cfg.Loader,
+			Settings:  cfg.Settings,
+			Documents: cfg.Documents,
+			Hooks:     &appHooks{app: nil},
 		},
 	}
 	app.deps.Hooks = &appHooks{app: app}
@@ -442,7 +455,16 @@ func (h *appHooks) RebuildRunner(ctx context.Context) (string, string, error) {
 		return "", "", fmt.Errorf("settings not loaded")
 	}
 
-	gen, err := h.app.generatorCache.GetOrCreate(ctx, h.app.deps.Settings)
+	// Use the merged settings (global + project overlay) for endpoint resolution
+	// so project-scoped mode and model overrides take effect after any save.
+	// deps.Settings (= Global) remains the mutation target for dialog saves.
+	effectiveSettings := h.app.deps.Settings
+	if h.app.docs != nil {
+		h.app.docs.ReloadMerged()
+		effectiveSettings = h.app.docs.Merged
+	}
+
+	gen, err := h.app.generatorCache.GetOrCreate(ctx, effectiveSettings)
 	if err != nil {
 		return "", "", err
 	}
@@ -450,6 +472,8 @@ func (h *appHooks) RebuildRunner(ctx context.Context) (string, string, error) {
 	// Keep the active provider's live model inside its curated active set. After
 	// a provider switch (or any rebuild) a previously-configured model may no
 	// longer be activated; coerce it to the first curated model and persist.
+	// Coercion uses deps.Settings (global) so any resulting save goes to the
+	// global file, not the read-only merged view.
 	activeID := h.app.deps.Settings.ActiveProvider()
 	if changed, cErr := provider.CoerceModelToCurated(h.app.deps.Settings, activeID); cErr == nil && changed {
 		if h.app.deps.Loader != nil {
@@ -457,12 +481,16 @@ func (h *appHooks) RebuildRunner(ctx context.Context) (string, string, error) {
 		}
 	}
 
-	endpoint, err := provider.ResolveEndpointConfig(h.app.deps.Settings)
+	endpoint, err := provider.ResolveEndpointConfig(effectiveSettings)
 	if err != nil {
 		return "", "", err
 	}
 
 	h.app.runner.SetGenerator(gen)
+	// Propagate the (possibly merged) effective settings so the runner's mode
+	// routing, system-prompt resolution, and per-model config always use the
+	// up-to-date merged view rather than the global-only snapshot it was built with.
+	h.app.runner.SetSettings(effectiveSettings)
 	h.app.runner.SetProviderDefaultModel(endpoint.Model)
 	if !h.app.runner.ModelPinned() {
 		h.app.runner.RefreshModelFromMode()
@@ -479,7 +507,7 @@ func (h *appHooks) RebuildRunner(ctx context.Context) (string, string, error) {
 	// sagittarius.compression.model override is configured (AD-015 active-model
 	// rule; per-utility override).
 	h.app.runner.SetContextManager(
-		NewContextManager(h.app.deps.Settings, gen,
+		NewContextManager(effectiveSettings, gen,
 			h.app.runner.CompressionModel,
 			h.app.runner.ActiveProviderID,
 			func() string { return h.app.runner.InteractionMode().String() },
@@ -529,6 +557,12 @@ func (h *appHooks) SetProviderAPIKey(ctx context.Context, providerID, apiKey str
 func (h *appHooks) ReloadMCP(ctx context.Context) (string, error) {
 	if h.app == nil || h.app.runtime == nil || h.app.runner == nil {
 		return "", fmt.Errorf("runtime not available")
+	}
+	// Propagate the current merged settings so MCP server discovery reads any
+	// project-scoped server definitions that were added since startup.
+	if h.app.docs != nil {
+		h.app.docs.ReloadMerged()
+		h.app.runtime.SetSettings(h.app.docs.Merged)
 	}
 	reg, err := h.app.runtime.ReloadTools(ctx)
 	if err != nil {
@@ -994,7 +1028,13 @@ func (h *appHooks) SetInteractionMode(ctx context.Context, mode modes.Mode) (str
 	if h.app == nil || h.app.runner == nil {
 		return "", fmt.Errorf("runner not available")
 	}
+	// Use the merged view so project-scoped mode overrides (sagittarius.modes.*
+	// and the active provider) are respected. Mutations (SetActiveProvider) still
+	// target deps.Settings (= global) so writes go to the correct file.
 	settings := h.app.deps.Settings
+	if h.app.docs != nil {
+		settings = h.app.docs.Merged
+	}
 
 	// Resolve this mode's provider override, if any.
 	modeProvider := ""
@@ -1063,6 +1103,68 @@ func (h *appHooks) InteractionMode() (modes.Mode, string) {
 	return mode, h.app.runner.Model()
 }
 
+// SetModeOverride persists a (provider, model) routing override for the given
+// mode name to the specified scope file. An empty model clears the override.
+// This implements the headless /modes override command.
+func (h *appHooks) SetModeOverride(ctx context.Context, modeName, providerID, model string, scope config.SettingScope) error {
+	if h.app == nil {
+		return fmt.Errorf("app not available")
+	}
+	docs := h.app.docs
+	if docs == nil {
+		return fmt.Errorf("settings not loaded")
+	}
+	if model == "" {
+		// Empty model means clear the override.
+		s := docs.TargetSettings(scope)
+		if s.Sagittarius == nil || s.Sagittarius.Modes == nil {
+			return nil
+		}
+		clearModeConfigOverride(s.Sagittarius.Modes, modeName)
+		return docs.Save(scope)
+	}
+	s := docs.TargetSettings(scope)
+	if s.Sagittarius == nil {
+		s.Sagittarius = &config.SagittariusSettings{}
+	}
+	if s.Sagittarius.Modes == nil {
+		s.Sagittarius.Modes = &config.SagittariusModes{}
+	}
+	mc := &config.SagittariusModeConfig{
+		Provider: config.NormalizeProviderID(providerID),
+		Model:    model,
+	}
+	switch modeName {
+	case "agent":
+		if s.Sagittarius.Modes.Agent != nil {
+			mc.SystemPromptSuffix = s.Sagittarius.Modes.Agent.SystemPromptSuffix
+			mc.Extra = s.Sagittarius.Modes.Agent.Extra
+		}
+		s.Sagittarius.Modes.Agent = mc
+	case "plan":
+		if s.Sagittarius.Modes.Plan != nil {
+			mc.SystemPromptSuffix = s.Sagittarius.Modes.Plan.SystemPromptSuffix
+			mc.Extra = s.Sagittarius.Modes.Plan.Extra
+		}
+		s.Sagittarius.Modes.Plan = mc
+	case "ask":
+		if s.Sagittarius.Modes.Ask != nil {
+			mc.SystemPromptSuffix = s.Sagittarius.Modes.Ask.SystemPromptSuffix
+			mc.Extra = s.Sagittarius.Modes.Ask.Extra
+		}
+		s.Sagittarius.Modes.Ask = mc
+	case "debug":
+		if s.Sagittarius.Modes.Debug != nil {
+			mc.SystemPromptSuffix = s.Sagittarius.Modes.Debug.SystemPromptSuffix
+			mc.Extra = s.Sagittarius.Modes.Debug.Extra
+		}
+		s.Sagittarius.Modes.Debug = mc
+	default:
+		return fmt.Errorf("unknown mode %q (expected agent, plan, ask, debug)", modeName)
+	}
+	return docs.Save(scope)
+}
+
 func (h *appHooks) SnapshotDiff(pathFilter string) (string, error) {
 	if h.app == nil || h.app.runner == nil {
 		return "", fmt.Errorf("runner not available")
@@ -1121,18 +1223,38 @@ func (h *appHooks) ApplyProjectSystemPromptPreset(ctx context.Context, presetID 
 	if !ok {
 		return "", fmt.Errorf("unknown system prompt preset %q", presetID)
 	}
-	wd, err := os.Getwd()
-	if err != nil {
-		return "", fmt.Errorf("resolve working directory: %w", err)
-	}
-	if err := config.SaveProjectSystemPrompt(wd, preset.Personality, preset.Variant); err != nil {
-		return "", err
-	}
-	if h.app.deps.Settings != nil {
-		if err := config.MergeProjectSystemPrompt(h.app.deps.Settings, wd); err != nil {
+
+	// When Documents is available write directly to docs.Project and call
+	// docs.SaveProject so the merged view is immediately updated. The legacy
+	// SaveProjectSystemPrompt+MergeProjectSystemPrompt path reads/writes the
+	// project file independently of docs.Project, leaving the merged view stale.
+	if h.app.docs != nil {
+		s := h.app.docs.TargetSettings(config.ScopeProject)
+		if s.Sagittarius == nil {
+			s.Sagittarius = &config.SagittariusSettings{}
+		}
+		s.Sagittarius.SystemPrompt = &config.SagittariusSystemPromptConfig{
+			Personality: config.CanonicalPersonalityID(preset.Personality),
+			Variant:     config.CanonicalVariant(preset.Variant),
+		}
+		if err := h.app.docs.SaveProject(); err != nil {
 			return "", err
 		}
+	} else {
+		wd, err := os.Getwd()
+		if err != nil {
+			return "", fmt.Errorf("resolve working directory: %w", err)
+		}
+		if err := config.SaveProjectSystemPrompt(wd, preset.Personality, preset.Variant); err != nil {
+			return "", err
+		}
+		if h.app.deps.Settings != nil {
+			if err := config.MergeProjectSystemPrompt(h.app.deps.Settings, wd); err != nil {
+				return "", err
+			}
+		}
 	}
+
 	if err := h.ReloadSystemInstruction(ctx); err != nil {
 		return "", err
 	}

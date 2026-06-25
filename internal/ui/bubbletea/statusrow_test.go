@@ -69,9 +69,6 @@ func TestRenderStatusRowShowsApprovalAndCounts(t *testing.T) {
 			t.Errorf("status row missing %q\n%s", want, row)
 		}
 	}
-	if !strings.Contains(row, "Alt+M") {
-		t.Errorf("status row missing mouse toggle\n%s", row)
-	}
 }
 
 func TestRenderStatusRowShowsScrollHintsWithoutComposerStatus(t *testing.T) {
@@ -82,9 +79,6 @@ func TestRenderStatusRowShowsScrollHintsWithoutComposerStatus(t *testing.T) {
 	hints := scrollShortcutHints()
 	if !strings.Contains(row, hints) {
 		t.Errorf("status row missing scroll hints %q\n%s", hints, row)
-	}
-	if !strings.Contains(row, "Alt+M") {
-		t.Errorf("status row missing Alt+M\n%s", row)
 	}
 	if m.statusRowRows() != 1 {
 		t.Fatalf("statusRowRows = %d, want 1", m.statusRowRows())
@@ -97,10 +91,10 @@ func TestScrollShortcutHintsForGOOS(t *testing.T) {
 		goos string
 		want string
 	}{
-		{"darwin", "Fn↑ Fn↓ · Alt+M"},
-		{"windows", "Pg↑ Pg↓ · Alt+M"},
-		{"linux", "Pg↑ Pg↓ · Alt+M"},
-		{"freebsd", "Pg↑ Pg↓ · Alt+M"},
+		{"darwin", "Fn↑ Fn↓ · Alt+M · ⌥M"},
+		{"windows", "Pg↑ Pg↓ · Alt+M · ⌥M"},
+		{"linux", "Pg↑ Pg↓ · Alt+M · ⌥M"},
+		{"freebsd", "Pg↑ Pg↓ · Alt+M · ⌥M"},
 	}
 	for _, tc := range cases {
 		tc := tc

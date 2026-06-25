@@ -85,6 +85,8 @@ const (
 	DialogTools DialogKind = "tools"
 	// DialogBackground opens the background process viewer.
 	DialogBackground DialogKind = "background"
+	// DialogSettings opens the curated settings browser.
+	DialogSettings DialogKind = "settings"
 )
 
 // StreamEvent is a single streaming update rendered in the scrollback viewport.

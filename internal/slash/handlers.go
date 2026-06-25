@@ -11,6 +11,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/version"
 )
 
+
 func helpCommand() Command {
 	return Command{
 		Name:        "help",
@@ -19,6 +20,14 @@ func helpCommand() Command {
 			reg := NewRegistry()
 			return InfoResult(reg.RenderHelp())
 		},
+	}
+}
+
+func settingsCommand() Command {
+	return Command{
+		Name:        "settings",
+		Description: "Browse and edit global and project settings",
+		Handler:     func(_ *Context) Result { return DialogResult(DialogSettings) },
 	}
 }
 
@@ -212,13 +221,93 @@ func modesCommand() Command {
 	return Command{
 		Name:        "modes",
 		Description: "Edit mode overrides (assign a {Provider}/{Model} to a mode or clear to default) — opens an interactive menu",
-		Handler:     handleModes,
+		SubCommands: []Command{
+			{
+				Name:        "override",
+				Description: "Set a mode routing override headlessly (scope: global|project; default project). Usage: /modes override <agent|plan|ask|debug> <Provider/Model> [global|project]",
+				Handler:     handleModesOverride,
+			},
+			{
+				Name:        "clear",
+				Description: "Clear a mode routing override headlessly. Usage: /modes clear <agent|plan|ask|debug> [global|project]",
+				Handler:     handleModesClear,
+			},
+		},
+		Handler: handleModes,
 	}
 }
 
 // handleModes opens the mode-override editor dialog.
 func handleModes(_ *Context) Result {
 	return DialogResult(DialogModes)
+}
+
+// handleModesOverride sets a mode override headlessly:
+//
+//	/modes override <agent|plan|ask|debug> <Provider/Model> [global|project]
+func handleModesOverride(ctx *Context) Result {
+	if ctx.Deps.Hooks == nil {
+		return InfoResult("Mode override unavailable.")
+	}
+	parts := strings.Fields(strings.TrimSpace(ctx.Args))
+	if len(parts) < 2 {
+		return InfoResult("Usage: /modes override <agent|plan|ask|debug> <Provider/Model> [global|project]")
+	}
+	modeName := strings.ToLower(parts[0])
+	pair := parts[1]
+	scope := config.ScopeProject
+	if len(parts) >= 3 {
+		var err error
+		scope, err = parseScope(parts[2])
+		if err != nil {
+			return InfoResult(err.Error())
+		}
+	}
+	slash := strings.SplitN(pair, "/", 2)
+	if len(slash) != 2 || slash[0] == "" || slash[1] == "" {
+		return InfoResult("Model must be in Provider/Model format, e.g. openrouter/qwen/qwen3-235b-a22b")
+	}
+	if err := ctx.Deps.Hooks.SetModeOverride(ctx.Ctx, modeName, slash[0], slash[1], scope); err != nil {
+		return ErrorResult(err)
+	}
+	return InfoResult(fmt.Sprintf("Mode %s override → %s (saved to %s settings)", modeName, pair, scope))
+}
+
+// handleModesClear clears a mode override headlessly:
+//
+//	/modes clear <agent|plan|ask|debug> [global|project]
+func handleModesClear(ctx *Context) Result {
+	if ctx.Deps.Hooks == nil {
+		return InfoResult("Mode override unavailable.")
+	}
+	parts := strings.Fields(strings.TrimSpace(ctx.Args))
+	if len(parts) < 1 {
+		return InfoResult("Usage: /modes clear <agent|plan|ask|debug> [global|project]")
+	}
+	modeName := strings.ToLower(parts[0])
+	scope := config.ScopeProject
+	if len(parts) >= 2 {
+		var err error
+		scope, err = parseScope(parts[1])
+		if err != nil {
+			return InfoResult(err.Error())
+		}
+	}
+	if err := ctx.Deps.Hooks.SetModeOverride(ctx.Ctx, modeName, "", "", scope); err != nil {
+		return ErrorResult(err)
+	}
+	return InfoResult(fmt.Sprintf("Mode %s override cleared from %s settings", modeName, scope))
+}
+
+func parseScope(s string) (config.SettingScope, error) {
+	switch strings.ToLower(s) {
+	case "global", "user":
+		return config.ScopeGlobal, nil
+	case "project", "workspace":
+		return config.ScopeProject, nil
+	default:
+		return config.ScopeProject, fmt.Errorf("unknown scope %q (expected global or project)", s)
+	}
 }
 
 func memoryCommand() Command {

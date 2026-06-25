@@ -639,6 +639,8 @@ func (r *Runner) buildGenerateRequest() *provider.GenerateRequest {
 	model := r.model
 	system := r.system
 	r.modelMu.RUnlock()
+	settings := r.settingsSnapshot()
+	providerID := r.activeProviderID()
 	req := &provider.GenerateRequest{
 		Model:             model,
 		SystemInstruction: system,
@@ -647,7 +649,11 @@ func (r *Runner) buildGenerateRequest() *provider.GenerateRequest {
 	}
 	// Resolve temperature against the live model so mid-session model changes
 	// (mode routing) apply the right sampling without rebuilding the generator.
-	req.Temperature = config.ResolveEffectiveTemperature(r.settingsSnapshot(), r.activeProviderID(), model)
+	req.Temperature = config.ResolveEffectiveTemperature(settings, providerID, model)
+	// Request readable thoughts when the thinking box is enabled; the Gemini
+	// adapter uses this to set ThinkingConfig.IncludeThoughts; other adapters
+	// ignore the field.
+	req.IncludeThoughts = config.ResolveShowThinking(settings, providerID, model)
 	return req
 }
 

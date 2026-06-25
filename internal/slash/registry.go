@@ -131,6 +131,7 @@ func (r *Registry) registerBuiltins() {
 		modeCommand(),
 		themeCommand(),
 		mouseCommand(),
+		settingsCommand(),
 	}
 	r.sortCommandTree(r.commands)
 }

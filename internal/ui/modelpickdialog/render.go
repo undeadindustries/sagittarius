@@ -22,7 +22,14 @@ func (m Model) View() string {
 	if m.errMsg != "" {
 		b.WriteString("\n\n" + m.th.Error.Render(m.wrap("✗ "+m.errMsg)))
 	}
-	b.WriteString("\n\n" + dim.Render("↑/↓ move • Enter select • Esc close"))
+	if !m.scopeSel.Disabled {
+		b.WriteString("\n\n" + m.scopeSel.View(m.th))
+	}
+	footerHint := "↑/↓ move • Enter select • Esc close"
+	if !m.scopeSel.Disabled {
+		footerHint += " • Tab · scope"
+	}
+	b.WriteString("\n\n" + dim.Render(footerHint))
 
 	box := m.boxStyle()
 	body := b.String()

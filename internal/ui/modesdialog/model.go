@@ -6,6 +6,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/undeadindustries/sagittarius/internal/config"
+	"github.com/undeadindustries/sagittarius/internal/ui/scopedialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/theme"
 )
 
@@ -37,17 +39,26 @@ type Model struct {
 	models     []ModelEntry
 	pickCursor int
 
+	// scopeSel controls which settings file the override is written to.
+	scopeSel    scopedialog.ScopeSelector
+	scopeFocused bool
+
 	errMsg string
 	info   string
 }
 
 // New constructs the modes-override editor.
 func New(ctx context.Context, deps Deps) Model {
+	sel := scopedialog.NewScopeSelector(config.ScopeProject)
+	if !deps.ProjectAvailable() {
+		sel.Disabled = true
+	}
 	m := Model{
-		deps:   deps,
-		ctx:    ctx,
-		th:     theme.Default(),
-		screen: screenModes,
+		deps:     deps,
+		ctx:      ctx,
+		th:       theme.Default(),
+		screen:   screenModes,
+		scopeSel: sel,
 	}
 	m.modes = deps.ListModes()
 	return m
@@ -74,10 +85,34 @@ func (m Model) SetTheme(th theme.Theme) Model {
 
 // Update advances the editor for one message.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
+	// Scope-changed messages are handled by updating the embedded selector.
+	if _, ok := msg.(scopedialog.ScopeChangedMsg); ok {
+		return m, nil
+	}
+
+	// When the scope selector has focus, delegate navigation to it.
+	if m.scopeFocused && m.screen == screenPicker {
+		sel, cmd := m.scopeSel.Update(msg)
+		m.scopeSel = sel
+		return m, cmd
+	}
+
 	key, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return m, nil
 	}
+
+	// Tab toggles focus between the model list and the scope selector.
+	if key.String() == "tab" && m.screen == screenPicker && !m.scopeSel.Disabled {
+		m.scopeFocused = !m.scopeFocused
+		if m.scopeFocused {
+			m.scopeSel.Focus()
+		} else {
+			m.scopeSel.Blur()
+		}
+		return m, nil
+	}
+
 	listLen := m.currentListLen()
 	switch key.String() {
 	case "esc", "q":
@@ -112,6 +147,8 @@ func (m Model) back() (Model, tea.Cmd) {
 		m.done = true
 	case screenPicker:
 		m.screen = screenModes
+		m.scopeFocused = false
+		m.scopeSel.Blur()
 	}
 	m.errMsg = ""
 	m.info = ""
@@ -164,13 +201,16 @@ func (m Model) applyOverride() (Model, tea.Cmd) {
 	if e.IsClear {
 		return m.clearCurrentOverride()
 	}
-	if err := m.deps.SetModeOverride(m.ctx, m.targetMode, e.ProviderID, e.Model); err != nil {
+	scope := m.scopeSel.Scope
+	if err := m.deps.SetModeOverride(m.ctx, m.targetMode, e.ProviderID, e.Model, scope); err != nil {
 		m.errMsg = err.Error()
 		return m, nil
 	}
 	m.modes = m.deps.ListModes()
-	m.info = fmt.Sprintf("%s mode → %s/%s.", m.targetMode, e.DisplayID, e.Model)
+	m.info = fmt.Sprintf("%s mode → %s/%s. (%s)", m.targetMode, e.DisplayID, e.Model, scope)
 	m.status = m.info
+	m.scopeFocused = false
+	m.scopeSel.Blur()
 	m.screen = screenModes
 	return m, nil
 }
@@ -180,7 +220,8 @@ func (m Model) clearCurrentOverride() (Model, tea.Cmd) {
 		return m, nil
 	}
 	mode := m.modes[m.modeCursor].Mode
-	if err := m.deps.ClearModeOverride(m.ctx, mode); err != nil {
+	scope := m.scopeSel.Scope
+	if err := m.deps.ClearModeOverride(m.ctx, mode, scope); err != nil {
 		m.errMsg = err.Error()
 		return m, nil
 	}

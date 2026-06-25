@@ -37,6 +37,9 @@ type Hooks interface {
 	// Interaction mode hooks (Phase 15).
 	SetInteractionMode(ctx context.Context, mode modes.Mode) (model string, err error)
 	InteractionMode() (mode modes.Mode, model string)
+	// SetModeOverride persists a mode routing override to the given scope.
+	// providerID and model identify the target; an empty model clears the override.
+	SetModeOverride(ctx context.Context, modeName, providerID, model string, scope config.SettingScope) error
 	// Snapshot hooks (local diffs + undo). SnapshotDiff returns the net unified
 	// diff of this session's file changes (empty when none); SnapshotUndo
 	// reverts the last n changes and returns the restored relative paths.
@@ -88,7 +91,8 @@ type Hooks interface {
 
 // Deps supplies slash command dependencies (injectable for tests).
 type Deps struct {
-	Loader   *config.Loader
-	Settings *config.Settings
-	Hooks    Hooks
+	Loader    *config.Loader
+	Settings  *config.Settings
+	Documents *config.Documents
+	Hooks     Hooks
 }
