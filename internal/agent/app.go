@@ -10,6 +10,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/undeadindustries/sagittarius/internal/agents"
@@ -65,6 +66,7 @@ var (
 type App struct {
 	runner    *Runner
 	runtime   *Runtime
+	statusMu  sync.RWMutex // guards status
 	status    ui.StatusBar
 	processor *slash.Processor
 	deps      slash.Deps
@@ -141,6 +143,8 @@ func (a *App) HandleInput(ctx context.Context, input string) (<-chan ui.StreamEv
 
 // Status returns footer metadata for the TUI status bar.
 func (a *App) Status() ui.StatusBar {
+	a.statusMu.RLock()
+	defer a.statusMu.RUnlock()
 	return a.status
 }
 
@@ -376,7 +380,9 @@ func (a *App) cycleModel(ctx context.Context, step int) (<-chan ui.StreamEvent, 
 		if model == "" {
 			model = next.Model
 		}
+		a.statusMu.Lock()
 		a.status.Right = providerModelLabel(a.providerDisplay, model)
+		a.statusMu.Unlock()
 		out <- ui.StreamEvent{Type: ui.StreamInfo, Text: msg + "\n"}
 		out <- ui.StreamEvent{Type: ui.StreamDone}
 	}()
@@ -520,12 +526,15 @@ func (h *appHooks) RebuildRunner(ctx context.Context) (string, string, error) {
 	label := config.ProviderDisplayID(endpoint.ProviderID)
 
 	h.app.providerDisplay = label
-	h.app.status = ui.StatusBar{
+	next := ui.StatusBar{
 		Left:   workspaceLeft(h.app.runner),
 		Right:  providerModelLabel(label, resolvedModel),
 		Detail: systemPromptStatusDetail(h.app.runner, h.app.deps.Settings),
 		Mode:   h.app.runner.InteractionMode().String(),
 	}
+	h.app.statusMu.Lock()
+	h.app.status = next
+	h.app.statusMu.Unlock()
 	return label, resolvedModel, nil
 }
 
@@ -1071,8 +1080,10 @@ func (h *appHooks) SetInteractionMode(ctx context.Context, mode modes.Mode) (str
 	}
 
 	model := h.app.runner.SetInteractionMode(mode)
+	h.app.statusMu.Lock()
 	h.app.status.Right = providerModelLabel(h.app.providerDisplay, model)
 	h.app.status.Mode = mode.String()
+	h.app.statusMu.Unlock()
 	return model, nil
 }
 
@@ -1391,7 +1402,9 @@ func (r *Runner) PinModel(model string) {
 	if model == "" {
 		return
 	}
+	r.modelMu.Lock()
 	r.modelPinned = true
+	r.modelMu.Unlock()
 	r.SetModel(model)
 }
 

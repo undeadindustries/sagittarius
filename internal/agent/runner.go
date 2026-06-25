@@ -86,6 +86,9 @@ type Runner struct {
 	genMu                sync.RWMutex
 	gen                  provider.ContentGenerator
 	genErr               error
+	// modelMu guards model, providerDefaultModel, modelPinned, and the
+	// system-prompt fields (system, systemBase, memory) that model resolution
+	// rewrites together.
 	modelMu              sync.RWMutex
 	model                string
 	providerDefaultModel string
@@ -107,6 +110,7 @@ type Runner struct {
 	regMu            sync.RWMutex
 	registry         *tools.Registry
 	scheduler        *tools.Scheduler
+	historyMu        sync.RWMutex // guards history + turnCounter
 	history          []provider.Message
 	ctxMgrMu         sync.RWMutex
 	ctxMgr           *contextmgmt.Manager
@@ -302,6 +306,14 @@ func (r *Runner) ToolsModel() string {
 
 // ModelPinned reports whether CLI or explicit pinning bypasses mode routing.
 func (r *Runner) ModelPinned() bool {
+	return r.pinned()
+}
+
+// pinned reads modelPinned under modelMu. The flag shares modelMu with model,
+// providerDefaultModel, and the system-prompt fields it gates.
+func (r *Runner) pinned() bool {
+	r.modelMu.RLock()
+	defer r.modelMu.RUnlock()
 	return r.modelPinned
 }
 
@@ -323,7 +335,7 @@ func (r *Runner) SetInteractionMode(mode modes.Mode) string {
 	if r.modeState != nil {
 		r.modeState.SetMode(mode)
 	}
-	if !r.modelPinned {
+	if !r.pinned() {
 		r.refreshModelFromMode()
 	} else {
 		r.rebuildSystem()
@@ -331,12 +343,14 @@ func (r *Runner) SetInteractionMode(mode modes.Mode) string {
 	return r.Model()
 }
 
-// SetSettings updates settings used for mode routing (e.g. after reload).
+// SetSettings updates settings used for mode routing (e.g. after reload). It
+// replaces the pointer atomically under settingsMu; s must be a fresh document
+// that the caller will not mutate afterwards (see settingsSnapshot's contract).
 func (r *Runner) SetSettings(s *config.Settings) {
 	r.settingsMu.Lock()
 	r.settings = s
 	r.settingsMu.Unlock()
-	if !r.modelPinned {
+	if !r.pinned() {
 		r.refreshModelFromMode()
 	} else {
 		r.rebuildSystem()
@@ -350,8 +364,11 @@ func (r *Runner) SetProviderDefaultModel(model string) {
 	if model == "" {
 		return
 	}
+	r.modelMu.Lock()
 	r.providerDefaultModel = model
-	if !r.modelPinned {
+	pinned := r.modelPinned
+	r.modelMu.Unlock()
+	if !pinned {
 		r.refreshModelFromMode()
 	} else {
 		r.rebuildSystem()
@@ -435,10 +452,12 @@ func (r *Runner) RunTurn(ctx context.Context, userInput string) (<-chan ui.Strea
 
 	r.setState(StateIdle)
 	r.metrics.recordTurn()
+	r.historyMu.Lock()
 	r.history = append(r.history, provider.Message{
 		Role:  provider.RoleUser,
 		Parts: parts,
 	})
+	r.historyMu.Unlock()
 	if r.sessionRecorder != nil {
 		r.sessionRecorder.RecordUserMessage(userInput)
 	}
@@ -519,7 +538,7 @@ func (r *Runner) runAgentLoop(ctx context.Context, out chan<- ui.StreamEvent) {
 	for {
 		for round := 0; round < maxRounds; round++ {
 			r.prepareContext(ctx)
-			if !r.modelPinned {
+			if !r.pinned() {
 				r.refreshModelFromMode()
 			}
 			req := r.buildGenerateRequest()
@@ -607,11 +626,22 @@ func (r *Runner) prepareContext(ctx context.Context) {
 	if mgr == nil {
 		return
 	}
-	prepared, err := mgr.PrepareTurn(ctx, r.history, r.turnCounter)
+	// Snapshot under the lock, run PrepareTurn (which may do network I/O for
+	// compression) off-lock, then publish the result under the lock. Keeping the
+	// critical sections to header reads/writes avoids holding historyMu across I/O.
+	r.historyMu.RLock()
+	current := r.history
+	counter := r.turnCounter
+	r.historyMu.RUnlock()
+
+	prepared, err := mgr.PrepareTurn(ctx, current, counter)
+
+	r.historyMu.Lock()
 	r.turnCounter++
 	if prepared != nil {
 		r.history = prepared
 	}
+	r.historyMu.Unlock()
 	if err != nil {
 		// PrepareTurn already logged; proceed with the (best-effort) history.
 		return
@@ -641,10 +671,13 @@ func (r *Runner) buildGenerateRequest() *provider.GenerateRequest {
 	r.modelMu.RUnlock()
 	settings := r.settingsSnapshot()
 	providerID := r.activeProviderID()
+	r.historyMu.RLock()
+	messages := append([]provider.Message(nil), r.history...)
+	r.historyMu.RUnlock()
 	req := &provider.GenerateRequest{
 		Model:             model,
 		SystemInstruction: system,
-		Messages:          append([]provider.Message(nil), r.history...),
+		Messages:          messages,
 		Tools:             r.toolRegistry().ListDeclarationsForMode(r.InteractionMode()),
 	}
 	// Resolve temperature against the live model so mid-session model changes
@@ -685,7 +718,9 @@ func (r *Runner) RefreshModelFromMode() {
 func (r *Runner) refreshModelFromMode() {
 	mode := r.InteractionMode()
 	providerID := r.activeProviderID()
+	r.modelMu.RLock()
 	providerDefault := r.providerDefaultModel
+	r.modelMu.RUnlock()
 	resolved := modes.ResolveModel(mode, r.sagittariusSettings(), providerID, providerDefault)
 	modes.LogModeSelection(mode, resolved, providerID, providerDefault)
 	r.modelMu.Lock()
@@ -749,6 +784,12 @@ func (r *Runner) applyModeSystemSuffix() {
 }
 
 // settingsSnapshot returns the current full settings under the settings lock.
+//
+// Contract: the returned *config.Settings is immutable once handed to the
+// runner. settingsMu protects only the pointer swap (see SetSettings), not the
+// pointed-to struct, so callers must treat the result as read-only. Mutators
+// (dialogs, reload paths) build a fresh *Settings via config.Documents and
+// publish it through SetSettings rather than editing the live object in place.
 func (r *Runner) settingsSnapshot() *config.Settings {
 	r.settingsMu.RLock()
 	defer r.settingsMu.RUnlock()
@@ -983,10 +1024,12 @@ func (r *Runner) appendModelMessage(text string, toolCalls []provider.ToolCall) 
 	if len(parts) == 0 {
 		return
 	}
+	r.historyMu.Lock()
 	r.history = append(r.history, provider.Message{
 		Role:  provider.RoleModel,
 		Parts: parts,
 	})
+	r.historyMu.Unlock()
 	if r.sessionRecorder != nil {
 		r.sessionRecorder.RecordModelMessage(text, toolCalls)
 	}
@@ -1000,10 +1043,12 @@ func (r *Runner) appendModelParts(parts []provider.Part, text string, toolCalls 
 	if len(parts) == 0 {
 		return
 	}
+	r.historyMu.Lock()
 	r.history = append(r.history, provider.Message{
 		Role:  provider.RoleModel,
 		Parts: parts,
 	})
+	r.historyMu.Unlock()
 	if r.sessionRecorder != nil {
 		r.sessionRecorder.RecordModelMessage(text, toolCalls)
 	}
@@ -1018,10 +1063,12 @@ func (r *Runner) appendFunctionResponses(responses []provider.FunctionResponse) 
 		respCopy := resp
 		parts = append(parts, provider.Part{FunctionResponse: &respCopy})
 	}
+	r.historyMu.Lock()
 	r.history = append(r.history, provider.Message{
 		Role:  provider.RoleUser,
 		Parts: parts,
 	})
+	r.historyMu.Unlock()
 	if r.sessionRecorder != nil {
 		r.sessionRecorder.RecordFunctionResponses(responses)
 	}
@@ -1035,6 +1082,8 @@ func (r *Runner) setState(state State) {
 
 // ClearHistory wipes the in-memory conversation history so the next turn starts fresh.
 func (r *Runner) ClearHistory() {
+	r.historyMu.Lock()
+	defer r.historyMu.Unlock()
 	r.history = r.history[:0]
 	r.turnCounter = 0
 }
@@ -1042,9 +1091,11 @@ func (r *Runner) ClearHistory() {
 // History returns a defensive copy of the current conversation history. The
 // copy is shallow (Part slices are shared), which is sufficient for read-only
 // consumers such as /chat share and /chat debug; callers must not mutate the
-// returned messages in place. Like ClearHistory, this assumes the single-turn
-// goroutine contract — it is safe to call between turns, not during one.
+// returned messages in place. Safe to call concurrently with a streaming turn:
+// historyMu guards the slice header against the turn goroutine's appends.
 func (r *Runner) History() []provider.Message {
+	r.historyMu.RLock()
+	defer r.historyMu.RUnlock()
 	return append([]provider.Message(nil), r.history...)
 }
 
@@ -1073,16 +1124,21 @@ func lastAssistantText(history []provider.Message) string {
 }
 
 // LastAssistantText returns the text of the most recent assistant (model) turn,
-// or "" when none exists. Like History it must be called between turns.
+// or "" when none exists. historyMu is held for the read so it is safe to call
+// concurrently with a streaming turn.
 func (r *Runner) LastAssistantText() string {
+	r.historyMu.RLock()
+	defer r.historyMu.RUnlock()
 	return lastAssistantText(r.history)
 }
 
 // ReplaceHistory swaps the in-memory conversation history for a copy of h,
 // resets the context turn counter, and optionally sets the session grants.
 func (r *Runner) ReplaceHistory(h []provider.Message, grants []string) {
+	r.historyMu.Lock()
 	r.history = append([]provider.Message(nil), h...)
 	r.turnCounter = 0
+	r.historyMu.Unlock()
 	r.regMu.Lock()
 	r.initialSessionGrants = append([]string(nil), grants...)
 	r.regMu.Unlock()
@@ -1111,15 +1167,20 @@ func (r *Runner) ContextCompressionAvailable() bool {
 // info for UI reporting. It is a no-op (CompressionNoOp) when compression is
 // unavailable.
 //
-// Like ReplaceHistory it must be called between turns: r.history is owned by the
-// turn goroutine and has no mutex. Slash handlers satisfy this contract.
+// It must be called between turns. historyMu guards the snapshot and the
+// publish; the compression call itself (which may do network I/O) runs off-lock.
 func (r *Runner) ForceCompress(ctx context.Context) (contextmgmt.CompressionInfo, error) {
-	newHistory, info, err := r.contextManager().ForceCompress(ctx, r.history)
+	r.historyMu.RLock()
+	current := r.history
+	r.historyMu.RUnlock()
+	newHistory, info, err := r.contextManager().ForceCompress(ctx, current)
 	if err != nil {
 		return info, err
 	}
 	if newHistory != nil {
+		r.historyMu.Lock()
 		r.history = newHistory
+		r.historyMu.Unlock()
 	}
 	return info, nil
 }
