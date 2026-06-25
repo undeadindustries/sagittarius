@@ -623,10 +623,14 @@ type systemPromptDialogDeps struct {
 }
 
 func (d *systemPromptDialogDeps) CurrentPresetID() string {
-	if d.app == nil || d.app.deps.Settings == nil {
+	if d.app == nil {
 		return ""
 	}
-	return config.ProjectSystemPromptPresetID(d.app.deps.Settings)
+	s := d.app.effectiveSettings()
+	if s == nil {
+		return ""
+	}
+	return config.ProjectSystemPromptPresetID(s)
 }
 
 func (d *systemPromptDialogDeps) ApplyPreset(ctx context.Context, presetID string) (string, error) {
@@ -658,8 +662,13 @@ type modelPickDialogDeps struct {
 
 func (d *modelPickDialogDeps) settings() *config.Settings { return d.app.deps.Settings }
 
+// effective returns the merged (global+project) view for picker READS so a
+// project-scoped /model pick or activeModels list is visible. Mirrors
+// modesDialogDeps.ListModes.
+func (d *modelPickDialogDeps) effective() *config.Settings { return d.app.effectiveSettings() }
+
 func (d *modelPickDialogDeps) AllActiveModels() []modelpickdialog.ModelEntry {
-	s := d.settings()
+	s := d.effective()
 	if s == nil {
 		return nil
 	}
@@ -677,10 +686,10 @@ func (d *modelPickDialogDeps) AllActiveModels() []modelpickdialog.ModelEntry {
 }
 
 func (d *modelPickDialogDeps) CurrentProviderID() string {
-	if d.settings() == nil {
+	if d.effective() == nil {
 		return ""
 	}
-	return d.settings().ActiveProvider()
+	return d.effective().ActiveProvider()
 }
 
 func (d *modelPickDialogDeps) CurrentModel() string {
@@ -688,7 +697,7 @@ func (d *modelPickDialogDeps) CurrentModel() string {
 	if id == "" {
 		return ""
 	}
-	endpoint, err := provider.ResolveEndpointForProvider(d.settings(), id)
+	endpoint, err := provider.ResolveEndpointForProvider(d.effective(), id)
 	if err != nil {
 		return ""
 	}

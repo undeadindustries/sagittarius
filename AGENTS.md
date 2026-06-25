@@ -258,6 +258,34 @@ boundary-checked.
 
 ## Recent decisions
 
+- **2026-06-25 — Settings persistence unified (AD-061):** Plan 05 of the
+concurrency-cohesion audit. Collapsed the three divergent settings paths that
+caused the dual-scope bug class (`bug1`–`bug5`) into one. (A) **All global
+writes go through `Documents`:** new `config.Documents.MutateGlobal(fn)` applies
+`fn` to `Global` then `Save(ScopeGlobal)` (which recomputes `Merged`), so a write
+can never leave `Merged` stale. New `App.persistGlobal(fn)` routes through it
+(`Loader.Save(deps.Settings)` survives only as the `docs == nil` test fallback);
+`SetShowThinking`, `CycleTheme`, `appHooks.SetUITheme`, and the `toolsdialog`
+tool-filter save now use it (the filter save keeps the AD-059 cache-rebuild, not
+reconnect). (B) **All runtime reads use the merged view:** new READ-ONLY
+`App.effectiveSettings()` returns `docs.Merged` (else `deps.Settings`); the
+user-facing read sites that previously read `Global` directly —
+`appHooks.AllActiveModels`, `modelPickDialogDeps.{AllActiveModels,CurrentProviderID,
+CurrentModel}`, `appHooks.{DiscoverModels,ProjectSystemPromptPresetID}`,
+`systemPromptDialogDeps.CurrentPresetID`, `App.ComposerStatus`, and the
+`RebuildRunner` status detail — now resolve through it so project-scoped
+`activeModels`/model picks/system-prompt/showThinking are visible (write paths
+that target `Documents`/`Loader` are unchanged). (C) **Legacy
+project-system-prompt path retired:** `ApplyProjectSystemPromptPreset` now errors
+("settings documents not loaded") instead of a divergent fallback when `docs`
+is nil; `SaveProjectSystemPrompt`, `MergeProjectSystemPrompt`,
+`overlayProjectSystemPrompt`, and `writeProjectSettings` (a byte-for-byte
+duplicate of `Documents.saveProject`) are deleted (`ProjectSystemPromptPresetID`
+kept as a pure read). On-disk format unchanged — code-path deletion only, no
+migration. Tests: `documents_test.go` asserts `MutateGlobal` refreshes `Merged`;
+a new `internal/agent` test asserts a project-scoped `activeModels` surfaces
+through `appHooks.AllActiveModels()` (fails pre-fix); `project_settings_test.go`
+now drives the `Documents` API.
 - **2026-06-25 — Credentials & misc concurrency hardening (AD-060):** Plan 06 of
 the concurrency-cohesion audit, a set of small independent fixes. (6.1) The
 historical credential-globals `-race` flake is removed via test serialization: a

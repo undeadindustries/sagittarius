@@ -107,6 +107,19 @@ func (d *Documents) Save(scope SettingScope) error {
 	return nil
 }
 
+// MutateGlobal applies fn to the global document, persists it, and refreshes
+// Merged. It is the single entry point for global scalar settings writes, so a
+// write can never leave Merged stale (the root cause of the dual-scope bugs).
+func (d *Documents) MutateGlobal(fn func(*Settings) error) error {
+	if fn == nil {
+		return fmt.Errorf("mutate global settings: nil mutator")
+	}
+	if err := fn(d.Global); err != nil {
+		return err
+	}
+	return d.Save(ScopeGlobal) // Save already recomputes Merged
+}
+
 // SaveProject writes the project Settings to disk and reloads Merged. It
 // creates the project directory if needed. If d.Project is nil a new empty
 // Settings is initialised first.
@@ -246,10 +259,6 @@ func settingsHasKey(s *Settings, key string) bool {
 		return ok
 	}
 }
-
-// writeProjectSettings is a package-level helper used by both Documents and the
-// legacy SaveProjectSystemPrompt path. It already lives in project_settings.go
-// but is referenced here for clarity; no second definition is needed.
 
 // ─── Merge engine ────────────────────────────────────────────────────────────
 

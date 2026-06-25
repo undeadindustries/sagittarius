@@ -319,6 +319,63 @@ func TestDocuments_IsDefined(t *testing.T) {
 	}
 }
 
+// MutateGlobal -------------------------------------------------------------
+
+func TestDocuments_MutateGlobalRefreshesMerged(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SAGITTARIUS_HOME", home)
+	workDir := t.TempDir()
+
+	docs, err := LoadDocuments(workDir)
+	if err != nil {
+		t.Fatalf("LoadDocuments: %v", err)
+	}
+
+	if err := docs.MutateGlobal(func(s *Settings) error {
+		if s.Sagittarius == nil {
+			s.Sagittarius = &SagittariusSettings{}
+		}
+		s.Sagittarius.DefaultModel = "global-mutated"
+		return nil
+	}); err != nil {
+		t.Fatalf("MutateGlobal: %v", err)
+	}
+
+	// Merged must reflect the global mutation without a manual ReloadMerged.
+	if docs.Merged == nil || docs.Merged.Sagittarius == nil ||
+		docs.Merged.Sagittarius.DefaultModel != "global-mutated" {
+		t.Fatal("Merged not refreshed after MutateGlobal")
+	}
+
+	// Persisted to disk.
+	reloaded, err := LoadDocuments(workDir)
+	if err != nil {
+		t.Fatalf("reload LoadDocuments: %v", err)
+	}
+	if reloaded.Global.Sagittarius == nil ||
+		reloaded.Global.Sagittarius.DefaultModel != "global-mutated" {
+		t.Fatal("global mutation not persisted to disk")
+	}
+}
+
+func TestDocuments_MutateGlobalPropagatesError(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SAGITTARIUS_HOME", home)
+
+	docs, err := LoadDocuments(t.TempDir())
+	if err != nil {
+		t.Fatalf("LoadDocuments: %v", err)
+	}
+	sentinel := errSentinel("boom")
+	if err := docs.MutateGlobal(func(*Settings) error { return sentinel }); err != sentinel {
+		t.Fatalf("MutateGlobal err = %v, want %v", err, sentinel)
+	}
+}
+
+type errSentinel string
+
+func (e errSentinel) Error() string { return string(e) }
+
 // SaveProject --------------------------------------------------------------
 
 func TestDocuments_SaveProject(t *testing.T) {

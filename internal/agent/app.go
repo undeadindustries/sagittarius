@@ -196,7 +196,7 @@ func (a *App) ComposerStatus() ui.ComposerStatus {
 	if a.runtime != nil && a.runtime.Catalog != nil {
 		cs.SkillCount = len(a.runtime.Catalog.SkillManager().Skills())
 	}
-	if s := a.deps.Settings; s != nil {
+	if s := a.effectiveSettings(); s != nil {
 		providerID := config.NormalizeProviderID(s.ActiveProvider())
 		model := ""
 		if ep, err := provider.ResolveEndpointForProvider(s, providerID); err == nil {
@@ -207,14 +207,28 @@ func (a *App) ComposerStatus() ui.ComposerStatus {
 	return cs
 }
 
-// SetShowThinking implements ui.ThinkingController: it persists the global
-// thinking-box visibility (ui.showThinking) so a live Ctrl+T toggle survives
-// restart. The per-provider/model overrides are managed via /models.
-func (a *App) SetShowThinking(on bool) error {
+// effectiveSettings returns the merged (global+project) view for runtime READS
+// (lists, pickers, autocomplete, resolution). Writes must target a scope via
+// Documents; never mutate or persist through this pointer.
+func (a *App) effectiveSettings() *config.Settings {
+	if a.docs != nil && a.docs.Merged != nil {
+		return a.docs.Merged
+	}
+	return a.deps.Settings
+}
+
+// persistGlobal is the single entry point for global scalar settings WRITES. It
+// routes through Documents.MutateGlobal so Merged is refreshed atomically with
+// the on-disk save; the raw Loader.Save path is only a fallback for tests that
+// construct an App without Documents.
+func (a *App) persistGlobal(fn func(*config.Settings) error) error {
+	if a.docs != nil {
+		return a.docs.MutateGlobal(fn)
+	}
 	if a.deps.Settings == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	if err := a.deps.Settings.SetUIShowThinking(on); err != nil {
+	if err := fn(a.deps.Settings); err != nil {
 		return err
 	}
 	if a.deps.Loader != nil {
@@ -225,24 +239,27 @@ func (a *App) SetShowThinking(on bool) error {
 	return nil
 }
 
+// SetShowThinking implements ui.ThinkingController: it persists the global
+// thinking-box visibility (ui.showThinking) so a live Ctrl+T toggle survives
+// restart. The per-provider/model overrides are managed via /models.
+func (a *App) SetShowThinking(on bool) error {
+	return a.persistGlobal(func(s *config.Settings) error { return s.SetUIShowThinking(on) })
+}
+
 // CycleTheme implements ui.ThemeController: it toggles the TUI color theme
 // between "default" and "greyscale", persists the choice (ui.theme), and returns
 // the new name so the TUI applies it live. Backs the Alt+T shortcut.
 func (a *App) CycleTheme() (string, error) {
-	if a.deps.Settings == nil {
+	s := a.effectiveSettings()
+	if s == nil {
 		return "", fmt.Errorf("settings not loaded")
 	}
 	next := "greyscale"
-	if strings.EqualFold(strings.TrimSpace(a.deps.Settings.UI().Theme), "greyscale") {
+	if strings.EqualFold(strings.TrimSpace(s.UI().Theme), "greyscale") {
 		next = "default"
 	}
-	if err := a.deps.Settings.SetUITheme(next); err != nil {
+	if err := a.persistGlobal(func(s *config.Settings) error { return s.SetUITheme(next) }); err != nil {
 		return "", err
-	}
-	if a.deps.Loader != nil {
-		if err := a.deps.Loader.Save(a.deps.Settings); err != nil {
-			return "", fmt.Errorf("save settings: %w", err)
-		}
 	}
 	return next, nil
 }
@@ -529,7 +546,7 @@ func (h *appHooks) RebuildRunner(ctx context.Context) (string, string, error) {
 	next := ui.StatusBar{
 		Left:   workspaceLeft(h.app.runner),
 		Right:  providerModelLabel(label, resolvedModel),
-		Detail: systemPromptStatusDetail(h.app.runner, h.app.deps.Settings),
+		Detail: systemPromptStatusDetail(h.app.runner, effectiveSettings),
 		Mode:   h.app.runner.InteractionMode().String(),
 	}
 	h.app.statusMu.Lock()
@@ -547,15 +564,19 @@ func (h *appHooks) ReloadSystemInstruction(ctx context.Context) error {
 }
 
 func (h *appHooks) DiscoverModels(ctx context.Context) []provider.ModelInfo {
-	if h.app == nil || h.app.deps.Settings == nil {
+	if h.app == nil {
 		return nil
 	}
-	active := h.app.deps.Settings.ActiveProvider()
+	s := h.app.effectiveSettings()
+	if s == nil {
+		return nil
+	}
+	active := s.ActiveProvider()
 	if active == "" {
 		return nil
 	}
 	// Delegate to the shared helper that routes Gemini vs OpenAI-compat correctly.
-	infos, _ := discoverModelInfos(ctx, h.app.deps.Settings, active)
+	infos, _ := discoverModelInfos(ctx, s, active)
 	return infos
 }
 
@@ -637,18 +658,10 @@ func (h *appHooks) SessionStatsText(section string) string {
 
 // SetUITheme implements slash.Hooks: it persists the theme to settings.json.
 func (h *appHooks) SetUITheme(name string) error {
-	if h.app == nil || h.app.deps.Settings == nil {
+	if h.app == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	if err := h.app.deps.Settings.SetUITheme(name); err != nil {
-		return err
-	}
-	if h.app.deps.Loader != nil {
-		if err := h.app.deps.Loader.Save(h.app.deps.Settings); err != nil {
-			return fmt.Errorf("save settings: %w", err)
-		}
-	}
-	return nil
+	return h.app.persistGlobal(func(s *config.Settings) error { return s.SetUITheme(name) })
 }
 
 // formatCompressionResult renders a CompressionInfo as a user-facing line.
@@ -1234,17 +1247,25 @@ func (h *appHooks) SelectCurrentModel(ctx context.Context, providerID, model str
 // AllActiveModels returns every curated (provider, model) pair for the /model
 // picker and autocomplete.
 func (h *appHooks) AllActiveModels() []provider.ProviderModelPair {
-	if h.app == nil || h.app.deps.Settings == nil {
+	if h.app == nil {
 		return nil
 	}
-	return provider.AllActiveModels(h.app.deps.Settings)
+	s := h.app.effectiveSettings()
+	if s == nil {
+		return nil
+	}
+	return provider.AllActiveModels(s)
 }
 
 func (h *appHooks) ProjectSystemPromptPresetID() string {
-	if h.app == nil || h.app.deps.Settings == nil {
+	if h.app == nil {
 		return ""
 	}
-	return config.ProjectSystemPromptPresetID(h.app.deps.Settings)
+	s := h.app.effectiveSettings()
+	if s == nil {
+		return ""
+	}
+	return config.ProjectSystemPromptPresetID(s)
 }
 
 func (h *appHooks) ApplyProjectSystemPromptPreset(ctx context.Context, presetID string) (string, error) {
@@ -1256,35 +1277,22 @@ func (h *appHooks) ApplyProjectSystemPromptPreset(ctx context.Context, presetID 
 		return "", fmt.Errorf("unknown system prompt preset %q", presetID)
 	}
 
-	// When Documents is available write directly to docs.Project and call
-	// docs.SaveProject so the merged view is immediately updated. The legacy
-	// SaveProjectSystemPrompt+MergeProjectSystemPrompt path reads/writes the
-	// project file independently of docs.Project, leaving the merged view stale.
-	if h.app.docs != nil {
-		s := h.app.docs.TargetSettings(config.ScopeProject)
-		if s.Sagittarius == nil {
-			s.Sagittarius = &config.SagittariusSettings{}
-		}
-		s.Sagittarius.SystemPrompt = &config.SagittariusSystemPromptConfig{
-			Personality: config.CanonicalPersonalityID(preset.Personality),
-			Variant:     config.CanonicalVariant(preset.Variant),
-		}
-		if err := h.app.docs.SaveProject(); err != nil {
-			return "", err
-		}
-	} else {
-		wd, err := os.Getwd()
-		if err != nil {
-			return "", fmt.Errorf("resolve working directory: %w", err)
-		}
-		if err := config.SaveProjectSystemPrompt(wd, preset.Personality, preset.Variant); err != nil {
-			return "", err
-		}
-		if h.app.deps.Settings != nil {
-			if err := config.MergeProjectSystemPrompt(h.app.deps.Settings, wd); err != nil {
-				return "", err
-			}
-		}
+	// Write directly to docs.Project and SaveProject so the merged view updates
+	// atomically. Documents is always wired in production; its absence is a
+	// programming/test error, not a reason to fall back to a divergent writer.
+	if h.app.docs == nil {
+		return "", fmt.Errorf("settings documents not loaded")
+	}
+	s := h.app.docs.TargetSettings(config.ScopeProject)
+	if s.Sagittarius == nil {
+		s.Sagittarius = &config.SagittariusSettings{}
+	}
+	s.Sagittarius.SystemPrompt = &config.SagittariusSystemPromptConfig{
+		Personality: config.CanonicalPersonalityID(preset.Personality),
+		Variant:     config.CanonicalVariant(preset.Variant),
+	}
+	if err := h.app.docs.SaveProject(); err != nil {
+		return "", err
 	}
 
 	if err := h.ReloadSystemInstruction(ctx); err != nil {
