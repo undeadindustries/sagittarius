@@ -99,11 +99,16 @@ func (t *Terminal) Run(ctx context.Context, app ui.App) error {
 func (t *Terminal) RenderStream(delta ui.StreamEvent) error {
 	t.mu.Lock()
 	p := t.program
+	m := t.model
 	t.mu.Unlock()
 	if p == nil {
 		return ui.ErrNotRunning
 	}
-	p.Send(streamEventMsg{event: delta})
+	gen := uint64(0)
+	if m != nil {
+		gen = m.activeStreamGen
+	}
+	p.Send(streamEventMsg{gen: gen, event: delta})
 	return nil
 }
 

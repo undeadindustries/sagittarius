@@ -63,22 +63,52 @@ func TestRenderStatusRowShowsApprovalAndCounts(t *testing.T) {
 		t.Fatalf("statusRowRows = %d, want 1", m.statusRowRows())
 	}
 	row := stripANSI(m.renderStatusRow())
-	for _, want := range []string{"auto-approve all (yolo)", "2 AGENTS.md files", "4 skills"} {
+	hints := scrollShortcutHints()
+	for _, want := range []string{"auto-approve all (yolo)", hints, "2 AGENTS.md files", "4 skills"} {
 		if !strings.Contains(row, want) {
 			t.Errorf("status row missing %q\n%s", want, row)
 		}
 	}
+	if !strings.Contains(row, "Alt+M") {
+		t.Errorf("status row missing mouse toggle\n%s", row)
+	}
 }
 
-func TestRenderStatusRowEmptyWhenNoData(t *testing.T) {
+func TestRenderStatusRowShowsScrollHintsWithoutComposerStatus(t *testing.T) {
 	t.Parallel()
-	// quitApp does not implement ComposerStatusProvider and there are no loaded
-	// memory files, so the row collapses entirely.
 	m := newTestModel()
-	if got := m.renderStatusRow(); got != "" {
-		t.Fatalf("status row should be empty without data, got %q", got)
+	m.width = 80
+	row := stripANSI(m.renderStatusRow())
+	hints := scrollShortcutHints()
+	if !strings.Contains(row, hints) {
+		t.Errorf("status row missing scroll hints %q\n%s", hints, row)
 	}
-	if m.statusRowRows() != 0 {
-		t.Fatalf("statusRowRows = %d, want 0", m.statusRowRows())
+	if !strings.Contains(row, "Alt+M") {
+		t.Errorf("status row missing Alt+M\n%s", row)
+	}
+	if m.statusRowRows() != 1 {
+		t.Fatalf("statusRowRows = %d, want 1", m.statusRowRows())
+	}
+}
+
+func TestScrollShortcutHintsForGOOS(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		goos string
+		want string
+	}{
+		{"darwin", "Fn↑ Fn↓ · Alt+M"},
+		{"windows", "Pg↑ Pg↓ · Alt+M"},
+		{"linux", "Pg↑ Pg↓ · Alt+M"},
+		{"freebsd", "Pg↑ Pg↓ · Alt+M"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.goos, func(t *testing.T) {
+			t.Parallel()
+			if got := scrollShortcutHintsForGOOS(tc.goos); got != tc.want {
+				t.Fatalf("scrollShortcutHintsForGOOS(%q) = %q, want %q", tc.goos, got, tc.want)
+			}
+		})
 	}
 }

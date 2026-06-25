@@ -14,6 +14,9 @@ func (m Model) View() string {
 	if m.saving {
 		return m.wrapBox(m.viewSaving())
 	}
+	if m.reloading {
+		return m.wrapBox(m.viewReloading())
+	}
 
 	var b strings.Builder
 	switch m.screen {
@@ -54,6 +57,13 @@ func (m Model) viewSaving() string {
 	}
 	b.WriteString(m.th.Title.Render(title) + "\n\n")
 	b.WriteString(m.spin.View() + " " + m.th.Dim.Render("Saving and reconnecting MCP servers…"))
+	return b.String()
+}
+
+func (m Model) viewReloading() string {
+	var b strings.Builder
+	b.WriteString(m.th.Title.Render("MCP Servers") + "\n\n")
+	b.WriteString(m.spin.View() + " " + m.th.Dim.Render("Reconnecting MCP servers…"))
 	return b.String()
 }
 

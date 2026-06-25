@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/undeadindustries/sagittarius/internal/atmention"
 	"github.com/undeadindustries/sagittarius/internal/config"
@@ -125,6 +126,8 @@ type Runner struct {
 	loadedMemoryFiles []string
 	// initialSessionGrants seeds the scheduler.
 	initialSessionGrants []string
+	// turnActive guards against overlapping RunTurn calls mutating history.
+	turnActive atomic.Bool
 }
 
 // LoadedMemoryFiles returns the AGENTS.md paths that contributed to the system
@@ -407,6 +410,14 @@ func (r *Runner) RunTurn(ctx context.Context, userInput string) (<-chan ui.Strea
 		return ch, nil
 	}
 
+	if !r.turnActive.CompareAndSwap(false, true) {
+		ch := make(chan ui.StreamEvent, 2)
+		ch <- ui.StreamEvent{Type: ui.StreamError, Err: errors.New("a turn is already in progress")}
+		ch <- ui.StreamEvent{Type: ui.StreamDone}
+		close(ch)
+		return ch, nil
+	}
+
 	// Expand "@path" references into the message parts sent to the model. The
 	// scrollback and session history keep the raw text the user typed; only the
 	// model-bound parts gain the injected file content. A resolution failure
@@ -414,6 +425,7 @@ func (r *Runner) RunTurn(ctx context.Context, userInput string) (<-chan ui.Strea
 	// surfaced error rather than silently dropping context.
 	parts, err := atmention.Expand(r.workspace, userInput)
 	if err != nil {
+		r.turnActive.Store(false)
 		ch := make(chan ui.StreamEvent, 2)
 		ch <- ui.StreamEvent{Type: ui.StreamError, Err: err}
 		ch <- ui.StreamEvent{Type: ui.StreamDone}
@@ -476,7 +488,10 @@ func (r *Runner) RunHeadless(ctx context.Context, prompt string, out io.Writer) 
 }
 
 func (r *Runner) runAgentLoop(ctx context.Context, out chan<- ui.StreamEvent) {
-	defer close(out)
+	defer func() {
+		r.turnActive.Store(false)
+		close(out)
+	}()
 
 	gen, err := r.generator()
 	if err != nil {

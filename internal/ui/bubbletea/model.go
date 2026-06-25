@@ -80,8 +80,13 @@ type onboardingHost interface {
 }
 
 type streamEventMsg struct {
+	gen   uint64
 	event ui.StreamEvent
 }
+
+// turnDrainDoneMsg signals that a force-abandoned stream channel has fully
+// drained so a new turn may start on the shared Runner.
+type turnDrainDoneMsg struct{}
 
 // clipboardResultMsg carries the outcome of an async clipboard copy started by
 // copyToClipboard, so the blocking copy runs off the UI goroutine.
@@ -163,12 +168,16 @@ type model struct {
 	// turn is running. turnStart marks when the turn began, for the elapsed
 	// timer in the working line. turnCanceled is true from the first Esc press
 	// until StreamDone arrives or the stream is force-abandoned.
-	// streamAbandoned is set by forceAbandonTurn so handleStream can discard
-	// stale events that were already queued in the Bubble Tea message loop.
-	turnCancel      context.CancelFunc
-	turnStart       time.Time
-	turnCanceled    bool
-	streamAbandoned bool
+	// turnInFlight stays true from a successful submit until StreamDone or the
+	// abandoned stream channel drains, so HandleInput cannot overlap on Runner.
+	// streamGen/activeStreamGen tag streamEventMsg values so stale events queued
+	// before force-abandon cannot apply to a later turn.
+	turnCancel       context.CancelFunc
+	turnStart        time.Time
+	turnCanceled     bool
+	turnInFlight     bool
+	streamGen        uint64
+	activeStreamGen  uint64
 	// spin drives the animated working/thinking indicator shown above the input
 	// while a turn is in flight. It only ticks while busy.
 	spin spinner.Model
@@ -378,7 +387,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case submitMsg:
 		return m.handleSubmit(msg.line)
 	case streamEventMsg:
-		return m.handleStream(msg.event)
+		return m.handleStreamGen(msg.gen, msg.event)
+	case turnDrainDoneMsg:
+		m.turnInFlight = false
+		return m, nil
 	case clipboardResultMsg:
 		return m, m.handleClipboardResult(msg)
 	case statusMsg:
@@ -451,7 +463,10 @@ func (m *model) updateOverlay(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case streamEventMsg:
-		return m.handleStream(msg.event)
+		return m.handleStreamGen(msg.gen, msg.event)
+	case turnDrainDoneMsg:
+		m.turnInFlight = false
+		return m, nil
 	case tea.QuitMsg:
 		return m, m.beginQuit()
 	}
@@ -957,7 +972,7 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else if m.turnCanceled {
 				// Second Esc: context already canceled; force-abandon so the
 				// user is not stuck waiting for slow-to-drain tools.
-				m.forceAbandonTurn()
+				return m, m.forceAbandonTurn()
 			}
 			return m, nil
 		case "ctrl+c":
@@ -1019,19 +1034,8 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if cycler, ok := m.app.(interface {
 			CycleInteractionMode(context.Context) (<-chan ui.StreamEvent, error)
 		}); ok {
-			ctx := m.ctx
-			if ctx == nil {
-				ctx = context.Background()
-			}
-			events, err := cycler.CycleInteractionMode(ctx)
-			if err != nil {
-				_ = m.term.ShowError(err)
-				return m, nil
-			}
-			m.busy = true
-			m.status.Left = "mode"
-			m.stream = events
-			return m, waitStream(events)
+			events, err := cycler.CycleInteractionMode(m.streamContext())
+			return m.startAppStream(events, err, "mode")
 		}
 		return m, nil
 	case "alt+1", "¡":
@@ -1046,19 +1050,8 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if cycler, ok := m.app.(interface {
 			CycleModel(context.Context) (<-chan ui.StreamEvent, error)
 		}); ok {
-			ctx := m.ctx
-			if ctx == nil {
-				ctx = context.Background()
-			}
-			events, err := cycler.CycleModel(ctx)
-			if err != nil {
-				_ = m.term.ShowError(err)
-				return m, nil
-			}
-			m.busy = true
-			m.status.Left = "model"
-			m.stream = events
-			return m, waitStream(events)
+			events, err := cycler.CycleModel(m.streamContext())
+			return m.startAppStream(events, err, "model")
 		}
 		return m, nil
 	case "ctrl+shift+p":
@@ -1434,26 +1427,28 @@ func (m *model) cancelTurn() {
 
 // forceAbandonTurn immediately restores the idle UI state when the user presses
 // Esc a second time while waiting for a canceled turn to drain. The stream
-// channel is detached and drained by a background goroutine so its writer
-// goroutine can unblock without leaking.
-func (m *model) forceAbandonTurn() {
+// channel is detached and drained asynchronously so its writer goroutine can
+// unblock without leaking; turnInFlight stays true until that drain completes.
+func (m *model) forceAbandonTurn() tea.Cmd {
 	m.busy = false
 	m.runningTool = ""
 	m.turnCanceled = false
-	m.streamAbandoned = true
 	m.turnStart = time.Time{}
 	m.setWorking(false, "")
 	m.status = m.idleStatus
-	if ch := m.stream; ch != nil {
-		m.stream = nil
-		go func() {
-			for ev := range ch {
-				if ev.Type == ui.StreamDone || ev.Type == ui.StreamError {
-					return
-				}
-			}
-		}()
+	// Invalidate any streamEventMsg already queued in the Bubble Tea loop.
+	m.activeStreamGen++
+	if len(m.queue) > 0 {
+		m.queue = nil
+		m.addBlock(roleInfo, "Queued messages discarded after force stop.")
 	}
+	ch := m.stream
+	m.stream = nil
+	if ch == nil {
+		m.turnInFlight = false
+		return nil
+	}
+	return drainStreamCmd(ch)
 }
 
 // clearTurn releases the per-turn cancel function and resets the elapsed clock
@@ -1464,7 +1459,6 @@ func (m *model) clearTurn() {
 		m.turnCancel = nil
 	}
 	m.turnCanceled = false
-	m.streamAbandoned = false
 	m.turnStart = time.Time{}
 }
 
@@ -1487,12 +1481,18 @@ func (m *model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 	if line == "" {
 		return m, nil
 	}
+	if m.turnInFlight {
+		m.addBlock(roleInfo, "Wait for the previous turn to finish before submitting.")
+		return m, nil
+	}
 
 	m.history.record(line)
 	m.followBottom = true
 	m.addBlock(roleUser, line)
 	m.busy = true
-	m.streamAbandoned = false
+	m.turnInFlight = true
+	m.streamGen++
+	m.activeStreamGen = m.streamGen
 	m.setWorking(true, m.busyLabel())
 
 	base := m.ctx
@@ -1507,19 +1507,25 @@ func (m *model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 	if err != nil {
 		m.clearTurn()
 		m.busy = false
+		m.turnInFlight = false
 		m.setWorking(false, "")
 		m.status = m.idleStatus
 		_ = m.term.ShowError(err)
 		return m, nil
 	}
 	m.stream = events
-	return m, tea.Batch(waitStream(events), m.spin.Tick)
+	gen := m.activeStreamGen
+	return m, tea.Batch(waitStream(events, gen), m.spin.Tick)
 }
 
+// handleStream applies ev to the current turn. Tests call this directly; live
+// events arrive via handleStreamGen with an explicit generation tag.
 func (m *model) handleStream(ev ui.StreamEvent) (tea.Model, tea.Cmd) {
-	// If the stream was force-abandoned, discard stale events that were already
-	// queued in the Bubble Tea message loop before the abandonment.
-	if m.streamAbandoned {
+	return m.handleStreamGen(m.activeStreamGen, ev)
+}
+
+func (m *model) handleStreamGen(gen uint64, ev ui.StreamEvent) (tea.Model, tea.Cmd) {
+	if gen != m.activeStreamGen {
 		return m, nil
 	}
 	switch ev.Type {
@@ -1541,7 +1547,7 @@ func (m *model) handleStream(ev ui.StreamEvent) (tea.Model, tea.Cmd) {
 	case ui.StreamCopyToClipboard:
 		cmd := m.copyToClipboard(ev.Text)
 		if m.stream != nil {
-			return m, tea.Batch(cmd, waitStream(m.stream))
+			return m, tea.Batch(cmd, waitStream(m.stream, gen))
 		}
 		return m, cmd
 	case ui.StreamSetTheme:
@@ -1549,7 +1555,7 @@ func (m *model) handleStream(ev ui.StreamEvent) (tea.Model, tea.Cmd) {
 	case ui.StreamSetMouse:
 		cmd := m.applyMouseMode(ev.Text)
 		if m.stream != nil {
-			return m, tea.Batch(cmd, waitStream(m.stream))
+			return m, tea.Batch(cmd, waitStream(m.stream, gen))
 		}
 		return m, cmd
 	case ui.StreamQuit:
@@ -1613,6 +1619,7 @@ func (m *model) handleStream(ev ui.StreamEvent) (tea.Model, tea.Cmd) {
 		m.setWorking(false, "")
 	case ui.StreamDone:
 		m.busy = false
+		m.turnInFlight = false
 		m.openToolOutputIdx = -1
 		m.runningTool = ""
 		m.thinking = ""
@@ -1629,7 +1636,7 @@ func (m *model) handleStream(ev ui.StreamEvent) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.stream != nil {
-		return m, waitStream(m.stream)
+		return m, waitStream(m.stream, gen)
 	}
 	return m, nil
 }
@@ -1774,9 +1781,16 @@ func (m *model) setWorking(on bool, label string) {
 
 // showWorkingIndicator reports whether the spinner row should render. The turn
 // is busy from submit until StreamDone; show activity whenever busy except
-// during tool confirmation (confirm band carries its own UX).
+// during tool confirmation (confirm band carries its own UX) or when the
+// thinking box is enabled (it embeds the spinner in its border).
 func (m *model) showWorkingIndicator() bool {
-	return m.busy && m.confirmReply == nil
+	if m.confirmReply != nil {
+		return false
+	}
+	if m.busy && m.effectiveShowThinking() {
+		return false
+	}
+	return m.busy
 }
 
 func (m *model) wrapWidth() int {
@@ -1871,7 +1885,9 @@ func (m *model) startAppStream(events <-chan ui.StreamEvent, err error, statusLe
 	m.busy = true
 	m.status.Left = statusLeft
 	m.stream = events
-	return m, waitStream(events)
+	m.streamGen++
+	m.activeStreamGen = m.streamGen
+	return m, waitStream(events, m.activeStreamGen)
 }
 
 // startModeSwitch switches directly to the named interaction mode via the app's
@@ -2181,13 +2197,21 @@ func (m *model) suggestionRows() int {
 	return rows
 }
 
-func waitStream(events <-chan ui.StreamEvent) tea.Cmd {
+func waitStream(events <-chan ui.StreamEvent, gen uint64) tea.Cmd {
 	return func() tea.Msg {
 		ev, ok := <-events
 		if !ok {
-			return streamEventMsg{event: ui.StreamEvent{Type: ui.StreamDone}}
+			return streamEventMsg{gen: gen, event: ui.StreamEvent{Type: ui.StreamDone}}
 		}
-		return streamEventMsg{event: ev}
+		return streamEventMsg{gen: gen, event: ev}
+	}
+}
+
+func drainStreamCmd(ch <-chan ui.StreamEvent) tea.Cmd {
+	return func() tea.Msg {
+		for range ch {
+		}
+		return turnDrainDoneMsg{}
 	}
 }
 

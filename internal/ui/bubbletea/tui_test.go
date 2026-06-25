@@ -118,8 +118,9 @@ func TestModelStreamPump(t *testing.T) {
 	events <- ui.StreamEvent{Type: ui.StreamDone}
 	close(events)
 	m.stream = events
+	m.activeStreamGen = 1
 
-	cmd := waitStream(events)
+	cmd := waitStream(events, 1)
 	msg := cmd()
 	evMsg, ok := msg.(streamEventMsg)
 	if !ok {

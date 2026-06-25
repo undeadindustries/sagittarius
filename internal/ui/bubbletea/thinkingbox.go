@@ -15,11 +15,18 @@ import (
 const thinkingBoxInnerRows = 5
 
 // thinkingBoxVisible reports whether the reasoning box should render: the user
-// (or the resolved per-model/global setting) enabled it and there is buffered
-// reasoning to show. It is suppressed during a tool confirmation so the confirm
-// band stands alone.
+// (or the resolved per-model/global setting) enabled it. While a turn is in
+// flight, show the spinner shell even before reasoning tokens arrive; after the
+// turn ends the box hides unless there is buffered reasoning to read. Suppressed
+// during tool confirmation so the confirm band stands alone.
 func (m *model) thinkingBoxVisible() bool {
-	return m.effectiveShowThinking() && m.confirmReply == nil && strings.TrimSpace(m.thinking) != ""
+	if m.confirmReply != nil || !m.effectiveShowThinking() {
+		return false
+	}
+	if strings.TrimSpace(m.thinking) != "" {
+		return true
+	}
+	return m.busy
 }
 
 // thinkingBoxRows is the rendered height of the reasoning box (the inner rows
@@ -37,7 +44,11 @@ func (m *model) renderThinkingBox() string {
 	if !m.thinkingBoxVisible() {
 		return ""
 	}
-	return renderThinkingBox(m.spin, m.thinking, m.th, m.width)
+	text := m.thinking
+	if strings.TrimSpace(text) == "" && m.busy {
+		text = "Listening for reasoning from the model."
+	}
+	return renderThinkingBox(m.spin, text, m.th, m.width)
 }
 
 // renderThinkingBox draws a rounded box whose top edge carries the working

@@ -97,3 +97,13 @@ func validateWriteFileContent(content string) error {
 	}
 	return nil
 }
+
+// validateWriteFileArgs checks write_file tool arguments before confirmation or
+// execution so invalid payloads fail immediately with a tool error.
+func validateWriteFileArgs(args map[string]any) error {
+	content, err := stringArg(args, WriteFileParamContent)
+	if err != nil {
+		return err
+	}
+	return validateWriteFileContent(content)
+}
