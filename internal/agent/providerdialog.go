@@ -653,19 +653,14 @@ func (d *modelsDialogDeps) rebuildIfActive(ctx context.Context, providerID strin
 
 // ModelPickDialogDeps returns the side-effect adapter the /model global picker uses.
 func (a *App) ModelPickDialogDeps() modelpickdialog.Deps {
-	return &modelPickDialogDeps{app: a}
+	return &modelPickDialogDeps{baseDialogDeps{app: a}}
 }
 
 type modelPickDialogDeps struct {
-	app *App
+	baseDialogDeps
 }
 
 func (d *modelPickDialogDeps) settings() *config.Settings { return d.app.deps.Settings }
-
-// effective returns the merged (global+project) view for picker READS so a
-// project-scoped /model pick or activeModels list is visible. Mirrors
-// modesDialogDeps.ListModes.
-func (d *modelPickDialogDeps) effective() *config.Settings { return d.app.effectiveSettings() }
 
 func (d *modelPickDialogDeps) AllActiveModels() []modelpickdialog.ModelEntry {
 	s := d.effective()
@@ -702,11 +697,6 @@ func (d *modelPickDialogDeps) CurrentModel() string {
 		return ""
 	}
 	return endpoint.Model
-}
-
-func (d *modelPickDialogDeps) ProjectAvailable() bool {
-	docs := d.app.docs
-	return docs != nil && docs.WorkDir() != ""
 }
 
 func (d *modelPickDialogDeps) SelectCurrentModel(ctx context.Context, providerID, model string, scope config.SettingScope) error {
@@ -760,19 +750,14 @@ func (d *modelPickDialogDeps) SelectCurrentModel(ctx context.Context, providerID
 
 // ModesDialogDeps returns the side-effect adapter the /modes editor uses.
 func (a *App) ModesDialogDeps() modesdialog.Deps {
-	return &modesDialogDeps{app: a}
+	return &modesDialogDeps{baseDialogDeps{app: a}}
 }
 
 type modesDialogDeps struct {
-	app *App
+	baseDialogDeps
 }
 
 func (d *modesDialogDeps) settings() *config.Settings { return d.app.deps.Settings }
-
-func (d *modesDialogDeps) ProjectAvailable() bool {
-	docs := d.app.docs
-	return docs != nil && docs.WorkDir() != ""
-}
 
 func (d *modesDialogDeps) ListModes() []modesdialog.ModeEntry {
 	// Read from merged settings so project overrides are visible.

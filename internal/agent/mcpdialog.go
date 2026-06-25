@@ -16,21 +16,16 @@ import (
 // MCPDialogDeps returns the side-effect adapter the /mcp wizard uses. It is
 // consumed by the Bubble Tea layer when opening the MCP overlay.
 func (a *App) MCPDialogDeps() mcpdialog.Deps {
-	return &mcpDialogDeps{app: a}
+	return &mcpDialogDeps{baseDialogDeps{app: a}}
 }
 
 // mcpDialogDeps implements mcpdialog.Deps over the App's settings, loader,
 // runtime catalog, and credential store.
-type mcpDialogDeps struct{ app *App }
+type mcpDialogDeps struct{ baseDialogDeps }
 
 func (d *mcpDialogDeps) settings() *config.Settings { return d.app.deps.Settings }
 func (d *mcpDialogDeps) loader() *config.Loader     { return d.app.deps.Loader }
 func (d *mcpDialogDeps) docs() *config.Documents    { return d.app.docs }
-
-func (d *mcpDialogDeps) ProjectAvailable() bool {
-	docs := d.docs()
-	return docs != nil && docs.WorkDir() != ""
-}
 
 // serverScope returns the scope that owns the named server: Project if it is
 // defined in the project settings file, Global otherwise.
