@@ -251,6 +251,34 @@ func TestMCPOpensDialog(t *testing.T) {
 	}
 }
 
+func TestModesOpensDialog(t *testing.T) {
+	t.Parallel()
+	deps, _, _ := testDeps(t, nil)
+	p := slash.NewProcessor()
+
+	result := p.Process(context.Background(), "/modes", deps)
+	if !result.Handled {
+		t.Fatal("expected handled")
+	}
+	if result.OpenDialog != slash.DialogModes {
+		t.Fatalf("OpenDialog = %q, want %q", result.OpenDialog, slash.DialogModes)
+	}
+}
+
+func TestModesOverrideIncompleteOpensDialog(t *testing.T) {
+	t.Parallel()
+	deps, _, _ := testDeps(t, nil)
+	p := slash.NewProcessor()
+
+	result := p.Process(context.Background(), "/modes override", deps)
+	if !result.Handled {
+		t.Fatal("expected handled")
+	}
+	if result.OpenDialog != slash.DialogModes {
+		t.Fatalf("OpenDialog = %q, want %q", result.OpenDialog, slash.DialogModes)
+	}
+}
+
 func TestToolsOpensDialog(t *testing.T) {
 	t.Parallel()
 	deps, _, _ := testDeps(t, nil)

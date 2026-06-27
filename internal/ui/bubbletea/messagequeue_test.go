@@ -25,6 +25,23 @@ func TestBusyEnterQueuesMessage(t *testing.T) {
 	}
 }
 
+func TestInputPlaceholderReflectsBusy(t *testing.T) {
+	t.Parallel()
+	m := newTestModel()
+
+	m.busy = false
+	m.syncInputPlaceholder()
+	if m.input.Placeholder != inputPlaceholderIdle {
+		t.Fatalf("idle placeholder = %q, want %q", m.input.Placeholder, inputPlaceholderIdle)
+	}
+
+	m.busy = true
+	m.syncInputPlaceholder()
+	if m.input.Placeholder != inputPlaceholderBusy {
+		t.Fatalf("busy placeholder = %q, want %q", m.input.Placeholder, inputPlaceholderBusy)
+	}
+}
+
 func TestBusyEnterRejectsSlashCommands(t *testing.T) {
 	t.Parallel()
 	m := newTestModel()

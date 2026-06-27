@@ -79,9 +79,10 @@ func TestEjectStaleContent(t *testing.T) {
 	if res.EjectedCount != 1 {
 		t.Fatalf("EjectedCount = %d, want 1", res.EjectedCount)
 	}
-	got := callContent(res.NewHistory[2])
-	if !strings.Contains(got, "omitted write_file content") {
-		t.Errorf("content = %q, want omission marker", got)
+	// The content arg is dropped entirely (not replaced with a marker) so the
+	// model has no value to copy into its next write_file call.
+	if _, present := res.NewHistory[2].Parts[0].FunctionCall.Args["content"]; present {
+		t.Errorf("content arg still present after ejection; want it dropped")
 	}
 	if path := res.NewHistory[2].Parts[0].FunctionCall.Args["file_path"]; path != "/foo.ts" {
 		t.Errorf("file_path = %v, want /foo.ts", path)

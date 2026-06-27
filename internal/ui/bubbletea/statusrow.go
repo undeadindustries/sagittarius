@@ -6,10 +6,33 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/undeadindustries/sagittarius/internal/ui"
 	"github.com/undeadindustries/sagittarius/internal/ui/theme"
 )
+
+// fitLeftRight shrinks a two-part status line so that
+// width(left) + 1 (minimum gap) + width(right) <= width. When the parts are too
+// wide it truncates the LEFT segment first, preserving the right-aligned segment
+// (token counts / metrics / context%) which carries the more important live
+// state. If the right segment alone overflows, it is truncated and the left is
+// dropped. This prevents the line from exceeding the terminal width, which would
+// soft-wrap and corrupt Bubble Tea's frame accounting (ghost rows).
+func fitLeftRight(left, right string, width int) (string, string) {
+	if width < 1 {
+		width = 1
+	}
+	if lipgloss.Width(left)+lipgloss.Width(right)+1 <= width {
+		return left, right
+	}
+	rw := lipgloss.Width(right)
+	if rw >= width {
+		return "", ansi.Truncate(right, width, "")
+	}
+	leftBudget := max(width-rw-1, 0)
+	return ansi.Truncate(left, leftBudget, ""), right
+}
 
 // composerStatus reads the optional composer status (approval policy + skill
 // count) from the app. The second return is false when the app does not
@@ -66,19 +89,20 @@ func scrollShortcutHints() string {
 	return scrollShortcutHintsForGOOS(runtime.GOOS)
 }
 
-// mouseScrollHint labels the mouse-wheel toggle for both PC (Alt) and Mac
-// (Option/⌥) keyboards. Shown on every OS so Mac users SSH'd into Linux still
-// see the key they actually press.
-const mouseScrollHint = "Alt+M · ⌥M"
+// toggleHints labels the two live toggles after the scroll keys: Alt+M / ⌥M
+// toggles mouse-wheel scrolling (both PC and Mac keyboards are shown so Mac
+// users SSH'd into Linux still see the key they press), and Ctrl+T toggles the
+// reasoning ("thinking") view. Each key group is followed by a plain-word label
+// rather than an icon: no single-width glyph for "mouse"/"thinking" renders
+// reliably across terminal fonts, so words stay terminal-safe.
+const toggleHints = "Alt+M or ⌥M mouse · Ctrl+T thinking"
 
 func scrollShortcutHintsForGOOS(goos string) string {
 	switch goos {
 	case "darwin":
-		return "Fn↑ Fn↓ · " + mouseScrollHint
-	case "windows":
-		return "Pg↑ Pg↓ · " + mouseScrollHint
+		return "Fn↑ Fn↓ · " + toggleHints
 	default:
-		return "Pg↑ Pg↓ · " + mouseScrollHint
+		return "Pg↑ Pg↓ · " + toggleHints
 	}
 }
 
@@ -112,6 +136,7 @@ func renderStatusRowLine(left, right string, th theme.Theme, width int) string {
 	if width < 1 {
 		width = 1
 	}
+	left, right = fitLeftRight(left, right, width)
 	gap := max(width-lipgloss.Width(left)-lipgloss.Width(right), 1)
 	return th.Dim.Render(left) + strings.Repeat(" ", gap) + th.Dim.Render(right)
 }

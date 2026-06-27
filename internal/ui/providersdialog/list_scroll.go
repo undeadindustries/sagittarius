@@ -68,8 +68,18 @@ func (m Model) addModelsFixedLines() int {
 }
 
 func (m Model) screenBodyFixedLines() int {
-	// Non-scroll screens: the whole body is fixed; list rows are not subtracted.
-	return 0
+	// Fixed (non-row) lines the body prints before its scrollable rows, so the
+	// row budget in visibleListRows is correct for the row-scrolling screens.
+	switch m.screen {
+	case screenEdit:
+		return 2 // "Editing X (wire)" header + blank line
+	case screenEditPicker:
+		return 2 // picker title + blank line
+	default:
+		// screenEditPick (list only) and non-row screens have no fixed body
+		// lines preceding the scrollable rows.
+		return 0
+	}
 }
 
 // visibleListRows returns how many list rows fit in the current terminal height.
@@ -78,7 +88,7 @@ func (m Model) visibleListRows() int {
 	if h <= 0 {
 		return 15
 	}
-	total := len(m.models)
+	total := m.listLen()
 	if total == 0 {
 		return 0
 	}
@@ -95,7 +105,10 @@ func (m Model) visibleListRows() int {
 	return 1
 }
 
-// listWindow returns the [start, end) slice of a long list to render.
+// listWindow returns the [start, end) slice of a long list to render. It is
+// cursor-aware: even if listOffset is stale (e.g. just after switching screens),
+// the window is shifted so the highlighted row is always visible, which keeps the
+// render correct without every screen transition having to reset the offset.
 func (m Model) listWindow(total int) (start, end int) {
 	if total <= 0 {
 		return 0, 0
@@ -105,6 +118,12 @@ func (m Model) listWindow(total int) (start, end int) {
 		return 0, total
 	}
 	start = m.listOffset
+	if m.cursor >= 0 && m.cursor < start {
+		start = m.cursor
+	}
+	if m.cursor >= start+vis {
+		start = m.cursor - vis + 1
+	}
 	if start > total-vis {
 		start = total - vis
 	}
@@ -140,7 +159,7 @@ func (m *Model) moveListCursor(delta int) {
 
 func (m Model) screenUsesListScroll() bool {
 	switch m.screen {
-	case screenModels, screenAddModels:
+	case screenEditPick, screenEdit, screenEditPicker, screenModels, screenAddModels:
 		return true
 	default:
 		return false

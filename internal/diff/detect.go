@@ -14,12 +14,22 @@ func LooksLikeUnifiedDiff(text string) bool {
 	if strings.HasPrefix(text, "@@") || strings.Contains(text, "\n@@ ") {
 		return true
 	}
-	adds, dels := countDiffPrefixLines(text)
-	if adds >= 1 && dels >= 1 {
+	adds, dels, nonBlank := countDiffPrefixLines(text)
+	if nonBlank == 0 {
+		return false
+	}
+	// Interleaved additions AND deletions making up most of the content: an edit
+	// hunk pasted without headers. The ratio gate stops a real file that merely
+	// contains a stray "+"/"-" line from being flagged.
+	if adds >= 1 && dels >= 1 && (adds+dels)*2 >= nonBlank {
 		return true
 	}
-	// Many single-sided +/- lines (common pseudo-diff edits).
-	if adds+dels >= 4 {
+	// A whole file pasted as all-"+" lines. Deletion-only ("-"-prefixed) content
+	// is intentionally NOT treated as a diff: legitimate files routinely start
+	// lines with "-" — CSS vendor prefixes (-webkit-*, -moz-*), markdown/YAML
+	// bullet lists ("- item"), CLI flags in docs, negative numbers — whereas
+	// "+"-prefixed lines essentially never dominate a real file.
+	if adds >= 4 && dels == 0 && adds*5 >= nonBlank*4 {
 		return true
 	}
 	return false
@@ -53,9 +63,13 @@ func LooksLikePlaceholderContent(text string) bool {
 	return false
 }
 
-func countDiffPrefixLines(text string) (adds, dels int) {
+func countDiffPrefixLines(text string) (adds, dels, nonBlank int) {
 	for _, line := range strings.Split(text, "\n") {
 		trimmed := strings.TrimLeft(line, " \t")
+		if trimmed == "" {
+			continue
+		}
+		nonBlank++
 		if len(trimmed) < 2 {
 			continue
 		}
@@ -66,5 +80,5 @@ func countDiffPrefixLines(text string) (adds, dels int) {
 			dels++
 		}
 	}
-	return adds, dels
+	return adds, dels, nonBlank
 }

@@ -142,3 +142,64 @@ func TestFormatToolSummary(t *testing.T) {
 		})
 	}
 }
+
+func TestFormatToolResult(t *testing.T) {
+	t.Parallel()
+
+	t.Run("write_file uses the diff verbatim", func(t *testing.T) {
+		t.Parallel()
+		text, code, isErr := formatToolResult(WriteFileToolName, map[string]any{"status": "ok"}, "+added")
+		if text != "+added" || code != nil || isErr {
+			t.Fatalf("got (%q, %v, %v)", text, code, isErr)
+		}
+	})
+
+	t.Run("shell success carries output and zero exit", func(t *testing.T) {
+		t.Parallel()
+		text, code, isErr := formatToolResult(ShellToolName, map[string]any{"output": "done", "exit_code": 0}, "")
+		if text != "done" || code == nil || *code != 0 || isErr {
+			t.Fatalf("got (%q, %v, %v)", text, code, isErr)
+		}
+	})
+
+	t.Run("shell non-zero exit is an error", func(t *testing.T) {
+		t.Parallel()
+		text, code, isErr := formatToolResult(ShellToolName, map[string]any{"output": "boom", "exit_code": 2}, "")
+		if text != "boom" || code == nil || *code != 2 || !isErr {
+			t.Fatalf("got (%q, %v, %v)", text, code, isErr)
+		}
+	})
+
+	t.Run("error key wins", func(t *testing.T) {
+		t.Parallel()
+		text, _, isErr := formatToolResult(GrepToolName, map[string]any{"error": "no rg"}, "")
+		if text != "no rg" || !isErr {
+			t.Fatalf("got (%q, isErr=%v)", text, isErr)
+		}
+	})
+
+	t.Run("read_file summarizes path and line count", func(t *testing.T) {
+		t.Parallel()
+		text, _, _ := formatToolResult(ReadFileToolName, map[string]any{"file_path": "a.txt", "content": "x\ny\nz"}, "")
+		if text != "Read a.txt (3 lines)" {
+			t.Fatalf("got %q", text)
+		}
+	})
+
+	t.Run("mcp result stringified", func(t *testing.T) {
+		t.Parallel()
+		text, _, isErr := formatToolResult("mcp_srv_do", map[string]any{"result": "hi there"}, "")
+		if text != "hi there" || isErr {
+			t.Fatalf("got (%q, isErr=%v)", text, isErr)
+		}
+	})
+}
+
+func TestCapLinesKeepsTail(t *testing.T) {
+	t.Parallel()
+	in := "1\n2\n3\n4\n5"
+	got := capLines(in, 2)
+	if !strings.Contains(got, "… 3 more lines") || !strings.HasSuffix(got, "4\n5") {
+		t.Fatalf("capLines = %q", got)
+	}
+}

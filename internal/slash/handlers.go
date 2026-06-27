@@ -223,12 +223,14 @@ func modesCommand() Command {
 		SubCommands: []Command{
 			{
 				Name:        "override",
-				Description: "Set a mode routing override headlessly (scope: global|project; default project). Usage: /modes override <agent|plan|ask|debug> <Provider/Model> [global|project]",
+				Hidden:      true, // headless/scripting; bare /modes opens the interactive editor
+				Description: "Set a mode routing override headlessly (scope: global|project; default project)",
 				Handler:     handleModesOverride,
 			},
 			{
 				Name:        "clear",
-				Description: "Clear a mode routing override headlessly. Usage: /modes clear <agent|plan|ask|debug> [global|project]",
+				Hidden:      true,
+				Description: "Clear a mode routing override headlessly",
 				Handler:     handleModesClear,
 			},
 		},
@@ -250,7 +252,9 @@ func handleModesOverride(ctx *Context) Result {
 	}
 	parts := strings.Fields(strings.TrimSpace(ctx.Args))
 	if len(parts) < 2 {
-		return InfoResult("Usage: /modes override <agent|plan|ask|debug> <Provider/Model> [global|project]")
+		// Incomplete headless invocation (e.g. autocomplete picked "override");
+		// open the interactive editor instead of printing usage.
+		return DialogResult(DialogModes)
 	}
 	modeName := strings.ToLower(parts[0])
 	pair := parts[1]
@@ -281,7 +285,7 @@ func handleModesClear(ctx *Context) Result {
 	}
 	parts := strings.Fields(strings.TrimSpace(ctx.Args))
 	if len(parts) < 1 {
-		return InfoResult("Usage: /modes clear <agent|plan|ask|debug> [global|project]")
+		return DialogResult(DialogModes)
 	}
 	modeName := strings.ToLower(parts[0])
 	scope := config.ScopeProject

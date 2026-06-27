@@ -107,28 +107,26 @@ func (m Model) activationHeader() string {
 
 func (m Model) renderProviderList(entries []ProviderEntry) string {
 	dim := m.th.Dim
-	var b strings.Builder
 	if len(entries) == 0 {
-		b.WriteString(dim.Render("No providers configured. Press a to add one."))
-		return b.String()
+		return dim.Render("No providers configured. Press a to add one.")
 	}
+	labels := make([]string, len(entries))
 	for i, p := range entries {
 		label := fmt.Sprintf("%s (%s)", p.DisplayID, p.DisplayName)
-		marker := ""
 		if p.IsCustom {
-			marker = " [custom]"
+			label += dim.Render(" [custom]")
 		}
-		b.WriteString(m.renderRow(label+dim.Render(marker), i == m.cursor) + "\n")
+		labels[i] = label
 	}
-	return strings.TrimRight(b.String(), "\n")
+	return m.renderWindowedRows(labels)
 }
 
 func (m Model) renderEdit() string {
 	dim := m.th.Dim
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Editing %s (%s)\n\n", config.ProviderDisplayID(m.targetID), m.targetWire))
+	header := fmt.Sprintf("Editing %s (%s)\n\n", config.ProviderDisplayID(m.targetID), m.targetWire)
 	values := m.deps.ProviderSettings(m.targetID)
 	eff := m.deps.EffectiveProviderSettings(m.targetID)
+	labels := make([]string, len(m.editItems))
 	for i, item := range m.editItems {
 		label := item.label
 		switch item.kind {
@@ -147,9 +145,9 @@ func (m Model) renderEdit() string {
 				label += dim.Render("  (default: " + e + ")")
 			}
 		}
-		b.WriteString(m.renderRow(label, i == m.cursor) + "\n")
+		labels[i] = label
 	}
-	return strings.TrimRight(b.String(), "\n")
+	return header + m.renderWindowedRows(labels)
 }
 
 // presetLabel returns the display label for the provider's current system prompt
@@ -170,10 +168,12 @@ func (m Model) renderPicker() string {
 		b.WriteString(dim.Render("(no options)"))
 		return b.String()
 	}
+	labels := make([]string, len(m.pickerOptions))
 	for i, opt := range m.pickerOptions {
-		b.WriteString(m.renderRow(opt.label, i == m.cursor) + "\n")
+		labels[i] = opt.label
 	}
-	return strings.TrimRight(b.String(), "\n")
+	b.WriteString(m.renderWindowedRows(labels))
+	return b.String()
 }
 
 func (m Model) renderTextEntry(title string) string {
@@ -260,6 +260,31 @@ func (m Model) renderActivation(title string) string {
 	}
 	b.WriteString(dim.Render("Checked models are active. Space toggles, A all/none, a adds, Enter saves.") + "\n\n")
 	b.WriteString(m.renderScrollableRows(m.models, m.checked))
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// renderWindowedRows renders only the [start,end) slice of pre-built row labels
+// that fits the terminal height, with "… N more above/below" indicators.
+// Selection highlight uses the absolute index so it tracks m.cursor. Used by the
+// row-list screens (provider list, edit sheet, enum picker) so a long list never
+// overflows the overlay and pushes the top border off-screen.
+func (m Model) renderWindowedRows(labels []string) string {
+	total := len(labels)
+	if total == 0 {
+		return ""
+	}
+	start, end := m.listWindow(total)
+	dim := m.th.Dim
+	var b strings.Builder
+	if start > 0 {
+		b.WriteString(dim.Render(fmt.Sprintf("  … %d more above", start)) + "\n")
+	}
+	for i := start; i < end; i++ {
+		b.WriteString(m.renderRow(labels[i], i == m.cursor) + "\n")
+	}
+	if end < total {
+		b.WriteString(dim.Render(fmt.Sprintf("  … %d more below", total-end)) + "\n")
+	}
 	return strings.TrimRight(b.String(), "\n")
 }
 

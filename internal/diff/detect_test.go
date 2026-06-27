@@ -29,6 +29,21 @@ func TestLooksLikeUnifiedDiff(t *testing.T) {
 			text: "- item one\n- item two\n- item three",
 			want: false,
 		},
+		{
+			name: "markdown long bullet list",
+			text: "- one\n- two\n- three\n- four\n- five\n- six",
+			want: false,
+		},
+		{
+			name: "css vendor prefixes",
+			text: ".window {\n  -webkit-backdrop-filter: blur(20px);\n  backdrop-filter: blur(20px);\n  -webkit-box-shadow: 0 10px 30px rgba(0,0,0,0.3);\n  -webkit-transform: translateZ(0);\n  -moz-user-select: none;\n  -webkit-user-select: none;\n}",
+			want: false,
+		},
+		{
+			name: "whole new file pasted as additions",
+			text: "+import x\n+\n+function foo() {\n+  return 1;\n+}",
+			want: true,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

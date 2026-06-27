@@ -27,8 +27,8 @@ func newWorkingSpinner(th theme.Theme) spinner.Model {
 }
 
 // renderWorkingLine renders the animated working indicator shown above the input
-// while the agent is busy (e.g. "⠹ Thinking…"). label is the current activity
-// (e.g. "Thinking…" or "Running write_file").
+// while the agent is busy (e.g. "⠹ Working…"). label is the current activity
+// (e.g. "Working…" or "Running Shell").
 func renderWorkingLine(s spinner.Model, label string, th theme.Theme, width int) string {
 	line := s.View() + " " + th.Secondary.Render(label)
 	return lipgloss.NewStyle().Width(max(width, 1)).Render(line)

@@ -78,10 +78,21 @@ func NewContextManager(
 		MaskingProtectionFraction:   cm.MaskingProtectionFraction,
 		MaskingPrunableFraction:     cm.MaskingPrunableFraction,
 		MaskingProtectLatestTurn:    cm.MaskingProtectLatestTurn,
-		EjectionEnabled:             true,
-		EjectionMinAgeTurns:         ejectionMinAgeTurns,
-		EjectionMinTokensPerCall:    ejectionMinTokensPerCall,
-		BudgetEnabled:               true,
+		// Write-file content ejection is disabled (AD-068). It rewrote the
+		// content arg of stale write_file calls in history, but models template
+		// off their own prior tool calls and copied whatever we left there into
+		// the next write_file call — a structured marker tripped the
+		// ejection-marker guard, and dropping the arg made the model emit
+		// content-less calls ("missing required parameter content"). Both caused
+		// rejection loops. Budget relief now comes from tool-output masking
+		// (results, which are not mimicked as call templates) and compression
+		// (summarizes old turns to text). Do not re-enable without a
+		// mimicry-resistant representation (e.g. converting ejected calls to a
+		// plain text note rather than a write_file call the model imitates).
+		EjectionEnabled:          false,
+		EjectionMinAgeTurns:      ejectionMinAgeTurns,
+		EjectionMinTokensPerCall: ejectionMinTokensPerCall,
+		BudgetEnabled:            true,
 		ReservedResponseTokens:      reservedResponseTokens,
 		ProactiveCompressAt:         proactiveCompressAt,
 		AdaptiveEnabled:             true,

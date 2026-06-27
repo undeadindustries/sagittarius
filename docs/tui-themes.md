@@ -51,19 +51,44 @@ tool activity are easy to scan:
 | Assistant | `✦` | Model response (rendered with basic markdown) |
 | Info | `ℹ` | System/slash-command output |
 | Error | `✕` | Non-fatal errors |
-| Tool start | `⚙` | A tool invocation began, labeled with its target (e.g. `⚙ write_file hello.txt`) |
-| Tool result | `↳` | A tool's result; `write_file` results show a colorized diff |
-| Confirm | `?` | A tool is awaiting your approval |
 
 The user's own prompts are rendered in a muted grey so the assistant's replies
 stay the visual focus, and a blank line separates each turn.
 
+## Tool cards
+
+Each tool invocation renders as a single rounded **card** in the scrollback
+rather than separate start/output/result lines. The card updates in place across
+the call's lifecycle, so you see one grouped box per tool call. Its top border
+carries a status icon, the tool's display name, and a dimmed truncated summary of
+the arguments (the command, the path, etc.):
+
+```
+╭─ ✓ Shell  go build ./... ───────────────────────╮
+│ ok                                              │
+│ exit 0                                          │
+╰─────────────────────────────────────────────────╯
+```
+
+| Phase | Icon | Body |
+|-------|------|------|
+| Running | spinner | Live output (shell) or a `Running…` placeholder |
+| Confirming | `?` (warning) | A nested command/diff preview plus the numbered allow menu |
+| Success | `✓` (green) | The result snippet, a colorized diff (`write_file`), or formatted text; shell adds an `exit N` footer |
+| Error | `✗` (red) | The error text (workspace-boundary block, denial, tool failure, or a non-zero exit) |
+
+Built-in tools get friendly names (`run_shell_command` → **Shell**,
+`write_file` → **Write file**, `grep_search` → **Search**, …). MCP tools render
+as their bare tool name with a dim `(server)` badge so they are visually distinct
+from built-ins. Long output is capped to the most recent lines with a `… N more
+lines` note, so a noisy command never floods the viewport.
+
 ### Tool confirmations
 
-While a tool confirmation is pending, a focused (purple-bordered) band appears
-above the input so it is never lost in scrollback. For `write_file` it shows a
-colorized unified-diff preview (green additions, red deletions) of the pending
-change, followed by a selectable list:
+When a tool needs approval, its card switches to the confirming phase (a
+focus-bordered box) and shows the request inline in the scrollback — a nested
+preview (the colorized diff for `write_file`, or the command for shell) followed
+by a numbered allow menu:
 
 | Choice | Keys | Effect |
 |--------|------|--------|
@@ -72,6 +97,7 @@ change, followed by a selectable list:
 | No | `3`, `n`, or `Esc` | Reject the invocation |
 
 Use the arrow keys plus `Enter` to pick, or press the number/letter directly.
+The viewport pins to the confirming card so the prompt is never lost.
 
 ### Diffs
 
@@ -119,9 +145,26 @@ newline for multi-line prompts.
 
 While the agent is working, a braille spinner appears directly above the input
 showing the current activity, an elapsed timer, and a cancel hint — e.g.
-`⠹ Thinking… (12s · esc to cancel)`. Press `Esc` to cancel the in-flight turn.
+`⠹ Working… (12s · esc to cancel)`. Press `Esc` to cancel the in-flight turn.
 `Ctrl+C` also cancels a running turn rather than quitting outright; a second
 `Ctrl+C` (when idle) exits.
+
+The label is phase-accurate, so the spinner never claims the model is "thinking"
+when it is not:
+
+- **`Working…`** — the turn is busy with local context preparation, the network
+  round-trip, or provider queueing (time-to-first-token), and during the gaps
+  between tool rounds while waiting on the next model response. This is the
+  default state immediately after you submit.
+- **`Running {tool}`** — shown in the tool card while a tool executes (the card
+  header carries the spinner; the standalone line is suppressed).
+- **Thinking box** — a separate rounded box (its border carries the spinner and
+  a `Thinking` label) appears only when the model actually streams reasoning
+  ("thinking") tokens *and* `showThinking` is enabled (`Ctrl+T`, or a
+  per-provider/model/global setting). Providers that send no reasoning never
+  trigger it, so you see `Working…` instead.
+- **No spinner** — once the assistant's reply text is visibly streaming into the
+  scrollback, the spinner line is hidden: the words are the feedback.
 
 ## Footer
 
