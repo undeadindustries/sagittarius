@@ -105,6 +105,17 @@ type StreamEvent struct {
 	Dialog DialogKind
 	// ScrollbackRole is set for StreamScrollback and selects the block styling.
 	ScrollbackRole ScrollbackRole
+	// ToolCallID correlates the StreamToolStart / StreamToolOutput /
+	// StreamToolConfirm / StreamToolResult events for a single tool invocation
+	// so the TUI can update one tool card in place rather than appending
+	// separate lifecycle lines. Empty for providers that don't supply call ids.
+	ToolCallID string
+	// ExitCode is set on StreamToolResult for run_shell_command (nil otherwise)
+	// so the card can show the command's exit status.
+	ExitCode *int
+	// IsError marks a StreamToolResult as a failure (denied, boundary block,
+	// tool error, non-zero exit) so the card renders with the error icon/color.
+	IsError bool
 }
 
 // ConfirmDecision is the user's answer to a tool confirmation prompt.

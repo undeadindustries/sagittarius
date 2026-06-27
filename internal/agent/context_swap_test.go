@@ -130,13 +130,20 @@ func TestRunnerSwapsContextManager(t *testing.T) {
 	}
 }
 
-// TestNewContextManagerEjectionSkipsSmallPayloads guards the ejection min-tokens
-// floor: stale write_file payloads below the threshold are preserved while large
-// ones are ejected. Without the floor, trivial writes would be ejected too.
-func TestNewContextManagerEjectionSkipsSmallPayloads(t *testing.T) {
+// TestNewContextManagerDoesNotEjectWriteFileContent asserts the production
+// context-manager path never rewrites the content arg of stale write_file calls
+// (AD-068). Ejection is disabled because models template off their own prior
+// tool calls and copy whatever we leave in the content slot into the next call,
+// causing rejection loops. Even under hard budget pressure (tiny contextLimit),
+// the original write_file content must survive verbatim.
+func TestNewContextManagerDoesNotEjectWriteFileContent(t *testing.T) {
 	t.Parallel()
 
-	settings := &config.Settings{Providers: &config.ProvidersSettings{Active: string(config.BuiltInOpenAI)}}
+	smallLimit := 1_000
+	settings := &config.Settings{Providers: &config.ProvidersSettings{
+		Active: string(config.BuiltInOpenAI),
+		OpenAI: &config.ProviderInstanceConfig{ContextLimit: &smallLimit},
+	}}
 	mgr := NewContextManager(settings, nil, func() string { return "gpt-4o" }, nil, nil, "sess-test", nil)
 	if mgr == nil {
 		t.Fatal("expected a context manager for the openai-chat provider")
@@ -158,10 +165,10 @@ func TestNewContextManagerEjectionSkipsSmallPayloads(t *testing.T) {
 	}
 
 	if c := writeFileCallContent(got[2]); c != "short" {
-		t.Errorf("small payload should be preserved, got %q", c)
+		t.Errorf("small payload must be preserved, got %q", c)
 	}
-	if c := writeFileCallContent(got[3]); c == big {
-		t.Error("large stale payload should have been ejected")
+	if c := writeFileCallContent(got[3]); c != big {
+		t.Error("large stale write_file content must be preserved (ejection disabled), but it was rewritten")
 	}
 }
 

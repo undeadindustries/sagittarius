@@ -199,30 +199,27 @@ func TestResponseDeltasAccumulateIntoOneBlock(t *testing.T) {
 	}
 }
 
-func TestConfirmBandVisibleWhilePending(t *testing.T) {
+func TestConfirmCardVisibleWhilePending(t *testing.T) {
 	t.Parallel()
 	m := newModel(ui.Options{ThemeName: "greyscale"}, quitApp{}, NewTerminal(ui.Options{}))
 	m.width = 80
 	m.height = 24
 
-	if band := m.renderConfirmBand(); band != "" {
-		t.Fatalf("confirm band should be empty when idle, got %q", band)
-	}
-
 	reply := make(chan ui.ConfirmDecision, 1)
-	m.handleStream(ui.StreamEvent{Type: ui.StreamToolConfirm, ToolName: "write_file", Text: "/tmp/x", ConfirmReply: reply})
-	band := m.renderConfirmBand()
-	if !strings.Contains(band, "write_file") || !strings.Contains(band, "Allow for this session") {
-		t.Fatalf("confirm band missing prompt: %q", band)
+	m.handleStream(ui.StreamEvent{Type: ui.StreamToolStart, ToolName: "write_file", Text: "/tmp/x", ToolCallID: "c1"})
+	m.handleStream(ui.StreamEvent{Type: ui.StreamToolConfirm, ToolName: "write_file", Text: "/tmp/x", ToolCallID: "c1", ConfirmReply: reply})
+	out := stripANSI(m.renderScrollback(80))
+	if !strings.Contains(out, "Write file") || !strings.Contains(out, "Allow for this session") {
+		t.Fatalf("confirming card missing prompt:\n%s", out)
 	}
 
-	// "y" approves once and clears the band.
+	// "y" approves once and clears the pending confirmation.
 	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'y'}})
 	if got := <-reply; got != ui.ConfirmOnce {
 		t.Fatalf("expected y to send ConfirmOnce, got %v", got)
 	}
-	if band := m.renderConfirmBand(); band != "" {
-		t.Fatalf("confirm band should clear after answer, got %q", band)
+	if m.confirmReply != nil {
+		t.Fatal("confirm should clear after answer")
 	}
 }
 

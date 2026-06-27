@@ -121,6 +121,21 @@ func TestCompleteSubcommandsStillWork(t *testing.T) {
 	}
 }
 
+func TestCompleteModesNoHeadlessSubcommands(t *testing.T) {
+	t.Parallel()
+	reg := NewRegistry()
+	got := reg.Complete("/modes ", Deps{})
+
+	if len(got.Items) != 0 {
+		t.Fatalf("/modes should not suggest headless subcommands (got %v)", labels(got.Items))
+	}
+	for _, hidden := range []string{"override", "clear"} {
+		if contains(got.Items, hidden) {
+			t.Errorf("/modes completion should not include hidden %q", hidden)
+		}
+	}
+}
+
 func TestCompleteNonSlashEmpty(t *testing.T) {
 	t.Parallel()
 	reg := NewRegistry()

@@ -372,6 +372,57 @@ func TestActivationViewFitsTerminal(t *testing.T) {
 	}
 }
 
+// TestEditSheetFitsSmallTerminal is the regression for the reported bug: a
+// custom provider's edit sheet (many rows) on a small 80x24 window overflowed,
+// pushing the "Providers" title and the top purple border off-screen. The
+// windowed render must keep the view within the terminal height and show the
+// title + a scroll indicator.
+func TestEditSheetFitsSmallTerminal(t *testing.T) {
+	deps := newFakeDeps()
+	m := New(context.Background(), deps)
+	// Navigate to my-vllm (index 2, custom) → its edit sheet has the most rows
+	// (custom definition rows + the full openai-chat override allowlist).
+	m, _ = send(m, key("down"), key("down"), key("enter"))
+	if m.screen != screenEdit {
+		t.Fatalf("screen = %d, want edit", m.screen)
+	}
+	m = m.SetSize(80, 24)
+
+	view := m.View()
+	if lines := viewLineCount(view); lines > 24 {
+		t.Fatalf("edit sheet has %d lines, want <= 24 (overflows top border):\n%s", lines, view)
+	}
+	if !strings.Contains(view, "Providers") {
+		t.Fatalf("edit sheet dropped the title (top border scrolled off):\n%s", view)
+	}
+	// With more rows than fit, there must be a scroll indicator.
+	if !strings.Contains(view, "more below") {
+		t.Fatalf("expected a scroll indicator when rows exceed the window:\n%s", view)
+	}
+}
+
+// TestEditSheetCursorStaysVisibleWhenScrolling verifies arrowing down past the
+// visible window scrolls the edit sheet (the bottom rows like "Back" become
+// reachable) instead of rendering off-screen.
+func TestEditSheetCursorStaysVisibleWhenScrolling(t *testing.T) {
+	deps := newFakeDeps()
+	m := New(context.Background(), deps)
+	m, _ = send(m, key("down"), key("down"), key("enter")) // my-vllm edit sheet
+	m = m.SetSize(80, 24)
+
+	// Move the cursor to the last row (Back) and confirm it renders.
+	for i := 0; i < len(m.editItems)-1; i++ {
+		m, _ = send(m, key("down"))
+	}
+	view := m.View()
+	if !strings.Contains(view, "Back") {
+		t.Fatalf("cursor at last row but 'Back' not visible (not scrolled):\n%s", view)
+	}
+	if lines := viewLineCount(view); lines > 24 {
+		t.Fatalf("scrolled edit sheet has %d lines, want <= 24:\n%s", lines, view)
+	}
+}
+
 func TestManageModelsActivationSaves(t *testing.T) {
 	deps := newFakeDeps()
 	deps.active = "openai"

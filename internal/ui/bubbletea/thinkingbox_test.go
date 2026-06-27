@@ -43,25 +43,36 @@ func TestThinkingBoxHiddenByDefault(t *testing.T) {
 	}
 }
 
-func TestThinkingBoxShowsWhileBusyBeforeReasoning(t *testing.T) {
+// TestThinkingBoxHiddenUntilReasoning asserts the box does NOT appear merely
+// because a turn is busy with showThinking enabled: it stays hidden (and the
+// "Working…" line shows instead) until the model actually streams reasoning
+// tokens. This prevents the false "Thinking" cue during context prep / network
+// waits / providers that send no reasoning.
+func TestThinkingBoxHiddenUntilReasoning(t *testing.T) {
 	t.Parallel()
 	m := newTestModel()
 	m.showThinking = true
 	m.thinkingToggled = true
 	m.busy = true
 
+	if m.thinkingBoxVisible() {
+		t.Fatal("box should be hidden while busy before any reasoning tokens arrive")
+	}
+	if !m.showWorkingIndicator() {
+		t.Fatal("the Working… line should show while waiting, before reasoning arrives")
+	}
+
+	// Once reasoning streams in, the box appears and the working line yields.
+	m.handleStream(ui.StreamEvent{Type: ui.StreamReasoningDelta, Text: "considering options"})
 	if !m.thinkingBoxVisible() {
-		t.Fatal("box should be visible while busy even before reasoning tokens arrive")
+		t.Fatal("box should become visible once reasoning tokens arrive")
 	}
 	out := stripANSI(m.renderThinkingBox())
-	if !strings.Contains(out, "Thinking") {
-		t.Fatalf("thinking box missing spinner label:\n%s", out)
-	}
-	if !strings.Contains(out, "Listening for reasoning") {
-		t.Fatalf("thinking box should show waiting placeholder:\n%s", out)
+	if !strings.Contains(out, "Thinking") || !strings.Contains(out, "considering options") {
+		t.Fatalf("thinking box missing label/reasoning:\n%s", out)
 	}
 	if m.showWorkingIndicator() {
-		t.Fatal("standalone working line should be hidden while thinking box is enabled")
+		t.Fatal("standalone working line should be hidden while the thinking box is shown")
 	}
 }
 
@@ -100,6 +111,48 @@ func TestThinkingBufferClearsOnDone(t *testing.T) {
 	}
 	if m.thinkingBoxVisible() {
 		t.Fatal("box should auto-hide once the turn is done")
+	}
+}
+
+// TestThinkingBoxClearsWhenModelActs asserts the box is retired the moment the
+// model stops reasoning for a step and starts acting — on the first tool start
+// or the first answer-text delta — instead of lingering (with a frozen reasoning
+// tail and an animating border spinner) through tool execution until StreamDone.
+func TestThinkingBoxClearsWhenModelActs(t *testing.T) {
+	t.Parallel()
+
+	// (1) A tool start retires the box.
+	m := newTestModel()
+	m.showThinking = true
+	m.thinkingToggled = true
+	m.busy = true
+	m.handleStream(ui.StreamEvent{Type: ui.StreamReasoningDelta, Text: "plan the write"})
+	if !m.thinkingBoxVisible() {
+		t.Fatal("box should show while reasoning streams")
+	}
+	m.handleStream(ui.StreamEvent{Type: ui.StreamToolStart, ToolName: "write_file", ToolCallID: "c1"})
+	if m.thinking != "" {
+		t.Fatalf("tool start should clear the reasoning buffer, got %q", m.thinking)
+	}
+	if m.thinkingBoxVisible() {
+		t.Fatal("box should be hidden once a tool starts")
+	}
+
+	// (2) Answer text retires the box.
+	m2 := newTestModel()
+	m2.showThinking = true
+	m2.thinkingToggled = true
+	m2.busy = true
+	m2.handleStream(ui.StreamEvent{Type: ui.StreamReasoningDelta, Text: "compose answer"})
+	if !m2.thinkingBoxVisible() {
+		t.Fatal("box should show while reasoning streams")
+	}
+	m2.handleStream(ui.StreamEvent{Type: ui.StreamTextDelta, Text: "Here is the answer"})
+	if m2.thinking != "" {
+		t.Fatalf("answer text should clear the reasoning buffer, got %q", m2.thinking)
+	}
+	if m2.thinkingBoxVisible() {
+		t.Fatal("box should be hidden once answer text streams")
 	}
 }
 

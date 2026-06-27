@@ -13,11 +13,11 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/mattn/go-runewidth"
 
 	"github.com/undeadindustries/sagittarius/internal/bgproc"
 	"github.com/undeadindustries/sagittarius/internal/clipboard"
-	"github.com/undeadindustries/sagittarius/internal/diff"
 	"github.com/undeadindustries/sagittarius/internal/ui"
 	"github.com/undeadindustries/sagittarius/internal/ui/bgprocdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/mcpdialog"
@@ -119,17 +119,19 @@ const (
 	roleResponse
 	roleInfo
 	roleError
-	roleToolStart
-	roleToolOutput
-	roleToolResult
-	roleConfirm
+	// roleToolCard is a grouped tool invocation rendered as a bordered card.
+	// The block carries a *toolCard whose phase/body update in place across the
+	// invocation's lifecycle.
+	roleToolCard
 )
 
 // scrollBlock is one logical message in the scrollback. text may contain
-// embedded newlines; the renderer wraps and prefixes it at paint time.
+// embedded newlines; the renderer wraps and prefixes it at paint time. For
+// roleToolCard blocks the content lives on card instead of text.
 type scrollBlock struct {
 	role scrollRole
 	text string
+	card *toolCard
 }
 
 type model struct {
@@ -153,9 +155,20 @@ type model struct {
 	// renderer can prefix and color it consistently (user, assistant, info,
 	// error, tool lifecycle). Streamed assistant text accumulates into the
 	// block at openResponseIdx until the turn ends.
-	blocks            []scrollBlock
-	openResponseIdx   int
-	openToolOutputIdx int
+	blocks          []scrollBlock
+	openResponseIdx int
+	// lastTextDeltaAt is when the most recent assistant text delta arrived. The
+	// working spinner is suppressed only briefly after it (streamingSpinnerGrace)
+	// so the spinner reappears during the silent wait for the model's next action
+	// even though the response block stays open.
+	lastTextDeltaAt time.Time
+
+	// Tool cards: activeCard is the invocation currently executing or awaiting
+	// confirmation (tool events arrive serially from the scheduler); cardByID
+	// indexes every card by its call id so out-of-order or interleaved events
+	// still update the right card.
+	activeCard *toolCard
+	cardByID   map[string]*toolCard
 
 	// followBottom pins the scrollback viewport to the newest content. It is
 	// true until the user scrolls up (PgUp/wheel/Shift+Up) and is restored when
@@ -189,7 +202,7 @@ type model struct {
 	// while a turn is in flight. It only ticks while busy.
 	spin spinner.Model
 	// working toggles visibility of the working indicator line; workingLabel is
-	// the current activity (e.g. "Thinking…" or "Running write_file").
+	// the current activity (e.g. "Working…" or "Running Shell").
 	working      bool
 	workingLabel string
 	runningTool  string
@@ -205,15 +218,11 @@ type model struct {
 	// goodbye screen after the alt-screen program tears down.
 	exitSummary string
 	stream      <-chan ui.StreamEvent
-	// confirmReply is set while a tool confirmation is pending; the confirm
-	// band renders above the input until the user picks a choice. The decision
-	// is once / session / deny.
+	// confirmReply is set while a tool confirmation is pending; the active tool
+	// card renders the numbered menu in scrollback until the user picks a
+	// choice. The decision is once / session / deny.
 	confirmReply chan ui.ConfirmDecision
-	confirmText  string
-	// confirmDiff is an optional unified-diff preview (write_file) shown in the
-	// confirm band, colorized add/del.
-	confirmDiff string
-	// confirmChoice is the highlighted option in the confirm band
+	// confirmChoice is the highlighted option in the confirming card's menu
 	// (0=once, 1=session, 2=no).
 	confirmChoice int
 
@@ -265,7 +274,7 @@ const maxVisibleSuggestions = 8
 
 func newModel(opts ui.Options, app ui.App, term *Terminal) *model {
 	ti := textarea.New()
-	ti.Placeholder = "Type a message"
+	ti.Placeholder = inputPlaceholderIdle
 	ti.Focus()
 	ti.CharLimit = 8192
 	ti.ShowLineNumbers = false
@@ -298,18 +307,18 @@ func newModel(opts ui.Options, app ui.App, term *Terminal) *model {
 		app:               app,
 		term:              term,
 		th:                th,
-		welcome:           welcome,
-		openResponseIdx:   -1,
-		openToolOutputIdx: -1,
-		input:             ti,
-		viewport:          vp,
-		spin:              newWorkingSpinner(th),
-		status:            idleStatus,
-		idleStatus:        idleStatus,
-		suggestionIdx:     -1,
-		history:           newInputHistory(),
-		followBottom:      true,
-		showThinking:      opts.ShowThinking,
+		welcome:         welcome,
+		openResponseIdx: -1,
+		cardByID:        make(map[string]*toolCard),
+		input:           ti,
+		viewport:        vp,
+		spin:            newWorkingSpinner(th),
+		status:          idleStatus,
+		idleStatus:      idleStatus,
+		suggestionIdx:   -1,
+		history:         newInputHistory(),
+		followBottom:    true,
+		showThinking:    opts.ShowThinking,
 	}
 	m.syncInputPrompt(idleStatus.Mode)
 
@@ -429,6 +438,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		applySpinnerColor(&m.spin, m.th)
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(msg)
+		// A running tool card embeds the spinner in its header (inside the
+		// viewport), so re-render the scrollback each tick to animate it.
+		if m.activeCard != nil && m.activeCard.phase == toolRunning {
+			m.syncViewportContent()
+		}
 		return m, cmd
 	case tea.QuitMsg:
 		return m, m.beginQuit()
@@ -784,6 +798,7 @@ func (m *model) View() string {
 		return m.settingsOverlay.View()
 	}
 	m.syncInputLayout()
+	m.syncInputPlaceholder()
 
 	header := renderHeader(m.opts, m.th, m.width)
 	footer := renderFooter(m.statusWithMetrics(), m.th, m.width)
@@ -795,9 +810,6 @@ func (m *model) View() string {
 	m.viewport.Width = max(m.width-2, 1)
 
 	sections := []string{header, m.viewport.View()}
-	if band := m.renderConfirmBand(); band != "" {
-		sections = append(sections, band)
-	}
 	if row := m.renderStatusRow(); row != "" {
 		sections = append(sections, row)
 	}
@@ -814,18 +826,36 @@ func (m *model) View() string {
 		sections = append(sections, suggestions)
 	}
 	sections = append(sections, footer)
-	return lipgloss.JoinVertical(lipgloss.Left, sections...)
+	return clampWidth(lipgloss.JoinVertical(lipgloss.Left, sections...), m.width)
 }
 
-// confirmChoices are the selectable answers in the confirmation band, ordered
+// clampWidth truncates every line of the rendered frame to width cells. The
+// composer layout is built so each section fits on a single (or fixed number of)
+// row(s) at exactly width; any line that nonetheless exceeds the terminal width
+// would soft-wrap and desynchronize Bubble Tea's frame diff, leaving ghost rows
+// (duplicated status row / footer). This is a cheap, ANSI-aware safety net.
+func clampWidth(frame string, width int) string {
+	if width < 1 {
+		return frame
+	}
+	lines := strings.Split(frame, "\n")
+	for i, line := range lines {
+		if lipgloss.Width(line) > width {
+			lines[i] = ansi.Truncate(line, width, "")
+		}
+	}
+	return strings.Join(lines, "\n")
+}
+
+// confirmChoices are the selectable answers in a confirming tool card, ordered
 // to match confirmChoice (0=once, 1=session, 2=no).
 var confirmChoices = []string{"Allow once", "Allow for this session", "No"}
 
-// confirmDiffMaxLines caps the diff preview height in the confirm band so a
+// confirmDiffMaxLines caps the diff preview height in a confirming card so a
 // large write does not push the input off-screen.
 const confirmDiffMaxLines = 20
 
-// confirmDecisionForChoice maps a highlighted band row to its decision.
+// confirmDecisionForChoice maps a highlighted menu row to its decision.
 func confirmDecisionForChoice(choice int) ui.ConfirmDecision {
 	switch choice {
 	case 1:
@@ -837,62 +867,25 @@ func confirmDecisionForChoice(choice int) ui.ConfirmDecision {
 	}
 }
 
-// sendConfirm delivers the user's decision to the waiting scheduler and clears
-// the confirmation state, resuming the working indicator.
+// sendConfirm delivers the user's decision to the waiting scheduler, returns the
+// confirming card to its running phase, and resumes the working indicator.
 func (m *model) sendConfirm(d ui.ConfirmDecision) {
 	if m.confirmReply == nil {
 		return
 	}
 	m.confirmReply <- d
 	m.confirmReply = nil
-	m.confirmText = ""
-	m.confirmDiff = ""
 	m.confirmChoice = 0
 	m.status.Left = ""
+	if m.activeCard != nil && m.activeCard.phase == toolConfirming {
+		// Denials surface as an error result from the scheduler; for an approval
+		// the card resumes running until output/result arrive.
+		m.activeCard.phase = toolRunning
+		m.activeCard.body = ""
+		m.activeCard.diff = ""
+	}
 	m.setWorking(true, m.busyLabel())
-}
-
-// confirmBandLines builds the inner (un-bordered) lines of the confirmation
-// panel: a title, an optional colorized diff preview, and the choice list with
-// the current selection marked. Used by both renderConfirmBand and
-// confirmBandRows so their heights stay in sync.
-func (m *model) confirmBandLines() []string {
-	title := m.confirmText
-	if title == "" {
-		title = "Run tool?"
-	}
-	lines := []string{m.th.Accent.Render("Confirm: ") + m.th.Primary.Render(title)}
-	if m.confirmDiff != "" {
-		lines = append(lines, m.renderDiffLines(m.confirmDiff, max(m.width-4, 1), confirmDiffMaxLines)...)
-	}
-	for i, c := range confirmChoices {
-		row := fmt.Sprintf("%d %s", i+1, c)
-		if i == m.confirmChoice {
-			lines = append(lines, m.th.Selected.Render("› "+row))
-		} else {
-			lines = append(lines, "  "+m.th.Secondary.Render(row))
-		}
-	}
-	return lines
-}
-
-// renderConfirmBand draws a focused panel above the input while a tool
-// confirmation is pending, so the prompt is not lost in scrollback. It shows a
-// diff preview (write_file) and a selectable Allow-once / Allow-for-session /
-// No list.
-func (m *model) renderConfirmBand() string {
-	if m.confirmReply == nil {
-		return ""
-	}
-	body := strings.Join(m.confirmBandLines(), "\n")
-	style := lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		Padding(0, 1).
-		Width(max(m.width-2, 1))
-	if m.th.Colored {
-		style = style.BorderForeground(m.th.FocusBorderColor)
-	}
-	return style.Render(body)
+	m.syncViewportContent()
 }
 
 // suggestionWindow calculates the visible slice of suggestions, keeping the
@@ -993,9 +986,11 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "up":
 			m.confirmChoice = (m.confirmChoice + 2) % 3
+			m.syncViewportContent()
 			return m, nil
 		case "down":
 			m.confirmChoice = (m.confirmChoice + 1) % 3
+			m.syncViewportContent()
 			return m, nil
 		case "enter":
 			m.sendConfirm(confirmDecisionForChoice(m.confirmChoice))
@@ -1587,7 +1582,9 @@ func (m *model) handleStreamGen(gen uint64, ev ui.StreamEvent) (tea.Model, tea.C
 	case ui.StreamReasoningDelta:
 		// Reasoning ("thinking") streams into the dedicated box, never the
 		// scrollback. Accumulate even when hidden so toggling on mid-turn shows
-		// the thoughts so far; the buffer is cleared at StreamDone.
+		// the thoughts so far. The buffer is cleared when the model stops
+		// reasoning for a step — at the first tool start or answer-text delta
+		// (see startToolCard/addResponseDelta) — and again at StreamDone.
 		m.thinking += ev.Text
 	case ui.StreamInfo:
 		m.addBlock(roleInfo, ev.Text)
@@ -1616,47 +1613,41 @@ func (m *model) handleStreamGen(gen uint64, ev ui.StreamEvent) (tea.Model, tea.C
 	case ui.StreamOpenDialog:
 		m.openDialog(ev.Dialog)
 	case ui.StreamToolStart:
-		label := ev.ToolName
-		if ev.Text != "" {
-			label += " " + ev.Text
-		}
-		m.openToolOutputIdx = -1
-		m.addBlock(roleToolStart, label)
+		m.startToolCard(ev)
 		m.runningTool = ev.ToolName
 		m.setWorking(true, m.busyLabel())
 	case ui.StreamToolOutput:
-		text := ev.Text
-		if text == "" {
-			text = "Waiting for output..."
+		if c := m.toolCardFor(ev); c != nil {
+			c.body = ev.Text
+			m.syncViewportContent()
 		}
-		if m.openToolOutputIdx < 0 {
-			m.blocks = append(m.blocks, scrollBlock{role: roleToolOutput, text: text})
-			m.openToolOutputIdx = len(m.blocks) - 1
-		} else {
-			m.blocks[m.openToolOutputIdx].text = text
-		}
-		m.syncViewportContent()
 	case ui.StreamToolConfirm:
-		text := ev.ToolName
-		if ev.Text != "" {
-			text += ": " + ev.Text
+		if c := m.toolCardFor(ev); c != nil {
+			c.phase = toolConfirming
+			c.diff = ev.Diff
+			c.body = ev.Text
 		}
-		m.addBlock(roleConfirm, text)
 		m.confirmReply = ev.ConfirmReply
-		m.confirmText = text
-		m.confirmDiff = ev.Diff
 		m.confirmChoice = 0
-		// Awaiting the user; hide the spinner so the confirm band stands alone.
+		// Keep the confirming card pinned in view; the spinner gives way to the
+		// card's own '?' icon and inline menu.
 		m.setWorking(false, "")
 		m.status.Left = "confirm tool"
+		m.followBottom = true
+		m.syncViewportContent()
 	case ui.StreamToolResult:
-		text := ev.ToolName
-		if ev.Text != "" {
-			text += " " + ev.Text
+		if c := m.toolCardFor(ev); c != nil {
+			c.body = ev.Text
+			c.exitCode = ev.ExitCode
+			if ev.IsError {
+				c.phase = toolError
+			} else {
+				c.phase = toolSuccess
+			}
 		}
-		m.openToolOutputIdx = -1
-		m.addBlock(roleToolResult, text)
+		m.activeCard = nil
 		m.runningTool = ""
+		m.syncViewportContent()
 		// Tool finished; the model will be queried again next.
 		m.setWorking(true, m.busyLabel())
 	case ui.StreamError:
@@ -1665,13 +1656,13 @@ func (m *model) handleStreamGen(gen uint64, ev ui.StreamEvent) (tea.Model, tea.C
 		} else if ev.Text != "" {
 			m.addBlock(roleError, ev.Text)
 		}
-		m.openToolOutputIdx = -1
+		m.activeCard = nil
 		m.runningTool = ""
 		m.setWorking(false, "")
 	case ui.StreamDone:
 		m.busy = false
 		m.turnInFlight = false
-		m.openToolOutputIdx = -1
+		m.activeCard = nil
 		m.runningTool = ""
 		m.thinking = ""
 		m.clearTurn()
@@ -1717,6 +1708,25 @@ func (m *model) refreshIdleStatus() {
 // wrapped continuation rows (and the textarea's end-of-buffer padding rows) are
 // blank, aligned under the text. This mirrors gemini-cli's single-prompt input
 // and prevents a duplicate "Agent> " row from appearing below the cursor.
+// Input placeholder strings. While a turn is in flight, anything submitted is
+// queued for after the turn (handleBusyEnter), so the busy hint says "Queue"
+// to signal the composer is not idle — the only other "still working" cue is
+// the Working… spinner row.
+const (
+	inputPlaceholderIdle = "Type a message"
+	inputPlaceholderBusy = "Queue a message"
+)
+
+// syncInputPlaceholder keeps the composer placeholder in step with the turn
+// state so an editable input during a running turn does not look idle.
+func (m *model) syncInputPlaceholder() {
+	if m.busy {
+		m.input.Placeholder = inputPlaceholderBusy
+		return
+	}
+	m.input.Placeholder = inputPlaceholderIdle
+}
+
 func (m *model) syncInputPrompt(mode string) {
 	prompt := inputPromptForMode(mode)
 	width := runewidth.StringWidth(prompt)
@@ -1784,6 +1794,38 @@ func (m *model) addBlock(role scrollRole, text string) {
 	m.syncViewportContent()
 }
 
+// startToolCard appends a new running tool card for a StreamToolStart event,
+// indexing it by call id and marking it active so subsequent output/confirm/
+// result events update it in place.
+func (m *model) startToolCard(ev ui.StreamEvent) {
+	// The model has stopped reasoning for this step and is now acting, so retire
+	// the Thinking box (its buffer is never replayed). A later step that reasons
+	// again repopulates it; otherwise the tool card owns the spinner.
+	m.thinking = ""
+	card := newToolCard(ev)
+	m.blocks = append(m.blocks, scrollBlock{role: roleToolCard, card: card})
+	m.openResponseIdx = -1
+	m.activeCard = card
+	if card.callID != "" {
+		if m.cardByID == nil {
+			m.cardByID = make(map[string]*toolCard)
+		}
+		m.cardByID[card.callID] = card
+	}
+	m.syncViewportContent()
+}
+
+// toolCardFor resolves the card a follow-up tool event applies to: by call id
+// when present, falling back to the active card (tool events arrive serially).
+func (m *model) toolCardFor(ev ui.StreamEvent) *toolCard {
+	if ev.ToolCallID != "" {
+		if c, ok := m.cardByID[ev.ToolCallID]; ok {
+			return c
+		}
+	}
+	return m.activeCard
+}
+
 // clearScrollbackBlocks drops every scrollback block and closes any open
 // assistant response so a restored conversation (/chat resume) replaces the
 // visible history instead of being appended beneath it. The static welcome
@@ -1797,7 +1839,12 @@ func (m *model) clearScrollbackBlocks() {
 // addResponseDelta accumulates streamed assistant text into the current
 // response block, starting one if none is open.
 func (m *model) addResponseDelta(text string) {
+	m.lastTextDeltaAt = time.Now()
 	if m.openResponseIdx < 0 {
+		// Answer text is starting: reasoning for this step is over, so hide the
+		// Thinking box. Cleared only when the block opens (not on every delta) so
+		// any reasoning that interleaves with the answer can still surface.
+		m.thinking = ""
 		m.blocks = append(m.blocks, scrollBlock{role: roleResponse})
 		m.openResponseIdx = len(m.blocks) - 1
 	}
@@ -1811,12 +1858,14 @@ func (m *model) closeResponse() {
 }
 
 // busyLabel returns the activity label for the working indicator. When a tool is
-// executing, it returns "Running <tool>". Otherwise, it defaults to "Thinking…".
+// executing, it returns "Running <display name>". Otherwise it defaults to
+// "Working…": the turn is busy with context prep, the network round-trip, or
+// provider queueing — not necessarily model reasoning, which has its own box.
 func (m *model) busyLabel() string {
 	if m.runningTool != "" {
-		return "Running " + m.runningTool
+		return "Running " + toolDisplayName(m.runningTool)
 	}
-	return "Thinking…"
+	return "Working…"
 }
 
 // setWorking toggles the working/thinking indicator and re-syncs the viewport so
@@ -1830,19 +1879,42 @@ func (m *model) setWorking(on bool, label string) {
 	m.syncViewportContent()
 }
 
-// showWorkingIndicator reports whether the spinner row should render. The turn
-// is busy from submit until StreamDone; show activity whenever busy except
-// during tool confirmation (confirm band carries its own UX) or when the
-// thinking box is enabled (it embeds the spinner in its border).
+// showWorkingIndicator reports whether the standalone "Working…" spinner row
+// should render. The turn is busy from submit until StreamDone; the line shows
+// only during genuine wait gaps (context prep, network, provider queueing,
+// between tool rounds) and is suppressed whenever another element already owns
+// the activity cue or visible progress makes it redundant:
+//   - tool confirmation (the confirming card carries its own '?' menu),
+//   - a running tool card (its header embeds the spinner),
+//   - a visible thinking box (its border embeds the spinner),
+//   - assistant text actively streaming into the scrollback (the words are the
+//     feedback; a spinner would be noise) — but only while deltas are still
+//     arriving. Once they pause (streamingSpinnerGrace) the spinner returns so
+//     the silent wait for the model's next action still shows activity.
 func (m *model) showWorkingIndicator() bool {
+	if !m.busy {
+		return false
+	}
 	if m.confirmReply != nil {
 		return false
 	}
-	if m.busy && m.effectiveShowThinking() {
+	if m.activeCard != nil && m.activeCard.phase == toolRunning {
 		return false
 	}
-	return m.busy
+	if m.thinkingBoxVisible() {
+		return false
+	}
+	if m.openResponseIdx >= 0 && time.Since(m.lastTextDeltaAt) < streamingSpinnerGrace {
+		return false
+	}
+	return true
 }
+
+// streamingSpinnerGrace is how long after the last assistant text delta the
+// working spinner stays hidden. While deltas keep arriving the words are the
+// feedback; once they stop for this long the turn is waiting on the model (or a
+// tool round) so the spinner reappears even with the response block still open.
+const streamingSpinnerGrace = 400 * time.Millisecond
 
 func (m *model) wrapWidth() int {
 	w := m.viewport.Width
@@ -2040,14 +2112,6 @@ func (m *model) roleStyle(role scrollRole) (glyph string, prefix, body lipgloss.
 		return "ℹ ", m.th.Secondary, m.th.Secondary
 	case roleError:
 		return "✕ ", m.th.Error, m.th.Error
-	case roleToolStart:
-		return "⚙ ", m.th.Secondary, m.th.Secondary
-	case roleToolOutput:
-		return "│ ", m.th.Dim, m.th.Primary
-	case roleToolResult:
-		return "↳ ", m.th.Dim, m.th.Dim
-	case roleConfirm:
-		return "? ", m.th.Accent, m.th.Warning
 	default:
 		return "  ", m.th.Primary, m.th.Primary
 	}
@@ -2058,6 +2122,10 @@ func (m *model) roleStyle(role scrollRole) (glyph string, prefix, body lipgloss.
 // responses are run through the lightweight markdown renderer; all other roles
 // render as plain styled text.
 func (m *model) renderBlock(blk scrollBlock, width int) []string {
+	if blk.role == roleToolCard && blk.card != nil {
+		return m.renderToolCard(blk.card, width)
+	}
+
 	glyph, prefix, body := m.roleStyle(blk.role)
 	gw := lipgloss.Width(glyph)
 	indent := strings.Repeat(" ", gw)
@@ -2066,8 +2134,6 @@ func (m *model) renderBlock(blk scrollBlock, width int) []string {
 	switch {
 	case blk.role == roleResponse:
 		rendered = renderMarkdown(blk.text, max(width-gw, 1), m.th)
-	case (blk.role == roleToolResult || blk.role == roleConfirm) && diff.LooksLikeUnifiedDiff(blk.text):
-		rendered = m.renderDiffLines(blk.text, max(width-gw, 1), diffResultMaxLines)
 	default:
 		for _, line := range strings.Split(wrapText(blk.text, max(width-gw, 1)), "\n") {
 			rendered = append(rendered, body.Render(line))
@@ -2084,10 +2150,6 @@ func (m *model) renderBlock(blk scrollBlock, width int) []string {
 	}
 	return out
 }
-
-// diffResultMaxLines caps how many lines of a write_file result diff are shown
-// in the scrollback before a "… N more" footer.
-const diffResultMaxLines = 60
 
 // renderDiffLines colorizes unified-diff text: additions green, deletions red,
 // hunk/file markers dim, context faint. width bounds wrapping; maxLines caps
@@ -2195,7 +2257,7 @@ func (m *model) inputHeight() int {
 func (m *model) bodyHeight() int {
 	// Baseline 6 covers header, a single input row, and the two-line footer;
 	// add the extra input rows when the box has grown for a multi-line prompt.
-	chrome := 6 + m.suggestionRows() + m.confirmBandRows() + m.statusRowRows() + m.activityRows() + separatorRows + (m.inputHeight() - 1)
+	chrome := 6 + m.suggestionRows() + m.statusRowRows() + m.activityRows() + separatorRows + (m.inputHeight() - 1)
 	h := m.height - chrome
 	if h < 3 {
 		return 3
@@ -2231,16 +2293,6 @@ func (m *model) workingRows() int {
 		return 1
 	}
 	return 0
-}
-
-// confirmBandRows is the height of the confirm panel while a tool confirmation
-// is pending, else 0. It mirrors renderConfirmBand: the inner lines plus the
-// rounded border's top and bottom rows.
-func (m *model) confirmBandRows() int {
-	if m.confirmReply == nil {
-		return 0
-	}
-	return len(m.confirmBandLines()) + 2
 }
 
 // suggestionRows is the number of terminal lines the suggestion block occupies,
@@ -2362,8 +2414,10 @@ func footerDetailWithShortcuts(detail string) string {
 }
 
 func renderFooter(status ui.StatusBar, th theme.Theme, width int) string {
-	left := status.Left
-	right := status.Right
+	// Fit the parts to the terminal width before styling. An over-wide footer
+	// line soft-wraps and corrupts Bubble Tea's frame accounting, leaving ghost
+	// footer/status rows; keep the right-aligned model+usage segment intact.
+	left, right := fitLeftRight(status.Left, status.Right, width)
 
 	// Measure raw string widths before injecting ANSI so the gap is accurate.
 	gap := max(width-lipgloss.Width(left)-lipgloss.Width(right), 1)
@@ -2382,11 +2436,12 @@ func renderFooter(status ui.StatusBar, th theme.Theme, width int) string {
 		return line
 	}
 
+	detailText := ansi.Truncate(status.Detail, max(width, 1), "")
 	var detail string
 	if len(th.TitleGradient) > 0 {
-		detail = th.GradientText(status.Detail, th.Secondary, th.TitleGradient)
+		detail = th.GradientText(detailText, th.Secondary, th.TitleGradient)
 	} else {
-		detail = th.Secondary.Render(status.Detail)
+		detail = th.Secondary.Render(detailText)
 	}
 	return line + "\n" + detail
 }

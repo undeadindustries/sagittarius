@@ -45,17 +45,18 @@ func TestRenderDiffLinesCaps(t *testing.T) {
 func TestToolStartSummaryRendered(t *testing.T) {
 	t.Parallel()
 	m := newTestModel()
-	m.handleStream(ui.StreamEvent{Type: ui.StreamToolStart, ToolName: "write_file", Text: "hello.txt"})
+	m.handleStream(ui.StreamEvent{Type: ui.StreamToolStart, ToolName: "write_file", Text: "hello.txt", ToolCallID: "c1"})
 	out := stripANSI(m.renderScrollback(80))
-	if !strings.Contains(out, "write_file hello.txt") {
-		t.Fatalf("tool-start summary missing: %s", out)
+	if !strings.Contains(out, "Write file") || !strings.Contains(out, "hello.txt") {
+		t.Fatalf("tool-start card missing display name/summary: %s", out)
 	}
 }
 
 func TestResultDiffColorizedInScrollback(t *testing.T) {
 	t.Parallel()
 	m := newTestModel()
-	m.handleStream(ui.StreamEvent{Type: ui.StreamToolResult, ToolName: "write_file", Text: sampleDiff})
+	m.handleStream(ui.StreamEvent{Type: ui.StreamToolStart, ToolName: "write_file", Text: "hello.txt", ToolCallID: "c1"})
+	m.handleStream(ui.StreamEvent{Type: ui.StreamToolResult, ToolName: "write_file", Text: sampleDiff, ToolCallID: "c1"})
 	out := stripANSI(m.renderScrollback(80))
 	if !strings.Contains(out, "+new") || !strings.Contains(out, "-old") {
 		t.Fatalf("result diff not rendered: %s", out)
@@ -92,13 +93,14 @@ func TestConfirmSessionKeySendsDecision(t *testing.T) {
 	t.Parallel()
 	m := newTestModel()
 	reply := make(chan ui.ConfirmDecision, 1)
-	m.handleStream(ui.StreamEvent{Type: ui.StreamToolConfirm, ToolName: "write_file", Text: "x", ConfirmReply: reply})
+	m.handleStream(ui.StreamEvent{Type: ui.StreamToolStart, ToolName: "write_file", Text: "x", ToolCallID: "c1"})
+	m.handleStream(ui.StreamEvent{Type: ui.StreamToolConfirm, ToolName: "write_file", Text: "x", ToolCallID: "c1", ConfirmReply: reply})
 	m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'2'}})
 	if got := <-reply; got != ui.ConfirmSession {
 		t.Fatalf("key 2 sent %v, want ConfirmSession", got)
 	}
-	if m.renderConfirmBand() != "" {
-		t.Fatal("band should clear after a decision")
+	if m.confirmReply != nil {
+		t.Fatal("confirm should clear after a decision")
 	}
 }
 

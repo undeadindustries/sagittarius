@@ -182,12 +182,29 @@ func (m *Manager) PrepareTurn(ctx context.Context, history []Message, turnIndex 
 
 	history = m.applyEjection(history)
 	history = m.applyMasking(history)
-	return m.applyBudgetCompression(ctx, history, turnIndex)
+	history, err := m.applyBudgetCompression(ctx, history, turnIndex)
+	return history, err
 }
+
+// ejectionTriggerFraction is the share of the context limit that must be in use
+// before stale write_file content is ejected. Ejecting earlier wastes the
+// model's access to its own recent writes for no token benefit, so ejection only
+// fires once the conversation is genuinely approaching the budget (it still runs
+// before threshold compression, which triggers higher, at ProactiveCompressAt).
+const ejectionTriggerFraction = 0.6
 
 func (m *Manager) applyEjection(history []Message) []Message {
 	if !m.cfg.EjectionEnabled || m.cfg.WriteFileToolName == "" {
 		return history
+	}
+	// Only eject under real budget pressure. With headroom, retaining write_file
+	// content keeps the model's recent writes visible and avoids needlessly
+	// mutating its prior tool calls.
+	if m.cfg.ContextLimit > 0 {
+		historyTokens := EstimateTokens(flattenParts(history))
+		if float64(historyTokens) < ejectionTriggerFraction*float64(m.cfg.ContextLimit) {
+			return history
+		}
 	}
 	res := EjectStaleWriteFileContent(history, WriteFileEjectionOptions{
 		WriteFileToolName: m.cfg.WriteFileToolName,

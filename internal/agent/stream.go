@@ -24,12 +24,10 @@ func MapStreamResponse(resp provider.StreamResponse) []ui.StreamEvent {
 			Text: resp.TextDelta,
 		})
 	}
-	for _, call := range resp.ToolCalls {
-		events = append(events, ui.StreamEvent{
-			Type:     ui.StreamToolStart,
-			ToolName: call.Name,
-		})
-	}
+	// Tool calls are NOT turned into StreamToolStart here: the scheduler emits
+	// the canonical start (carrying the argument summary and call id) when it
+	// begins executing each call. Emitting one here too produced a duplicate
+	// "⚙ tool" line per invocation in both the TUI and headless stream-json.
 	if resp.Done {
 		events = append(events, ui.StreamEvent{Type: ui.StreamDone})
 	}

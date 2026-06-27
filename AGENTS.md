@@ -117,8 +117,10 @@ in `internal/contextmgmt`, gated to the `openai-chat` path only.
 (default purple + greyscale/`NO_COLOR`), basic markdown, footer telemetry (per-turn
 `↑in ↓out` + optional OpenRouter cost; session totals on detail line), exit summary
 per-model/per-mode token breakdown with cost column when OpenRouter cost is known.
-De-emphasized `You ›` user blocks with per-turn spacing, colorized `write_file`
-diffs (confirm preview + result), a multi-line wrapping input (`textarea`) with
+De-emphasized `You ›` user blocks with per-turn spacing, grouped **tool cards**
+(rounded lipgloss frames per invocation: status icon + display name + dim arg
+summary in the border, phase-dependent body, shell `exit N` footer, MCP
+`(server)` badge) with colorized `write_file` diffs, a multi-line wrapping input (`textarea`) with
 `@path/to/file` mention autocompletion, a loaded-`AGENTS.md` banner line, a
 color-cycling working spinner, and per-turn cancel (`Esc`; `Ctrl+C` cancels
 then quits). In-app conversation scrolling (`PgUp`/`PgDn` + `Shift+Up`/
@@ -130,7 +132,8 @@ active models forward/back, `Alt+T` cycles the color theme. An optional
 auto-hiding "thinking" box (spinner in its border) shows provider reasoning,
 opt-in via `ui.showThinking` (`Ctrl+T` toggles live) or a per-provider/model
 `showThinking` setting; and a dim separator rule above the input. Tool
-confirmations offer Allow once / Allow for this session / No.
+confirmations render inline in the active tool card (nested command/diff preview
++ numbered menu) offering Allow once / Allow for this session / No.
 Overlay dialogs: providers wizard, global model picker (`modelpickdialog`), per-model
 settings editor (`modelsdialog`), mode-override editor (`modesdialog`), project
 system-prompt picker (`systempromptdialog`), MCP server wizard (`mcpdialog`),
@@ -264,6 +267,85 @@ boundary-checked.
 ---
 
 ## Recent decisions
+
+- **2026-06-26 — Disable write_file content ejection (AD-068):** Removed a
+  recurring `write_file` rejection loop by turning off the context manager's
+  write_file content-ejection optimization (`EjectionEnabled: false` in
+  `internal/agent/context.go`). Ejection rewrote the `content` arg of stale
+  `write_file` calls in history to reclaim tokens, but models template off their
+  own prior tool calls and copied whatever we left in the content slot into the
+  *next* `write_file` call. Both representations failed in production against
+  `z-ai/glm-4.5-air`: a structured marker (`[sagittarius omitted …]` /
+  `<file_written …>`) tripped the `LooksLikeEjectionMarker` guard, and dropping
+  the arg entirely made the model emit content-less calls (`missing required
+  parameter "content"`) — each an infinite reject→retry loop. Runtime evidence
+  (debug session) confirmed the mimicry directly: the model reproduced our
+  marker verbatim, adapting its path/line-count/token-count. Conclusion: there
+  is no safe mutation of a historical `write_file` call's content. Budget relief
+  now comes only from tool-output masking (results, which are never mimicked as
+  call templates) and compression (summarizes old turns to plain text, so the
+  model never sees a malformed `write_file` call). The ejection machinery
+  (`EjectStaleWriteFileContent`, `applyEjection`, the budget-gate
+  `ejectionTriggerFraction`) is retained but gated off; do not re-enable without
+  a mimicry-resistant representation (e.g. converting an ejected call to a plain
+  text note rather than a `write_file` call the model imitates). The `write_file`
+  validation guards that reject markers/diffs/placeholders are kept as a
+  defense against such content from any source.
+
+- **2026-06-26 — Tool-card follow-up fixes (AD-066):** Two bugs surfaced by live
+  use of the AD-065 tool cards. (1) **Duplicate status row / footer ("two
+  footers"):** the composer status row and footer build `left + gap + right`
+  with `gap` forced to a minimum of 1 column, so when `left + right >= width`
+  (the default `Tools: confirm before run · … · Ctrl+T thinking` hints plus a
+  skill count overflow an 80-col terminal) the line exceeded the terminal width,
+  soft-wrapped, and desynchronized Bubble Tea's frame diff — leaving ghost copies
+  of the status row and footer (with stale token counts). New
+  `bubbletea.fitLeftRight` (ANSI-aware, in `statusrow.go`) truncates the LEFT
+  segment first so the right-aligned live metrics survive; wired into
+  `renderStatusRowLine` and `renderFooter` (line 1), the footer detail line is
+  `ansi.Truncate`d, and a defensive `clampWidth` at the `View()` boundary
+  truncates every frame line to the terminal width as a permanent safety net
+  against any future overflow→ghosting. (2) **`write_file` false-positive
+  "looks like a unified diff" on valid CSS:** `diff.LooksLikeUnifiedDiff`'s
+  single-sided `adds+dels >= 4` rule fired on any file with 4+ lines starting
+  with `-`/`+`, so a macOS-style CSS file full of vendor prefixes
+  (`-webkit-*`, `-moz-*`) — and any markdown/YAML bullet list — was rejected.
+  The heuristic now keeps the `--- `/`@@` header signals and a ratio-gated
+  both-sided rule (`adds>=1 && dels>=1 && prefixed*2 >= nonBlank`) but only flags
+  single-sided content when it is **additions-dominated** (`adds>=4 && dels==0 &&
+  adds*5 >= nonBlank*4`); deletion-only content is never flagged because
+  legitimate files routinely start lines with `-`. `countDiffPrefixLines` now
+  also returns the non-blank line count. Regression tests cover the CSS,
+  long-bullet-list, and whole-new-file-as-additions cases.
+
+- **2026-06-26 — Tool card UX parity with gemini-cli (AD-065):** Replaced the
+  flat per-tool scrollback lines (`⚙ start` / `│ output` / `↳ result`) and the
+  composer confirm band with grouped, rounded **tool cards** that update in
+  place across a call's lifecycle. (1) **Event hygiene:** `ui.StreamEvent` gained
+  `ToolCallID`, `ExitCode *int`, and `IsError`; `MapStreamResponse`
+  (`internal/agent/stream.go`) no longer emits a `StreamToolStart` per tool call
+  (the scheduler emits the canonical start with the arg summary + call id), which
+  also fixes duplicate `tool_start` lines in headless stream-json. The scheduler
+  (`internal/tools/scheduler.go`) now threads the call id through every tool
+  event and formats a rich `StreamToolResult` via `formatToolResult`: shell tail
+  output + `exit_code`, `read_file`/`list_directory`/`grep_search` summaries, MCP
+  `result` JSON, and the `write_file` diff verbatim (`capLines` keeps the tail).
+  (2) **Renderer:** new `internal/ui/bubbletea/toolcard.go` (`toolCard`,
+  `toolPhase`, `toolDisplayName`, `parseMCPToolName`, `renderToolCard`) draws a
+  lipgloss rounded card — status icon (spinner / `✓` / `✗` / `?`) + display name
+  + dim truncated summary in the top border, phase-dependent body, shell `exit N`
+  footer, and a dim `(server)` badge for MCP tools. (3) **Integration:**
+  `model.go` carries cards as `roleToolCard` scroll blocks keyed by call id
+  (`activeCard`/`cardByID`); the spinner tick re-syncs the viewport so the
+  header spinner animates, and the standalone working line hides while a card is
+  running (the card owns the spinner). (4) **Confirm-in-scrollback:** the
+  confirm band and its chrome (`renderConfirmBand`/`confirmBandLines`/
+  `confirmBandRows`) were removed; confirmations now render inside the active
+  card (nested diff/command preview + numbered allow menu), pinned to the bottom,
+  reusing the existing `ui.ConfirmDecision` keys. The agent/UI seam holds —
+  `internal/tools`/`internal/agent` stay Bubble Tea-free and the card renderer
+  duplicates the handful of wire tool names (like the existing `mcp_` prefix
+  duplication) rather than importing `internal/tools`.
 
 - **2026-06-25 — Bugbot race fixes: Documents + MCP client (AD-064):** Two
 high-severity data races surfaced by a full-branch Bugbot review of plans 01–07.

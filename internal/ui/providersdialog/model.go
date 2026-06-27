@@ -393,6 +393,7 @@ func (m Model) back() (Model, tea.Cmd) {
 		m.providers = m.deps.ListProviders()
 		m.screen = screenEditPick
 		m.cursor = 0
+		m.listOffset = 0
 	case screenEditField, screenEditPicker:
 		m.screen = screenEdit
 	case screenModelsAdd:
@@ -427,6 +428,7 @@ func (m Model) returnToEdit() Model {
 	}
 	m.screen = screenEdit
 	m.cursor = 0
+	m.listOffset = 0
 	return m
 }
 
@@ -547,6 +549,7 @@ func (m Model) selectEditPick() (Model, tea.Cmd) {
 	m.editItems = m.buildEditItems(p)
 	m.screen = screenEdit
 	m.cursor = 0
+	m.listOffset = 0
 	return m, nil
 }
 
@@ -749,6 +752,8 @@ func (m Model) enterPreset() Model {
 	m.pickerTitle = "System prompt for " + config.ProviderDisplayID(m.targetID)
 	m.pickerOptions = opts
 	m.screen = screenEditPicker
+	m.listOffset = 0
+	m.ensureListVisible()
 	return m
 }
 
@@ -774,6 +779,8 @@ func (m Model) enterEnum(key string) Model {
 	m.pickerTitle = key + " for " + config.ProviderDisplayID(m.targetID)
 	m.pickerOptions = opts
 	m.screen = screenEditPicker
+	m.listOffset = 0
+	m.ensureListVisible()
 	return m
 }
 
