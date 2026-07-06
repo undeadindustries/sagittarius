@@ -293,6 +293,8 @@ See also: [MCP server configuration](../tools/mcp-server.md).
 
 ## Headless CLI flags
 
+Unified keyboard + CLI quick reference: [README.md § Quick reference](../README.md#quick-reference).
+
 These flags drive Sagittarius without a terminal, which is how agents (and CI)
 exercise it. See [agent-testing.md](../agent-testing.md) for end-to-end recipes.
 

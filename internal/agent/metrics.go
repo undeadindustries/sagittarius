@@ -42,7 +42,9 @@ type sessionMetrics struct {
 	lastCostUSD   float64
 	lastCostKnown bool
 
-	// contextTokens is the most-recent input size for the context-% footer gauge.
+	// contextTokens drives the footer context-% gauge: last main-turn prompt_tokens
+	// when the provider reports usage, otherwise a local history estimate after
+	// compression or prepareContext defenses.
 	contextTokens int
 
 	// perKey tracks usage keyed by "provider\x00model\x00mode". Allocated on first write.
@@ -86,6 +88,17 @@ func (s *sessionMetrics) recordTurnUsage(prov, model, mode string, inTok, outTok
 // recordAuxUsage is the entry point for compression / summarizer token accounting.
 // It updates session totals and per-key breakdown but does NOT update the
 // last-turn snapshot (compression should not overwrite the most-recent user turn).
+// setContextTokens updates the footer context-% gauge without touching session
+// totals or the last-turn snapshot (used after /compress and prepareContext).
+func (s *sessionMetrics) setContextTokens(tokens int) {
+	if tokens <= 0 {
+		return
+	}
+	s.mu.Lock()
+	s.contextTokens = tokens
+	s.mu.Unlock()
+}
+
 func (s *sessionMetrics) recordAuxUsage(prov, model, mode string, inTok, outTok int, costUSD float64, costKnown bool) {
 	s.mu.Lock()
 	s.inputTokens += inTok

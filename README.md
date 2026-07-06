@@ -65,42 +65,50 @@ You can define custom rules and instructions that the agent must follow. These a
 - **Global rules:** Create `~/.sagittarius/AGENTS.md`. The agent will apply these rules across all projects.
 - **Project rules:** Create an `AGENTS.md` file in the root of your project. The agent will read this file when run within the project directory.
 
-## Keyboard shortcuts
+## Quick reference
 
-These work in the interactive TUI. See [docs/reference/commands.md](docs/reference/commands.md) for slash commands (`/help`, `/settings`, `/mouse`, and others).
+Interactive shortcuts, headless flags, and slash commands for the same features where they exist. Full slash-command tree: [docs/reference/commands.md](docs/reference/commands.md).
 
-### Windows and Linux
-
-| Key | Action |
-|-----|--------|
-| `Alt+1` / `Alt+2` / `Alt+3` / `Alt+4` | Switch to agent / plan / ask / debug mode |
-| `Ctrl+Shift+M` | Cycle interaction mode (agent → plan → ask → debug) |
-| `Ctrl+/` | Cycle forward through active models |
-| `Ctrl+Shift+P` | Cycle backward through active models |
-| `Alt+T` | Cycle the color theme (default ↔ greyscale) |
-| `Ctrl+T` | Toggle the thinking ("reasoning") box |
-| `Alt+M` | Toggle mouse-wheel scrolling |
-| `Ctrl+B` | Open the background process viewer |
-| `PgUp` / `PgDn` / `Shift+Up` / `Shift+Down` | Scroll the conversation |
-| `Up` / `Down` / `Ctrl+P` / `Ctrl+N` | Navigate prompt history (at input boundaries) |
-| `Alt+Enter` / `Shift+Enter` / `Ctrl+J` | Insert a newline in the input (Enter submits) |
-| `Esc` | Cancel the in-flight turn |
-| `Ctrl+C` | Cancel the turn when busy; quit when idle |
+| Feature | Keyboard (TUI) | CLI flags / parameters |
+|---------|----------------|------------------------|
+| **Interaction mode** (agent / plan / ask / debug) | `Alt+1` … `Alt+4`, `Ctrl+Shift+M`; or `/mode`, `/modes` | `--mode` (`agent`, `plan`, `ask`, `debug`) |
+| **Model** (pick or cycle active set) | `Ctrl+/` (forward), `Ctrl+Shift+P` (back); or `/model`, `/models` | `-m`, `--model <id>` (pins model for this run; disables mode-based model routing) |
+| **Tool approval** (confirm vs auto-run tools) | Tool cards: Allow once / session / deny; status row shows policy | `--approval-mode` (`default`, `autoEdit`, `yolo`); `-y`, `--yolo` (shorthand for yolo; not combinable with `--approval-mode`) |
+| **Thinking / reasoning box** | `Ctrl+T` (persists `ui.showThinking`) | — (use `/settings` or per-model `showThinking` in `/models`) |
+| **Color theme** | `Alt+T` (persists `ui.theme`) | `/theme` (no startup flag) |
+| **Mouse-wheel scroll** | `Alt+M` (per session; off again on next launch) | `/mouse` (`on`, `off`, `toggle`, `show`) |
+| **Background processes** | `Ctrl+B` | — |
+| **Scroll conversation** | `PgUp` / `PgDn`, `Shift+Up` / `Shift+Down`; macOS: `Fn+Up` / `Fn+Down` on compact keyboards | — |
+| **Prompt history** | `Up` / `Down`, `Ctrl+P` / `Ctrl+N` (at input line boundaries) | — |
+| **New line in input** | `Alt+Enter`, `Shift+Enter`, `Ctrl+J` (`Enter` submits) | — |
+| **Cancel in-flight turn** | `Esc` | — |
+| **Quit** | `Ctrl+C` when idle; `/quit` | — |
+| **Non-interactive turn** | — | `-p`, `--prompt <text>` (also accepts a single positional argument) |
+| **Headless output shape** | — | `--output-format` (`text`, `json`, `stream-json`) |
+| **Slash command (no TTY)** | — | `--slash "<command>"` (e.g. `--slash "/diff"`; mutually exclusive with `-p`) |
+| **Resume session** | `/resume`, `/chat resume` | `--resume`, `-r` (id, index, or `latest`) |
+| **List / delete sessions** | — | `--list-sessions`; `--delete-session` (id or index) |
+| **Debug logging** | — | `--debug`, `-d` (writes to `~/.sagittarius/logs/sagittarius.log` in the TUI) |
+| **Screen-reader TUI** | — | `--screen-reader` |
+| **Version** | — | `--version`, `-v` |
+| **Git worktree** (stub) | — | `--worktree`, `-w` |
 
 `Alt+digit` is used for direct mode selection because most terminals cannot distinguish `Ctrl+digit` from the plain digit.
 
-### macOS
+**Environment:** `SAGITTARIUS_SESSION_ID` pins the session id across headless invocations (shared snapshots for `--slash "/diff"` / `/undo`). See [docs/agent-testing.md](docs/agent-testing.md).
 
-Most shortcuts are the same, but macOS terminals often send **Option** key chords as special characters instead of Alt sequences. Sagittarius accepts these out of the box without terminal reconfiguration:
+### macOS keyboard aliases
+
+Most shortcuts match Windows/Linux. macOS terminals often send **Option** chords as special characters; Sagittarius accepts these without terminal reconfiguration:
 
 | macOS key | Same as | Action |
 |-----------|---------|--------|
 | `Option+1` … `Option+4` | `Alt+1` … `Alt+4` | Switch mode (agent / plan / ask / debug) |
 | `Option+T` (`†`) | `Alt+T` | Cycle theme |
 | `Option+M` (`µ`) | `Alt+M` | Toggle mouse-wheel scrolling |
-| `Option+1` … `4` (character keys) | | Also works via `¡`, `™`, `£`, `¢` when the terminal emits those instead |
+| `Option+1` … `4` | | Also works via `¡`, `™`, `£`, `¢` when the terminal emits those instead |
 
-All `Ctrl+…` shortcuts (`Ctrl+T`, `Ctrl+/`, `Ctrl+Shift+M`, `Ctrl+Shift+P`, `Ctrl+B`, `Ctrl+P`, `Ctrl+N`, `Ctrl+C`) behave the same as on Windows and Linux.
+All `Ctrl+…` shortcuts behave the same as on Windows and Linux.
 
 ## FAQ
 

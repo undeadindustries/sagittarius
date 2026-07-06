@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -89,6 +90,21 @@ type modelsLoadedMsg struct {
 	err    error
 }
 
+// addResultMsg carries the outcome of an off-Update AddCustomProvider write so
+// the credential/disk write never blocks the Bubble Tea loop and a spinner can
+// animate while it runs.
+type addResultMsg struct {
+	id  string
+	err error
+}
+
+// removeResultMsg carries the outcome of an off-Update RemoveCustomProvider
+// delete (definition + instance settings + stored key) for the same reason.
+type removeResultMsg struct {
+	name string
+	err  error
+}
+
 // Model is the providers wizard overlay. It is driven by the parent Bubble Tea
 // model: the parent forwards messages to Update while the dialog is active and
 // renders View; when Done reports true the parent removes the overlay.
@@ -130,6 +146,11 @@ type Model struct {
 	// removeTarget is the provider id pending delete confirmation on screenRemove.
 	removeTarget string
 
+	// spin animates while an add/remove write is in flight; saving gates it and
+	// swallows input so the selection can't change mid-write.
+	spin   spinner.Model
+	saving bool
+
 	loading   bool
 	models    []string
 	modelsErr string
@@ -160,9 +181,16 @@ func New(ctx context.Context, deps Deps) Model {
 		input:     ti,
 		add:       addState{wire: config.WireFormatOpenAIChat, fieldIdx: addFieldName},
 		providers: deps.ListProviders(),
+		spin:      newDialogSpinner(),
 	}
 	m.syncInputWidth()
 	return m
+}
+
+// newDialogSpinner returns the small braille-dot spinner shown while an
+// add/remove write runs (matches the other async overlays).
+func newDialogSpinner() spinner.Model {
+	return spinner.New(spinner.WithSpinner(spinner.MiniDot))
 }
 
 // Done reports whether the dialog has finished and should be removed.
@@ -204,9 +232,25 @@ func (m Model) contentWidth() int {
 // Update advances the dialog state machine for one message.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case spinner.TickMsg:
+		if !m.saving {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.spin, cmd = m.spin.Update(msg)
+		return m, cmd
+	case addResultMsg:
+		return m.handleAddResult(msg)
+	case removeResultMsg:
+		return m.handleRemoveResult(msg)
 	case modelsLoadedMsg:
 		return m.handleModelsLoaded(msg), nil
 	case tea.KeyMsg:
+		// Swallow input while an add/remove write is in flight (the spinner
+		// keeps animating via the TickMsg case above).
+		if m.saving {
+			return m, nil
+		}
 		return m.handleKey(msg)
 	}
 	return m, nil
@@ -582,7 +626,9 @@ func (m Model) handleRemoveKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	return m, nil
 }
 
-// doRemove performs the confirmed provider removal.
+// doRemove performs the confirmed provider removal off the Update goroutine so
+// the credential/disk delete never blocks the UI loop; a spinner animates while
+// it runs.
 func (m Model) doRemove() (Model, tea.Cmd) {
 	if m.removeTarget == "" {
 		return m.back()
@@ -594,13 +640,34 @@ func (m Model) doRemove() (Model, tea.Cmd) {
 			break
 		}
 	}
-	if err := m.deps.RemoveCustomProvider(m.ctx, m.removeTarget); err != nil {
-		m.errMsg = err.Error()
+	id := m.removeTarget
+	ctx := m.ctx
+	deps := m.deps
+	m.saving = true
+	m.errMsg = ""
+	m.info = fmt.Sprintf("Removing %s…", name)
+	return m, tea.Batch(
+		m.spin.Tick,
+		func() tea.Msg {
+			err := deps.RemoveCustomProvider(ctx, id)
+			return removeResultMsg{name: name, err: err}
+		},
+	)
+}
+
+// handleRemoveResult finishes the delete: on success it returns to the provider
+// list with the target gone; on failure it surfaces the error on the
+// confirmation screen so the user can Esc out.
+func (m Model) handleRemoveResult(msg removeResultMsg) (Model, tea.Cmd) {
+	m.saving = false
+	if msg.err != nil {
+		m.errMsg = msg.err.Error()
+		m.info = ""
 		return m, nil
 	}
 	m.removeTarget = ""
 	m.providers = m.deps.ListProviders()
-	m.info = fmt.Sprintf("Removed %s.", name)
+	m.info = fmt.Sprintf("Removed %s.", msg.name)
 	m.status = m.info
 	if m.cursor >= len(m.providers) && m.cursor > 0 {
 		m.cursor = len(m.providers) - 1
@@ -1028,18 +1095,40 @@ func (m Model) submitAdd() (Model, tea.Cmd) {
 		WireFormat:   m.add.wire,
 	}
 	id := m.add.idOverride
-	if err := m.deps.AddCustomProvider(m.ctx, id, def, m.add.apiKey); err != nil {
-		m.errMsg = err.Error()
-		return m, nil
+	apiKey := m.add.apiKey
+	ctx := m.ctx
+	deps := m.deps
+	m.saving = true
+	m.errMsg = ""
+	m.info = fmt.Sprintf("Adding %s…", m.add.displayName)
+	m.input.Blur()
+	return m, tea.Batch(
+		m.spin.Tick,
+		func() tea.Msg {
+			err := deps.AddCustomProvider(ctx, id, def, apiKey)
+			return addResultMsg{id: id, err: err}
+		},
+	)
+}
+
+// handleAddResult resumes the add flow once the off-Update write completes:
+// on success it discovers the new provider's models; on failure it surfaces the
+// error and re-focuses the id field so the user can correct and retry.
+func (m Model) handleAddResult(msg addResultMsg) (Model, tea.Cmd) {
+	m.saving = false
+	if msg.err != nil {
+		m.errMsg = msg.err.Error()
+		m.info = ""
+		return m, m.input.Focus()
 	}
 	m.providers = m.deps.ListProviders()
-	m.targetID = id
+	m.targetID = msg.id
 	m.loading = true
 	m.models = nil
 	m.modelsErr = ""
 	m.cursor = 0
 	m.screen = screenAddModels
-	return m, discoverCmd(m.ctx, m.deps, id)
+	return m, discoverCmd(m.ctx, m.deps, msg.id)
 }
 
 // urlHasPort reports whether hostOrURL (full URL or bare host) already

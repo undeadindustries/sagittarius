@@ -174,7 +174,12 @@ The footer has two lines:
 response — `↑{in} ↓{out}` — and, when the request was routed through
 OpenRouter, a cost figure (e.g. `$0.0021`). When a context limit is known
 (OpenAI-compatible providers with a configured `contextLimit`), the context
-gauge `{pct}% ctx` is also appended.
+gauge `{pct}% ctx` is also appended. The gauge uses `ContextTokens / ContextLimit`
+(capped at 100%). `ContextTokens` comes from the provider's last main-turn
+`prompt_tokens` when reported; after `/compress` or automatic defenses in
+`prepareContext`, it is refreshed from `CompressionInfo.NewTokenCount` or a local
+history estimate so the figure drops immediately without waiting for the next
+API turn (AD-070; gemini-cli parity).
 
 **Line 2 (detail, wide terminals ≥ 80 cols):** Running session totals — `Σ
 {in}/{out}` — followed by the cumulative session cost when OpenRouter cost is
