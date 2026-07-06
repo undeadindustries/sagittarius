@@ -39,24 +39,25 @@ func (d *onboardingDeps) PrepareGemini(ctx context.Context, apiKey string) (stri
 	return geminiProviderID, nil
 }
 
-func (d *onboardingDeps) PrepareOpenRouter(ctx context.Context, apiKey string) (string, error) {
+func (d *onboardingDeps) PreparePreset(ctx context.Context, presetID, apiKey string) (string, error) {
 	apiKey = strings.TrimSpace(apiKey)
 	if apiKey == "" {
 		return "", fmt.Errorf("API key is required")
 	}
-	if err := ensureOpenRouterProvider(d.settings()); err != nil {
+	id, err := ensurePresetProvider(d.settings(), presetID)
+	if err != nil {
 		return "", err
 	}
 	if err := d.loader().Save(d.settings()); err != nil {
 		return "", err
 	}
-	if err := credentials.SetProviderAPIKey(ctx, onboardingdialog.OpenRouterProviderID, apiKey); err != nil {
+	if err := credentials.SetProviderAPIKey(ctx, id, apiKey); err != nil {
 		return "", err
 	}
-	if err := provider.SaveActiveProvider(d.loader(), d.settings(), onboardingdialog.OpenRouterProviderID); err != nil {
+	if err := provider.SaveActiveProvider(d.loader(), d.settings(), id); err != nil {
 		return "", err
 	}
-	return onboardingdialog.OpenRouterProviderID, nil
+	return id, nil
 }
 
 func (d *onboardingDeps) PrepareCustom(ctx context.Context, baseURL, apiKey string) (string, error) {
@@ -115,9 +116,16 @@ func (d *onboardingDeps) CompleteSetup(ctx context.Context, providerID, model st
 	return err
 }
 
-func ensureOpenRouterProvider(settings *config.Settings) error {
+// ensurePresetProvider materializes a config.ProviderPreset into a
+// providers.custom.<id> entry (reusing the preset id) if one does not already
+// exist, returning the provider id to use.
+func ensurePresetProvider(settings *config.Settings, presetID string) (string, error) {
 	if settings == nil {
-		return fmt.Errorf("settings not loaded")
+		return "", fmt.Errorf("settings not loaded")
+	}
+	p, ok := config.LookupProviderPreset(presetID)
+	if !ok {
+		return "", fmt.Errorf("unknown provider preset %q", presetID)
 	}
 	if settings.Providers == nil {
 		settings.Providers = &config.ProvidersSettings{}
@@ -125,10 +133,10 @@ func ensureOpenRouterProvider(settings *config.Settings) error {
 	if settings.Providers.Custom == nil {
 		settings.Providers.Custom = map[string]config.CustomProviderDefinition{}
 	}
-	if _, ok := settings.Providers.Custom[onboardingdialog.OpenRouterProviderID]; !ok {
-		settings.Providers.Custom[onboardingdialog.OpenRouterProviderID] = onboardingdialog.OpenRouterDefinition()
+	if _, exists := settings.Providers.Custom[p.ID]; !exists {
+		settings.Providers.Custom[p.ID] = p.ToCustomProviderDefinition()
 	}
-	return nil
+	return p.ID, nil
 }
 
 func claimCustomProviderID(settings *config.Settings, baseURL string) string {

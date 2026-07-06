@@ -15,7 +15,13 @@ const (
 type BuiltInProviderID string
 
 const (
-	BuiltInGeminiAPIKey    BuiltInProviderID = "gemini-apikey"
+	BuiltInGeminiAPIKey BuiltInProviderID = "gemini-apikey"
+	// BuiltInOpenAI and BuiltInOpenAIResponses are no longer native built-ins
+	// (they were collapsed into the ProviderPresets templates, AD-072). The ids
+	// are retained because they remain the canonical settings.json ids for the
+	// migrated custom providers, the typed instance-override store
+	// (ProvidersSettings.OpenAI / OpenAIResponses), and legacy references. They
+	// are intentionally absent from BuiltInProviders — only Gemini is built-in.
 	BuiltInOpenAI          BuiltInProviderID = "openai"
 	BuiltInOpenAIResponses BuiltInProviderID = "openai-responses"
 )
@@ -34,6 +40,10 @@ type BuiltInProvider struct {
 }
 
 // BuiltInProviders maps built-in provider ids to their registry defaults.
+// Gemini is the only native built-in: it needs the genai SDK, has no base URL,
+// and uses GEMINI_API_KEY/GOOGLE_API_KEY. Every other known provider (OpenAI,
+// OpenRouter, Anthropic, …) is a ProviderPreset template that materializes an
+// ordinary providers.custom.<id> definition (AD-072).
 var BuiltInProviders = map[BuiltInProviderID]BuiltInProvider{
 	BuiltInGeminiAPIKey: {
 		ID:                  BuiltInGeminiAPIKey,
@@ -45,32 +55,37 @@ var BuiltInProviders = map[BuiltInProviderID]BuiltInProvider{
 		DefaultContextLimit: 1_048_576,
 		RequiresAPIKey:      true,
 	},
-	BuiltInOpenAI: {
-		ID:                  BuiltInOpenAI,
-		DisplayName:         "OpenAI",
-		DefaultBaseURL:      "https://api.openai.com/v1/chat/completions",
-		APIKeyEnvVar:        "OPENAI_API_KEY",
-		WireFormat:          WireFormatOpenAIChat,
-		DefaultModel:        "gpt-4o-mini",
-		DefaultContextLimit: 128_000,
-		RequiresAPIKey:      true,
-	},
-	BuiltInOpenAIResponses: {
-		ID:                  BuiltInOpenAIResponses,
-		DisplayName:         "OpenAI Responses",
-		DefaultBaseURL:      "https://api.openai.com/v1/responses",
-		APIKeyEnvVar:        "OPENAI_API_KEY",
-		WireFormat:          WireFormatOpenAIResponses,
-		DefaultModel:        "gpt-5-codex",
-		DefaultContextLimit: 400_000,
-		RequiresAPIKey:      true,
-	},
 }
 
 // LookupBuiltInProvider returns the registry entry for id, or false if unknown.
 func LookupBuiltInProvider(id string) (BuiltInProvider, bool) {
 	def, ok := BuiltInProviders[BuiltInProviderID(NormalizeProviderID(id))]
 	return def, ok
+}
+
+// ProviderDefaults returns the registry-style defaults for a known provider id:
+// a native built-in (Gemini) or a preset template converted to a BuiltInProvider
+// shape. It lets endpoint resolution and validation treat presets as "known"
+// providers even before a providers.custom.<id> definition has been persisted,
+// so existing openai/openai-responses settings keep resolving after the
+// built-in collapse (AD-072).
+func ProviderDefaults(id string) (BuiltInProvider, bool) {
+	if def, ok := LookupBuiltInProvider(id); ok {
+		return def, true
+	}
+	if p, ok := LookupProviderPreset(NormalizeProviderID(id)); ok {
+		return BuiltInProvider{
+			ID:                  BuiltInProviderID(p.ID),
+			DisplayName:         p.DisplayName,
+			DefaultBaseURL:      p.BaseURL,
+			APIKeyEnvVar:        p.APIKeyEnvVar,
+			WireFormat:          p.WireFormat,
+			DefaultModel:        p.DefaultModel,
+			DefaultContextLimit: p.DefaultContextLimit,
+			RequiresAPIKey:      p.APIKeyEnvVar != "",
+		}, true
+	}
+	return BuiltInProvider{}, false
 }
 
 // NormalizeProviderID maps user-facing aliases to canonical settings.json ids.
@@ -162,6 +177,15 @@ func ProviderWireFormat(id string, custom *CustomProviderDefinition) WireFormat 
 	if custom != nil {
 		if custom.WireFormat != "" {
 			return custom.WireFormat
+		}
+		return WireFormatOpenAIChat
+	}
+	// No custom definition yet: fall back to a preset template so a legacy
+	// openai/openai-responses id (or any preset) still exposes the right
+	// editable settings before migration materializes a custom block.
+	if p, ok := LookupProviderPreset(NormalizeProviderID(id)); ok {
+		if p.WireFormat != "" {
+			return p.WireFormat
 		}
 		return WireFormatOpenAIChat
 	}

@@ -91,6 +91,61 @@ func MigrateLegacyLocalSettings(s *Settings) LegacyLocalMigrationResult {
 	return result
 }
 
+// legacyBuiltinPresetIDs are the provider ids that were native built-ins before
+// the preset-template collapse (AD-072). On load they are re-materialized as
+// ordinary providers.custom.<id> definitions (reusing the same id) whenever a
+// user's settings still reference them, so stored credentials and the documented
+// env var (e.g. OPENAI_API_KEY) keep resolving and the provider appears in the
+// /providers list as an editable custom row.
+var legacyBuiltinPresetIDs = []string{string(BuiltInOpenAI), string(BuiltInOpenAIResponses)}
+
+// MigrateLegacyBuiltins converts references to the former openai/openai-responses
+// built-ins into providers.custom.<id> definitions synthesized from their preset
+// templates. It is idempotent: an id that already has a custom definition, or is
+// not referenced (neither active nor carrying a typed instance block), is left
+// untouched. It returns true when it changed settings.
+func MigrateLegacyBuiltins(s *Settings) bool {
+	if s == nil || s.Providers == nil {
+		return false
+	}
+	changed := false
+	for _, id := range legacyBuiltinPresetIDs {
+		if !legacyBuiltinReferenced(s, id) {
+			continue
+		}
+		if s.Providers.Custom != nil {
+			if _, ok := s.Providers.Custom[id]; ok {
+				continue // already materialized
+			}
+		}
+		preset, ok := LookupProviderPreset(id)
+		if !ok {
+			continue
+		}
+		if s.Providers.Custom == nil {
+			s.Providers.Custom = make(map[string]CustomProviderDefinition)
+		}
+		s.Providers.Custom[id] = preset.ToCustomProviderDefinition()
+		changed = true
+	}
+	return changed
+}
+
+// legacyBuiltinReferenced reports whether settings still point at a former
+// built-in id (as the active provider or via its typed instance-override block).
+func legacyBuiltinReferenced(s *Settings, id string) bool {
+	if s.Providers.Active == id {
+		return true
+	}
+	switch id {
+	case string(BuiltInOpenAI):
+		return s.Providers.OpenAI != nil
+	case string(BuiltInOpenAIResponses):
+		return s.Providers.OpenAIResponses != nil
+	}
+	return false
+}
+
 func legacyNonEmptyKeys(local map[string]json.RawMessage) []string {
 	var keys []string
 	for k, v := range local {

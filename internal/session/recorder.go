@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/undeadindustries/sagittarius/internal/goal"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 )
 
@@ -232,6 +233,21 @@ func (r *Recorder) RecordSessionGrant(toolName string) error {
 	set := SetRecord{
 		Set: &MetadataRecord{
 			SessionGrants: []string{toolName},
+		},
+	}
+	return r.appendLineLocked(set)
+}
+
+// SetGoal appends a goal metadata update to the session file.
+func (r *Recorder) SetGoal(goal *goal.Snapshot) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.disabled {
+		return nil
+	}
+	set := SetRecord{
+		Set: &MetadataRecord{
+			Goal: goal,
 		},
 	}
 	return r.appendLineLocked(set)

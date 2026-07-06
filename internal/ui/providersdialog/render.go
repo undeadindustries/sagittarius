@@ -44,6 +44,8 @@ func (m Model) footerHint() string {
 		return "↑/↓ move • Enter edit • a add • x remove custom • Esc close"
 	case screenEdit:
 		return "↑/↓ move • Enter select • r reset field • Esc back"
+	case screenAddTemplate:
+		return "↑/↓ move • Enter choose template • Esc back"
 	case screenAdd:
 		if m.add.fieldIdx == addFieldWire {
 			return "←/→ toggle • Enter next • Esc cancel"
@@ -55,7 +57,7 @@ func (m Model) footerHint() string {
 	case screenRemove:
 		return "y / Enter confirm • Esc cancel"
 	case screenAddModels:
-		return "↑/↓ select • Enter choose • Esc back"
+		return "↑/↓ select • Enter choose • a add model • Esc back"
 	case screenModels:
 		return "↑/↓ move • Space toggle • A all/none • a add • Enter save • Esc back"
 	default:
@@ -77,6 +79,8 @@ func (m Model) screenBody() string {
 		return m.renderTextEntry(fmt.Sprintf("Set API key for %s\n(Paste your key, then Enter — field starts blank)", config.ProviderDisplayID(m.targetID)))
 	case screenModelsAdd:
 		return m.renderTextEntry("Add model name")
+	case screenAddTemplate:
+		return m.renderAddTemplate()
 	case screenAdd:
 		return m.renderAdd()
 	case screenAddModels:
@@ -184,10 +188,34 @@ func (m Model) renderTextEntry(title string) string {
 	return title + "\n\n" + m.input.View()
 }
 
+// renderAddTemplate lists the provider preset templates plus a Blank entry.
+func (m Model) renderAddTemplate() string {
+	var b strings.Builder
+	b.WriteString("Add provider — choose a template\n\n")
+	labels := make([]string, len(m.pickerOptions))
+	for i, opt := range m.pickerOptions {
+		label := opt.label
+		if p, ok := config.LookupProviderPreset(opt.id); ok {
+			suffix := string(p.WireFormat)
+			label += m.th.Dim.Render("  " + suffix)
+		}
+		labels[i] = label
+	}
+	b.WriteString(m.renderWindowedRows(labels))
+	return b.String()
+}
+
 func (m Model) renderAdd() string {
 	var b strings.Builder
-	b.WriteString("Add custom provider\n\n")
+	title := "Add custom provider"
+	if m.add.presetID != "" {
+		title = "Add " + m.add.displayName
+	}
+	b.WriteString(title + "\n\n")
 	b.WriteString(m.th.Dim.Render(m.addSummary()) + "\n\n")
+	if m.add.note != "" {
+		b.WriteString(m.th.Dim.Render(m.wrap("Note: "+m.add.note)) + "\n\n")
+	}
 	if m.add.fieldIdx == addFieldWire {
 		b.WriteString("Wire format: " + m.renderWireToggle(m.add.wire))
 		return b.String()
@@ -233,7 +261,7 @@ func (m Model) renderModels(title string, pickable bool) string {
 	if len(m.models) == 0 {
 		b.WriteString(dim.Render("No models returned by the endpoint."))
 		if pickable {
-			b.WriteString("\n" + dim.Render("Provider was added; set a model later from the /providers edit sheet."))
+			b.WriteString("\n" + dim.Render("Press a to type a model name, or Esc to set one later from the /providers edit sheet."))
 		}
 		return b.String()
 	}

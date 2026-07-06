@@ -54,6 +54,29 @@ func TestBusyEnterRejectsSlashCommands(t *testing.T) {
 	if len(m.queue) != 0 {
 		t.Fatalf("slash command should not be queued, queue = %v", m.queue)
 	}
+	if m.input.Value() != "/help" {
+		t.Fatalf("input should not be cleared, got %q", m.input.Value())
+	}
+}
+
+func TestBusyEnterAllowsConcurrentSafeSlash(t *testing.T) {
+	t.Parallel()
+	m := newTestModel()
+	m.busy = true
+	m.input.SetValue("/goal pause")
+	m.syncInputLayout()
+
+	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyEnter})
+
+	if len(m.queue) != 0 {
+		t.Fatalf("slash command should not be queued, queue = %v", m.queue)
+	}
+	if m.input.Value() != "" {
+		t.Fatalf("input should be cleared, got %q", m.input.Value())
+	}
+	if cmd == nil {
+		t.Fatal("expected a command to execute concurrent slash")
+	}
 }
 
 func TestQueueFlushesOnStreamDone(t *testing.T) {

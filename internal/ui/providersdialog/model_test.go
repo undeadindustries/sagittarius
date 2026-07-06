@@ -164,6 +164,18 @@ func send(m Model, msgs ...tea.Msg) (Model, tea.Cmd) {
 	return m, cmd
 }
 
+// gotoBlankAdd opens the add flow (a → template picker) and selects the Blank
+// entry (last option), landing on the field-by-field screenAdd. It mirrors the
+// pre-template-picker behavior of pressing 'a'.
+func gotoBlankAdd(m Model) Model {
+	m, _ = send(m, key("a"))
+	for i := 0; i < len(config.ProviderPresets); i++ {
+		m, _ = send(m, key("down"))
+	}
+	m, _ = send(m, key("enter"))
+	return m
+}
+
 // runAsync drives an async cmd (typically a tea.Batch of spin.Tick + the
 // off-Update write) the way the Bubble Tea runtime would: it feeds every
 // produced message except spinner ticks (which loop forever) back into the
@@ -231,8 +243,8 @@ func TestAddFlowDiscoversAndPicksModel(t *testing.T) {
 	deps.models = []string{"qwen3", "llama3"}
 	m := New(context.Background(), deps)
 
-	// Press 'a' to add a new provider from the provider list.
-	m, _ = send(m, key("a"))
+	// Press 'a' to add a new provider, then choose the Blank template.
+	m = gotoBlankAdd(m)
 	if m.screen != screenAdd {
 		t.Fatalf("screen = %d, want add", m.screen)
 	}
@@ -890,7 +902,7 @@ func TestAddWizardBareHostShowsPortStep(t *testing.T) {
 	deps := newFakeDeps()
 	m := New(context.Background(), deps)
 
-	m, _ = send(m, key("a"))
+	m = gotoBlankAdd(m)
 	m.input.SetValue("My Local Model")
 	m, _ = send(m, key("enter")) // name → hostOrURL
 
@@ -916,7 +928,7 @@ func TestAddWizardURLWithPortSkipsPortStep(t *testing.T) {
 	deps := newFakeDeps()
 	m := New(context.Background(), deps)
 
-	m, _ = send(m, key("a"))
+	m = gotoBlankAdd(m)
 	m.input.SetValue("My Model")
 	m, _ = send(m, key("enter")) // name → hostOrURL
 
@@ -931,7 +943,7 @@ func TestAddWizardURLWithPortSkipsPortStep(t *testing.T) {
 func TestAddWizardRequiresName(t *testing.T) {
 	deps := newFakeDeps()
 	m := New(context.Background(), deps)
-	m, _ = send(m, key("a"))
+	m = gotoBlankAdd(m)
 	// Press enter without entering a name.
 	m, _ = send(m, key("enter"))
 	if m.errMsg == "" {
@@ -939,6 +951,121 @@ func TestAddWizardRequiresName(t *testing.T) {
 	}
 	if m.add.fieldIdx != addFieldName {
 		t.Fatalf("should stay on addFieldName after empty-name error, got %d", m.add.fieldIdx)
+	}
+}
+
+// TestAddOpensTemplatePicker verifies 'a' opens the preset/blank picker listing
+// every preset plus a Blank entry.
+func TestAddOpensTemplatePicker(t *testing.T) {
+	deps := newFakeDeps()
+	m := New(context.Background(), deps)
+	m, _ = send(m, key("a"))
+	if m.screen != screenAddTemplate {
+		t.Fatalf("screen = %d, want screenAddTemplate", m.screen)
+	}
+	if len(m.pickerOptions) != len(config.ProviderPresets)+1 {
+		t.Fatalf("options = %d, want %d (presets + Blank)", len(m.pickerOptions), len(config.ProviderPresets)+1)
+	}
+	// Blank entry is last and has an empty id.
+	if last := m.pickerOptions[len(m.pickerOptions)-1]; last.id != "" {
+		t.Fatalf("last option id = %q, want empty (Blank)", last.id)
+	}
+}
+
+// TestSelectPresetSeedsAddFlow verifies choosing a preset pre-fills the add
+// state and jumps straight to the API-key step.
+func TestSelectPresetSeedsAddFlow(t *testing.T) {
+	deps := newFakeDeps()
+	m := New(context.Background(), deps)
+	m, _ = send(m, key("a"))
+
+	// Find the openrouter preset's position and select it.
+	idx := -1
+	for i, opt := range m.pickerOptions {
+		if opt.id == "openrouter" {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		t.Fatal("openrouter preset missing from picker")
+	}
+	for i := 0; i < idx; i++ {
+		m, _ = send(m, key("down"))
+	}
+	m, _ = send(m, key("enter"))
+
+	if m.screen != screenAdd {
+		t.Fatalf("screen = %d, want screenAdd after preset select", m.screen)
+	}
+	if m.add.fieldIdx != addFieldAPIKey {
+		t.Fatalf("fieldIdx = %d, want addFieldAPIKey (URL/wire/env pre-filled)", m.add.fieldIdx)
+	}
+	p, _ := config.LookupProviderPreset("openrouter")
+	if m.add.hostOrURL != p.BaseURL {
+		t.Fatalf("hostOrURL = %q, want %q", m.add.hostOrURL, p.BaseURL)
+	}
+	if m.add.wire != p.WireFormat {
+		t.Fatalf("wire = %q, want %q", m.add.wire, p.WireFormat)
+	}
+	if m.add.envVar != p.APIKeyEnvVar {
+		t.Fatalf("envVar = %q, want %q", m.add.envVar, p.APIKeyEnvVar)
+	}
+	if m.add.presetID != "openrouter" {
+		t.Fatalf("presetID = %q, want openrouter", m.add.presetID)
+	}
+}
+
+// TestPresetIDCollisionDeduped verifies that when a preset id already exists in
+// the provider list, the suggested id gets a numeric suffix.
+func TestPresetIDCollisionDeduped(t *testing.T) {
+	deps := newFakeDeps()
+	// Seed an existing "openrouter" provider so the preset id collides.
+	deps.providers = append(deps.providers, ProviderEntry{ID: "openrouter", DisplayID: "openrouter", DisplayName: "OpenRouter", WireFormat: config.WireFormatOpenAIChat, IsCustom: true})
+	m := New(context.Background(), deps)
+	m, _ = send(m, key("a"))
+	idx := -1
+	for i, opt := range m.pickerOptions {
+		if opt.id == "openrouter" {
+			idx = i
+			break
+		}
+	}
+	for i := 0; i < idx; i++ {
+		m, _ = send(m, key("down"))
+	}
+	m, _ = send(m, key("enter")) // seed → API-key step
+
+	// Enter an API key → advances to id override, pre-filled with a deduped id.
+	m.input.SetValue("sk-test")
+	m, _ = send(m, key("enter"))
+	if m.add.fieldIdx != addFieldIdOverride {
+		t.Fatalf("fieldIdx = %d, want addFieldIdOverride", m.add.fieldIdx)
+	}
+	if m.add.idOverride != "openrouter-1" {
+		t.Fatalf("idOverride = %q, want openrouter-1 (deduped)", m.add.idOverride)
+	}
+}
+
+// TestAddFlowEmptyDiscoverySeedsPresetDefault verifies that when discovery
+// returns no models for a template-seeded add, the preset's DefaultModel is
+// offered as a pickable fallback (needed for non-/v1 endpoints like z.ai).
+func TestAddFlowEmptyDiscoverySeedsPresetDefault(t *testing.T) {
+	deps := newFakeDeps()
+	deps.models = nil // discovery returns nothing
+	m := New(context.Background(), deps)
+
+	// zai preset has a DefaultModel and a non-/v1 URL.
+	p, ok := config.LookupProviderPreset("zai")
+	if !ok || p.DefaultModel == "" {
+		t.Skip("zai preset has no default model")
+	}
+	m.add = addState{presetID: "zai"}
+	m.targetID = "zai"
+	m.screen = screenAddModels
+	m = m.handleModelsLoaded(modelsLoadedMsg{id: "zai", models: nil, err: nil})
+	if len(m.models) != 1 || m.models[0] != p.DefaultModel {
+		t.Fatalf("models = %v, want [%s] (preset default fallback)", m.models, p.DefaultModel)
 	}
 }
 

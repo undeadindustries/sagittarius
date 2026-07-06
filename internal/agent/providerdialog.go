@@ -713,7 +713,7 @@ func (d *modelPickDialogDeps) SelectCurrentModel(ctx context.Context, providerID
 	// then write only providers.active and providers.<id>.model to the project tier.
 	merged := docs.Merged()
 	providerID = config.NormalizeProviderID(providerID)
-	if _, ok := config.LookupBuiltInProvider(providerID); !ok {
+	if _, ok := config.ProviderDefaults(providerID); !ok {
 		if merged == nil || merged.Providers == nil || merged.Providers.Custom == nil {
 			return fmt.Errorf("select model: unknown provider %q", providerID)
 		}

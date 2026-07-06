@@ -405,6 +405,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(msg)
 	case submitMsg:
 		return m.handleSubmit(msg.line)
+	case concurrentStreamEventMsg:
+		if msg.gen != m.activeStreamGen {
+			return m, nil
+		}
+		m, cmd := m.handleStream(msg.event)
+		return m, tea.Batch(cmd, waitConcurrentStream(msg.ch, msg.gen))
 	case streamEventMsg:
 		return m.handleStreamGen(msg.gen, msg.event)
 	case turnDrainDoneMsg:
@@ -1186,14 +1192,22 @@ func (m *model) handleEnter() (tea.Model, tea.Cmd) {
 }
 
 // handleBusyEnter queues the current input for submission after the in-flight
-// turn finishes. Slash commands cannot be queued (they may depend on live
-// session state), so they are rejected with a brief notice.
+// turn finishes. Most slash commands cannot be queued (they may depend on live
+// session state), so they are rejected with a brief notice. However, specific
+// safe slash commands (like /goal pause) can be executed concurrently.
 func (m *model) handleBusyEnter() (tea.Model, tea.Cmd) {
 	line := strings.TrimSpace(m.input.Value())
 	if line == "" {
 		return m, nil
 	}
 	if strings.HasPrefix(line, "/") {
+		// Allow safe read-only or goal-pausing commands to run concurrently.
+		if isConcurrentSafeSlash(line) {
+			m.input.SetValue("")
+			m.clearSuggestions()
+			m.syncInputLayout()
+			return m, m.runConcurrentSlash(line)
+		}
 		m.addBlock(roleInfo, "Slash commands cannot be queued; wait for the current turn to finish.")
 		return m, nil
 	}
@@ -1202,6 +1216,31 @@ func (m *model) handleBusyEnter() (tea.Model, tea.Cmd) {
 	m.clearSuggestions()
 	m.syncInputLayout()
 	return m, nil
+}
+
+func isConcurrentSafeSlash(line string) bool {
+	l := strings.ToLower(line)
+	return l == "/goal pause" || l == "/goal status" || l == "/stats" ||
+		strings.HasPrefix(l, "/stats ")
+}
+
+func (m *model) runConcurrentSlash(line string) tea.Cmd {
+	gen := m.activeStreamGen
+	return func() tea.Msg {
+		// Run in background context so it doesn't get canceled if the turn cancels.
+		events, err := m.app.HandleInput(context.Background(), line)
+		if err != nil {
+			return streamEventMsg{gen: gen, event: ui.StreamEvent{Type: ui.StreamError, Err: err}}
+		}
+		// Return the first event, ignoring StreamDone to avoid ending the busy turn.
+		for ev := range events {
+			if ev.Type == ui.StreamDone {
+				continue
+			}
+			return concurrentStreamEventMsg{gen: gen, event: ev, ch: events}
+		}
+		return nil
+	}
 }
 
 // handleBusyTab queues the current (non-slash) input while a turn runs, matching
@@ -1859,11 +1898,14 @@ func (m *model) closeResponse() {
 
 // busyLabel returns the activity label for the working indicator. When a tool is
 // executing, it returns "Running <display name>". Otherwise it defaults to
-// "Working…": the turn is busy with context prep, the network round-trip, or
-// provider queueing — not necessarily model reasoning, which has its own box.
+// "Working…" or "Pursuing goal…" depending on the goal state.
 func (m *model) busyLabel() string {
 	if m.runningTool != "" {
 		return "Running " + toolDisplayName(m.runningTool)
+	}
+	cs, ok := m.composerStatus()
+	if ok && cs.GoalActive {
+		return "Pursuing goal…"
 	}
 	return "Working…"
 }
@@ -2316,6 +2358,24 @@ func waitStream(events <-chan ui.StreamEvent, gen uint64) tea.Cmd {
 			return streamEventMsg{gen: gen, event: ui.StreamEvent{Type: ui.StreamDone}}
 		}
 		return streamEventMsg{gen: gen, event: ev}
+	}
+}
+
+type concurrentStreamEventMsg struct {
+	gen   uint64
+	event ui.StreamEvent
+	ch    <-chan ui.StreamEvent
+}
+
+func waitConcurrentStream(events <-chan ui.StreamEvent, gen uint64) tea.Cmd {
+	return func() tea.Msg {
+		for ev := range events {
+			if ev.Type == ui.StreamDone {
+				continue
+			}
+			return concurrentStreamEventMsg{gen: gen, event: ev, ch: events}
+		}
+		return nil
 	}
 }
 

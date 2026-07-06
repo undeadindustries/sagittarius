@@ -10,6 +10,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/agents"
 	"github.com/undeadindustries/sagittarius/internal/bgproc"
 	"github.com/undeadindustries/sagittarius/internal/config"
+	"github.com/undeadindustries/sagittarius/internal/goal"
 	"github.com/undeadindustries/sagittarius/internal/mcp"
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
@@ -169,6 +170,15 @@ func (m *mockHooks) ListBackgroundProcesses() []bgproc.Process { return nil }
 func (m *mockHooks) KillBackgroundProcess(pid int) error { return nil }
 
 func (m *mockHooks) BackgroundProcessOutput(pid int) string { return "" }
+
+func (m *mockHooks) GoalStatus() *goal.Goal { return nil }
+func (m *mockHooks) SetGoal(objective string, tokenBudget *int) error { return nil }
+func (m *mockHooks) PauseGoal(note string) error { return nil }
+func (m *mockHooks) ResumeGoal(note string) error { return nil }
+func (m *mockHooks) CompleteGoal(note string) error { return nil }
+func (m *mockHooks) BlockGoal(note string) error { return nil }
+func (m *mockHooks) ClearGoal(note string) error { return nil }
+func (m *mockHooks) SetGoalBudget(tokens int) error { return nil }
 
 func testDeps(t *testing.T, settings *config.Settings) (slash.Deps, *config.Loader, *mockHooks) {
 	t.Helper()

@@ -6,6 +6,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/agents"
 	"github.com/undeadindustries/sagittarius/internal/bgproc"
 	"github.com/undeadindustries/sagittarius/internal/config"
+	"github.com/undeadindustries/sagittarius/internal/goal"
 	"github.com/undeadindustries/sagittarius/internal/mcp"
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
@@ -87,6 +88,16 @@ type Hooks interface {
 	ListBackgroundProcesses() []bgproc.Process
 	KillBackgroundProcess(pid int) error
 	BackgroundProcessOutput(pid int) string
+
+	// /goal autonomous mode hooks
+	GoalStatus() *goal.Goal
+	SetGoal(objective string, tokenBudget *int) error
+	PauseGoal(note string) error
+	ResumeGoal(note string) error
+	CompleteGoal(note string) error
+	BlockGoal(note string) error
+	ClearGoal(note string) error
+	SetGoalBudget(tokens int) error
 }
 
 // Deps supplies slash command dependencies (injectable for tests).

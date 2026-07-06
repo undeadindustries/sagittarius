@@ -19,6 +19,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/agent"
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/credentials"
+	"github.com/undeadindustries/sagittarius/internal/goal"
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 	"github.com/undeadindustries/sagittarius/internal/session"
@@ -624,6 +625,19 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 	if err != nil {
 		return nil, nil, nil, "", "", err
 	}
+	
+	// Clean up any stale mode overrides (e.g. from older unqualified configs)
+	// on startup. This ensures the UI doesn't show invalid "gemini - qwen"
+	// states when the user launches.
+	if provider.PruneModeOverrides(docs.Global) {
+		_ = docs.Save(config.ScopeGlobal)
+	}
+	if docs.Project != nil {
+		if provider.PruneModeOverrides(docs.Project) {
+			_ = docs.Save(config.ScopeProject)
+		}
+	}
+
 	// settings is the merged view (project wins); dialogs still mutate docs.Global.
 	settings := docs.Merged()
 
@@ -694,6 +708,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 	var sessRecorder *session.Recorder
 	var initialHistory []provider.Message
 	var initialGrants []string
+	var initialGoal *goal.Snapshot
 
 	projectRoot := wd
 	if projectRoot == "" {
@@ -724,6 +739,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		slog.Info("resuming session", "info", result.DisplayInfo)
 		initialHistory = session.ConvertToProviderHistory(result.Record)
 		initialGrants = result.Record.SessionGrants
+		initialGoal = result.Record.Goal
 		mgr, mgrErr := session.NewManagerForResume(projectRoot, sessID, result)
 		if mgrErr != nil {
 			slog.Warn("session recording disabled: cannot open recorder for resumed session", "err", mgrErr)
@@ -751,6 +767,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		SessionRecorder:         sessRecorder,
 		InitialHistory:          initialHistory,
 		InitialSessionGrants:    initialGrants,
+		InitialGoal:             initialGoal,
 		Settings:                settings,
 		InitialMode:             initialMode,
 		ModelPinned:             modelPinned,

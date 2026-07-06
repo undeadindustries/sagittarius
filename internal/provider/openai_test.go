@@ -465,10 +465,34 @@ func TestChatCompletionsURL(t *testing.T) {
 		{"https://api.openai.com/v1/chat/completions", "https://api.openai.com/v1/chat/completions"},
 		{"https://openrouter.ai/api/v1", "https://openrouter.ai/api/v1/chat/completions"},
 		{"http://127.0.0.1:8000", "http://127.0.0.1:8000/v1/chat/completions"},
+		{"https://openrouter.ai/api/v1/chat/completions", "https://openrouter.ai/api/v1/chat/completions"},
+		{"https://api.anthropic.com/v1/chat/completions", "https://api.anthropic.com/v1/chat/completions"},
+		{"https://api.deepseek.com/v1/chat/completions", "https://api.deepseek.com/v1/chat/completions"},
+		{"https://api.x.ai/v1/chat/completions", "https://api.x.ai/v1/chat/completions"},
+		{"https://api.groq.com/openai/v1/chat/completions", "https://api.groq.com/openai/v1/chat/completions"},
+		{"https://api.fireworks.ai/inference/v1/chat/completions", "https://api.fireworks.ai/inference/v1/chat/completions"},
+		// z.ai exposes the endpoint at a non-/v1 path: it must NOT be mangled
+		// into .../v4/chat/completions/v1/chat/completions (AD-072 regression).
+		{"https://api.z.ai/api/coding/paas/v4/chat/completions", "https://api.z.ai/api/coding/paas/v4/chat/completions"},
 	}
 	for _, tt := range tests {
 		if got := ChatCompletionsURL(tt.in); got != tt.want {
 			t.Errorf("ChatCompletionsURL(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+
+	roots := []struct {
+		in   string
+		want string
+	}{
+		{"https://api.openai.com/v1/chat/completions", "https://api.openai.com"},
+		{"https://api.groq.com/openai/v1/chat/completions", "https://api.groq.com/openai"},
+		{"https://api.z.ai/api/coding/paas/v4/chat/completions", "https://api.z.ai/api/coding/paas/v4"},
+		{"https://example.com/v1/completions", "https://example.com"},
+	}
+	for _, tt := range roots {
+		if got := ExtractServerRoot(tt.in); got != tt.want {
+			t.Errorf("ExtractServerRoot(%q) = %q, want %q", tt.in, got, tt.want)
 		}
 	}
 }

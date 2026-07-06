@@ -88,6 +88,8 @@ type SagittariusSettings struct {
 	Verify *SagittariusVerifyConfig `json:"verify,omitempty"`
 	// Web configures the built-in google_web_search and web_fetch tools.
 	Web *SagittariusWebConfig `json:"web,omitempty"`
+	// Goal configures the /goal autonomous mode parameters.
+	Goal *SagittariusGoalConfig `json:"goal,omitempty"`
 	// MaxToolRounds caps how many tool-call/response cycles the agent may
 	// execute per turn. Nil means use the compiled-in default (100).
 	// Set higher for tasks that write many files; set lower to cap runaway loops.
@@ -105,6 +107,21 @@ type SagittariusWebConfig struct {
 	RetryFetchErrors *bool                      `json:"retryFetchErrors,omitempty"`
 	MaxFetchBytes    *int                       `json:"maxFetchBytes,omitempty"`
 	Extra            map[string]json.RawMessage `json:"-"`
+}
+
+// SagittariusGoalConfig configures the /goal autonomous mode parameters.
+type SagittariusGoalConfig struct {
+	// MaxTurns caps the goal loop (default 25).
+	MaxTurns *int `json:"maxTurns,omitempty"`
+	// EvaluatorProvider overrides the provider used for goal completion checks.
+	EvaluatorProvider string `json:"evaluatorProvider,omitempty"`
+	// EvaluatorModel overrides the model used for goal completion checks.
+	EvaluatorModel string `json:"evaluatorModel,omitempty"`
+	// EvaluatorTimeout caps the evaluator call (default 30).
+	EvaluatorTimeout *int `json:"evaluatorTimeout,omitempty"`
+	// DefaultBudget sets the token budget if not specified at creation.
+	DefaultBudget *int                       `json:"defaultBudget,omitempty"`
+	Extra         map[string]json.RawMessage `json:"-"`
 }
 
 // DefaultMaxFetchBytes is 250 KiB (water-fill across URLs in one turn).

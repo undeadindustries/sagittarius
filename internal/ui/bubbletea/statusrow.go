@@ -120,7 +120,18 @@ func (m *model) statusRowParts() (left, right string) {
 	} else {
 		left = hints
 	}
-	right = contextSummary(len(m.opts.LoadedMemoryFiles), cs.SkillCount)
+	
+	right = contextSummary(len(m.opts.LoadedMemoryFiles), 0)
+	if ok {
+		right = contextSummary(len(m.opts.LoadedMemoryFiles), cs.SkillCount)
+		if cs.GoalStatusText != "" {
+			if right != "" {
+				right = cs.GoalStatusText + "  ·  " + right
+			} else {
+				right = cs.GoalStatusText
+			}
+		}
+	}
 	return left, right
 }
 

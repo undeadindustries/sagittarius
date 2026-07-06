@@ -202,18 +202,22 @@ func TestParityProviderList(t *testing.T) {
 		t.Fatal("slash registry missing 'models' command")
 	}
 
-	// Built-in provider IDs that must ship in the binary's registry. Asserting
-	// against config.BuiltInProviders catches a built-in being removed, which
-	// the help-text check alone would miss.
-	builtinIDs := []string{"gemini-apikey", "openai", "openai-responses"}
-	for _, id := range builtinIDs {
-		if _, ok := config.LookupBuiltInProvider(id); !ok {
-			t.Errorf("built-in provider %q missing from config.BuiltInProviders", id)
-		}
+	// Gemini is the only native built-in (it needs the genai SDK, has no base
+	// URL, and uses GEMINI_API_KEY/GOOGLE_API_KEY). OpenAI + OpenAI-Responses and
+	// the other big-name providers are now preset templates that produce ordinary
+	// providers.custom entries (see internal/config/provider_presets.go).
+	if _, ok := config.LookupBuiltInProvider("gemini-apikey"); !ok {
+		t.Error("built-in provider \"gemini-apikey\" missing from config.BuiltInProviders")
 	}
-	if len(config.BuiltInProviders) != len(builtinIDs) {
-		t.Errorf("config.BuiltInProviders has %d entries, want %d (%v)",
-			len(config.BuiltInProviders), len(builtinIDs), builtinIDs)
+	if len(config.BuiltInProviders) != 1 {
+		t.Errorf("config.BuiltInProviders has %d entries, want 1 (gemini-apikey only)",
+			len(config.BuiltInProviders))
+	}
+	// openai + openai-responses must remain resolvable as presets.
+	for _, id := range []string{"openai", "openai-responses"} {
+		if _, ok := config.LookupProviderPreset(id); !ok {
+			t.Errorf("provider preset %q missing from config.ProviderPresets", id)
+		}
 	}
 
 	// Live-fork comparison (opt-in only): just confirm the fork starts and

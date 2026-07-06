@@ -35,31 +35,42 @@ type EndpointConfig struct {
 }
 
 // ExtractServerRoot normalizes a provider URL to a server root suitable for
-// appending /v1/models, /v1/chat/completions, or /v1/responses.
+// appending /v1/models, /v1/chat/completions, or /v1/responses. It strips a
+// trailing completions/responses path — honoring both the OpenAI /v1/... layout
+// and providers that expose the endpoint at a non-/v1 path (e.g. z.ai's
+// .../api/coding/paas/v4/chat/completions) — then any trailing /v1 (AD-072).
 func ExtractServerRoot(rawURL string) string {
 	s := strings.TrimRight(strings.TrimSpace(rawURL), "/")
-	s = strings.TrimSuffix(s, "/v1/chat/completions")
-	s = strings.TrimSuffix(s, "/v1/completions")
-	s = strings.TrimSuffix(s, "/v1/responses")
+	// Order matters: "/chat/completions" must be tested before "/completions"
+	// because the former also ends with the latter.
+	for _, suffix := range []string{"/chat/completions", "/completions", "/responses"} {
+		if strings.HasSuffix(s, suffix) {
+			s = strings.TrimSuffix(s, suffix)
+			break
+		}
+	}
 	s = strings.TrimSuffix(s, "/v1")
 	return strings.TrimRight(s, "/")
 }
 
-// ChatCompletionsURL returns the POST target for OpenAI chat completions.
-// baseURL may be a full /v1/chat/completions path or a prefix ending in /v1.
+// ChatCompletionsURL returns the POST target for OpenAI chat completions. Any
+// URL already ending in /chat/completions is honored verbatim (so non-/v1 hosts
+// like z.ai are not mangled); otherwise the canonical /v1/chat/completions path
+// is appended to the server root.
 func ChatCompletionsURL(baseURL string) string {
 	s := strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	if strings.HasSuffix(s, "/v1/chat/completions") {
+	if strings.HasSuffix(s, "/chat/completions") {
 		return s
 	}
 	return ExtractServerRoot(s) + "/v1/chat/completions"
 }
 
-// ResponsesURL returns the POST target for OpenAI Responses API.
-// baseURL may be a full /v1/responses path or a prefix ending in /v1.
+// ResponsesURL returns the POST target for the OpenAI Responses API. Any URL
+// already ending in /responses is honored verbatim; otherwise the canonical
+// /v1/responses path is appended to the server root.
 func ResponsesURL(baseURL string) string {
 	s := strings.TrimRight(strings.TrimSpace(baseURL), "/")
-	if strings.HasSuffix(s, "/v1/responses") {
+	if strings.HasSuffix(s, "/responses") {
 		return s
 	}
 	return ExtractServerRoot(s) + "/v1/responses"
@@ -88,6 +99,13 @@ func ResolveEndpointConfig(settings *config.Settings) (EndpointConfig, error) {
 		if custom, ok := settings.Providers.Custom[providerID]; ok {
 			return resolveCustomEndpoint(settings, providerID, custom)
 		}
+	}
+
+	// Preset fallback: a legacy openai/openai-responses id (or any preset) with
+	// no persisted providers.custom.<id> block still resolves against the preset
+	// defaults + typed instance overrides (AD-072).
+	if def, ok := config.ProviderDefaults(providerID); ok {
+		return resolveBuiltInEndpoint(settings, providerID, def)
 	}
 
 	return EndpointConfig{}, fmt.Errorf("resolve endpoint: unknown provider %q", providerID)
