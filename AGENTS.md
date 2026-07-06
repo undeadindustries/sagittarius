@@ -27,13 +27,34 @@ messages accordingly.
 
 ---
 
-## Current State (2026-06-22)
+## Current State (2026-07-06)
 
 Feature-complete and stable. `go build ./...`, `go vet ./...`, and `go test ./...`
 are green; `-race` is clean on actively-touched packages. The codebase is no
 longer organized around "phases" — it is a maintained product. Detailed change
 history lives in git; record significant **new** architectural decisions briefly
 in this file (see [Keeping this file current](#keeping-this-file-current)).
+
+### Pick up here (session handoff)
+
+**Uncommitted work in the working tree (verify with `git status` before editing):**
+
+| Area | Files | Status |
+|------|-------|--------|
+| Footer context % after `/compress` (AD-070) | `internal/agent/metrics.go`, `runner.go`, `runner_compress_test.go` | Implemented; tests green |
+| Async custom provider add/remove spinner (AD-069) | `internal/ui/providersdialog/` | Implemented; tests green |
+| README keyboard/CLI quick reference | `README.md`, `docs/reference/commands.md` | Doc only |
+
+**Open follow-ups (not started or blocked on user):**
+
+1. **DiffusionGemma serve bridge** — `/home/rob/src/vllm_scripts/serve-diffusiongemma.py` (port **8015**, container `vllm-diffusiongemma-26b`). Streaming path must omit `content` deltas when `tool_calls` are present; normalize `filepath`→`file_path`; multi-turn needs OpenAI `role:tool` history. Runtime evidence: `/home/rob/src/diffusion/sagittarius-request-20260627-161023.json` (polluted turn: huge `content` + valid `tool_calls` → next turn leaked raw tool syntax, no `write_file` for `style.css`). **Ask before restarting the container.**
+2. **`contextLimitPreferDiscovered` setting** — discussed, not implemented. Today `contextLimitUserSet` pins provider-level limits against discovery; per-model `/models` overrides always win. A boolean to prefer API-reported `context_length`/`max_model_len`/`inputTokenLimit` over manual pins is a product decision still open.
+3. **TUI input clipping** — `inputContentLines` prompt width can clip wrapped input on narrow terminals; diagnosed, not fixed.
+4. **Commit** — none of the above has been committed; user drives git.
+
+**MemPalace:** wing `sagittarius`, rooms `project-status`, `decisions`, `diary`. Search: `mempalace search "sagittarius AD-070" --wing sagittarius`.
+
+**Cross-repo context:** workspace index `/home/rob/src/AGENT.md`; local LLM ops `/home/rob/src/SPARK-LLM.md`. Sagittarius is the maintained Gemini-cli successor (this repo), not the fork under `gemini-cli/`.
 
 ### Project facts
 
@@ -115,7 +136,9 @@ are partial stubs (discovery + reload; execution/marketplace deferred).
 in `internal/contextmgmt`, gated to the `openai-chat` path only.
 - **TUI:** Bubble Tea behind the `internal/ui.UI` interface; semantic themes
 (default purple + greyscale/`NO_COLOR`), basic markdown, footer telemetry (per-turn
-`↑in ↓out` + optional OpenRouter cost; session totals on detail line), exit summary
+`↑in ↓out` + optional OpenRouter cost + **`N% ctx`** when `contextLimit` is known;
+the context gauge refreshes immediately after `/compress` and after automatic
+masking/compression in `prepareContext` — AD-070), session totals on detail line), exit summary
 per-model/per-mode token breakdown with cost column when OpenRouter cost is known.
 De-emphasized `You ›` user blocks with per-turn spacing, grouped **tool cards**
 (rounded lipgloss frames per invocation: status icon + display name + dim arg
@@ -263,10 +286,35 @@ distinct role preamble over the shared lite core; full bespoke prompt bodies
 are still to be authored. No `/personality` command yet (config/preset-driven).
 - **Snapshots:** `write_file` only (not `run_shell_command`); MCP writes are not
 boundary-checked.
+- **Context limit discovery override:** no `contextLimitPreferDiscovered` flag yet;
+pinned `contextLimit` / `contextLimitUserSet` and per-model `/models` overrides beat
+API-reported limits today (see `provider.MaybeSetContextLimit`, `resolveContextLimit`).
 
 ---
 
 ## Recent decisions
+
+- **2026-06-27 — Footer context % refreshes after compress (AD-070):** Manual
+ `/compress` and automatic defenses in `prepareContext` no longer leave the
+ footer `N% ctx` stuck at the pre-compress API `prompt_tokens` snapshot until
+ the next main turn. `sessionMetrics.setContextTokens` updates only the gauge
+ (not last-turn totals); `ForceCompress` sets it from `CompressionInfo.NewTokenCount`
+ when compression truncates or summarizes, otherwise re-estimates history;
+ `prepareContext` re-estimates after every `PrepareTurn` so masking and
+ budget compression also move the gauge immediately (gemini-cli parity).
+
+- **2026-06-27 — Async provider add/remove with spinner (AD-069):** Adding or
+ removing a custom provider in the `/providers` wizard ran the
+ `AddCustomProvider`/`RemoveCustomProvider` credential+disk write *synchronously*
+ on Bubble Tea's `Update` goroutine, freezing the overlay with no feedback (the
+ AD-062 anti-pattern). Both now follow the established async-overlay template
+ (`modesdialog`): a `spinner.MiniDot` (`spin`) + `saving` flag, the write runs in
+ a `tea.Cmd` batched with `spin.Tick`, input is swallowed while in flight, and the
+ result (`addResultMsg`/`removeResultMsg`) resumes the flow — add → model
+ discovery, remove → back to the list — or surfaces the error (add re-focuses the
+ id field for retry). The spinner is prefixed on the info line
+ (`providersdialog/render.go`). Tests drive the batch via a `runAsync` helper that
+ skips the self-re-arming spinner tick; `-race` clean.
 
 - **2026-06-26 — Disable write_file content ejection (AD-068):** Removed a
   recurring `write_file` rejection loop by turning off the context manager's

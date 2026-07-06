@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/undeadindustries/sagittarius/internal/config"
@@ -163,6 +164,34 @@ func send(m Model, msgs ...tea.Msg) (Model, tea.Cmd) {
 	return m, cmd
 }
 
+// runAsync drives an async cmd (typically a tea.Batch of spin.Tick + the
+// off-Update write) the way the Bubble Tea runtime would: it feeds every
+// produced message except spinner ticks (which loop forever) back into the
+// model, and returns the updated model plus the last command produced (e.g. the
+// discover command after an add).
+func runAsync(m Model, cmd tea.Cmd) (Model, tea.Cmd) {
+	var last tea.Cmd
+	var run func(c tea.Cmd)
+	run = func(c tea.Cmd) {
+		if c == nil {
+			return
+		}
+		switch msg := c().(type) {
+		case tea.BatchMsg:
+			for _, sub := range msg {
+				run(sub)
+			}
+		case spinner.TickMsg:
+			// ignore: feeding it back would re-arm the tick forever
+		case nil:
+		default:
+			m, last = m.Update(msg)
+		}
+	}
+	run(cmd)
+	return m, last
+}
+
 // TestDialogOpensAtProviderList verifies the dialog opens directly at the
 // provider list (screenEditPick), not at a top-level menu.
 func TestDialogOpensAtProviderList(t *testing.T) {
@@ -247,9 +276,19 @@ func TestAddFlowDiscoversAndPicksModel(t *testing.T) {
 		t.Fatalf("idOverride = %q, want auto-id", m.add.idOverride)
 	}
 
-	// Step 6: accept the suggested id → submit
+	// Step 6: accept the suggested id → submit (now an async write + spinner)
 	m, cmd := send(m, key("enter"))
-
+	if !m.saving {
+		t.Fatal("expected saving=true while the add write is in flight")
+	}
+	if cmd == nil {
+		t.Fatal("expected an async add command (spinner + write)")
+	}
+	// Drive the async AddCustomProvider; runAsync returns the discover command.
+	m, cmd = runAsync(m, cmd)
+	if m.saving {
+		t.Fatal("saving should clear once the add result is delivered")
+	}
 	if deps.added != "auto-id" {
 		t.Fatalf("added = %q, want auto-id", deps.added)
 	}
@@ -677,8 +716,19 @@ func TestRemoveCustomProvider(t *testing.T) {
 	if deps.removed != "" {
 		t.Fatalf("provider was removed before confirmation: %q", deps.removed)
 	}
-	// Confirm removal with 'y'.
-	m, _ = send(m, key("y"))
+	// Confirm removal with 'y' — now an async delete + spinner.
+	m, cmd := send(m, key("y"))
+	if !m.saving {
+		t.Fatal("expected saving=true while the remove write is in flight")
+	}
+	if deps.removed != "" {
+		t.Fatalf("provider removed synchronously, want async: %q", deps.removed)
+	}
+	// Drive the async RemoveCustomProvider.
+	m, _ = runAsync(m, cmd)
+	if m.saving {
+		t.Fatal("saving should clear once the remove result is delivered")
+	}
 	if deps.removed != "my-vllm" {
 		t.Fatalf("removed = %q, want my-vllm after confirmation", deps.removed)
 	}

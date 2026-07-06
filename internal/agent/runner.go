@@ -646,6 +646,7 @@ func (r *Runner) prepareContext(ctx context.Context) {
 		// PrepareTurn already logged; proceed with the (best-effort) history.
 		return
 	}
+	r.syncContextGauge()
 }
 
 // SetContextManager swaps the active context manager. It is called after a
@@ -1181,8 +1182,35 @@ func (r *Runner) ForceCompress(ctx context.Context) (contextmgmt.CompressionInfo
 		r.historyMu.Lock()
 		r.history = newHistory
 		r.historyMu.Unlock()
+		r.refreshContextGaugeAfterCompress(info)
 	}
 	return info, nil
+}
+
+// syncContextGauge re-estimates context fill from the live history so the footer
+// reflects masking/compression without waiting for the next provider prompt_tokens.
+func (r *Runner) syncContextGauge() {
+	r.historyMu.RLock()
+	msgs := r.history
+	r.historyMu.RUnlock()
+	if len(msgs) == 0 {
+		return
+	}
+	tok := estimateMessageTokens(msgs)
+	if tok > 0 {
+		r.metrics.setContextTokens(tok)
+	}
+}
+
+// refreshContextGaugeAfterCompress updates the footer gauge from compression
+// telemetry when available, matching gemini-cli's post-compress token refresh.
+func (r *Runner) refreshContextGaugeAfterCompress(info contextmgmt.CompressionInfo) {
+	if info.NewTokenCount > 0 &&
+		(info.Status == contextmgmt.Compressed || info.Status == contextmgmt.ContentTruncated) {
+		r.metrics.setContextTokens(info.NewTokenCount)
+		return
+	}
+	r.syncContextGauge()
 }
 
 // WorkDir returns the runner's resolved workspace root.

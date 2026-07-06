@@ -68,6 +68,22 @@ func TestSessionMetricsOpenRouterCost(t *testing.T) {
 	}
 }
 
+func TestSessionMetricsSetContextTokens(t *testing.T) {
+	t.Parallel()
+
+	m := newSessionMetrics()
+	m.recordTurnUsage("openai", "gpt-4o", "agent", 9000, 40, 0, false)
+	m.setContextTokens(1200)
+
+	_, _, _, _, _, ctxTok, _, _, _, lastIn, _, _, _ := m.snapshot()
+	if ctxTok != 1200 {
+		t.Errorf("contextTokens = %d, want 1200", ctxTok)
+	}
+	if lastIn != 9000 {
+		t.Errorf("lastInTokens = %d, want 9000 (unchanged)", lastIn)
+	}
+}
+
 func TestSessionMetricsAuxDoesNotUpdateLastTurn(t *testing.T) {
 	t.Parallel()
 
