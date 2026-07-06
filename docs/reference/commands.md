@@ -15,6 +15,19 @@ to later phases — see [Deferred commands](#deferred-commands).
 - **Description:** List slash commands and subcommands with short descriptions.
 - **Usage:** `/help`
 
+### `/goal`
+
+- **Description:** Manage autonomous run-until-done goals. Starts an objective that evaluates automatically across turns without user input until complete or blocked.
+- **Usage:**
+  - `/goal <objective>`: Starts a new goal (alias for `/goal start`). Requires agent mode.
+  - `/goal status`: Show current goal status, turn counts, and evaluator notes.
+  - `/goal pause`: Pauses the active goal so the user can intervene.
+  - `/goal resume`: Resumes a paused goal.
+  - `/goal clear`: Removes the goal entirely (also `/goal cancel`, `/goal stop`).
+  - `/goal complete`: Manually mark the goal as achieved.
+  - `/goal block`: Manually mark the goal as blocked.
+- **Note:** Recommended to run under the `yolo` approval mode (`--yolo` or `/approval yolo`), otherwise tool confirmations will block the loop and require manual intervention anyway.
+
 ### `/quit`
 
 - **Description:** Exit the interactive session.
@@ -78,20 +91,34 @@ and resets to off on the next launch.
 
 - **Description:** Manage provider connections — edit definitions, API keys, and
   activate models per provider.
-- **Menu-first:** `/providers` opens directly at a provider list (built-ins first,
-  then custom providers alphabetically). Select a provider to open its edit sheet.
-  Press `a` to add a custom provider; press `x` on a custom provider to open a
-  delete confirmation screen (`y` or Enter confirms, Esc cancels). Built-ins
-  (Gemini, OpenAI, OpenRouter) cannot be deleted.
-- **Adding a custom provider (`a`):**
-  1. **Provider name** — display name (required).
-  2. **URL or host** — full URL (`http://127.0.0.1:8000`) or bare host (`127.0.0.1`).
-  3. **Port** — shown only when the URL above has no port; defaults to `8000`.
-  4. **Wire format** — toggle between `openai-chat` (default) and `openai-responses`.
-  5. **API key env var** — optional environment variable name.
-  6. **API key** — optional; stored in OS keychain.
-  7. **Provider id** — auto-generated from the URL; edit to override before confirm.
-  After submission the wizard discovers available models and prompts you to pick a default.
+- **Menu-first:** `/providers` opens directly at a provider list (the native
+  Gemini built-in first, then custom providers alphabetically). Select a provider
+  to open its edit sheet. Press `a` to add a provider; press `x` on a custom
+  provider to open a delete confirmation screen (`y` or Enter confirms, Esc
+  cancels). Gemini is the only native built-in and cannot be deleted. OpenAI,
+  OpenAI-Responses, OpenRouter, and the other big-name providers are **templates**
+  that create ordinary custom providers you can edit or remove.
+- **Adding a provider (`a`) — template picker:** pressing `a` first shows a list
+  of provider **templates** (OpenAI, OpenAI-Responses, OpenRouter, Anthropic,
+  DeepSeek, xAI, z.ai, Groq, Together, Mistral, Fireworks) plus a **Custom (blank)**
+  entry.
+  - **Choosing a template** pre-fills the base URL, wire format, and API-key
+    environment variable, then jumps straight to the **API key** step. The
+    suggested provider id defaults to the template id (de-duplicated with a
+    numeric suffix if it already exists). Any caveat (e.g. Anthropic's OpenAI-compat
+    layer, z.ai's unavailable model discovery) is shown as a note.
+  - **Custom (blank)** starts the field-by-field flow:
+    1. **Provider name** — display name (required).
+    2. **URL or host** — full URL (`http://127.0.0.1:8000`) or bare host (`127.0.0.1`).
+    3. **Port** — shown only when the URL above has no port; defaults to `8000`.
+    4. **Wire format** — toggle between `openai-chat` (default) and `openai-responses`.
+    5. **API key env var** — optional environment variable name.
+    6. **API key** — optional; stored in OS keychain.
+    7. **Provider id** — auto-generated from the URL; edit to override before confirm.
+  After submission the wizard discovers available models and prompts you to pick a
+  default. When discovery returns nothing (e.g. a non-`/v1` endpoint like z.ai),
+  the template's default model is offered and you can press `a` to type a model
+  name manually.
 - **Edit sheet items (custom providers):**
   - **Provider name**, **URL / host**, **Port** — decomposed fields that compose back to `baseUrl` on save.
   - **Wire format** toggle.

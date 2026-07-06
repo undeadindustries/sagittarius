@@ -100,6 +100,10 @@ type ComposerStatus struct {
 	// ShowThinking is the resolved thinking-box visibility for the active
 	// (provider, model): per-model override, else provider, else global setting.
 	ShowThinking bool
+	// GoalActive is true if there is an autonomous goal currently active or paused.
+	GoalActive bool
+	// GoalStatusText summarizes the goal state (e.g. "Pursuing goal (3/25) — active").
+	GoalStatusText string
 }
 
 // ComposerStatusProvider is an optional capability the TUI uses to render the

@@ -42,7 +42,7 @@ func (m Model) screenBody() string {
 	switch m.screen {
 	case screenChoose:
 		return m.renderChoose()
-	case screenAPIKey, screenCustomURL, screenCustomKey:
+	case screenAPIKey, screenCustomURL, screenCustomKey, screenManualModel:
 		return m.renderInputScreen()
 	case screenModels:
 		return m.renderModels()
@@ -54,14 +54,25 @@ func (m Model) screenBody() string {
 func (m Model) renderChoose() string {
 	var b strings.Builder
 	b.WriteString(m.th.Primary.Render("Choose how to connect:") + "\n\n")
-	for i, label := range choiceLabels {
+	visible := m.visibleListRows()
+	end := m.listOffset + visible
+	if end > len(m.choices) {
+		end = len(m.choices)
+	}
+	if m.listOffset > 0 {
+		b.WriteString(m.th.Dim.Render(fmt.Sprintf("  ↑ %d more", m.listOffset)) + "\n")
+	}
+	for i := m.listOffset; i < end; i++ {
 		prefix := "  "
-		line := label
+		line := m.choices[i].label
 		if i == m.cursor {
 			prefix = m.th.Accent.Render("› ")
-			line = m.th.Selected.Render(label)
+			line = m.th.Selected.Render(line)
 		}
 		b.WriteString(prefix + line + "\n")
+	}
+	if rest := len(m.choices) - end; rest > 0 {
+		b.WriteString(m.th.Dim.Render(fmt.Sprintf("  ↓ %d more", rest)) + "\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -73,6 +84,8 @@ func (m Model) renderInputScreen() string {
 		title = "Endpoint URL"
 	case screenCustomKey:
 		title = "API key / bearer token"
+	case screenManualModel:
+		title = "Model name"
 	}
 	return m.th.Primary.Render(title) + "\n\n" + m.input.View()
 }
@@ -115,13 +128,13 @@ func (m Model) footerHint() string {
 	switch m.screen {
 	case screenChoose:
 		return "↑/↓ select · Enter continue · Ctrl+C quit"
-	case screenAPIKey, screenCustomURL, screenCustomKey:
+	case screenAPIKey, screenCustomURL, screenCustomKey, screenManualModel:
 		return "Enter submit · Esc back · Ctrl+C quit"
 	case screenModels:
 		if m.loading {
 			return "Please wait…"
 		}
-		return "↑/↓ select · Enter confirm model · Esc back"
+		return "↑/↓ select · Enter confirm model · m type model · Esc back"
 	default:
 		return ""
 	}

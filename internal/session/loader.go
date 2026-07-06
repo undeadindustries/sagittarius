@@ -50,6 +50,7 @@ func LoadSession(filePath string) (*ConversationRecord, error) {
 		Summary:       meta.Summary,
 		Kind:          meta.Kind,
 		SessionGrants: meta.SessionGrants,
+		Goal:          meta.Goal,
 		Messages:      messages,
 	}, nil
 }
@@ -322,6 +323,9 @@ func applyMetaUpdate(dst, src *MetadataRecord) {
 	}
 	if src.Kind != "" {
 		dst.Kind = src.Kind
+	}
+	if src.Goal != nil {
+		dst.Goal = src.Goal
 	}
 	if len(src.SessionGrants) > 0 {
 		for _, g := range src.SessionGrants {

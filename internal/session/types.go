@@ -1,6 +1,9 @@
 package session
 
-import "github.com/undeadindustries/sagittarius/internal/provider"
+import (
+	"github.com/undeadindustries/sagittarius/internal/goal"
+	"github.com/undeadindustries/sagittarius/internal/provider"
+)
 
 const (
 	// SessionFilePrefix is the filename prefix for session JSONL files.
@@ -66,9 +69,10 @@ type MetadataRecord struct {
 	ProjectHash   string   `json:"projectHash"`
 	StartTime     string   `json:"startTime"`
 	LastUpdated   string   `json:"lastUpdated"`
-	Summary       string   `json:"summary,omitempty"`
-	Kind          string   `json:"kind,omitempty"` // "main" | "subagent"
-	SessionGrants []string `json:"sessionGrants,omitempty"`
+	Summary       string          `json:"summary,omitempty"`
+	Kind          string          `json:"kind,omitempty"` // "main" | "subagent"
+	SessionGrants []string        `json:"sessionGrants,omitempty"`
+	Goal          *goal.Snapshot  `json:"goal,omitempty"`
 }
 
 // SetRecord carries a $set metadata update appended mid-session.
@@ -90,6 +94,7 @@ type ConversationRecord struct {
 	Summary       string
 	Kind          string
 	SessionGrants []string
+	Goal          *goal.Snapshot
 	Messages      []MessageRecord
 }
 

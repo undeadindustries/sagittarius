@@ -41,6 +41,7 @@ in this file (see [Keeping this file current](#keeping-this-file-current)).
 
 | Area | Files | Status |
 |------|-------|--------|
+| Autonomous `/goal` loop (AD-071) | `internal/goal/`, `internal/agent/goal*.go`, `internal/slash/goal*.go`, `internal/config/`, `internal/session/` | Implemented; tests green |
 | Footer context % after `/compress` (AD-070) | `internal/agent/metrics.go`, `runner.go`, `runner_compress_test.go` | Implemented; tests green |
 | Async custom provider add/remove spinner (AD-069) | `internal/ui/providersdialog/` | Implemented; tests green |
 | README keyboard/CLI quick reference | `README.md`, `docs/reference/commands.md` | Doc only |
@@ -72,12 +73,22 @@ in this file (see [Keeping this file current](#keeping-this-file-current)).
 ### What works today
 
 - **Providers (one set of adapters):**
-  - Gemini native (API key) via `google.golang.org/genai`.
+  - Gemini native (API key) via `google.golang.org/genai` — the **only** native
+  built-in (`config.BuiltInProviders`), because it needs the genai SDK, has no
+  base URL, and uses `GEMINI_API_KEY`/`GOOGLE_API_KEY`.
   - OpenAI Chat Completions — the single `openai-chat` adapter also serves
   OpenRouter, custom endpoints, and local vLLM (difference is `baseUrl` +
   credentials, not architecture).
   - OpenAI Responses API (GPT-5 / reasoning), with `reasoning.effort` and
   optional response chaining.
+  - **Everything except Gemini is a preset template** (`config.ProviderPresets`
+  in `internal/config/provider_presets.go`), not a hard-coded built-in: OpenAI,
+  OpenAI-Responses, OpenRouter, Anthropic, DeepSeek, xAI, z.ai, Groq, Together,
+  Mistral, Fireworks. A preset produces an ordinary `providers.custom.<id>` entry;
+  `config.ProviderDefaults` resolves a preset as a "known" provider (defaults +
+  wire format) even before an explicit custom definition exists, and
+  `config.MigrateLegacyBuiltins` (run on load) materializes legacy `openai`/
+  `openai-responses` references into custom definitions reusing the same id.
 - **Interaction modes:** `agent`, `plan`, `ask`, `debug`. Per-mode model routing;
 `plan`/`ask` enforce read-only tool gates in the scheduler (`plan` allows
 writes only under `docs/plans/`). `/mode`, Ctrl+Shift+M, or `--mode`. Mode
@@ -293,6 +304,44 @@ API-reported limits today (see `provider.MaybeSetContextLimit`, `resolveContextL
 ---
 
 ## Recent decisions
+
+- **2026-07-06 — Provider preset templates + built-in collapse (AD-072):**
+ Generalized provider handling into one source of truth. (1) **Preset table:**
+ new `internal/config/provider_presets.go` defines `ProviderPreset{ID, DisplayName,
+ BaseURL, APIKeyEnvVar, WireFormat, DefaultModel, DefaultContextLimit, Note}` and
+ an 11-entry `ProviderPresets` slice (openai, openai-responses, openrouter,
+ anthropic, deepseek, xai, zai, groq, together, mistral, fireworks) with
+ `LookupProviderPreset` + `ToCustomProviderDefinition`. Everything is `openai-chat`
+ except openai-responses; anthropic/z.ai carry caveat `Note`s. (2) **Built-in
+ collapse:** `config.BuiltInProviders` is reduced to `gemini-apikey` only (Gemini
+ needs the genai SDK, has no base URL, uses `GEMINI_API_KEY`/`GOOGLE_API_KEY`). The
+ `BuiltInOpenAI`/`BuiltInOpenAIResponses` **constants** are retained for canonical
+ ids + `settings.json` compat, but they are no longer map entries. New
+ `config.ProviderDefaults(id)` resolves a preset as a known provider (defaults +
+ wire) so existing `openai`/`openai-responses` references still resolve;
+ `ProviderWireFormat`, `provider.ResolveEndpointConfig`, `providerKnown`, and
+ `credentials.envVarNames` all fall back to presets. (3) **Migration:**
+ `config.MigrateLegacyBuiltins` (wired into `Loader.Load`) synthesizes
+ `providers.custom.openai`/`openai-responses` from their presets — reusing the
+ same id so keychain creds + env vars still resolve — when they appear as the
+ active provider or as instance blocks; idempotent, no-op otherwise. (4) **URL
+ normalizer:** `ExtractServerRoot`/`ChatCompletionsURL`/`ResponsesURL` now honor a
+ URL already ending in `/chat/completions` or `/responses` (fixes z.ai's
+ `.../api/coding/paas/v4` path, which previously became `.../v4/v1/chat/completions`).
+ (5) **Add-wizard template picker:** `/providers` `a` opens `screenAddTemplate`
+ (preset list + a Custom-blank entry); a preset seeds displayName/URL/wire/env and
+ jumps to the API-key step with a de-duplicated id, rendering the caveat note; blank
+ keeps the field-by-field flow. (6) **Onboarding is preset-driven:**
+ `onboardingdialog` offers Gemini (native) + every preset + custom-blank;
+ `Deps.PreparePreset(presetID,key)` + agent `ensurePresetProvider` replace the
+ hard-coded OpenRouter path. (7) **Discovery fallback:** when `DiscoverModels`
+ returns empty, both the add wizard and onboarding offer the preset `DefaultModel`
+ and a manual model-name entry (`a` in the add wizard, `m` in onboarding) — needed
+ for non-`/v1` endpoints like z.ai. AWS Bedrock is intentionally excluded (SigV4 +
+ regional hosts don't fit paste-URL+key). `tests/parity/parity_test.go` now asserts
+ exactly one built-in (`gemini-apikey`) plus openai/openai-responses as presets.
+
+- **2026-07-06 — Autonomous run-until-done loop (AD-071):** Implemented `/goal`, enabling a hybrid goal-completion system that automatically loops the agent across multiple turns until finished. Completion checks combine deterministic tools (like tests or builds enclosed in backticks) coordinated via `errgroup`, with a fallback to a fast evaluator model. State is preserved across `/chat resume` in `settings.json` and session JSONL files (`MetadataRecord`). This keeps the UI busy during back-to-back agent turns without requiring `StreamDone` flushes between them.
 
 - **2026-06-27 — Footer context % refreshes after compress (AD-070):** Manual
  `/compress` and automatic defenses in `prepareContext` no longer leave the

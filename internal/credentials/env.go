@@ -29,15 +29,22 @@ func apiKeyFromEnv(providerID string) (string, bool) {
 
 func envVarNames(providerID string) []string {
 	if def, ok := config.LookupBuiltInProvider(providerID); ok {
-		if providerID == string(config.BuiltInGeminiAPIKey) {
+		if config.NormalizeProviderID(providerID) == string(config.BuiltInGeminiAPIKey) {
 			return []string{envGeminiAPIKey, envGoogleAPIKey}
 		}
 		if def.APIKeyEnvVar != "" {
 			return []string{def.APIKeyEnvVar}
 		}
 	}
+	// A persisted custom definition's env var wins (the user may have edited it).
 	if name := customProviderEnvVar(providerID); name != "" {
 		return []string{name}
+	}
+	// Preset fallback: a known provider (e.g. openai, openrouter) whose custom
+	// definition has not been persisted yet still resolves its documented env
+	// var so a key set before materialization is found (AD-072).
+	if p, ok := config.LookupProviderPreset(config.NormalizeProviderID(providerID)); ok && p.APIKeyEnvVar != "" {
+		return []string{p.APIKeyEnvVar}
 	}
 	return nil
 }

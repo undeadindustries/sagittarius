@@ -25,6 +25,7 @@ const (
 	screenEditField
 	screenEditPicker
 	screenSetKey
+	screenAddTemplate
 	screenAdd
 	screenAddModels
 	screenRemove
@@ -70,6 +71,13 @@ type addState struct {
 	envVar      string
 	apiKey      string
 	wire        config.WireFormat
+	// presetID is set when the add flow was seeded from a ProviderPreset
+	// template; it seeds the suggested provider id and is empty for the blank
+	// (field-by-field) flow.
+	presetID string
+	// note carries the preset's caveat line (if any) for display during the
+	// seeded add flow.
+	note string
 }
 
 const (
@@ -165,6 +173,10 @@ type Model struct {
 	// modelsFrom records which screen opened the activation screen so back/save
 	// returns there: screenEdit (per-provider edit sheet) or screenEditPick (root list).
 	modelsFrom screen
+
+	// modelsAddReturn records the screen that opened the manual model-name entry
+	// (screenModels activation vs screenAddModels add flow) so commit returns there.
+	modelsAddReturn screen
 }
 
 // New constructs the wizard at the menu screen with the current provider list.
@@ -263,26 +275,28 @@ func (m Model) handleModelsLoaded(msg modelsLoadedMsg) Model {
 	m.loading = false
 	if msg.err != nil {
 		m.modelsErr = msg.err.Error()
-		m.models = m.seedModels(msg.id)
-		if m.screen == screenModels {
-			m.resetListScroll()
-			m.initChecked()
-		}
-		return m
+	} else {
+		m.modelsErr = ""
 	}
-	m.modelsErr = ""
 	m.models = msg.models
+	if len(m.models) == 0 {
+		m.models = m.seedModels(msg.id)
+	}
 	m.cursor = 0
-	if m.screen == screenModels {
-		if len(m.models) == 0 {
-			m.models = m.seedModels(msg.id)
-		}
+	switch m.screen {
+	case screenModels:
 		m.resetListScroll()
 		m.initChecked()
+	case screenAddModels:
+		m.resetListScroll()
 	}
 	return m
 }
 
+// seedModels supplies a model list when discovery returns nothing (or errors):
+// the curated activeModels, then the configured default, then the preset
+// DefaultModel for a template-seeded add (needed for non-/v1 endpoints like
+// z.ai whose /models discovery is unavailable).
 func (m Model) seedModels(id string) []string {
 	if curated := m.deps.ActiveModels(id); len(curated) > 0 {
 		out := make([]string, len(curated))
@@ -291,6 +305,11 @@ func (m Model) seedModels(id string) []string {
 	}
 	if name := currentValue(m.deps.ProviderSettings(id), "model"); name != "" {
 		return []string{name}
+	}
+	if m.add.presetID != "" {
+		if p, ok := config.LookupProviderPreset(m.add.presetID); ok && p.DefaultModel != "" {
+			return []string{p.DefaultModel}
+		}
 	}
 	return nil
 }
@@ -362,12 +381,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		}
 	case "a":
 		if m.screen == screenEditPick {
-			m.add = addState{wire: config.WireFormatOpenAIChat, fieldIdx: addFieldName}
-			m.input = freshInput("display name (e.g. Local vLLM)")
-			m.screen = screenAdd
-			return m, nil
+			return m.enterAddTemplate(), nil
 		}
-		if m.screen == screenModels && !m.loading {
+		if (m.screen == screenModels || m.screen == screenAddModels) && !m.loading {
 			return m.enterModelsAdd(), nil
 		}
 	case "x":
@@ -440,6 +456,20 @@ func (m Model) back() (Model, tea.Cmd) {
 		m.listOffset = 0
 	case screenEditField, screenEditPicker:
 		m.screen = screenEdit
+	case screenAddTemplate:
+		m.screen = screenEditPick
+		m.cursor = 0
+		m.listOffset = 0
+	case screenAdd:
+		// A template-seeded add returns to the template picker; a blank add
+		// returns to the provider list.
+		if m.add.presetID != "" {
+			return m.enterAddTemplate(), nil
+		}
+		m.providers = m.deps.ListProviders()
+		m.screen = screenEditPick
+		m.cursor = 0
+		m.listOffset = 0
 	case screenModelsAdd:
 		m.screen = screenModels
 		m.syncInputWidth()
@@ -484,7 +514,7 @@ func (m Model) listLen() int {
 		return len(m.providers)
 	case screenEdit:
 		return len(m.editItems)
-	case screenEditPicker:
+	case screenEditPicker, screenAddTemplate:
 		return len(m.pickerOptions)
 	case screenRemove:
 		return 0 // confirmation dialog; no scrollable list
@@ -517,6 +547,8 @@ func (m Model) selectCurrent() (Model, tea.Cmd) {
 		return m.selectEdit()
 	case screenEditPicker:
 		return m.selectPicker()
+	case screenAddTemplate:
+		return m.selectTemplate()
 	case screenAddModels:
 		return m.selectAddModel()
 	case screenModels:
@@ -905,6 +937,7 @@ func (m Model) enterModels(id string) (Model, tea.Cmd) {
 }
 
 func (m Model) enterModelsAdd() Model {
+	m.modelsAddReturn = m.screen
 	m.input = freshInput("model name (e.g. gemini-2.5-pro)")
 	m.screen = screenModelsAdd
 	m.syncInputWidth()
@@ -986,6 +1019,79 @@ func (m Model) commitTextEntry() (Model, tea.Cmd) {
 	return m, nil
 }
 
+// ---- add: template picker ------------------------------------------------
+
+// enterAddTemplate shows the preset-or-blank picker that precedes the add
+// wizard. Selecting a preset seeds the add flow; selecting Blank starts the
+// field-by-field flow.
+func (m Model) enterAddTemplate() Model {
+	opts := make([]pickerOption, 0, len(config.ProviderPresets)+1)
+	for _, p := range config.ProviderPresets {
+		opts = append(opts, pickerOption{id: p.ID, label: p.DisplayName})
+	}
+	opts = append(opts, pickerOption{id: "", label: "Custom (blank) — enter a URL manually"})
+	m.pickerOptions = opts
+	m.cursor = 0
+	m.listOffset = 0
+	m.errMsg = ""
+	m.info = ""
+	m.screen = screenAddTemplate
+	return m
+}
+
+// selectTemplate seeds the add flow from the highlighted preset (jumping to the
+// API-key step with URL/wire/env pre-filled) or, for the Blank entry, starts the
+// field-by-field flow.
+func (m Model) selectTemplate() (Model, tea.Cmd) {
+	if m.cursor < 0 || m.cursor >= len(m.pickerOptions) {
+		return m, nil
+	}
+	choice := m.pickerOptions[m.cursor]
+	m.errMsg = ""
+	m.info = ""
+	if choice.id == "" {
+		m.add = addState{wire: config.WireFormatOpenAIChat, fieldIdx: addFieldName}
+		m.input = freshInput("display name (e.g. Local vLLM)")
+		m.screen = screenAdd
+		return m, nil
+	}
+	p, ok := config.LookupProviderPreset(choice.id)
+	if !ok {
+		m.errMsg = "Unknown template."
+		return m, nil
+	}
+	m.add = addState{
+		displayName: p.DisplayName,
+		hostOrURL:   p.BaseURL,
+		wire:        p.WireFormat,
+		envVar:      p.APIKeyEnvVar,
+		presetID:    p.ID,
+		note:        p.Note,
+		fieldIdx:    addFieldAPIKey,
+	}
+	m.input = freshSecretInput()
+	m.screen = screenAdd
+	return m, nil
+}
+
+// claimProviderID returns preferred, or preferred-N when it collides with an
+// existing provider id, using the dialog's current provider list (no network).
+func (m Model) claimProviderID(preferred string) string {
+	taken := make(map[string]bool, len(m.providers))
+	for _, p := range m.providers {
+		taken[p.ID] = true
+	}
+	if !taken[preferred] {
+		return preferred
+	}
+	for i := 1; ; i++ {
+		candidate := fmt.Sprintf("%s-%d", preferred, i)
+		if !taken[candidate] {
+			return candidate
+		}
+	}
+}
+
 // ---- add -----------------------------------------------------------------
 
 func (m Model) handleAddKey(msg tea.KeyMsg) (Model, tea.Cmd) {
@@ -1060,7 +1166,14 @@ func (m Model) advanceAdd() (Model, tea.Cmd) {
 			m.errMsg = err.Error()
 			return m, nil
 		}
-		suggested := m.deps.GenerateProviderID(baseURL)
+		// A template-seeded add defaults its id to the preset id (collision
+		// de-duplicated); a blank add derives one from the URL host.
+		suggested := ""
+		if m.add.presetID != "" {
+			suggested = m.claimProviderID(m.add.presetID)
+		} else {
+			suggested = m.deps.GenerateProviderID(baseURL)
+		}
 		m.add.idOverride = suggested
 		m.add.fieldIdx = addFieldIdOverride
 		ti := freshInput("provider id (edit or Enter to accept)")
@@ -1225,12 +1338,19 @@ func (m Model) commitModelsAdd(name string) (Model, tea.Cmd) {
 		}
 	}
 	m.models = append(m.models, name)
-	m.checked = append(m.checked, true)
 	m.cursor = len(m.models) - 1
-	m.ensureListVisible()
 	m.modelsErr = ""
-	m.info = fmt.Sprintf("Added %q — Space toggles, Enter saves.", name)
-	m.screen = screenModels
+	// The add flow (screenAddModels) picks a single default; the activation
+	// screen (screenModels) toggles a curated set.
+	if m.modelsAddReturn == screenAddModels {
+		m.screen = screenAddModels
+		m.info = fmt.Sprintf("Added %q — Enter to use it.", name)
+	} else {
+		m.checked = append(m.checked, true)
+		m.screen = screenModels
+		m.info = fmt.Sprintf("Added %q — Space toggles, Enter saves.", name)
+	}
+	m.ensureListVisible()
 	m.syncInputWidth()
 	return m, nil
 }

@@ -1,7 +1,8 @@
 // Package onboardingdialog implements the first-run provider setup overlay for
 // the Bubble Tea TUI. It guides the user through choosing an endpoint (Gemini,
-// OpenRouter, or custom OpenAI-compatible), entering credentials, and picking a
-// starting model from a live discovery list.
+// one of the built-in provider presets, or a custom OpenAI-compatible base
+// URL), entering credentials, and picking a starting model from a live
+// discovery list.
 package onboardingdialog
 
 import (
@@ -12,6 +13,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/ui/theme"
 )
 
@@ -23,20 +25,51 @@ const (
 	screenCustomURL
 	screenCustomKey
 	screenModels
+	screenManualModel
 )
 
-type providerChoice int
+type choiceKind int
 
 const (
-	choiceGemini providerChoice = iota
-	choiceOpenRouter
-	choiceCustom
+	choiceKindGemini choiceKind = iota
+	choiceKindPreset
+	choiceKindCustom
 )
 
-var choiceLabels = []string{
-	"Gemini — Google AI API key",
-	"OpenRouter — hosted models API key",
-	"Custom — OpenAI-compatible endpoint (base URL + key)",
+// onboardChoice is one row on the connect-method screen: Gemini (native), a
+// provider preset, or the custom base-URL flow.
+type onboardChoice struct {
+	kind     choiceKind
+	presetID string
+	label    string
+	note     string
+	// defaultModel lets the model step offer a sensible default when discovery
+	// returns nothing (e.g. non-/v1 endpoints like z.ai).
+	defaultModel string
+}
+
+// buildChoices assembles the ordered connect-method list: Gemini first, then
+// every provider preset, then the custom (blank) flow.
+func buildChoices() []onboardChoice {
+	choices := make([]onboardChoice, 0, len(config.ProviderPresets)+2)
+	choices = append(choices, onboardChoice{
+		kind:  choiceKindGemini,
+		label: "Gemini — Google AI API key",
+	})
+	for _, p := range config.ProviderPresets {
+		choices = append(choices, onboardChoice{
+			kind:         choiceKindPreset,
+			presetID:     p.ID,
+			label:        fmt.Sprintf("%s — %s", p.DisplayName, string(p.WireFormat)),
+			note:         p.Note,
+			defaultModel: p.DefaultModel,
+		})
+	}
+	choices = append(choices, onboardChoice{
+		kind:  choiceKindCustom,
+		label: "Custom — OpenAI-compatible endpoint (base URL + key)",
+	})
+	return choices
 }
 
 // modelsLoadedMsg is delivered when async DiscoverModels completes.
@@ -62,14 +95,18 @@ type Model struct {
 	errMsg string
 	info   string
 
-	choice     providerChoice
-	cursor     int
-	targetID   string
-	customURL  string
-	loading    bool
-	models     []string
-	modelsErr  string
-	listOffset int
+	choices   []onboardChoice
+	choice    onboardChoice
+	cursor    int
+	targetID  string
+	customURL string
+	// defaultModel carries the chosen preset's default so the model step can
+	// offer it when discovery returns nothing.
+	defaultModel string
+	loading      bool
+	models       []string
+	modelsErr    string
+	listOffset   int
 
 	input textinput.Model
 }
@@ -80,11 +117,12 @@ func New(ctx context.Context, deps Deps) Model {
 	ti.CharLimit = 8192
 	ti.Prompt = "> "
 	return Model{
-		deps:   deps,
-		ctx:    ctx,
-		th:     theme.Default(),
-		screen: screenChoose,
-		input:  ti,
+		deps:    deps,
+		ctx:     ctx,
+		th:      theme.Default(),
+		screen:  screenChoose,
+		choices: buildChoices(),
+		input:   ti,
 	}
 }
 
@@ -145,6 +183,13 @@ func (m Model) handleModelsLoaded(msg modelsLoadedMsg) Model {
 		m.modelsErr = ""
 		m.models = msg.models
 	}
+	// When discovery returns nothing (empty list or error), fall back to the
+	// chosen preset's default model so non-/v1 endpoints (e.g. z.ai) are still
+	// usable; the user can also press 'm' to type a model name.
+	if len(m.models) == 0 && m.defaultModel != "" {
+		m.models = []string{m.defaultModel}
+		m.modelsErr = ""
+	}
 	m.cursor = 0
 	m.listOffset = 0
 	return m
@@ -160,6 +205,10 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m.moveCursor(1), nil
 	case "esc":
 		return m.back(), nil
+	case "m":
+		if m.screen == screenModels && !m.loading {
+			return m.enterManualModel(), nil
+		}
 	case "enter":
 		return m.activate()
 	}
@@ -168,14 +217,26 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 	return m, cmd
 }
 
+// enterManualModel opens a text field to type a model name when discovery does
+// not surface the model the user wants (or returns nothing).
+func (m Model) enterManualModel() Model {
+	m.screen = screenManualModel
+	m.input = freshInput("model name (e.g. gpt-4o-mini)")
+	m.errMsg = ""
+	m.info = "Type the exact model id to use with this endpoint."
+	m.syncInputWidth()
+	return m
+}
+
 func (m Model) moveCursor(delta int) Model {
 	switch m.screen {
 	case screenChoose:
-		n := len(choiceLabels)
+		n := len(m.choices)
 		if n == 0 {
 			return m
 		}
 		m.cursor = (m.cursor + delta%n + n) % n
+		m.ensureListVisible()
 	case screenModels:
 		if len(m.models) == 0 {
 			return m
@@ -203,6 +264,10 @@ func (m Model) back() Model {
 		m.models = nil
 		m.loading = false
 		m.errMsg = ""
+	case screenManualModel:
+		m.screen = screenModels
+		m.errMsg = ""
+		m.input.Blur()
 	}
 	return m
 }
@@ -210,21 +275,22 @@ func (m Model) back() Model {
 func (m Model) activate() (Model, tea.Cmd) {
 	switch m.screen {
 	case screenChoose:
-		if m.cursor < 0 || m.cursor >= len(choiceLabels) {
+		if m.cursor < 0 || m.cursor >= len(m.choices) {
 			return m, nil
 		}
-		m.choice = providerChoice(m.cursor)
+		m.choice = m.choices[m.cursor]
+		m.defaultModel = m.choice.defaultModel
 		m.errMsg = ""
-		switch m.choice {
-		case choiceGemini:
+		switch m.choice.kind {
+		case choiceKindGemini:
 			m.screen = screenAPIKey
 			m.input = freshSecretInput()
 			m.info = "Paste your Gemini API key (from Google AI Studio)."
-		case choiceOpenRouter:
+		case choiceKindPreset:
 			m.screen = screenAPIKey
 			m.input = freshSecretInput()
-			m.info = "Paste your OpenRouter API key."
-		case choiceCustom:
+			m.info = m.presetKeyInfo()
+		case choiceKindCustom:
 			m.screen = screenCustomURL
 			m.input = freshInput("base URL (e.g. http://127.0.0.1:8000/v1/chat/completions)")
 			m.info = "Enter the chat-completions URL for your OpenAI-compatible server."
@@ -250,19 +316,50 @@ func (m Model) activate() (Model, tea.Cmd) {
 		return m.submitCustomKey()
 	case screenModels:
 		return m.selectModel()
+	case screenManualModel:
+		return m.submitManualModel()
 	}
 	return m, nil
+}
+
+func (m Model) submitManualModel() (Model, tea.Cmd) {
+	name := strings.TrimSpace(m.input.Value())
+	if name == "" {
+		m.errMsg = "Model name is required."
+		return m, nil
+	}
+	if err := m.deps.CompleteSetup(m.ctx, m.targetID, name); err != nil {
+		m.errMsg = err.Error()
+		return m, nil
+	}
+	m.status = fmt.Sprintf("Connected to %s with model %s.", m.targetID, name)
+	m.done = true
+	return m, nil
+}
+
+// presetKeyInfo builds the API-key prompt for the chosen preset, appending its
+// caveat note when present.
+func (m Model) presetKeyInfo() string {
+	name := m.choice.label
+	if p, ok := config.LookupProviderPreset(m.choice.presetID); ok {
+		name = p.DisplayName
+	}
+	info := fmt.Sprintf("Paste your %s API key.", name)
+	if m.choice.note != "" {
+		info += " Note: " + m.choice.note
+	}
+	return info
 }
 
 func (m Model) submitAPIKey() (Model, tea.Cmd) {
 	key := strings.TrimSpace(m.input.Value())
 	var id string
 	var err error
-	switch m.choice {
-	case choiceGemini:
+	switch m.choice.kind {
+	case choiceKindGemini:
 		id, err = m.deps.PrepareGemini(m.ctx, key)
-	case choiceOpenRouter:
-		id, err = m.deps.PrepareOpenRouter(m.ctx, key)
+	case choiceKindPreset:
+		id, err = m.deps.PreparePreset(m.ctx, m.choice.presetID, key)
 	default:
 		m.errMsg = "unexpected provider choice"
 		return m, nil
@@ -339,7 +436,16 @@ func freshSecretInput() textinput.Model {
 }
 
 func (m *Model) ensureListVisible() {
-	if m.screen != screenModels || len(m.models) == 0 {
+	var n int
+	switch m.screen {
+	case screenChoose:
+		n = len(m.choices)
+	case screenModels:
+		n = len(m.models)
+	default:
+		return
+	}
+	if n == 0 {
 		return
 	}
 	visible := m.visibleListRows()

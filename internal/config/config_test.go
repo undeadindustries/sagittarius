@@ -102,9 +102,14 @@ func TestLoadForkFixture(t *testing.T) {
 		{
 			name: "built-in registry",
 			fn: func(t *testing.T) {
-				openai, ok := LookupBuiltInProvider("openai")
+				// Gemini is the only native built-in after the preset collapse
+				// (AD-072); openai/openai-responses resolve via ProviderDefaults.
+				if _, ok := LookupBuiltInProvider("openai"); ok {
+					t.Fatal("openai should no longer be a native built-in")
+				}
+				openai, ok := ProviderDefaults("openai")
 				if !ok {
-					t.Fatal("openai not in registry")
+					t.Fatal("openai not resolvable via ProviderDefaults")
 				}
 				if openai.APIKeyEnvVar != "OPENAI_API_KEY" {
 					t.Errorf("APIKeyEnvVar = %q", openai.APIKeyEnvVar)

@@ -15,6 +15,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/atmention"
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/contextmgmt"
+	"github.com/undeadindustries/sagittarius/internal/goal"
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/prompt"
 	"github.com/undeadindustries/sagittarius/internal/provider"
@@ -79,6 +80,8 @@ type RunnerConfig struct {
 	// that wrote files. Resolved from sagittarius.verify.suggestAfterWrite;
 	// default false. It never runs checks automatically.
 	SuggestVerifyAfterWrite bool
+	// InitialGoal pre-populates the active session goal from a resumed session.
+	InitialGoal *goal.Snapshot
 }
 
 // Runner orchestrates conversation history and provider streaming for the agent loop.
@@ -132,6 +135,9 @@ type Runner struct {
 	initialSessionGrants []string
 	// turnActive guards against overlapping RunTurn calls mutating history.
 	turnActive atomic.Bool
+
+	goalMu     sync.RWMutex
+	activeGoal *goal.Goal
 }
 
 // LoadedMemoryFiles returns the AGENTS.md paths that contributed to the system
@@ -186,11 +192,8 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		return nil, fmt.Errorf("agent runner: workspace: %w", err)
 	}
 	registry := tools.NewBuiltinRegistry(ws, tools.WithAllowFix(cfg.AllowFix))
-	policy := approvalToPolicy(mode)
-	scheduler := tools.NewScheduler(registry, policy, cfg.Interactive, nil, ws)
-	// Wire interaction-mode gate, project boundary, and snapshot hook after the
-	// runner is constructed (attachInteractionModeGate rebuilds the scheduler).
-
+	
+	// Create the runner struct first to pass it to goal tools
 	var history []provider.Message
 	if len(cfg.InitialHistory) > 0 {
 		history = append(history, cfg.InitialHistory...)
@@ -209,7 +212,6 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		workDir:              ws.Root(),
 		workspace:            ws,
 		registry:             registry,
-		scheduler:            scheduler,
 		ctxMgr:               cfg.ContextManager,
 		state:                StateIdle,
 		sessionRecorder:      cfg.SessionRecorder,
@@ -222,6 +224,21 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		loadedMemoryFiles:    memoryFiles,
 		initialSessionGrants: cfg.InitialSessionGrants,
 	}
+
+	if cfg.InitialGoal != nil {
+		runner.activeGoal = goal.FromSnapshot(cfg.InitialGoal)
+		if runner.activeGoal != nil {
+			runner.activeGoal.TurnCount = 0
+			// Token baseline will be reset to current session tokens at end of setup or on Resume
+			runner.activeGoal.TokensBaseline = runner.TotalSessionTokens()
+		}
+	}
+
+	registerGoalTools(runner, registry)
+
+	policy := approvalToPolicy(mode)
+	scheduler := tools.NewScheduler(registry, policy, cfg.Interactive, nil, ws)
+	runner.scheduler = scheduler
 	if !cfg.ModelPinned {
 		runner.refreshModelFromMode()
 	} else {
@@ -535,6 +552,7 @@ func (r *Runner) runAgentLoop(ctx context.Context, out chan<- ui.StreamEvent) {
 		}
 	}
 
+	outerLoop:
 	for {
 		for round := 0; round < maxRounds; round++ {
 			r.prepareContext(ctx)
@@ -582,6 +600,9 @@ func (r *Runner) runAgentLoop(ctx context.Context, out chan<- ui.StreamEvent) {
 			}
 
 			if len(toolCalls) == 0 {
+				if r.evaluateGoalTurn(ctx, out, modelText) {
+					continue outerLoop
+				}
 				r.setState(StateDone)
 				out <- ui.StreamEvent{Type: ui.StreamDone}
 				return
@@ -811,6 +832,10 @@ func (r *Runner) providerDisplayName(providerID string) string {
 		if custom, ok := settings.Providers.Custom[providerID]; ok && custom.DisplayName != "" {
 			return custom.DisplayName
 		}
+	}
+	// Preset fallback (e.g. an openai id resolving before migration).
+	if def, ok := config.ProviderDefaults(providerID); ok && def.DisplayName != "" {
+		return def.DisplayName
 	}
 	return providerID
 }

@@ -660,6 +660,12 @@ func unmarshalSagittarius(raw json.RawMessage) (*SagittariusSettings, error) {
 				return nil, fmt.Errorf("decode sagittarius.web: %w", err)
 			}
 			s.Web = w
+		case "goal":
+			g, err := unmarshalGoalConfig(val)
+			if err != nil {
+				return nil, fmt.Errorf("decode sagittarius.goal: %w", err)
+			}
+			s.Goal = g
 		case "maxToolRounds":
 			var n int
 			if err := json.Unmarshal(val, &n); err != nil {
@@ -763,10 +769,113 @@ func marshalSagittarius(s *SagittariusSettings) (json.RawMessage, error) {
 		}
 		obj["web"] = b
 	}
+	if s.Goal != nil {
+		b, err := marshalGoalConfig(s.Goal)
+		if err != nil {
+			return nil, err
+		}
+		obj["goal"] = b
+	}
 	if err := add("maxToolRounds", s.MaxToolRounds); err != nil {
 		return nil, err
 	}
 	for key, val := range s.Extra {
+		obj[key] = val
+	}
+	if len(obj) == 0 {
+		return json.RawMessage("{}"), nil
+	}
+	return json.Marshal(obj)
+}
+
+func unmarshalGoalConfig(raw json.RawMessage) (*SagittariusGoalConfig, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, err
+	}
+	c := &SagittariusGoalConfig{Extra: make(map[string]json.RawMessage)}
+	for key, val := range obj {
+		switch key {
+		case "maxTurns":
+			var n int
+			if err := json.Unmarshal(val, &n); err != nil {
+				return nil, err
+			}
+			c.MaxTurns = &n
+		case "evaluatorProvider":
+			if err := json.Unmarshal(val, &c.EvaluatorProvider); err != nil {
+				return nil, err
+			}
+		case "evaluatorModel":
+			if err := json.Unmarshal(val, &c.EvaluatorModel); err != nil {
+				return nil, err
+			}
+		case "evaluatorTimeout":
+			var n int
+			if err := json.Unmarshal(val, &n); err != nil {
+				return nil, err
+			}
+			c.EvaluatorTimeout = &n
+		case "defaultBudget":
+			var n int
+			if err := json.Unmarshal(val, &n); err != nil {
+				return nil, err
+			}
+			c.DefaultBudget = &n
+		default:
+			c.Extra[key] = val
+		}
+	}
+	if len(c.Extra) == 0 {
+		c.Extra = nil
+	}
+	return c, nil
+}
+
+func marshalGoalConfig(c *SagittariusGoalConfig) (json.RawMessage, error) {
+	if c == nil {
+		return nil, nil
+	}
+	obj := make(map[string]json.RawMessage)
+	if c.MaxTurns != nil {
+		b, err := json.Marshal(*c.MaxTurns)
+		if err != nil {
+			return nil, err
+		}
+		obj["maxTurns"] = b
+	}
+	if c.EvaluatorProvider != "" {
+		b, err := json.Marshal(c.EvaluatorProvider)
+		if err != nil {
+			return nil, err
+		}
+		obj["evaluatorProvider"] = b
+	}
+	if c.EvaluatorModel != "" {
+		b, err := json.Marshal(c.EvaluatorModel)
+		if err != nil {
+			return nil, err
+		}
+		obj["evaluatorModel"] = b
+	}
+	if c.EvaluatorTimeout != nil {
+		b, err := json.Marshal(*c.EvaluatorTimeout)
+		if err != nil {
+			return nil, err
+		}
+		obj["evaluatorTimeout"] = b
+	}
+	if c.DefaultBudget != nil {
+		b, err := json.Marshal(*c.DefaultBudget)
+		if err != nil {
+			return nil, err
+		}
+		obj["defaultBudget"] = b
+	}
+	for key, val := range c.Extra {
 		obj[key] = val
 	}
 	if len(obj) == 0 {

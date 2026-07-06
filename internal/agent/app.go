@@ -18,6 +18,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/bgproc"
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/contextmgmt"
+	"github.com/undeadindustries/sagittarius/internal/goal"
 	"github.com/undeadindustries/sagittarius/internal/credentials"
 	"github.com/undeadindustries/sagittarius/internal/mcp"
 	"github.com/undeadindustries/sagittarius/internal/modes"
@@ -192,6 +193,10 @@ func (a *App) ComposerStatus() ui.ComposerStatus {
 	cs := ui.ComposerStatus{}
 	if a.runner != nil {
 		cs.ApprovalMode = string(a.runner.ApprovalMode())
+		if g := a.runner.Goal(); g != nil {
+			cs.GoalActive = g.Status != goal.StatusComplete
+			cs.GoalStatusText = fmt.Sprintf("Goal %d/%d — %s", g.TurnCount, g.MaxTurns, g.Status)
+		}
 	}
 	if a.runtime != nil && a.runtime.Catalog != nil {
 		cs.SkillCount = len(a.runtime.Catalog.SkillManager().Skills())
@@ -841,6 +846,130 @@ func (h *appHooks) BackgroundProcessOutput(pid int) string {
 		return ""
 	}
 	return h.app.runtime.BgMgr.Output(pid)
+}
+
+// /goal hooks
+
+func (h *appHooks) GoalStatus() *goal.Goal {
+	if h.app == nil || h.app.runner == nil {
+		return nil
+	}
+	return h.app.runner.Goal()
+}
+
+func (h *appHooks) SetGoal(objective string, tokenBudget *int) error {
+	if h.app == nil || h.app.runner == nil {
+		return fmt.Errorf("runner not available")
+	}
+	maxTurns := 25
+	settings := h.app.effectiveSettings()
+	if settings != nil && settings.Sagittarius != nil && settings.Sagittarius.Goal != nil {
+		if settings.Sagittarius.Goal.MaxTurns != nil {
+			maxTurns = *settings.Sagittarius.Goal.MaxTurns
+		}
+		if tokenBudget == nil && settings.Sagittarius.Goal.DefaultBudget != nil {
+			tokenBudget = settings.Sagittarius.Goal.DefaultBudget
+		}
+	}
+
+	g := &goal.Goal{
+		Objective:      objective,
+		Status:         goal.StatusActive,
+		StartedAt:      time.Now(),
+		TurnCount:      0,
+		MaxTurns:       maxTurns,
+		TokenBudget:    tokenBudget,
+		TokensBaseline: h.app.runner.TotalSessionTokens(),
+	}
+	h.app.runner.SetGoal(g)
+	return nil
+}
+
+func (h *appHooks) PauseGoal(note string) error {
+	if h.app == nil || h.app.runner == nil {
+		return fmt.Errorf("runner not available")
+	}
+	g := h.app.runner.Goal()
+	if g == nil {
+		return fmt.Errorf("no active goal")
+	}
+	if g.Status == goal.StatusComplete {
+		return fmt.Errorf("goal already complete")
+	}
+	g.Status = goal.StatusPaused
+	g.Note = note
+	h.app.runner.SetGoal(g)
+	return nil
+}
+
+func (h *appHooks) ResumeGoal(note string) error {
+	if h.app == nil || h.app.runner == nil {
+		return fmt.Errorf("runner not available")
+	}
+	g := h.app.runner.Goal()
+	if g == nil {
+		return fmt.Errorf("no active goal")
+	}
+	if g.Status == goal.StatusComplete {
+		return fmt.Errorf("goal already complete")
+	}
+	g.Status = goal.StatusActive
+	g.Note = note
+	g.TokensBaseline = h.app.runner.TotalSessionTokens()
+	h.app.runner.SetGoal(g)
+	return nil
+}
+
+func (h *appHooks) CompleteGoal(note string) error {
+	if h.app == nil || h.app.runner == nil {
+		return fmt.Errorf("runner not available")
+	}
+	g := h.app.runner.Goal()
+	if g == nil {
+		return fmt.Errorf("no active goal")
+	}
+	g.Status = goal.StatusComplete
+	g.Note = note
+	h.app.runner.SetGoal(g)
+	return nil
+}
+
+func (h *appHooks) BlockGoal(note string) error {
+	if h.app == nil || h.app.runner == nil {
+		return fmt.Errorf("runner not available")
+	}
+	g := h.app.runner.Goal()
+	if g == nil {
+		return fmt.Errorf("no active goal")
+	}
+	if g.Status == goal.StatusComplete {
+		return fmt.Errorf("goal already complete")
+	}
+	g.Status = goal.StatusBlocked
+	g.Note = note
+	h.app.runner.SetGoal(g)
+	return nil
+}
+
+func (h *appHooks) ClearGoal(note string) error {
+	if h.app == nil || h.app.runner == nil {
+		return fmt.Errorf("runner not available")
+	}
+	h.app.runner.SetGoal(nil)
+	return nil
+}
+
+func (h *appHooks) SetGoalBudget(tokens int) error {
+	if h.app == nil || h.app.runner == nil {
+		return fmt.Errorf("runner not available")
+	}
+	g := h.app.runner.Goal()
+	if g == nil {
+		return fmt.Errorf("no active goal")
+	}
+	g.TokenBudget = &tokens
+	h.app.runner.SetGoal(g)
+	return nil
 }
 
 // WorkDir returns the runner's workspace root, used to keep /chat share writes

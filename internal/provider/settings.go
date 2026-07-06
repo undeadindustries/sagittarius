@@ -67,6 +67,22 @@ func AllActiveModels(settings *config.Settings) []ProviderModelPair {
 	return out
 }
 
+// providerKnown reports whether providerID is resolvable: a native built-in
+// (Gemini), a preset template (materialized on demand), or a persisted custom
+// provider. It centralizes the validity check that the built-in collapse
+// (AD-072) generalized from "built-in or custom" to "known-defaults or custom".
+func providerKnown(settings *config.Settings, providerID string) bool {
+	if _, ok := config.ProviderDefaults(providerID); ok {
+		return true
+	}
+	if settings != nil && settings.Providers != nil && settings.Providers.Custom != nil {
+		if _, ok := settings.Providers.Custom[providerID]; ok {
+			return true
+		}
+	}
+	return false
+}
+
 // sortedIDs sorts ids in place lexicographically.
 func sortedIDs(ids []string) {
 	for i := 1; i < len(ids); i++ {
@@ -91,13 +107,8 @@ func SelectCurrentModel(loader *config.Loader, settings *config.Settings, provid
 		return fmt.Errorf("select model: model is required")
 	}
 	// Validate provider exists.
-	if _, ok := config.LookupBuiltInProvider(providerID); !ok {
-		if settings == nil || settings.Providers == nil || settings.Providers.Custom == nil {
-			return fmt.Errorf("select model: unknown provider %q", providerID)
-		}
-		if _, ok := settings.Providers.Custom[providerID]; !ok {
-			return fmt.Errorf("select model: unknown provider %q", providerID)
-		}
+	if !providerKnown(settings, providerID) {
+		return fmt.Errorf("select model: unknown provider %q", providerID)
 	}
 	// Validate model is in the active set (skip if uncurated).
 	curated := CuratedActiveModels(settings, providerID)
@@ -159,13 +170,8 @@ func SetActiveProvider(settings *config.Settings, providerID string) error {
 	if settings.Providers == nil {
 		settings.Providers = &config.ProvidersSettings{}
 	}
-	if _, ok := config.LookupBuiltInProvider(providerID); !ok {
-		if settings.Providers.Custom == nil {
-			return fmt.Errorf("set active provider: unknown provider %q", providerID)
-		}
-		if _, ok := settings.Providers.Custom[providerID]; !ok {
-			return fmt.Errorf("set active provider: unknown provider %q", providerID)
-		}
+	if !providerKnown(settings, providerID) {
+		return fmt.Errorf("set active provider: unknown provider %q", providerID)
 	}
 	settings.Providers.Active = providerID
 	return nil
@@ -213,11 +219,12 @@ func SetProviderModel(settings *config.Settings, providerID, model string) error
 // is no longer present in the provider's curated active-model set, or whose
 // provider no longer exists. This keeps mode overrides consistent after a model
 // is deactivated or a provider is removed. Settings are mutated in place; the
-// caller is responsible for persisting.
-func PruneModeOverrides(settings *config.Settings) {
+// caller is responsible for persisting if the function returns true.
+func PruneModeOverrides(settings *config.Settings) bool {
 	if settings == nil || settings.Sagittarius == nil || settings.Sagittarius.Modes == nil {
-		return
+		return false
 	}
+	changed := false
 	modes := settings.Sagittarius.Modes
 	for _, mc := range []*config.SagittariusModeConfig{modes.Agent, modes.Plan, modes.Ask, modes.Debug} {
 		if mc == nil || mc.Model == "" {
@@ -225,22 +232,19 @@ func PruneModeOverrides(settings *config.Settings) {
 		}
 		provID := config.NormalizeProviderID(mc.Provider)
 		if provID == "" {
-			// No provider qualifier — leave the plain model string alone; it will
-			// resolve against whatever provider is active at runtime.
-			continue
-		}
-		// Check provider still exists.
-		provExists := false
-		if _, ok := config.LookupBuiltInProvider(provID); ok {
-			provExists = true
-		} else if settings.Providers != nil && settings.Providers.Custom != nil {
-			if _, ok := settings.Providers.Custom[provID]; ok {
-				provExists = true
+			// No provider qualifier — it will resolve against the active provider
+			// at runtime. We validate it against the current active provider to
+			// prune stale overrides from older configs.
+			provID = config.NormalizeProviderID(settings.ActiveProvider())
+			if provID == "" {
+				continue
 			}
 		}
-		if !provExists {
+		// Check provider still exists.
+		if !providerKnown(settings, provID) {
 			mc.Model = ""
 			mc.Provider = ""
+			changed = true
 			continue
 		}
 		// Check model is still in the active set for that provider.
@@ -255,8 +259,10 @@ func PruneModeOverrides(settings *config.Settings) {
 		if !found {
 			mc.Model = ""
 			mc.Provider = ""
+			changed = true
 		}
 	}
+	return changed
 }
 
 // SetActiveModels persists the curated active-model set for providerID. Values
@@ -727,13 +733,8 @@ func ensureProviderInstance(settings *config.Settings, providerID string) (*conf
 	if providerID == "" {
 		return nil, fmt.Errorf("provider instance: id is required")
 	}
-	if _, ok := config.LookupBuiltInProvider(providerID); !ok {
-		if settings.Providers == nil || settings.Providers.Custom == nil {
-			return nil, fmt.Errorf("provider instance: unknown provider %q", providerID)
-		}
-		if _, ok := settings.Providers.Custom[providerID]; !ok {
-			return nil, fmt.Errorf("provider instance: unknown provider %q", providerID)
-		}
+	if !providerKnown(settings, providerID) {
+		return nil, fmt.Errorf("provider instance: unknown provider %q", providerID)
 	}
 	if settings.Providers == nil {
 		settings.Providers = &config.ProvidersSettings{}
