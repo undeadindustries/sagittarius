@@ -1,8 +1,0 @@
-usage: mempalace hook [-h] {run} ...
-
-positional arguments:
-  {run}
-    run       Execute a hook
-
-options:
-  -h, --help  show this help message and exit

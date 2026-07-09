@@ -1,1 +1,0 @@
-{"jsonrpc": "2.0", "id": 5, "result": {"content": [{"type": "text", "text": "{\n  \"success\": true,\n  \"entry_id\": \"diary_sagittarius_20260624_120759291899_31deb58f2c26\",\n  \"agent\": \"cursor-ide\",\n  \"topic\": \"general\",\n  \"timestamp\": \"2026-06-24T12:07:59.291899\",\n  \"chunks\": 1\n}"}]}}
