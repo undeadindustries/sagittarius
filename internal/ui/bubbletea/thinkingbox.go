@@ -70,9 +70,8 @@ func renderThinkingBox(s spinner.Model, thinking string, th theme.Theme, width i
 	var b strings.Builder
 	b.WriteString(thinkingBoxTop(s, th, border, width))
 	b.WriteString("\n")
-	pad := lipgloss.NewStyle().Width(inner)
 	for _, line := range lines {
-		content := pad.Render(th.Secondary.Render(line))
+		content := padOrTruncate(th.Secondary.Render(line), inner)
 		b.WriteString(border.Render("│") + " " + content + " " + border.Render("│"))
 		b.WriteString("\n")
 	}
