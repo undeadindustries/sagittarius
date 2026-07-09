@@ -152,9 +152,8 @@ func (m *model) renderToolCard(c *toolCard, width int) []string {
 	}
 
 	out := []string{m.toolCardTop(c, border, width)}
-	pad := lipgloss.NewStyle().Width(inner)
 	for _, line := range m.toolCardBody(c, inner) {
-		out = append(out, border.Render("│")+" "+pad.Render(line)+" "+border.Render("│"))
+		out = append(out, border.Render("│")+" "+padOrTruncate(line, inner)+" "+border.Render("│"))
 	}
 	out = append(out, border.Render("╰"+strings.Repeat("─", width-2)+"╯"))
 	return out
