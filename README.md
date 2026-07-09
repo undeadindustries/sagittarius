@@ -29,6 +29,16 @@ tar -xzf sagittarius_0.1.0_linux_amd64.tar.gz
 sudo mv sagittarius /usr/local/bin/
 ```
 
+#### Note for macOS Users (Gatekeeper)
+
+Since these binaries are not signed with an Apple Developer Account, macOS Gatekeeper will block execution when first run with a warning that "Apple could not verify sagittarius". 
+
+You can bypass this easily by stripping the quarantine flag right after moving it to your path:
+
+```bash
+sudo xattr -d com.apple.quarantine /usr/local/bin/sagittarius
+```
+
 ### From Source (Build)
 
 ```bash
