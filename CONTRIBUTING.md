@@ -5,7 +5,7 @@ workflow for this Go project.
 
 ## Before you begin
 
-1. Read [README.md](README.md) and [AGENTS.md](AGENTS.md) for project scope and phase status.
+1. Read [README.md](README.md) for project scope.
 2. Open an issue or comment on an existing one before large changes.
 3. Follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
@@ -50,7 +50,22 @@ changes before merge.
 
 ## Documentation
 
-Update README.md and AGENTS.md when behavior, phases, or operational steps change.
+Update README.md when behavior, phases, or operational steps change.
+
+## Releasing
+
+To create a new release:
+
+1. Tag the commit using semantic versioning (e.g., `v0.1.0`):
+   ```bash
+   git tag -a v0.1.0 -m "Release v0.1.0"
+   ```
+2. Push the tag to GitHub:
+   ```bash
+   git push origin v0.1.0
+   ```
+3. The Release GitHub Actions workflow will automatically run, compile the binaries for all target platforms, and publish a draft release on GitHub.
+4. Review the drafted release, verify the checksums, and publish it when ready.
 
 ## License
 

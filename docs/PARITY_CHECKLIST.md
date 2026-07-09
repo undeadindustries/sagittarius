@@ -221,7 +221,7 @@ Some slash command descriptions differ intentionally:
 - [x] `TestParityColdStartPerf` — Sagittarius 7ms vs fork ~3.6s (483x speedup)
 - [x] `SAGITTARIUS_PARITY_FORK=1` tests run and blockers noted
 - [x] `docs/PARITY_CHECKLIST.md` committed
-- [x] `AGENTS.md` updated (Phase 14 complete, AD-021)
+- [x] Internal decisions documented (Phase 14 complete, AD-021)
 - [ ] Human sign-off on manual TUI walk-through (interactive mode)
 - [ ] Human sign-off on real Gemini API key headless test
 - [ ] Human sign-off on real OpenAI API key headless test

@@ -1,5 +1,6 @@
 # Local planning docs — never commit (agent context only)
 docs/plans/
+/AGENTS.md
 
 # Go build artifacts
 /bin/
