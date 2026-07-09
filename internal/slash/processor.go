@@ -63,6 +63,10 @@ type Result struct {
 	// MouseMode, when non-empty, asks the UI to enable/disable mouse-wheel
 	// reporting live ("on", "off", or "toggle"). Set by /mouse.
 	MouseMode string
+	// CompleteGrillAfter asks the agent layer to mark the active grill session
+	// StatusComplete once the SubmitPrompt turn finishes (set by /grill done,
+	// whose SubmitPrompt writes the spec file as the turn's only action).
+	CompleteGrillAfter bool
 }
 
 // ScrollRole classifies a restored scrollback entry so the TUI can apply the

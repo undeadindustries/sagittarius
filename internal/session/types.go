@@ -2,6 +2,7 @@ package session
 
 import (
 	"github.com/undeadindustries/sagittarius/internal/goal"
+	"github.com/undeadindustries/sagittarius/internal/grill"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 )
 
@@ -65,14 +66,15 @@ type MessageRecord struct {
 
 // MetadataRecord is the first line of each JSONL file and any $set update.
 type MetadataRecord struct {
-	SessionID     string   `json:"sessionId"`
-	ProjectHash   string   `json:"projectHash"`
-	StartTime     string   `json:"startTime"`
-	LastUpdated   string   `json:"lastUpdated"`
+	SessionID     string          `json:"sessionId"`
+	ProjectHash   string          `json:"projectHash"`
+	StartTime     string          `json:"startTime"`
+	LastUpdated   string          `json:"lastUpdated"`
 	Summary       string          `json:"summary,omitempty"`
 	Kind          string          `json:"kind,omitempty"` // "main" | "subagent"
 	SessionGrants []string        `json:"sessionGrants,omitempty"`
 	Goal          *goal.Snapshot  `json:"goal,omitempty"`
+	Grill         *grill.Snapshot `json:"grill,omitempty"`
 }
 
 // SetRecord carries a $set metadata update appended mid-session.
@@ -95,6 +97,7 @@ type ConversationRecord struct {
 	Kind          string
 	SessionGrants []string
 	Goal          *goal.Snapshot
+	Grill         *grill.Snapshot
 	Messages      []MessageRecord
 }
 

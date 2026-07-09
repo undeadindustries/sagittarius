@@ -20,6 +20,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/credentials"
 	"github.com/undeadindustries/sagittarius/internal/goal"
+	"github.com/undeadindustries/sagittarius/internal/grill"
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 	"github.com/undeadindustries/sagittarius/internal/session"
@@ -625,7 +626,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 	if err != nil {
 		return nil, nil, nil, "", "", err
 	}
-	
+
 	// Clean up any stale mode overrides (e.g. from older unqualified configs)
 	// on startup. This ensures the UI doesn't show invalid "gemini - qwen"
 	// states when the user launches.
@@ -709,6 +710,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 	var initialHistory []provider.Message
 	var initialGrants []string
 	var initialGoal *goal.Snapshot
+	var initialGrill *grill.Snapshot
 
 	projectRoot := wd
 	if projectRoot == "" {
@@ -740,6 +742,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		initialHistory = session.ConvertToProviderHistory(result.Record)
 		initialGrants = result.Record.SessionGrants
 		initialGoal = result.Record.Goal
+		initialGrill = result.Record.Grill
 		mgr, mgrErr := session.NewManagerForResume(projectRoot, sessID, result)
 		if mgrErr != nil {
 			slog.Warn("session recording disabled: cannot open recorder for resumed session", "err", mgrErr)
@@ -768,6 +771,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		InitialHistory:          initialHistory,
 		InitialSessionGrants:    initialGrants,
 		InitialGoal:             initialGoal,
+		InitialGrill:            initialGrill,
 		Settings:                settings,
 		InitialMode:             initialMode,
 		ModelPinned:             modelPinned,

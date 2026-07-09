@@ -226,6 +226,18 @@ type model struct {
 	// (0=once, 1=session, 2=no).
 	confirmChoice int
 
+	// askReply is set while a grill-mode ask_user question is pending; the
+	// active tool card renders the structured picker (options + an automatic
+	// "Other" entry) until the user answers.
+	askReply chan ui.AskAnswer
+	// askChoice is the highlighted row in the asking card's menu (0-based;
+	// len(options) is the automatic "Other" entry).
+	askChoice int
+	// askOtherMode is true once the user has selected "Other": the main input
+	// box captures a free-text answer instead of the numbered menu handling
+	// up/down/enter.
+	askOtherMode bool
+
 	// Slash-command autocompletion state.
 	suggestions    []ui.Suggestion
 	suggestionIdx  int // -1 means nothing highlighted (user is still typing)
@@ -303,10 +315,10 @@ func newModel(opts ui.Options, app ui.App, term *Terminal) *model {
 	}
 
 	m := &model{
-		opts:              opts,
-		app:               app,
-		term:              term,
-		th:                th,
+		opts:            opts,
+		app:             app,
+		term:            term,
+		th:              th,
 		welcome:         welcome,
 		openResponseIdx: -1,
 		cardByID:        make(map[string]*toolCard),
@@ -894,6 +906,129 @@ func (m *model) sendConfirm(d ui.ConfirmDecision) {
 	m.syncViewportContent()
 }
 
+// handleAskKey routes key input while a grill-mode ask_user question is
+// pending: menu navigation (up/down/digits/enter) over the picker, or free-text
+// editing once "Other" has been selected.
+func (m *model) handleAskKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.askOtherMode {
+		switch msg.String() {
+		case "enter":
+			text := strings.TrimSpace(m.input.Value())
+			if text == "" {
+				return m, nil
+			}
+			m.input.SetValue("")
+			m.syncInputLayout()
+			m.sendAskAnswer(ui.AskAnswer{Index: -1, Text: text})
+			return m, nil
+		case "esc":
+			m.askOtherMode = false
+			m.input.SetValue("")
+			m.syncInputLayout()
+			m.syncViewportContent()
+			return m, nil
+		case "ctrl+c":
+			return m, m.beginQuit()
+		}
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		m.syncInputLayout()
+		return m, cmd
+	}
+
+	total := 1 // the automatic "Other" entry
+	if m.activeCard != nil {
+		total += len(m.activeCard.askOptions)
+	}
+	switch msg.String() {
+	case "up":
+		m.askChoice = (m.askChoice - 1 + total) % total
+		m.syncViewportContent()
+		return m, nil
+	case "down":
+		m.askChoice = (m.askChoice + 1) % total
+		m.syncViewportContent()
+		return m, nil
+	case "enter":
+		m.selectAskChoice(m.askChoice)
+		return m, nil
+	case "ctrl+c":
+		return m, m.beginQuit()
+	default:
+		if n, ok := digitChoice(msg.String()); ok && n >= 1 && n <= total {
+			m.selectAskChoice(n - 1)
+		}
+	}
+	return m, nil
+}
+
+// digitChoice parses a single-digit key ("1".."9") into a 1-based menu index.
+func digitChoice(s string) (int, bool) {
+	if len(s) == 1 && s[0] >= '1' && s[0] <= '9' {
+		return int(s[0] - '0'), true
+	}
+	return 0, false
+}
+
+// selectAskChoice resolves a highlighted picker row: a real option answers
+// immediately, while the trailing "Other" row switches to free-text capture in
+// the main input box instead.
+func (m *model) selectAskChoice(idx int) {
+	c := m.activeCard
+	if c == nil {
+		return
+	}
+	if idx < 0 || idx > len(c.askOptions) {
+		return
+	}
+	if idx == len(c.askOptions) {
+		m.askOtherMode = true
+		m.askChoice = idx
+		m.input.Focus()
+		m.syncViewportContent()
+		return
+	}
+	opt := c.askOptions[idx]
+	m.sendAskAnswer(ui.AskAnswer{Index: idx, Text: opt.Label})
+}
+
+// sendAskAnswer delivers the user's answer to the waiting ask_user tool,
+// returns the asking card to its running phase, and resumes the working
+// indicator.
+func (m *model) sendAskAnswer(a ui.AskAnswer) {
+	if m.askReply == nil {
+		return
+	}
+	m.askReply <- a
+	m.askReply = nil
+	m.askChoice = 0
+	m.askOtherMode = false
+	m.status.Left = ""
+	if m.activeCard != nil && m.activeCard.phase == toolAsking {
+		m.activeCard.phase = toolRunning
+		m.activeCard.body = ""
+	}
+	m.setWorking(true, m.busyLabel())
+	m.syncViewportContent()
+}
+
+// clearAskState drops any pending grill-mode ask_user question without sending a
+// reply. Called when a turn ends (StreamDone/StreamError) so a cancelled or
+// failed ask_user does not leave the composer stuck intercepting keystrokes for
+// a question that will never be answered. The tool goroutine has already
+// returned (its select unblocks on ctx.Done()), so no send is needed.
+func (m *model) clearAskState() {
+	if m.askReply == nil {
+		return
+	}
+	m.askReply = nil
+	m.askChoice = 0
+	m.askOtherMode = false
+	if m.status.Left == "answer question" {
+		m.status.Left = ""
+	}
+}
+
 // suggestionWindow calculates the visible slice of suggestions, keeping the
 // highlighted item in view. It returns the start index, number of items to show,
 // and whether there are hidden items above or below the window.
@@ -986,6 +1121,10 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// '†' is Mac Option+T.
 	if msg.String() == "alt+t" || msg.String() == "†" {
 		return m.cycleTheme()
+	}
+
+	if m.askReply != nil {
+		return m.handleAskKey(msg)
 	}
 
 	if m.confirmReply != nil {
@@ -1221,6 +1360,7 @@ func (m *model) handleBusyEnter() (tea.Model, tea.Cmd) {
 func isConcurrentSafeSlash(line string) bool {
 	l := strings.ToLower(line)
 	return l == "/goal pause" || l == "/goal status" || l == "/stats" ||
+		l == "/grill pause" || l == "/grill status" ||
 		strings.HasPrefix(l, "/stats ")
 }
 
@@ -1674,6 +1814,20 @@ func (m *model) handleStreamGen(gen uint64, ev ui.StreamEvent) (tea.Model, tea.C
 		m.status.Left = "confirm tool"
 		m.followBottom = true
 		m.syncViewportContent()
+	case ui.StreamAskUser:
+		if c := m.toolCardFor(ev); c != nil {
+			c.phase = toolAsking
+			c.askQuestion = ev.AskQuestion
+			c.askOptions = ev.AskOptions
+			c.askRecommended = ev.AskRecommended
+		}
+		m.askReply = ev.AskReply
+		m.askChoice = ev.AskRecommended
+		m.askOtherMode = false
+		m.setWorking(false, "")
+		m.status.Left = "answer question"
+		m.followBottom = true
+		m.syncViewportContent()
 	case ui.StreamToolResult:
 		if c := m.toolCardFor(ev); c != nil {
 			c.body = ev.Text
@@ -1697,6 +1851,7 @@ func (m *model) handleStreamGen(gen uint64, ev ui.StreamEvent) (tea.Model, tea.C
 		}
 		m.activeCard = nil
 		m.runningTool = ""
+		m.clearAskState()
 		m.setWorking(false, "")
 	case ui.StreamDone:
 		m.busy = false
@@ -1704,6 +1859,7 @@ func (m *model) handleStreamGen(gen uint64, ev ui.StreamEvent) (tea.Model, tea.C
 		m.activeCard = nil
 		m.runningTool = ""
 		m.thinking = ""
+		m.clearAskState()
 		m.clearTurn()
 		m.setWorking(false, "")
 		m.closeResponse()
@@ -1937,7 +2093,7 @@ func (m *model) showWorkingIndicator() bool {
 	if !m.busy {
 		return false
 	}
-	if m.confirmReply != nil {
+	if m.confirmReply != nil || m.askReply != nil {
 		return false
 	}
 	if m.activeCard != nil && m.activeCard.phase == toolRunning {

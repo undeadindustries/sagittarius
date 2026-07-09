@@ -79,6 +79,19 @@ func askModeAllow(name string, args map[string]any) (bool, string) {
 	}
 }
 
+// grillModeAllow enforces the grill-mode read-only gate: everything askModeAllow
+// permits is allowed, plus ask_user itself (the interrogation mechanism), so
+// the agent can keep asking questions while writes/shell stay blocked.
+func grillModeAllow(name string, args map[string]any) (bool, string) {
+	if name == AskUserToolName {
+		return true, ""
+	}
+	if allowed, reason := askModeAllow(name, args); !allowed {
+		return false, "grill mode: " + strings.TrimPrefix(reason, "ask mode: ")
+	}
+	return true, ""
+}
+
 func planModeAllow(name string, args map[string]any, ws *Workspace) (bool, string) {
 	if name == ProjectChecksToolName && projectChecksFixRequested(args) {
 		return false, "plan mode: run_project_checks fix mode rewrites files and is not allowed; run check-only (fix=false) instead"

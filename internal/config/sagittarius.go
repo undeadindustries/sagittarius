@@ -90,6 +90,8 @@ type SagittariusSettings struct {
 	Web *SagittariusWebConfig `json:"web,omitempty"`
 	// Goal configures the /goal autonomous mode parameters.
 	Goal *SagittariusGoalConfig `json:"goal,omitempty"`
+	// Grill configures the /grill interrogation mode parameters.
+	Grill *SagittariusGrillConfig `json:"grill,omitempty"`
 	// MaxToolRounds caps how many tool-call/response cycles the agent may
 	// execute per turn. Nil means use the compiled-in default (100).
 	// Set higher for tasks that write many files; set lower to cap runaway loops.
@@ -122,6 +124,20 @@ type SagittariusGoalConfig struct {
 	// DefaultBudget sets the token budget if not specified at creation.
 	DefaultBudget *int                       `json:"defaultBudget,omitempty"`
 	Extra         map[string]json.RawMessage `json:"-"`
+}
+
+// SagittariusGrillConfig configures the /grill interrogation mode parameters.
+type SagittariusGrillConfig struct {
+	// SpecDir is the directory the final spec markdown is written into
+	// (default "docs/specs").
+	SpecDir string `json:"specDir,omitempty"`
+	// MaxQuestions is a soft cap on questions per session; advisory only, the
+	// directive nudges the model to wrap up as it approaches this count.
+	MaxQuestions *int `json:"maxQuestions,omitempty"`
+	// Recommend toggles whether the directive requires ask_user to always
+	// propose a recommended answer first (default true).
+	Recommend *bool                      `json:"recommend,omitempty"`
+	Extra     map[string]json.RawMessage `json:"-"`
 }
 
 // DefaultMaxFetchBytes is 250 KiB (water-fill across URLs in one turn).

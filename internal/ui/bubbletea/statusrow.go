@@ -120,19 +120,26 @@ func (m *model) statusRowParts() (left, right string) {
 	} else {
 		left = hints
 	}
-	
+
 	right = contextSummary(len(m.opts.LoadedMemoryFiles), 0)
 	if ok {
 		right = contextSummary(len(m.opts.LoadedMemoryFiles), cs.SkillCount)
-		if cs.GoalStatusText != "" {
-			if right != "" {
-				right = cs.GoalStatusText + "  ·  " + right
-			} else {
-				right = cs.GoalStatusText
-			}
-		}
+		right = prependStatus(right, cs.GoalStatusText)
+		right = prependStatus(right, cs.GrillStatusText)
 	}
 	return left, right
+}
+
+// prependStatus joins a status-row segment (goal/grill indicator) ahead of the
+// existing right side, omitting the separator when either half is empty.
+func prependStatus(right, status string) string {
+	if status == "" {
+		return right
+	}
+	if right == "" {
+		return status
+	}
+	return status + "  ·  " + right
 }
 
 // renderStatusRow draws the composer status row shown between the scrollback and

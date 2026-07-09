@@ -31,6 +31,11 @@ type Scheduler struct {
 	workspace   *Workspace
 	enforce     bool
 	snapshotter Snapshotter
+	// readOnly, when non-nil and returning true, forces read-only tool gating
+	// regardless of the active interaction mode (grill mode while
+	// interrogating). ask_user is always exempt so the interrogation itself
+	// can proceed.
+	readOnly func() bool
 
 	// sessionGrants records tools the user approved "for this session" so later
 	// invocations of the same tool skip confirmation. Guarded by mu.
@@ -70,6 +75,12 @@ func WithProjectBoundary(enforce bool) SchedulerOption {
 // snapshotter leaves snapshotting disabled.
 func WithSnapshotter(snap Snapshotter) SchedulerOption {
 	return func(s *Scheduler) { s.snapshotter = snap }
+}
+
+// WithReadOnlyGate installs a signal that, while true, forces read-only tool
+// gating regardless of the active interaction mode (used by grill mode).
+func WithReadOnlyGate(fn func() bool) SchedulerOption {
+	return func(s *Scheduler) { s.readOnly = fn }
 }
 
 // NewScheduler constructs a scheduler for the given registry and policy.
@@ -188,12 +199,24 @@ func (s *Scheduler) executeOne(
 	var result map[string]any
 	var err error
 
-	if streamTool, ok := tool.(StreamingTool); ok {
+	switch t := tool.(type) {
+	case InteractiveTool:
+		wrappedEmit := func(se ui.StreamEvent) {
+			if se.ToolCallID == "" {
+				se.ToolCallID = id
+			}
+			if se.ToolName == "" {
+				se.ToolName = name
+			}
+			emit(se)
+		}
+		result, err = t.ExecuteInteractive(ctx, args, s.interactive, wrappedEmit)
+	case StreamingTool:
 		sink := func(text string) {
 			emit(ui.StreamEvent{Type: ui.StreamToolOutput, ToolName: name, ToolCallID: id, Text: text})
 		}
-		result, err = streamTool.ExecuteStream(ctx, args, sink)
-	} else {
+		result, err = t.ExecuteStream(ctx, args, sink)
+	default:
 		result, err = tool.Execute(ctx, args)
 	}
 
@@ -354,6 +377,11 @@ func errorResponse(call provider.ToolCall, message string) *provider.FunctionRes
 }
 
 func (s *Scheduler) interactionModeAllow(toolName string, args map[string]any) (bool, string) {
+	if s.readOnly != nil && s.readOnly() {
+		if allowed, reason := grillModeAllow(canonicalToolName(toolName), args); !allowed {
+			return false, reason
+		}
+	}
 	if s.mode == nil {
 		return true, ""
 	}

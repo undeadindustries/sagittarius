@@ -133,6 +133,7 @@ func (r *Registry) registerBuiltins() {
 		mouseCommand(),
 		settingsCommand(),
 		goalCommand(),
+		grillCommand(),
 	}
 	r.sortCommandTree(r.commands)
 }

@@ -104,6 +104,10 @@ type ComposerStatus struct {
 	GoalActive bool
 	// GoalStatusText summarizes the goal state (e.g. "Pursuing goal (3/25) — active").
 	GoalStatusText string
+	// GrillActive is true if there is a grill-me session currently active or paused.
+	GrillActive bool
+	// GrillStatusText summarizes the grill state (e.g. "Grill: 3 questions").
+	GrillStatusText string
 }
 
 // ComposerStatusProvider is an optional capability the TUI uses to render the

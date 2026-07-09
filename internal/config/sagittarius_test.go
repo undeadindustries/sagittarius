@@ -111,6 +111,65 @@ func TestDefaultModelsOmittedWhenEmpty(t *testing.T) {
 	}
 }
 
+// TestGrillConfigRoundTrip guards against the grill config being defined but
+// never wired into unmarshalSagittarius/marshalSagittarius, which would
+// silently drop it into Extra instead of populating SagittariusGrillConfig.
+func TestGrillConfigRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	s, err := unmarshalSagittarius(json.RawMessage(`{
+  "grill": {
+    "specDir": "docs/interrogations",
+    "maxQuestions": 12,
+    "recommend": false
+  }
+}`))
+	if err != nil {
+		t.Fatalf("unmarshalSagittarius: %v", err)
+	}
+	if s.Grill == nil {
+		t.Fatal("Grill is nil")
+	}
+	if got := s.Grill.SpecDir; got != "docs/interrogations" {
+		t.Errorf("SpecDir = %q", got)
+	}
+	if s.Grill.MaxQuestions == nil || *s.Grill.MaxQuestions != 12 {
+		t.Errorf("MaxQuestions = %+v", s.Grill.MaxQuestions)
+	}
+	if s.Grill.Recommend == nil || *s.Grill.Recommend != false {
+		t.Errorf("Recommend = %+v", s.Grill.Recommend)
+	}
+	if _, ok := s.Extra["grill"]; ok {
+		t.Error("grill leaked into Extra instead of being parsed into Grill")
+	}
+
+	raw, err := marshalSagittarius(s)
+	if err != nil {
+		t.Fatalf("marshalSagittarius: %v", err)
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		t.Fatalf("unmarshal serialized sagittarius: %v", err)
+	}
+	grillRaw, ok := obj["grill"]
+	if !ok {
+		t.Fatal("grill missing from serialized output")
+	}
+	reparsed, err := unmarshalGrillConfig(grillRaw)
+	if err != nil {
+		t.Fatalf("unmarshalGrillConfig(reserialized): %v", err)
+	}
+	if reparsed.SpecDir != "docs/interrogations" {
+		t.Errorf("reserialized SpecDir = %q", reparsed.SpecDir)
+	}
+	if reparsed.MaxQuestions == nil || *reparsed.MaxQuestions != 12 {
+		t.Errorf("reserialized MaxQuestions = %+v", reparsed.MaxQuestions)
+	}
+	if reparsed.Recommend == nil || *reparsed.Recommend != false {
+		t.Errorf("reserialized Recommend = %+v", reparsed.Recommend)
+	}
+}
+
 func TestValidateSagittariusSettingsRejectsBadMode(t *testing.T) {
 	t.Parallel()
 

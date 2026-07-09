@@ -3,6 +3,7 @@ package slash_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,6 +12,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/bgproc"
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/goal"
+	"github.com/undeadindustries/sagittarius/internal/grill"
 	"github.com/undeadindustries/sagittarius/internal/mcp"
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
@@ -30,6 +32,14 @@ type mockHooks struct {
 	workDir       string
 	lastAssistant string
 	lastUITheme   string
+
+	// interactionMode backs InteractionMode(); defaults to modes.ModeAgent
+	// (the zero value) so most tests need not set it explicitly.
+	interactionMode modes.Mode
+	// grillSession backs GrillStatus()/SetGrill()/... for a stateful mock,
+	// so /grill command tests can assert real start/pause/resume/done/clear
+	// transitions rather than fixed stubs.
+	grillSession *grill.Session
 }
 
 func (m *mockHooks) RebuildRunner(context.Context) (string, string, error) {
@@ -99,7 +109,7 @@ func (m *mockHooks) SetInteractionMode(context.Context, modes.Mode) (string, err
 }
 
 func (m *mockHooks) InteractionMode() (modes.Mode, string) {
-	return modes.ModeAgent, "gpt-4o-mini"
+	return m.interactionMode, "gpt-4o-mini"
 }
 
 func (m *mockHooks) SnapshotDiff(string) (string, error) { return "", nil }
@@ -171,14 +181,53 @@ func (m *mockHooks) KillBackgroundProcess(pid int) error { return nil }
 
 func (m *mockHooks) BackgroundProcessOutput(pid int) string { return "" }
 
-func (m *mockHooks) GoalStatus() *goal.Goal { return nil }
+func (m *mockHooks) GoalStatus() *goal.Goal                           { return nil }
 func (m *mockHooks) SetGoal(objective string, tokenBudget *int) error { return nil }
-func (m *mockHooks) PauseGoal(note string) error { return nil }
-func (m *mockHooks) ResumeGoal(note string) error { return nil }
-func (m *mockHooks) CompleteGoal(note string) error { return nil }
-func (m *mockHooks) BlockGoal(note string) error { return nil }
-func (m *mockHooks) ClearGoal(note string) error { return nil }
-func (m *mockHooks) SetGoalBudget(tokens int) error { return nil }
+func (m *mockHooks) PauseGoal(note string) error                      { return nil }
+func (m *mockHooks) ResumeGoal(note string) error                     { return nil }
+func (m *mockHooks) CompleteGoal(note string) error                   { return nil }
+func (m *mockHooks) BlockGoal(note string) error                      { return nil }
+func (m *mockHooks) ClearGoal(note string) error                      { return nil }
+func (m *mockHooks) SetGoalBudget(tokens int) error                   { return nil }
+
+func (m *mockHooks) GrillStatus() *grill.Session { return m.grillSession }
+
+func (m *mockHooks) SetGrill(topic string) error {
+	m.grillSession = &grill.Session{Topic: topic, Status: grill.StatusActive}
+	return nil
+}
+
+func (m *mockHooks) PauseGrill(note string) error {
+	if m.grillSession == nil {
+		return fmt.Errorf("no active grill session")
+	}
+	m.grillSession.Status = grill.StatusPaused
+	m.grillSession.Note = note
+	return nil
+}
+
+func (m *mockHooks) ResumeGrill(note string) error {
+	if m.grillSession == nil {
+		return fmt.Errorf("no active grill session")
+	}
+	m.grillSession.Status = grill.StatusActive
+	m.grillSession.Note = note
+	return nil
+}
+
+func (m *mockHooks) EndGrill(note string) (string, error) {
+	if m.grillSession == nil {
+		return "", fmt.Errorf("no active grill session")
+	}
+	m.grillSession.Status = grill.StatusSummarizing
+	m.grillSession.Note = note
+	return grill.SpecPrompt(m.grillSession.Topic, m.grillSession.Decisions, "docs/specs/"+grill.SlugTopic(m.grillSession.Topic)+".md"), nil
+}
+
+func (m *mockHooks) ClearGrill(note string) error {
+	m.grillSession = nil
+	return nil
+}
 
 func testDeps(t *testing.T, settings *config.Settings) (slash.Deps, *config.Loader, *mockHooks) {
 	t.Helper()
