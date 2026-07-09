@@ -28,6 +28,31 @@ to later phases — see [Deferred commands](#deferred-commands).
   - `/goal block`: Manually mark the goal as blocked.
 - **Note:** Recommended to run under the `yolo` approval mode (`--yolo` or `/approval yolo`), otherwise tool confirmations will block the loop and require manual intervention anyway.
 
+### `/grill`
+
+- **Description:** Socratic interrogation mode — the inverse of `/goal`. Instead
+  of running autonomously, the agent interviews you one structured question at a
+  time (recommended answer + free-text "Other" escape hatch), explores the
+  codebase to resolve anything it can verify itself, refuses to write code while
+  interrogating, and on `/grill done` generates a spec markdown file capturing
+  every resolved decision. Requires agent mode.
+- **Usage:**
+  - `/grill <topic>`: Starts a new grill session on `<topic>` (alias for `/grill start`). The agent immediately asks its first question.
+  - `/grill status`: Show the current topic, status, question count, and any note.
+  - `/grill pause [note]`: Pauses interrogation so you can go do something else; runs even mid-turn.
+  - `/grill resume [note]`: Resumes a paused session.
+  - `/grill done` (alias `/grill finish`): Ends the interrogation, lifts the read-only gate, and has the agent write the spec (default `docs/specs/<topic>.md`) from the recorded decisions.
+  - `/grill clear` (alias `/grill stop`): Cancels the session without writing a spec.
+- **Read-only while active:** Tools other than the structured `ask_user` question
+  tool are blocked (mirrors `/plan`'s tool gate) until you run `/grill done`,
+  which switches the session to `summarizing` and allows the final `write_file`.
+- **Answering questions:** The TUI renders each question as a numbered picker
+  (arrow keys or digit to choose, `Enter` to confirm); the last option is always
+  "Other" for a free-text answer.
+- **Config:** `sagittarius.grill.specDir` (default `docs/specs`), `maxQuestions`,
+  and `recommend` (whether the agent should suggest an answer) — see
+  `/settings`.
+
 ### `/quit`
 
 - **Description:** Exit the interactive session.
@@ -362,9 +387,9 @@ incrementally; track gaps in `AGENTS.md`.
 | `/auth signin` / OAuth dialogs | Deferred auth paths |
 | ACP headless registry | Post-parity |
 
-Implemented: `/about`, `/chat`, `/clear`, `/compress`, `/copy`, `/diff`, `/init`,
-`/memory reload`, `/mcp` (list, reload, add/edit/remove wizard), `/modes` (override,
-clear headlessly), `/model`, `/models`, `/mouse`, `/reasoning`, `/resume`,
-`/settings` (curated browser), `/skills` (list, reload), `/agents` (list, reload),
-`/stats`, `/system-prompt`, `/theme`, `/tools` (list, desc, enable/disable),
-`/undo`, `activate_skill` tool.
+Implemented: `/about`, `/chat`, `/clear`, `/compress`, `/copy`, `/diff`, `/goal`,
+`/grill`, `/init`, `/memory reload`, `/mcp` (list, reload, add/edit/remove wizard),
+`/modes` (override, clear headlessly), `/model`, `/models`, `/mouse`, `/reasoning`,
+`/resume`, `/settings` (curated browser), `/skills` (list, reload), `/agents`
+(list, reload), `/stats`, `/system-prompt`, `/theme`, `/tools` (list, desc,
+enable/disable), `/undo`, `activate_skill` tool, `ask_user` tool.

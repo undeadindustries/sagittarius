@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/undeadindustries/sagittarius/internal/goal"
+	"github.com/undeadindustries/sagittarius/internal/grill"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 )
 
@@ -248,6 +249,21 @@ func (r *Recorder) SetGoal(goal *goal.Snapshot) error {
 	set := SetRecord{
 		Set: &MetadataRecord{
 			Goal: goal,
+		},
+	}
+	return r.appendLineLocked(set)
+}
+
+// SetGrill appends a grill-me session metadata update to the session file.
+func (r *Recorder) SetGrill(g *grill.Snapshot) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.disabled {
+		return nil
+	}
+	set := SetRecord{
+		Set: &MetadataRecord{
+			Grill: g,
 		},
 	}
 	return r.appendLineLocked(set)

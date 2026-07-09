@@ -18,8 +18,9 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/bgproc"
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/contextmgmt"
-	"github.com/undeadindustries/sagittarius/internal/goal"
 	"github.com/undeadindustries/sagittarius/internal/credentials"
+	"github.com/undeadindustries/sagittarius/internal/goal"
+	"github.com/undeadindustries/sagittarius/internal/grill"
 	"github.com/undeadindustries/sagittarius/internal/mcp"
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
@@ -196,6 +197,10 @@ func (a *App) ComposerStatus() ui.ComposerStatus {
 		if g := a.runner.Goal(); g != nil {
 			cs.GoalActive = g.Status != goal.StatusComplete
 			cs.GoalStatusText = fmt.Sprintf("Goal %d/%d — %s", g.TurnCount, g.MaxTurns, g.Status)
+		}
+		if g := a.runner.Grill(); g != nil {
+			cs.GrillActive = g.Status != grill.StatusComplete
+			cs.GrillStatusText = fmt.Sprintf("Grill %d — %s", g.QuestionCount, g.Status)
 		}
 	}
 	if a.runtime != nil && a.runtime.Catalog != nil {
@@ -476,6 +481,9 @@ func (a *App) emitSlashResult(ctx context.Context, result slash.Result, out chan
 		}
 		for ev := range turnEvents {
 			out <- ev
+		}
+		if result.CompleteGrillAfter {
+			a.completeGrillAfterSpec()
 		}
 		return
 	}
@@ -970,6 +978,116 @@ func (h *appHooks) SetGoalBudget(tokens int) error {
 	g.TokenBudget = &tokens
 	h.app.runner.SetGoal(g)
 	return nil
+}
+
+func (h *appHooks) GrillStatus() *grill.Session {
+	if h.app == nil || h.app.runner == nil {
+		return nil
+	}
+	return h.app.runner.Grill()
+}
+
+func (h *appHooks) SetGrill(topic string) error {
+	if h.app == nil || h.app.runner == nil {
+		return fmt.Errorf("runner not available")
+	}
+	h.app.runner.SetGrill(&grill.Session{
+		Topic:     topic,
+		Status:    grill.StatusActive,
+		StartedAt: time.Now(),
+	})
+	return nil
+}
+
+func (h *appHooks) PauseGrill(note string) error {
+	if h.app == nil || h.app.runner == nil {
+		return fmt.Errorf("runner not available")
+	}
+	return h.app.runner.UpdateGrill(func(g *grill.Session) error {
+		if g.Status == grill.StatusComplete {
+			return fmt.Errorf("grill session already complete")
+		}
+		g.Status = grill.StatusPaused
+		g.Note = note
+		return nil
+	})
+}
+
+func (h *appHooks) ResumeGrill(note string) error {
+	if h.app == nil || h.app.runner == nil {
+		return fmt.Errorf("runner not available")
+	}
+	return h.app.runner.UpdateGrill(func(g *grill.Session) error {
+		if g.Status == grill.StatusComplete {
+			return fmt.Errorf("grill session already complete")
+		}
+		g.Status = grill.StatusActive
+		g.Note = note
+		return nil
+	})
+}
+
+// EndGrill moves the session to summarizing (lifting the read-only gate so the
+// spec write can succeed) and returns the model prompt that writes it. The
+// caller drives the actual turn via Result.SubmitPrompt +
+// Result.CompleteGrillAfter, which flips the session to StatusComplete once
+// that turn finishes (see App.completeGrillAfterSpec).
+func (h *appHooks) EndGrill(note string) (string, error) {
+	if h.app == nil || h.app.runner == nil {
+		return "", fmt.Errorf("runner not available")
+	}
+	var prompt string
+	err := h.app.runner.UpdateGrill(func(g *grill.Session) error {
+		if g.Status == grill.StatusSummarizing || g.Status == grill.StatusComplete {
+			return fmt.Errorf("grill session is already finishing or complete")
+		}
+		if len(g.Decisions) == 0 {
+			return fmt.Errorf("no decisions recorded yet; ask at least one question before finishing")
+		}
+
+		specDir := grill.DefaultSpecDir
+		if s := h.app.effectiveSettings(); s != nil && s.Sagittarius != nil && s.Sagittarius.Grill != nil {
+			if d := strings.TrimSpace(s.Sagittarius.Grill.SpecDir); d != "" {
+				specDir = d
+			}
+		}
+		specPath := filepath.Join(specDir, grill.SlugTopic(g.Topic)+".md")
+
+		g.Status = grill.StatusSummarizing
+		g.Note = note
+		g.SpecPath = specPath
+		prompt = grill.SpecPrompt(g.Topic, g.Decisions, specPath)
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return prompt, nil
+}
+
+func (h *appHooks) ClearGrill(note string) error {
+	if h.app == nil || h.app.runner == nil {
+		return fmt.Errorf("runner not available")
+	}
+	h.app.runner.SetGrill(nil)
+	return nil
+}
+
+// completeGrillAfterSpec flips a summarizing grill session to StatusComplete
+// once its spec-writing turn (Result.SubmitPrompt + CompleteGrillAfter) has
+// finished streaming. A no-op if the session moved on for any other reason
+// (cleared, or already complete) while the turn was running.
+func (a *App) completeGrillAfterSpec() {
+	if a.runner == nil {
+		return
+	}
+	_ = a.runner.UpdateGrill(func(g *grill.Session) error {
+		if g.Status != grill.StatusSummarizing {
+			return errGrillNoop
+		}
+		g.Status = grill.StatusComplete
+		return nil
+	})
 }
 
 // WorkDir returns the runner's workspace root, used to keep /chat share writes

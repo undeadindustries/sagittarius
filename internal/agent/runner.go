@@ -16,6 +16,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/contextmgmt"
 	"github.com/undeadindustries/sagittarius/internal/goal"
+	"github.com/undeadindustries/sagittarius/internal/grill"
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/prompt"
 	"github.com/undeadindustries/sagittarius/internal/provider"
@@ -82,6 +83,8 @@ type RunnerConfig struct {
 	SuggestVerifyAfterWrite bool
 	// InitialGoal pre-populates the active session goal from a resumed session.
 	InitialGoal *goal.Snapshot
+	// InitialGrill pre-populates the active grill-me session from a resumed session.
+	InitialGrill *grill.Snapshot
 }
 
 // Runner orchestrates conversation history and provider streaming for the agent loop.
@@ -138,6 +141,9 @@ type Runner struct {
 
 	goalMu     sync.RWMutex
 	activeGoal *goal.Goal
+
+	grillMu     sync.RWMutex
+	activeGrill *grill.Session
 }
 
 // LoadedMemoryFiles returns the AGENTS.md paths that contributed to the system
@@ -192,7 +198,7 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		return nil, fmt.Errorf("agent runner: workspace: %w", err)
 	}
 	registry := tools.NewBuiltinRegistry(ws, tools.WithAllowFix(cfg.AllowFix))
-	
+
 	// Create the runner struct first to pass it to goal tools
 	var history []provider.Message
 	if len(cfg.InitialHistory) > 0 {
@@ -233,8 +239,12 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 			runner.activeGoal.TokensBaseline = runner.TotalSessionTokens()
 		}
 	}
+	if cfg.InitialGrill != nil {
+		runner.activeGrill = grill.FromSnapshot(cfg.InitialGrill)
+	}
 
 	registerGoalTools(runner, registry)
+	registerGrillTools(runner, registry)
 
 	policy := approvalToPolicy(mode)
 	scheduler := tools.NewScheduler(registry, policy, cfg.Interactive, nil, ws)
@@ -552,7 +562,7 @@ func (r *Runner) runAgentLoop(ctx context.Context, out chan<- ui.StreamEvent) {
 		}
 	}
 
-	outerLoop:
+outerLoop:
 	for {
 		for round := 0; round < maxRounds; round++ {
 			r.prepareContext(ctx)
@@ -796,6 +806,17 @@ func (r *Runner) rebuildBasePrompt() {
 
 func (r *Runner) applyModeSystemSuffix() {
 	suffix := modes.SystemPromptSuffix(r.InteractionMode(), r.sagittariusSettings())
+	// Only inject the interrogation directive while actively grilling. Paused
+	// sessions must not steer the model to keep asking questions, and
+	// summarizing/complete sessions are past the interview phase.
+	if g := r.Grill(); g != nil && g.Status == grill.StatusActive {
+		directive := grill.Directive(g.Topic, r.grillDirectiveConfig())
+		if suffix != "" {
+			suffix = strings.TrimRight(suffix, "\n") + "\n\n" + directive
+		} else {
+			suffix = directive
+		}
+	}
 	r.modelMu.Lock()
 	base := r.systemBase
 	if suffix != "" {
@@ -914,8 +935,34 @@ func (r *Runner) schedulerOptions() []tools.SchedulerOption {
 				_ = r.sessionRecorder.RecordSessionGrant(toolName)
 			}
 		}),
+		tools.WithReadOnlyGate(r.grillReadOnly),
 	)
 	return opts
+}
+
+// grillReadOnly reports whether an active grill session should force
+// read-only tool gating (active or paused interrogation). It is lifted once
+// the session moves to summarizing/complete so the final spec write and any
+// cleanup can proceed normally.
+func (r *Runner) grillReadOnly() bool {
+	g := r.Grill()
+	return g != nil && g.Status != grill.StatusSummarizing && g.Status != grill.StatusComplete
+}
+
+// grillDirectiveConfig resolves the interrogation directive tuning from
+// sagittarius.grill settings, defaulting Recommend to true (the documented
+// default) when unset.
+func (r *Runner) grillDirectiveConfig() grill.DirectiveConfig {
+	cfg := grill.DirectiveConfig{Recommend: true}
+	if s := r.sagittariusSettings(); s != nil && s.Grill != nil {
+		if s.Grill.MaxQuestions != nil {
+			cfg.MaxQuestions = *s.Grill.MaxQuestions
+		}
+		if s.Grill.Recommend != nil {
+			cfg.Recommend = *s.Grill.Recommend
+		}
+	}
+	return cfg
 }
 
 // rememberSessionGrant records a session-wide tool approval in runner state so

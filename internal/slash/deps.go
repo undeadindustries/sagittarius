@@ -7,6 +7,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/bgproc"
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/goal"
+	"github.com/undeadindustries/sagittarius/internal/grill"
 	"github.com/undeadindustries/sagittarius/internal/mcp"
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
@@ -98,6 +99,17 @@ type Hooks interface {
 	BlockGoal(note string) error
 	ClearGoal(note string) error
 	SetGoalBudget(tokens int) error
+
+	// /grill Socratic-interrogation mode hooks
+	GrillStatus() *grill.Session
+	SetGrill(topic string) error
+	PauseGrill(note string) error
+	ResumeGrill(note string) error
+	// EndGrill marks the session summarizing and returns the model prompt that
+	// writes the spec file; the caller (handleGrillDone) drives it via
+	// Result.SubmitPrompt.
+	EndGrill(note string) (specPrompt string, err error)
+	ClearGrill(note string) error
 }
 
 // Deps supplies slash command dependencies (injectable for tests).

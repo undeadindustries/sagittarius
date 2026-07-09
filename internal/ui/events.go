@@ -43,7 +43,25 @@ const (
 	// StreamSetMouse asks the TUI to enable/disable mouse-wheel reporting live;
 	// Text is "on", "off", or "toggle". Used by the /mouse command.
 	StreamSetMouse
+	// StreamAskUser prompts the user to answer a structured question posed by
+	// the ask_user tool during grill-me interrogation: AskQuestion + AskOptions
+	// describe the prompt, and the TUI sends the answer via AskReply.
+	StreamAskUser
 )
+
+// AskOption is one selectable answer for a StreamAskUser prompt.
+type AskOption struct {
+	Label       string
+	Description string
+}
+
+// AskAnswer is the user's response to a StreamAskUser prompt. Index is the
+// chosen option's position; -1 means the user typed a free-text answer via the
+// automatic "Other" escape hatch (Text always carries the answer text either way).
+type AskAnswer struct {
+	Index int
+	Text  string
+}
 
 // ScrollbackRole classifies a StreamScrollback block so the TUI applies the
 // matching user / assistant / info styling.
@@ -116,6 +134,15 @@ type StreamEvent struct {
 	// IsError marks a StreamToolResult as a failure (denied, boundary block,
 	// tool error, non-zero exit) so the card renders with the error icon/color.
 	IsError bool
+	// AskQuestion is the question text for StreamAskUser.
+	AskQuestion string
+	// AskOptions are the selectable answers for StreamAskUser (2-4 entries);
+	// the TUI appends an automatic "Other" entry for free-text answers.
+	AskOptions []AskOption
+	// AskRecommended is the 0-based index of the recommended AskOptions entry.
+	AskRecommended int
+	// AskReply is set for StreamAskUser; the TUI sends the user's answer here.
+	AskReply chan AskAnswer
 }
 
 // ConfirmDecision is the user's answer to a tool confirmation prompt.

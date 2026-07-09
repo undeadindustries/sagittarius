@@ -21,6 +21,10 @@ const (
 	// toolConfirming is awaiting the user's approval (nested command/diff preview
 	// plus the numbered allow menu).
 	toolConfirming
+	// toolAsking is awaiting the user's answer to a grill-mode ask_user
+	// question (the question text plus the numbered option menu, with an
+	// automatic "Other" entry for free-text answers).
+	toolAsking
 	// toolSuccess is a completed invocation (result snippet / diff / exit code).
 	toolSuccess
 	// toolError is a failed, denied, or boundary-blocked invocation.
@@ -41,6 +45,13 @@ type toolCard struct {
 	diff        string // unified-diff preview (write_file confirm + result)
 	phase       toolPhase
 	exitCode    *int
+
+	// askQuestion/askOptions/askRecommended hold a pending grill-mode ask_user
+	// prompt (toolAsking phase); askOptions never includes the automatic
+	// "Other" entry, which the renderer appends.
+	askQuestion    string
+	askOptions     []ui.AskOption
+	askRecommended int
 }
 
 // toolCardMaxBodyLines caps the live-output / result body height inside a card
@@ -87,10 +98,16 @@ func toolDisplayName(name string) string {
 		return "Web search"
 	case wireWebFetch:
 		return "Web fetch"
+	case wireAskUser:
+		return "Question"
 	default:
 		return name
 	}
 }
+
+// wireAskUser is grill mode's structured-question tool (tools.AskUserToolName,
+// duplicated here per the package's existing wire-name decoupling convention).
+const wireAskUser = "ask_user"
 
 // parseMCPToolName splits a qualified MCP wire name (mcp_{server}_{tool}) into
 // its server and tool segments. The first underscore after the prefix separates
@@ -146,7 +163,7 @@ func (m *model) renderToolCard(c *toolCard, width int) []string {
 // toolCardBorderColor highlights a confirming card with the focus color so the
 // pending decision draws the eye; other phases use the muted panel border.
 func (m *model) toolCardBorderColor(c *toolCard) lipgloss.TerminalColor {
-	if c.phase == toolConfirming {
+	if c.phase == toolConfirming || c.phase == toolAsking {
 		return m.th.FocusBorderColor
 	}
 	return m.th.BorderColor
@@ -176,7 +193,7 @@ func (m *model) toolCardTop(c *toolCard, border lipgloss.Style, width int) strin
 // phase: an animated spinner while running, else a static icon.
 func (m *model) toolStatusGlyph(c *toolCard) string {
 	switch c.phase {
-	case toolConfirming:
+	case toolConfirming, toolAsking:
 		return m.th.Warning.Render("?")
 	case toolSuccess:
 		return m.th.Success.Render("✓")
@@ -193,6 +210,8 @@ func (m *model) toolCardBody(c *toolCard, inner int) []string {
 	switch c.phase {
 	case toolConfirming:
 		return m.toolConfirmBody(c, inner)
+	case toolAsking:
+		return m.toolAskBody(c, inner)
 	case toolError:
 		return m.wrapStyled(strings.TrimSpace(c.body), inner, m.th.Error)
 	default:
@@ -257,6 +276,41 @@ func (m *model) toolConfirmBody(c *toolCard, inner int) []string {
 		} else {
 			lines = append(lines, "  "+m.th.Secondary.Render(row))
 		}
+	}
+	return lines
+}
+
+// toolAskBody renders a pending grill-mode ask_user question inside the card:
+// the question text, the recommended-first numbered options, and an automatic
+// trailing "Other" row for a free-text answer. Once "Other" is selected the
+// card shows a hint to type the answer in the main input box instead.
+func (m *model) toolAskBody(c *toolCard, inner int) []string {
+	var lines []string
+	for _, ln := range strings.Split(wrapText(strings.TrimSpace(c.askQuestion), max(inner, 1)), "\n") {
+		lines = append(lines, m.th.Warning.Render(ln))
+	}
+	for i, opt := range c.askOptions {
+		row := fmt.Sprintf("%d %s", i+1, opt.Label)
+		if i == c.askRecommended {
+			row += " " + m.th.Dim.Render("(recommended)")
+		}
+		if opt.Description != "" {
+			row += "  " + m.th.Dim.Render(opt.Description)
+		}
+		if i == m.askChoice && !m.askOtherMode {
+			lines = append(lines, m.th.Selected.Render("› "+row))
+		} else {
+			lines = append(lines, "  "+m.th.Secondary.Render(row))
+		}
+	}
+	otherRow := fmt.Sprintf("%d Other — type my own", len(c.askOptions)+1)
+	if m.askOtherMode || m.askChoice == len(c.askOptions) {
+		lines = append(lines, m.th.Selected.Render("› "+otherRow))
+	} else {
+		lines = append(lines, "  "+m.th.Secondary.Render(otherRow))
+	}
+	if m.askOtherMode {
+		lines = append(lines, m.th.Dim.Render("Type your answer below and press Enter."))
 	}
 	return lines
 }

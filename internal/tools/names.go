@@ -11,6 +11,10 @@ const (
 	ProjectChecksToolName   = "run_project_checks"
 	GoogleWebSearchToolName = "google_web_search"
 	WebFetchToolName        = "web_fetch"
+	// AskUserToolName is the grill-mode structured question tool (registered by
+	// internal/agent, not NewBuiltinRegistry, but its name must be known here so
+	// the scheduler's read-only gate can special-case it).
+	AskUserToolName = "ask_user"
 )
 
 const (

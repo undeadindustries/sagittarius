@@ -41,6 +41,7 @@ in this file (see [Keeping this file current](#keeping-this-file-current)).
 
 | Area | Files | Status |
 |------|-------|--------|
+| Grill-me interrogation mode (AD-072) | `internal/grill/`, `internal/agent/grill*.go`, `internal/slash/grill*.go`, `internal/ui/bubbletea/toolcard.go`, `internal/config/`, `internal/session/` | Implemented; tests green |
 | Autonomous `/goal` loop (AD-071) | `internal/goal/`, `internal/agent/goal*.go`, `internal/slash/goal*.go`, `internal/config/`, `internal/session/` | Implemented; tests green |
 | Footer context % after `/compress` (AD-070) | `internal/agent/metrics.go`, `runner.go`, `runner_compress_test.go` | Implemented; tests green |
 | Async custom provider add/remove spinner (AD-069) | `internal/ui/providersdialog/` | Implemented; tests green |
@@ -123,7 +124,8 @@ selected via presets. Per-turn temperature + sampling defaults; context-window
 auto-detection. Project default via `/system-prompt` (`sagittarius.systemPrompt`
 in project settings); provider override still available in `/providers`.
 - **Tools:** `read_file`, `write_file`, `list_directory`, `run_shell_command`,
-`grep_search`, `run_project_checks`, plus `activate_skill` and MCP tools.
+`grep_search`, `run_project_checks`, plus `activate_skill`, `ask_user` (grill-mode
+structured question tool, see AD-072), and MCP tools.
 Approval policy `default`/`autoEdit`/`yolo` (`--approval-mode`, `--yolo`/`-y`).
 Workspace path validation; a project-boundary option blocks out-of-root
 mutations (file writes + a heuristic shell scan).
@@ -194,6 +196,8 @@ comes from `mcp.Manager.ToolInventory` + `tools.Registry.ListEntries`.
 `/stats` (live session usage statistics; `session`/`model`/`tools`),
 `/init` (analyze the project and generate a tailored AGENTS.md),
 `/theme` (show or switch the TUI color theme; `default`/`greyscale`),
+`/goal` (autonomous run-until-done loop; `start`/`status`/`pause`/`resume`/`clear`/`complete`/`block`),
+`/grill` (Socratic interrogation mode; `start`/`status`/`pause`/`resume`/`done`/`clear` — see AD-072),
 `/memory reload`, `/mcp` (wizard; list/reload), `/tools` (inventory; list/desc),
 `/skills` (list/reload), `/agents` (list/reload), `/diff`, `/undo`. Naming rule:
 singular sets current one (`/model`, `/mode`), plural manages settings
@@ -340,6 +344,65 @@ API-reported limits today (see `provider.MaybeSetContextLimit`, `resolveContextL
  for non-`/v1` endpoints like z.ai. AWS Bedrock is intentionally excluded (SigV4 +
  regional hosts don't fit paste-URL+key). `tests/parity/parity_test.go` now asserts
  exactly one built-in (`gemini-apikey`) plus openai/openai-responses as presets.
+
+- **2026-07-06 — Grill-me Socratic interrogation mode (AD-072):** Added `/grill`,
+ the structural inverse of `/goal` (AD-071): instead of an autonomous loop, the
+ agent interviews the user one question at a time, exploring the codebase to
+ self-answer whatever it can verify, refusing to write code, and ending in a
+ generated spec markdown. New `internal/grill` package (`Session`/`Status`
+ enum `active`/`paused`/`summarizing`/`complete`/`Decision`/`Snapshot`, mirroring
+ `internal/goal`) plus `Directive()` (injected into the system prompt suffix by
+ `runner.applyModeSystemSuffix` whenever a grill is active and not summarizing)
+ and `SpecPrompt()` (the final spec-writing prompt). A new read-only
+ `internal/tools.InteractiveTool` interface (`ExecuteInteractive`, embedding
+ `Tool`) lets the scheduler special-case tools that need to pause for user
+ input mid-turn; `internal/agent/grill_tools.go`'s `ask_user` tool is the first
+ implementer — it emits `ui.StreamAskUser` (question + 2-4 `{label,
+ description}` options, recommended-first) and blocks on the reply channel,
+ recording a `grill.Decision` from the answer. The TUI (`toolcard.go`) renders
+ this as a new `toolAsking` phase reusing the tool-confirmation card chrome,
+ with digit/arrow selection and an automatic "Other" free-text option
+ (`model.go`'s `askReply`/`handleAskKey`); headless runs auto-pick the
+ recommended option so `-p`/`--slash` never hangs. Read-only enforcement is a
+ new `Scheduler.readOnly func() bool` gate (`tools.WithReadOnlyGate`) checked
+ ahead of the interaction-mode gate, backed by `interaction_mode.go`'s
+ `grillModeAllow` (delegates to the existing `askModeAllow` denylist but
+ explicitly allows `ask_user`); it is lifted once `EndGrill` flips the session
+ to `summarizing` so the spec `write_file` succeeds. `/grill <topic>` seeds the
+ session and submits an opening prompt (parallel to `/goal`'s
+ `SubmitPrompt`-driven start); `/grill done`/`finish` returns
+ `Result{SubmitPrompt, CompleteGrillAfter: true}`, and the new
+ `App.completeGrillAfterSpec` (invoked from `emitSlashResult`) flips the
+ session to `complete` once that turn's stream finishes. `/grill pause` and
+ `/grill status` were added to the TUI's concurrent-safe slash allow-list
+ (`isConcurrentSafeSlash`) alongside the existing `/goal pause`/`status`, fixing
+ the same "control command blocked mid-turn" class of bug for grill. Session
+ persistence mirrors `/goal`: `grill.Snapshot` round-trips through
+ `session.MetadataRecord`/`ConversationRecord` and `--resume` restores
+ `activeGrill` (and its read-only gate) via `RunnerConfig.InitialGrill`.
+ `SagittariusGrillConfig` (`specDir` default `docs/specs`, `maxQuestions`,
+ `recommend`) was added to `config.SagittariusSettings` — including the
+ `unmarshalGrillConfig`/`marshalGrillConfig` wiring in
+ `sagittarius_document.go` that `/goal`'s config already had, so `grill`
+ settings round-trip through `settings.json` instead of silently landing in
+ `Extra`. Grill is a slash-driven conversational protocol layered on agent
+ mode, **not** a 5th interaction mode: interaction modes gate tools/route
+ models, whereas grill only adds a directive + a stricter read-only gate on
+ top of whatever mode is active (agent-only at entry).
+ **Bugbot hardening (same day):** five review findings fixed. (1) The TUI now
+ clears `askReply`/`askChoice`/`askOtherMode` on `StreamDone`/`StreamError`
+ (`model.clearAskState`) so a cancelled/failed `ask_user` no longer leaves the
+ composer stuck intercepting keys. (2) `EndGrill` rejects sessions already
+ `summarizing`/`complete` so `/grill done` can't re-trigger spec generation.
+ (3) `grill.Directive` now takes a `DirectiveConfig{MaxQuestions, Recommend}`
+ resolved from settings (`runner.grillDirectiveConfig`) — the config keys were
+ round-tripping but never applied. (4) Pause actually suspends interrogation:
+ `applyModeSystemSuffix` injects the directive only for `StatusActive` (not
+ paused), and `ask_user` refuses to run while paused. (5) Grill-session field
+ mutations are race-safe: `Grill()` returns a deep `Clone()` (readers never
+ share the live pointer) and all in-place edits go through a new locked
+ `Runner.UpdateGrill(fn)` (recordDecision + pause/resume/end/complete hooks),
+ serializing mid-turn `recordDecision` against concurrent-safe `/grill pause`.
 
 - **2026-07-06 — Autonomous run-until-done loop (AD-071):** Implemented `/goal`, enabling a hybrid goal-completion system that automatically loops the agent across multiple turns until finished. Completion checks combine deterministic tools (like tests or builds enclosed in backticks) coordinated via `errgroup`, with a fallback to a fast evaluator model. State is preserved across `/chat resume` in `settings.json` and session JSONL files (`MetadataRecord`). This keeps the UI busy during back-to-back agent turns without requiring `StreamDone` flushes between them.
 

@@ -666,6 +666,12 @@ func unmarshalSagittarius(raw json.RawMessage) (*SagittariusSettings, error) {
 				return nil, fmt.Errorf("decode sagittarius.goal: %w", err)
 			}
 			s.Goal = g
+		case "grill":
+			g, err := unmarshalGrillConfig(val)
+			if err != nil {
+				return nil, fmt.Errorf("decode sagittarius.grill: %w", err)
+			}
+			s.Grill = g
 		case "maxToolRounds":
 			var n int
 			if err := json.Unmarshal(val, &n); err != nil {
@@ -776,6 +782,13 @@ func marshalSagittarius(s *SagittariusSettings) (json.RawMessage, error) {
 		}
 		obj["goal"] = b
 	}
+	if s.Grill != nil {
+		b, err := marshalGrillConfig(s.Grill)
+		if err != nil {
+			return nil, err
+		}
+		obj["grill"] = b
+	}
 	if err := add("maxToolRounds", s.MaxToolRounds); err != nil {
 		return nil, err
 	}
@@ -874,6 +887,78 @@ func marshalGoalConfig(c *SagittariusGoalConfig) (json.RawMessage, error) {
 			return nil, err
 		}
 		obj["defaultBudget"] = b
+	}
+	for key, val := range c.Extra {
+		obj[key] = val
+	}
+	if len(obj) == 0 {
+		return json.RawMessage("{}"), nil
+	}
+	return json.Marshal(obj)
+}
+
+func unmarshalGrillConfig(raw json.RawMessage) (*SagittariusGrillConfig, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, err
+	}
+	c := &SagittariusGrillConfig{Extra: make(map[string]json.RawMessage)}
+	for key, val := range obj {
+		switch key {
+		case "specDir":
+			if err := json.Unmarshal(val, &c.SpecDir); err != nil {
+				return nil, err
+			}
+		case "maxQuestions":
+			var n int
+			if err := json.Unmarshal(val, &n); err != nil {
+				return nil, err
+			}
+			c.MaxQuestions = &n
+		case "recommend":
+			var b bool
+			if err := json.Unmarshal(val, &b); err != nil {
+				return nil, err
+			}
+			c.Recommend = &b
+		default:
+			c.Extra[key] = val
+		}
+	}
+	if len(c.Extra) == 0 {
+		c.Extra = nil
+	}
+	return c, nil
+}
+
+func marshalGrillConfig(c *SagittariusGrillConfig) (json.RawMessage, error) {
+	if c == nil {
+		return nil, nil
+	}
+	obj := make(map[string]json.RawMessage)
+	if c.SpecDir != "" {
+		b, err := json.Marshal(c.SpecDir)
+		if err != nil {
+			return nil, err
+		}
+		obj["specDir"] = b
+	}
+	if c.MaxQuestions != nil {
+		b, err := json.Marshal(*c.MaxQuestions)
+		if err != nil {
+			return nil, err
+		}
+		obj["maxQuestions"] = b
+	}
+	if c.Recommend != nil {
+		b, err := json.Marshal(*c.Recommend)
+		if err != nil {
+			return nil, err
+		}
+		obj["recommend"] = b
 	}
 	for key, val := range c.Extra {
 		obj[key] = val
