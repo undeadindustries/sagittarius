@@ -34,5 +34,10 @@ coverage.html
 .env.*
 !.env.example
 
+# Temporary files and logs
+*.txt
+*.json
+!internal/config/testdata/*.json
+
 # Sagittarius runtime (if we add local state later)
 .sagittarius/
