@@ -28,7 +28,7 @@ LDFLAGS := -ldflags "-X $(MODULE)/internal/version.Version=$(VERSION) \
 	-X $(MODULE)/internal/version.Commit=$(COMMIT) \
 	-X $(MODULE)/internal/version.BuildDate=$(BUILD_DATE)"
 
-.PHONY: build test vet lint race clean tools vulncheck e2e e2e-mock
+.PHONY: build test vet lint race clean tools vulncheck e2e e2e-mock release-snapshot
 
 build: $(BINARY)
 
@@ -67,3 +67,7 @@ tools:
 
 vulncheck:
 	$(GO) run $(GOVULNCHECK) ./...
+
+release-snapshot:
+	goreleaser release --snapshot --clean
+

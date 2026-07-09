@@ -158,4 +158,4 @@ the restriction. Built-in system-prompt suffixes reinforce these rules; optional
 ## Related docs
 
 - Fork plan **approval** mode: see the frozen fork `docs/cli/plan-mode.md` (tool restrictions only).
-- Project decisions: `AGENTS.md` AD-007, AD-022.
+- Project decisions: see git commit history.

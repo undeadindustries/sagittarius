@@ -1,0 +1,43 @@
+# GoReleaser configuration for Sagittarius
+# See https://goreleaser.com for documentation
+
+version: 2
+
+project_name: sagittarius
+
+builds:
+  - id: sagittarius
+    binary: sagittarius
+    main: ./cmd/sagittarius
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w -X github.com/undeadindustries/sagittarius/internal/version.Version={{.Version}} -X github.com/undeadindustries/sagittarius/internal/version.Commit={{.ShortCommit}} -X github.com/undeadindustries/sagittarius/internal/version.BuildDate={{.Date}}
+
+archives:
+  - format: tar.gz
+    name_template: "sagittarius_{{.Version}}_{{.Os}}_{{.Arch}}"
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - "merge"
+
+release:
+  draft: true

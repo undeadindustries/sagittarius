@@ -14,7 +14,22 @@ You can set specific models for different modes (agent, plan, ask), choose diffe
 
 - Go **1.26.4** or later ([go.dev/dl](https://go.dev/dl/))
 
-## Build
+## Installation
+
+### From GitHub Releases
+
+Pre-compiled binaries for Linux and macOS are available on the [GitHub Releases](https://github.com/undeadindustries/sagittarius/releases) page.
+
+Download the appropriate archive, extract it, and move the binary to a directory in your `PATH` (for example, `/usr/local/bin`):
+
+```bash
+# Example for Linux AMD64
+curl -sSLO "https://github.com/undeadindustries/sagittarius/releases/download/v0.1.0/sagittarius_0.1.0_linux_amd64.tar.gz"
+tar -xzf sagittarius_0.1.0_linux_amd64.tar.gz
+sudo mv sagittarius /usr/local/bin/
+```
+
+### From Source (Build)
 
 ```bash
 make build
