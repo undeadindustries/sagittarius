@@ -27,4 +27,3 @@ func padOrTruncate(line string, width int) string {
 	}
 	return line
 }
-
