@@ -74,8 +74,9 @@ These work in the interactive TUI in addition to the slash commands above.
 
 | Key | Action |
 |-----|--------|
+| `Shift+Tab` | Cycle interaction mode (agent → plan → ask → debug) |
 | `Alt+1` / `Alt+2` / `Alt+3` / `Alt+4` | Switch to agent / plan / ask / debug mode |
-| `Ctrl+Shift+M` | Cycle interaction mode (agent → plan → ask → debug) |
+| `Ctrl+Shift+M` | Cycle interaction mode (alias of `Shift+Tab`) |
 | `Ctrl+/` | Cycle forward through active models |
 | `Ctrl+Shift+P` | Cycle backward through active models |
 | `Alt+T` | Cycle the color theme (default ↔ greyscale) |

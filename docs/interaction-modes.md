@@ -118,7 +118,8 @@ any mode or clear an existing override via a TUI menu.
 
 ### TUI shortcut
 
-Press **Ctrl+Shift+M** to cycle modes: agent → plan → ask → debug → agent.
+Press **Shift+Tab** (or **Ctrl+Shift+M**) to cycle modes: agent → plan → ask → debug → agent.
+Use **Alt+1..4** to jump directly to agent / plan / ask / debug.
 
 ## CLI overrides
 

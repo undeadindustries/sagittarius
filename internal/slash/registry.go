@@ -66,7 +66,8 @@ func (r *Registry) RenderHelp() string {
 
 	b.WriteString("\nKeyboard shortcuts:\n\n")
 	fmt.Fprintf(&b, "  %-28s %s\n", "Alt+1..4 (or ⌥+1..4)", "Switch mode (agent/plan/ask/debug)")
-	fmt.Fprintf(&b, "  %-28s %s\n", "Ctrl+Shift+M", "Cycle mode (agent → plan → ask → debug)")
+	fmt.Fprintf(&b, "  %-28s %s\n", "Shift+Tab", "Cycle mode (agent → plan → ask → debug)")
+	fmt.Fprintf(&b, "  %-28s %s\n", "Ctrl+Shift+M", "Cycle mode (alias of Shift+Tab)")
 	fmt.Fprintf(&b, "  %-28s %s\n", "Ctrl+/", "Cycle active models forward")
 	fmt.Fprintf(&b, "  %-28s %s\n", "Ctrl+Shift+P", "Cycle active models backward")
 	fmt.Fprintf(&b, "  %-28s %s\n", "Alt+T (or ⌥+T)", "Cycle color theme (default ↔ greyscale)")

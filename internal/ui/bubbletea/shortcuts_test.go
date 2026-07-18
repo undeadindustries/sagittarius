@@ -16,6 +16,7 @@ import (
 type shortcutApp struct {
 	modeName     string
 	modeCalls    int
+	cycleCalls   int
 	reverseCalls int
 	themeReturn  string
 	themeCalls   int
@@ -37,6 +38,11 @@ func doneStream() <-chan ui.StreamEvent {
 func (a *shortcutApp) SetModeByName(_ context.Context, name string) (<-chan ui.StreamEvent, error) {
 	a.modeName = name
 	a.modeCalls++
+	return doneStream(), nil
+}
+
+func (a *shortcutApp) CycleInteractionMode(context.Context) (<-chan ui.StreamEvent, error) {
+	a.cycleCalls++
 	return doneStream(), nil
 }
 
@@ -204,5 +210,32 @@ func TestStartModeSwitchNoCapabilityIsNoop(t *testing.T) {
 	}
 	if m.busy {
 		t.Fatal("no-op mode switch must not enter busy state")
+	}
+}
+
+func TestShiftTabCyclesMode(t *testing.T) {
+	t.Parallel()
+	app := &shortcutApp{}
+	m := newShortcutModel(app)
+	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	if app.cycleCalls != 1 {
+		t.Fatalf("Shift+Tab should call CycleInteractionMode once, got %d", app.cycleCalls)
+	}
+	if !m.busy || m.stream == nil || cmd == nil {
+		t.Fatalf("Shift+Tab should enter busy stream state (busy=%v stream=%v)", m.busy, m.stream != nil)
+	}
+}
+
+func TestShiftTabIgnoredWhileBusy(t *testing.T) {
+	t.Parallel()
+	app := &shortcutApp{}
+	m := newShortcutModel(app)
+	m.busy = true
+	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyShiftTab})
+	if app.cycleCalls != 0 {
+		t.Fatalf("Shift+Tab mid-turn must not cycle mode, got %d calls", app.cycleCalls)
+	}
+	if cmd != nil {
+		t.Fatal("Shift+Tab mid-turn should be a no-op (nil cmd)")
 	}
 }
