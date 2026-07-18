@@ -96,7 +96,7 @@ Interactive shortcuts, headless flags, and slash commands for the same features 
 
 | Feature | Keyboard (TUI) | CLI flags / parameters |
 |---------|----------------|------------------------|
-| **Interaction mode** (agent / plan / ask / debug) | `Alt+1` … `Alt+4`, `Ctrl+Shift+M`; or `/mode`, `/modes` | `--mode` (`agent`, `plan`, `ask`, `debug`) |
+| **Interaction mode** (agent / plan / ask / debug) | `Shift+Tab` (cycle), `Alt+1` … `Alt+4` (direct), `Ctrl+Shift+M` (cycle alias); or `/mode`, `/modes` | `--mode` (`agent`, `plan`, `ask`, `debug`) |
 | **Model** (pick or cycle active set) | `Ctrl+/` (forward), `Ctrl+Shift+P` (back); or `/model`, `/models` | `-m`, `--model <id>` (pins model for this run; disables mode-based model routing) |
 | **Tool approval** (confirm vs auto-run tools) | Tool cards: Allow once / session / deny; status row shows policy | `--approval-mode` (`default`, `autoEdit`, `yolo`); `-y`, `--yolo` (shorthand for yolo; not combinable with `--approval-mode`) |
 | **Thinking / reasoning box** | `Ctrl+T` (persists `ui.showThinking`) | — (use `/settings` or per-model `showThinking` in `/models`) |
@@ -193,8 +193,9 @@ The alt-screen is cleared when Sagittarius exits. The exit summary (session stat
 
 ### How do I change mode or model quickly?
 
+- **`Shift+Tab`**: cycle modes in order (agent → plan → ask → debug → agent).
 - **`Alt+1` … `Alt+4`** (or macOS Option equivalents): jump directly to agent, plan, ask, or debug.
-- **`Ctrl+Shift+M`**: cycle modes in order.
+- **`Ctrl+Shift+M`**: cycle modes in order (alias of `Shift+Tab`).
 - **`Ctrl+/`** / **`Ctrl+Shift+P`**: cycle active models forward / backward.
 - **`/mode`**, **`/model`**, **`/modes`**: full pickers and override editors.
 

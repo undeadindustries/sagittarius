@@ -1189,7 +1189,7 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			return m.handleBusyTab()
-		case "ctrl+shift+m", "ctrl+/":
+		case "ctrl+shift+m", "shift+tab", "ctrl+/":
 			// Mode/model switching is not allowed mid-turn; ignore so the keys
 			// do not corrupt the in-flight stream.
 			return m, nil
@@ -1221,7 +1221,7 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, m.beginQuit()
-	case "ctrl+shift+m":
+	case "ctrl+shift+m", "shift+tab":
 		if cycler, ok := m.app.(interface {
 			CycleInteractionMode(context.Context) (<-chan ui.StreamEvent, error)
 		}); ok {
