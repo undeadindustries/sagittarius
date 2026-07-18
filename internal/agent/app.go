@@ -1656,6 +1656,14 @@ func (r *Runner) SetRegistry(registry *tools.Registry) {
 	r.registry = registry
 	r.scheduler = scheduler
 	r.regMu.Unlock()
+
+	// The base prompt's tool-derived flags (SymbolsEnabled, the available-tools
+	// list) are computed from the registered tools, so a registry swap can make
+	// them stale — e.g. NewRunner builds the prompt against a default registry
+	// that always includes find_symbol, then main.go swaps in the real registry
+	// which may exclude it when sagittarius.symbols.enabled is false. Recompose
+	// the system prompt off the registry lock so it reflects the new registry.
+	r.rebuildSystem()
 }
 
 // Registry returns the active tool registry.

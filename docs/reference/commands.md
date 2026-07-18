@@ -226,7 +226,8 @@ and resets to off on the next launch.
     the built-in default takes over.
 - **Categories:** General (`sagittarius.maxToolRounds`), UI (`ui.theme`,
   `ui.showThinking`, `ui.hideBanner`), Security (`security.projectBoundary.enforce`),
-  Snapshots (`sagittarius.snapshots.*`), Verify (`sagittarius.verify.*`).
+  Snapshots (`sagittarius.snapshots.*`), Verify (`sagittarius.verify.*`),
+  Symbols (`sagittarius.symbols.*`).
 - **Persistence:** Changes are saved immediately to the target scope file and take
   effect in the current session. Provider API keys and definitions are always global
   (edit them in `/providers`).
@@ -285,6 +286,11 @@ See also: [MCP server configuration](../tools/mcp-server.md).
   Space toggles enable/disable, which persists each server's `includeTools` /
   `excludeTools` filter and reloads the registry. The footer links to the `/mcp`
   wizard for server management.
+- **`find_symbol`:** One of the built-in tools, this locates symbol definitions
+  and references across source files using a syntax-aware parser (no persistent
+  index). It is on by default; disable it with `sagittarius.symbols.enabled: false`
+  (see [code quality](../code-quality.md)) to rely on an external code-intelligence
+  MCP instead.
 
 #### Sub-commands
 

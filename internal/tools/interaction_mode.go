@@ -11,6 +11,7 @@ var readOnlyBuiltinTools = map[string]bool{
 	ReadFileToolName:        true,
 	ListDirectoryToolName:   true,
 	GrepToolName:            true,
+	FindSymbolToolName:      true,
 	activateSkillToolName:   true,
 	ProjectChecksToolName:   true,
 	GoogleWebSearchToolName: true,

@@ -475,6 +475,7 @@ func mergeSagittarius(global, project *SagittariusSettings) *SagittariusSettings
 	merged.SystemPrompt = mergeSystemPromptConfig(global.SystemPrompt, project.SystemPrompt)
 	merged.Snapshots = mergeSnapshotConfig(global.Snapshots, project.Snapshots)
 	merged.Verify = mergeVerifyConfig(global.Verify, project.Verify)
+	merged.Symbols = mergeSymbolsConfig(global.Symbols, project.Symbols)
 	// Web, Tools, Compression, Subagents: global-only in Phase 1.
 	return &merged
 }
@@ -544,6 +545,19 @@ func mergeVerifyConfig(global, project *SagittariusVerifyConfig) *SagittariusVer
 	merged := *global
 	merged.SuggestAfterWrite = overlayPtr(global.SuggestAfterWrite, project.SuggestAfterWrite)
 	merged.AllowFix = overlayPtr(global.AllowFix, project.AllowFix)
+	return &merged
+}
+
+func mergeSymbolsConfig(global, project *SagittariusSymbolsConfig) *SagittariusSymbolsConfig {
+	if project == nil {
+		return global
+	}
+	if global == nil {
+		return project
+	}
+	merged := *global
+	merged.Enabled = overlayPtr(global.Enabled, project.Enabled)
+	merged.PreferGopls = overlayPtr(global.PreferGopls, project.PreferGopls)
 	return &merged
 }
 

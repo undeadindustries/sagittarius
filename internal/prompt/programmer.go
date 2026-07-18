@@ -18,7 +18,7 @@ func buildProgrammerPrompt(opts Options) string {
 func programmerLite(opts Options) string {
 	sections := []string{
 		renderIdentity(opts.Identity, programmerProfile.roleNoun, programmerProfile.helpClause),
-		liteToolUsage(),
+		liteToolUsage(opts.SymbolsEnabled),
 		liteWorkflow(),
 		liteEditRules(),
 		liteShellSafety(opts.Interactive),
@@ -52,7 +52,7 @@ func programmerFull(opts Options) string {
 	sections := []string{
 		fullPreamble(opts),
 		fullCoreMandates(),
-		fullPrimaryWorkflow(opts.Interactive),
+		fullPrimaryWorkflow(opts.Interactive, opts.SymbolsEnabled),
 		fullOperationalGuidelines(),
 	}
 	if opts.IsGitRepo {
@@ -102,17 +102,22 @@ func fullCoreMandates() string {
 	)
 }
 
-func fullPrimaryWorkflow(interactive bool) string {
+func fullPrimaryWorkflow(interactive, symbolsEnabled bool) string {
 	clarify := "Work autonomously; only clarify if the request is critically underspecified."
 	if !interactive {
 		clarify = "Work autonomously, as no further user input is available."
 	}
+	research := "1. **Research:** Use `" + tools.GrepToolName + "` and `" + tools.ListDirectoryToolName + "` to locate points of interest, then `" + tools.ReadFileToolName + "` (with line ranges for large files) to understand context."
+	if symbolsEnabled {
+		research += " When you know a symbol name and want its definition or call sites, use `" + tools.FindSymbolToolName + "` for precise, syntax-aware navigation instead of text search."
+	}
+	research += " Prefer parallel, scoped searches over reading many files individually. " + clarify
 	return join(
 		"# Primary Workflow",
 		"",
 		"Operate using a **Research -> Strategy -> Execution** lifecycle. For Execution, resolve each sub-task through an iterative **Plan -> Act -> Validate** cycle.",
 		"",
-		"1. **Research:** Use `"+tools.GrepToolName+"` and `"+tools.ListDirectoryToolName+"` to locate points of interest, then `"+tools.ReadFileToolName+"` (with line ranges for large files) to understand context. Prefer parallel, scoped searches over reading many files individually. "+clarify,
+		research,
 		"2. **Strategy:** Form a concrete implementation and testing approach grounded in the conventions you observed.",
 		"3. **Execution:** For each sub-task:",
 		"   - **Plan:** Define the implementation approach and the testing strategy to verify it.",

@@ -17,6 +17,7 @@ var reservedSagittariusKeys = map[string]struct{}{
 	"snapshots":     {},
 	"verify":        {},
 	"web":           {},
+	"symbols":       {},
 }
 
 var reservedSagittariusModeKeys = map[string]struct{}{
@@ -589,6 +590,66 @@ func marshalWebConfig(cfg *SagittariusWebConfig) (json.RawMessage, error) {
 	return json.Marshal(obj)
 }
 
+func unmarshalSymbolsConfig(raw json.RawMessage) (*SagittariusSymbolsConfig, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, fmt.Errorf("decode symbols config: %w", err)
+	}
+	cfg := &SagittariusSymbolsConfig{Extra: make(map[string]json.RawMessage)}
+	for key, val := range obj {
+		switch key {
+		case "enabled":
+			if err := json.Unmarshal(val, &cfg.Enabled); err != nil {
+				return nil, err
+			}
+		case "preferGopls":
+			if err := json.Unmarshal(val, &cfg.PreferGopls); err != nil {
+				return nil, err
+			}
+		default:
+			cfg.Extra[key] = val
+		}
+	}
+	if len(cfg.Extra) == 0 {
+		cfg.Extra = nil
+	}
+	return cfg, nil
+}
+
+func marshalSymbolsConfig(cfg *SagittariusSymbolsConfig) (json.RawMessage, error) {
+	if cfg == nil {
+		return nil, nil
+	}
+	obj := make(map[string]json.RawMessage)
+	add := func(key string, v any) error {
+		if isEmptyValue(v) {
+			return nil
+		}
+		b, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		obj[key] = b
+		return nil
+	}
+	if err := add("enabled", cfg.Enabled); err != nil {
+		return nil, err
+	}
+	if err := add("preferGopls", cfg.PreferGopls); err != nil {
+		return nil, err
+	}
+	for key, val := range cfg.Extra {
+		obj[key] = val
+	}
+	if len(obj) == 0 {
+		return json.RawMessage("{}"), nil
+	}
+	return json.Marshal(obj)
+}
+
 func unmarshalSagittarius(raw json.RawMessage) (*SagittariusSettings, error) {
 	if len(raw) == 0 {
 		return nil, nil
@@ -660,6 +721,12 @@ func unmarshalSagittarius(raw json.RawMessage) (*SagittariusSettings, error) {
 				return nil, fmt.Errorf("decode sagittarius.web: %w", err)
 			}
 			s.Web = w
+		case "symbols":
+			sym, err := unmarshalSymbolsConfig(val)
+			if err != nil {
+				return nil, fmt.Errorf("decode sagittarius.symbols: %w", err)
+			}
+			s.Symbols = sym
 		case "goal":
 			g, err := unmarshalGoalConfig(val)
 			if err != nil {
@@ -774,6 +841,13 @@ func marshalSagittarius(s *SagittariusSettings) (json.RawMessage, error) {
 			return nil, err
 		}
 		obj["web"] = b
+	}
+	if s.Symbols != nil {
+		b, err := marshalSymbolsConfig(s.Symbols)
+		if err != nil {
+			return nil, err
+		}
+		obj["symbols"] = b
 	}
 	if s.Goal != nil {
 		b, err := marshalGoalConfig(s.Goal)

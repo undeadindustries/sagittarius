@@ -86,7 +86,7 @@ func personaPrompt(p personaProfile, opts Options) string {
 	sections := []string{
 		renderIdentity(opts.Identity, p.roleNoun, p.helpClause),
 		personaRole(p, lite),
-		liteToolUsage(),
+		liteToolUsage(opts.SymbolsEnabled),
 	}
 	if !lite {
 		sections = append(sections, liteWorkflow())

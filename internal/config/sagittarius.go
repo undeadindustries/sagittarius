@@ -88,6 +88,8 @@ type SagittariusSettings struct {
 	Verify *SagittariusVerifyConfig `json:"verify,omitempty"`
 	// Web configures the built-in google_web_search and web_fetch tools.
 	Web *SagittariusWebConfig `json:"web,omitempty"`
+	// Symbols configures the built-in find_symbol code-navigation tool.
+	Symbols *SagittariusSymbolsConfig `json:"symbols,omitempty"`
 	// Goal configures the /goal autonomous mode parameters.
 	Goal *SagittariusGoalConfig `json:"goal,omitempty"`
 	// Grill configures the /grill interrogation mode parameters.
@@ -109,6 +111,19 @@ type SagittariusWebConfig struct {
 	RetryFetchErrors *bool                      `json:"retryFetchErrors,omitempty"`
 	MaxFetchBytes    *int                       `json:"maxFetchBytes,omitempty"`
 	Extra            map[string]json.RawMessage `json:"-"`
+}
+
+// SagittariusSymbolsConfig configures the built-in find_symbol tool. Pointers
+// distinguish "unset" from an explicit value; both fields default to true.
+type SagittariusSymbolsConfig struct {
+	// Enabled toggles registration of the find_symbol tool. Default true; set
+	// false to rely on an external code-intelligence MCP instead.
+	Enabled *bool `json:"enabled,omitempty"`
+	// PreferGopls, when true (the default), adds a note to the tool description
+	// pointing at gopls MCP tools on Go modules. It never couples the tools at
+	// runtime.
+	PreferGopls *bool                      `json:"preferGopls,omitempty"`
+	Extra       map[string]json.RawMessage `json:"-"`
 }
 
 // SagittariusGoalConfig configures the /goal autonomous mode parameters.

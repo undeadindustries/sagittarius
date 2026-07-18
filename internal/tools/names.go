@@ -8,6 +8,7 @@ const (
 	ListDirectoryToolName   = "list_directory"
 	ShellToolName           = "run_shell_command"
 	GrepToolName            = "grep_search"
+	FindSymbolToolName      = "find_symbol"
 	ProjectChecksToolName   = "run_project_checks"
 	GoogleWebSearchToolName = "google_web_search"
 	WebFetchToolName        = "web_fetch"
@@ -40,6 +41,10 @@ const (
 	GrepParamBefore            = "before"
 	GrepParamNoIgnore          = "no_ignore"
 	ParamCaseSensitive         = "case_sensitive"
+
+	FindSymbolParamSymbol     = "symbol"
+	FindSymbolParamKind       = "kind"
+	FindSymbolParamMaxResults = "max_results"
 
 	ShellParamCommand      = "command"
 	ShellParamIsBackground = "is_background"

@@ -135,6 +135,28 @@ func (d *settingsDialogDeps) ListSettings(scope config.SettingScope) []settingsd
 		verifySuggestMerged = notSet
 	}
 
+	// --- Symbols ---
+	var symEnabled, symEnabledMerged string
+	var symGopls, symGoplsMerged string
+	var symDefined bool
+	if scopeSettings.Sagittarius != nil && scopeSettings.Sagittarius.Symbols != nil {
+		s := scopeSettings.Sagittarius.Symbols
+		symEnabled = boolVal(s.Enabled)
+		symGopls = boolVal(s.PreferGopls)
+		symDefined = true
+	} else {
+		symEnabled = notSet
+		symGopls = notSet
+	}
+	if merged.Sagittarius != nil && merged.Sagittarius.Symbols != nil {
+		s := merged.Sagittarius.Symbols
+		symEnabledMerged = boolVal(s.Enabled)
+		symGoplsMerged = boolVal(s.PreferGopls)
+	} else {
+		symEnabledMerged = notSet
+		symGoplsMerged = notSet
+	}
+
 	sagDefined := scopeSettings.Sagittarius != nil
 
 	return []settingsdialog.SettingEntry{
@@ -227,6 +249,26 @@ func (d *settingsDialogDeps) ListSettings(scope config.SettingScope) []settingsd
 			Value:       verifySuggest,
 			DefinedHere: verifyDefined,
 			MergedValue: verifySuggestMerged,
+			Kind:        settingsdialog.KindBool,
+		},
+
+		{Label: "Symbols", Kind: settingsdialog.KindHeader},
+		{
+			Key:         "sagittarius.symbols.enabled",
+			Label:       "Symbol navigation (find_symbol)",
+			Description: "Register the find_symbol code-navigation tool (default on; off to use an external MCP)",
+			Value:       symEnabled,
+			DefinedHere: symDefined,
+			MergedValue: symEnabledMerged,
+			Kind:        settingsdialog.KindBool,
+		},
+		{
+			Key:         "sagittarius.symbols.preferGopls",
+			Label:       "Prefer gopls for Go",
+			Description: "Note gopls MCP tools in find_symbol's description on Go modules (prompt-only)",
+			Value:       symGopls,
+			DefinedHere: symDefined,
+			MergedValue: symGoplsMerged,
 			Kind:        settingsdialog.KindBool,
 		},
 	}
@@ -360,6 +402,30 @@ func applySettingValue(s *config.Settings, key, value string) error {
 			s.Sagittarius.Verify = &config.SagittariusVerifyConfig{}
 		}
 		s.Sagittarius.Verify.SuggestAfterWrite = &b
+	case "sagittarius.symbols.enabled":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("enabled must be true/false: %w", err)
+		}
+		if s.Sagittarius == nil {
+			s.Sagittarius = &config.SagittariusSettings{}
+		}
+		if s.Sagittarius.Symbols == nil {
+			s.Sagittarius.Symbols = &config.SagittariusSymbolsConfig{}
+		}
+		s.Sagittarius.Symbols.Enabled = &b
+	case "sagittarius.symbols.preferGopls":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("preferGopls must be true/false: %w", err)
+		}
+		if s.Sagittarius == nil {
+			s.Sagittarius = &config.SagittariusSettings{}
+		}
+		if s.Sagittarius.Symbols == nil {
+			s.Sagittarius.Symbols = &config.SagittariusSymbolsConfig{}
+		}
+		s.Sagittarius.Symbols.PreferGopls = &b
 	default:
 		return fmt.Errorf("unknown setting key %q", key)
 	}
@@ -424,6 +490,14 @@ func clearSettingValue(s *config.Settings, key string) error {
 	case "sagittarius.verify.suggestAfterWrite":
 		if s.Sagittarius != nil && s.Sagittarius.Verify != nil {
 			s.Sagittarius.Verify.SuggestAfterWrite = nil
+		}
+	case "sagittarius.symbols.enabled":
+		if s.Sagittarius != nil && s.Sagittarius.Symbols != nil {
+			s.Sagittarius.Symbols.Enabled = nil
+		}
+	case "sagittarius.symbols.preferGopls":
+		if s.Sagittarius != nil && s.Sagittarius.Symbols != nil {
+			s.Sagittarius.Symbols.PreferGopls = nil
 		}
 	default:
 		return fmt.Errorf("unknown setting key %q", key)

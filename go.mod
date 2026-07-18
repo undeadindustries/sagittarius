@@ -13,6 +13,7 @@ require (
 	github.com/mattn/go-runewidth v0.0.24
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/muesli/termenv v0.16.0
+	github.com/odvcencio/gotreesitter v0.40.0
 	github.com/zalando/go-keyring v0.2.6
 	golang.org/x/crypto v0.54.0
 	golang.org/x/net v0.57.0

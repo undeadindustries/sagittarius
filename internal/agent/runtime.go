@@ -32,6 +32,10 @@ type RuntimeConfig struct {
 	Trusted       bool
 	// AllowFix permits run_project_checks to run mutating formatters (fix=true).
 	AllowFix bool
+	// SymbolsEnabled toggles registration of the find_symbol tool (default true).
+	SymbolsEnabled bool
+	// SymbolsPreferGopls tweaks find_symbol's description on Go modules.
+	SymbolsPreferGopls bool
 }
 
 // NewRuntime constructs and performs an initial tool catalog reload.
@@ -52,15 +56,17 @@ func NewRuntime(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 	skillMgr := skills.NewManager(ws.Root(), cfg.Trusted)
 	bgMgr := bgproc.NewManager()
 	catalog, err := NewCatalog(CatalogConfig{
-		Workspace:  ws,
-		MCP:        mcp.NewManager(mcp.ManagerConfig{ClientName: cfg.ClientName, ClientVersion: cfg.ClientVersion}),
-		Skills:     skillMgr,
-		Extensions: extLoader,
-		Settings:   cfg.Settings,
-		BgMgr:      bgMgr,
-		ClientName: cfg.ClientName,
-		Version:    cfg.ClientVersion,
-		AllowFix:   cfg.AllowFix,
+		Workspace:          ws,
+		MCP:                mcp.NewManager(mcp.ManagerConfig{ClientName: cfg.ClientName, ClientVersion: cfg.ClientVersion}),
+		Skills:             skillMgr,
+		Extensions:         extLoader,
+		Settings:           cfg.Settings,
+		BgMgr:              bgMgr,
+		ClientName:         cfg.ClientName,
+		Version:            cfg.ClientVersion,
+		AllowFix:           cfg.AllowFix,
+		SymbolsEnabled:     cfg.SymbolsEnabled,
+		SymbolsPreferGopls: cfg.SymbolsPreferGopls,
 	})
 	if err != nil {
 		return nil, err

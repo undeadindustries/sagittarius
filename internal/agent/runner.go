@@ -782,6 +782,7 @@ func (r *Runner) rebuildBasePrompt() {
 	settings := r.settingsSnapshot()
 	providerID := r.activeProviderID()
 
+	toolNames := r.toolDeclarationNames()
 	base := prompt.Build(prompt.Options{
 		Personality: prompt.Personality(config.ResolvePersonality(settings, providerID, model)),
 		Variant:     prompt.Variant(config.ResolveVariant(settings, providerID, model)),
@@ -789,10 +790,11 @@ func (r *Runner) rebuildBasePrompt() {
 			Model:        model,
 			ProviderName: r.providerDisplayName(providerID),
 		},
-		ToolNames:      r.toolDeclarationNames(),
+		ToolNames:      toolNames,
 		Interactive:    r.interactive,
 		IsGitRepo:      isGitRepo(r.workDir),
 		SandboxEnabled: false, // sandbox not ported (AD-017)
+		SymbolsEnabled: containsString(toolNames, tools.FindSymbolToolName),
 	})
 
 	if memory = strings.TrimSpace(memory); memory != "" {
@@ -872,6 +874,16 @@ func (r *Runner) toolDeclarationNames() []string {
 		}
 	}
 	return names
+}
+
+// containsString reports whether target is present in list.
+func containsString(list []string, target string) bool {
+	for _, v := range list {
+		if v == target {
+			return true
+		}
+	}
+	return false
 }
 
 // isGitRepo reports whether dir (or an ancestor) contains a .git entry.
