@@ -15,13 +15,15 @@ import (
 
 // Catalog assembles built-in, MCP, and skill tools into one registry.
 type Catalog struct {
-	ws         *tools.Workspace
-	mcp        *mcp.Manager
-	skills     *skills.Manager
-	extensions *extensions.Loader
-	settings   *config.Settings
-	bgMgr      *bgproc.Manager
-	allowFix   bool
+	ws                 *tools.Workspace
+	mcp                *mcp.Manager
+	skills             *skills.Manager
+	extensions         *extensions.Loader
+	settings           *config.Settings
+	bgMgr              *bgproc.Manager
+	allowFix           bool
+	symbolsEnabled     bool
+	symbolsPreferGopls bool
 }
 
 // CatalogConfig configures tool catalog assembly.
@@ -36,6 +38,10 @@ type CatalogConfig struct {
 	Version    string
 	// AllowFix permits run_project_checks to run mutating formatters (fix=true).
 	AllowFix bool
+	// SymbolsEnabled toggles registration of the find_symbol tool (default true).
+	SymbolsEnabled bool
+	// SymbolsPreferGopls tweaks find_symbol's description on Go modules.
+	SymbolsPreferGopls bool
 }
 
 // NewCatalog constructs a tool catalog.
@@ -56,19 +62,25 @@ func NewCatalog(cfg CatalogConfig) (*Catalog, error) {
 		cfg.Extensions = extensions.NewLoader()
 	}
 	return &Catalog{
-		ws:         cfg.Workspace,
-		mcp:        cfg.MCP,
-		skills:     cfg.Skills,
-		extensions: cfg.Extensions,
-		settings:   cfg.Settings,
-		bgMgr:      cfg.BgMgr,
-		allowFix:   cfg.AllowFix,
+		ws:                 cfg.Workspace,
+		mcp:                cfg.MCP,
+		skills:             cfg.Skills,
+		extensions:         cfg.Extensions,
+		settings:           cfg.Settings,
+		bgMgr:              cfg.BgMgr,
+		allowFix:           cfg.AllowFix,
+		symbolsEnabled:     cfg.SymbolsEnabled,
+		symbolsPreferGopls: cfg.SymbolsPreferGopls,
 	}, nil
 }
 
 // BuildRegistry assembles the current registry without reconnecting MCP servers.
 func (c *Catalog) BuildRegistry() *tools.Registry {
-	reg := tools.NewBuiltinRegistry(c.ws, tools.WithAllowFix(c.allowFix), tools.WithBackgroundManager(c.bgMgr))
+	reg := tools.NewBuiltinRegistry(c.ws,
+		tools.WithAllowFix(c.allowFix),
+		tools.WithBackgroundManager(c.bgMgr),
+		tools.WithSymbols(c.symbolsEnabled, c.symbolsPreferGopls),
+	)
 	reg.Register(tools.NewActivateSkillTool(c.skills))
 	for _, tool := range c.mcp.Tools() {
 		reg.Register(wrapMCPTool(tool))

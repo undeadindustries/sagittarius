@@ -83,6 +83,65 @@ func collectEvents(t *testing.T, events <-chan ui.StreamEvent) []ui.StreamEvent 
 	return out
 }
 
+// TestSystemPromptTracksSymbolsRegistry asserts the find_symbol prompt guidance
+// follows the actually-registered tools across a SetRegistry swap. NewRunner
+// builds the base prompt against a default registry (find_symbol on), so the
+// prompt must be recomposed when main.go swaps in a registry that excludes it
+// (sagittarius.symbols.enabled=false); otherwise the model is told to prefer a
+// tool it cannot call.
+func TestSystemPromptTracksSymbolsRegistry(t *testing.T) {
+	t.Parallel()
+
+	workDir := t.TempDir()
+	gen := &fakeGenerator{batches: [][]provider.StreamResponse{
+		{{Done: true}},
+		{{Done: true}},
+	}}
+	runner, err := NewRunner(RunnerConfig{
+		Generator:   gen,
+		Model:       "test-model",
+		WorkDir:     workDir,
+		Interactive: false,
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	// Default registry includes find_symbol → prompt should mention it.
+	drainEvents(t, mustRunTurn(t, runner, "hi"))
+	if req := gen.lastRequest(); req == nil || !strings.Contains(req.SystemInstruction, tools.FindSymbolToolName) {
+		t.Fatalf("expected find_symbol guidance with default registry:\n%q", systemOf(req))
+	}
+
+	// Swap in a symbols-disabled registry → prompt must drop the guidance.
+	ws, err := tools.NewWorkspace(workDir)
+	if err != nil {
+		t.Fatalf("NewWorkspace: %v", err)
+	}
+	runner.SetRegistry(tools.NewBuiltinRegistry(ws, tools.WithSymbols(false, false)))
+
+	drainEvents(t, mustRunTurn(t, runner, "hi again"))
+	if req := gen.lastRequest(); req == nil || strings.Contains(req.SystemInstruction, tools.FindSymbolToolName) {
+		t.Fatalf("find_symbol guidance should be gone after disabling symbols:\n%q", systemOf(req))
+	}
+}
+
+func mustRunTurn(t *testing.T, runner *Runner, prompt string) <-chan ui.StreamEvent {
+	t.Helper()
+	events, err := runner.RunTurn(testContext(t), prompt)
+	if err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+	return events
+}
+
+func systemOf(req *provider.GenerateRequest) string {
+	if req == nil {
+		return "<nil request>"
+	}
+	return req.SystemInstruction
+}
+
 func TestRunTurnExpandsFileMention(t *testing.T) {
 	t.Parallel()
 

@@ -693,13 +693,16 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 	sessID := persistentSessionID()
 
 	allowFix, suggestVerify := resolveVerifyFlags(settings)
+	symbolsEnabled, symbolsPreferGopls := resolveSymbolsFlags(settings)
 
 	runtime, err := agent.NewRuntime(ctx, agent.RuntimeConfig{
-		Settings:      settings,
-		ClientName:    "sagittarius",
-		ClientVersion: version.String(),
-		Trusted:       true,
-		AllowFix:      allowFix,
+		Settings:           settings,
+		ClientName:         "sagittarius",
+		ClientVersion:      version.String(),
+		Trusted:            true,
+		AllowFix:           allowFix,
+		SymbolsEnabled:     symbolsEnabled,
+		SymbolsPreferGopls: symbolsPreferGopls,
 	})
 	if err != nil {
 		return nil, nil, nil, "", "", err
@@ -827,6 +830,13 @@ func resolveBoundaryAndSnapshots(merged *config.Settings, projectRoot, sessID st
 func resolveVerifyFlags(merged *config.Settings) (allowFix, suggestAfterWrite bool) {
 	return config.VerifyAllowFix(merged, nil),
 		config.VerifySuggestAfterWrite(merged, nil)
+}
+
+// resolveSymbolsFlags reads the find_symbol tool flags from the already-merged
+// settings. Both default to true (feature on).
+func resolveSymbolsFlags(merged *config.Settings) (enabled, preferGopls bool) {
+	return config.SymbolsEnabled(merged, nil),
+		config.SymbolsPreferGopls(merged, nil)
 }
 
 // persistentSessionID returns a stable per-process identifier.

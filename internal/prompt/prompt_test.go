@@ -49,6 +49,39 @@ func TestProgrammerFullAnchors(t *testing.T) {
 	assertNoUnported(t, out)
 }
 
+func TestFindSymbolGuidanceGatedBySymbolsEnabled(t *testing.T) {
+	t.Parallel()
+
+	for _, variant := range []Variant{VariantFull, VariantLite} {
+		on := Build(Options{
+			Personality:    PersonalityProgrammer,
+			Variant:        variant,
+			SymbolsEnabled: true,
+		})
+		if !strings.Contains(on, "find_symbol") {
+			t.Errorf("%s prompt should mention find_symbol when SymbolsEnabled", variant)
+		}
+		off := Build(Options{
+			Personality:    PersonalityProgrammer,
+			Variant:        variant,
+			SymbolsEnabled: false,
+		})
+		if strings.Contains(off, "find_symbol") {
+			t.Errorf("%s prompt should not mention find_symbol when SymbolsEnabled is false", variant)
+		}
+	}
+
+	// Stub personalities share liteToolUsage, so they get the same gating.
+	sysadmin := Build(Options{
+		Personality:    PersonalitySysadmin,
+		Variant:        VariantLite,
+		SymbolsEnabled: true,
+	})
+	if !strings.Contains(sysadmin, "find_symbol") {
+		t.Error("sysadmin persona should mention find_symbol when SymbolsEnabled")
+	}
+}
+
 func TestProgrammerLiteAnchors(t *testing.T) {
 	t.Parallel()
 

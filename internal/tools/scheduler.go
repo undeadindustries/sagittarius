@@ -443,6 +443,8 @@ func formatToolResult(name string, result map[string]any, writeDiff string) (tex
 		if matches, ok := result["matches"].(string); ok {
 			return capLines(matches, toolResultMaxLines), nil, false
 		}
+	case FindSymbolToolName:
+		return formatFindSymbolResult(result), nil, false
 	}
 
 	// MCP tools (and any other tool) carry their payload under "result".
@@ -450,6 +452,26 @@ func formatToolResult(name string, result map[string]any, writeDiff string) (tex
 		return capLines(stringifyResult(v), toolResultMaxLines), nil, false
 	}
 	return "ok", nil, false
+}
+
+// formatFindSymbolResult renders a find_symbol result: a one-line count header
+// (definitions/references) followed by the capped match list.
+func formatFindSymbolResult(result map[string]any) string {
+	count, _ := intValue(result["count"])
+	if count == 0 {
+		return "no symbols found"
+	}
+	defs, _ := intValue(result["definitions"])
+	refs, _ := intValue(result["references"])
+	header := fmt.Sprintf("%d symbols (%d defs, %d refs)", count, defs, refs)
+	if truncated, ok := result["truncated"].(bool); ok && truncated {
+		header += " [truncated]"
+	}
+	matches := asString(result["matches"])
+	if matches == "" {
+		return header
+	}
+	return header + "\n" + capLines(matches, toolResultMaxLines)
 }
 
 // formatShellResult renders a run_shell_command result: the tail of the captured

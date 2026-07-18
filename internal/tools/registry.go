@@ -72,8 +72,10 @@ func (r *Registry) ListEntries() []ToolEntry {
 type RegistryOption func(*registryConfig)
 
 type registryConfig struct {
-	allowFix bool
-	bgMgr    *bgproc.Manager
+	allowFix           bool
+	bgMgr              *bgproc.Manager
+	symbolsEnabled     bool
+	symbolsPreferGopls bool
 }
 
 // WithBackgroundManager provides a background process manager to tools.
@@ -87,9 +89,21 @@ func WithAllowFix(allow bool) RegistryOption {
 	return func(c *registryConfig) { c.allowFix = allow }
 }
 
+// WithSymbols controls the find_symbol tool. enabled toggles its registration
+// (it is registered by default); preferGopls only tweaks the tool's description
+// to point at gopls MCP tools on Go modules. It never couples the tools at
+// runtime.
+func WithSymbols(enabled, preferGopls bool) RegistryOption {
+	return func(c *registryConfig) {
+		c.symbolsEnabled = enabled
+		c.symbolsPreferGopls = preferGopls
+	}
+}
+
 // NewBuiltinRegistry registers all core built-in tools for a workspace.
 func NewBuiltinRegistry(ws *Workspace, opts ...RegistryOption) *Registry {
-	cfg := registryConfig{}
+	// find_symbol is on by default; a caller must opt out via WithSymbols(false, …).
+	cfg := registryConfig{symbolsEnabled: true, symbolsPreferGopls: true}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
@@ -106,6 +120,9 @@ func NewBuiltinRegistry(ws *Workspace, opts ...RegistryOption) *Registry {
 		newProjectChecksTool(ws, cfg.allowFix),
 	} {
 		r.Register(tool)
+	}
+	if cfg.symbolsEnabled {
+		r.Register(newFindSymbolTool(ws, cfg.symbolsPreferGopls))
 	}
 	return r
 }

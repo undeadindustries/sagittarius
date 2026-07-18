@@ -28,16 +28,22 @@ LDFLAGS := -ldflags "-X $(MODULE)/internal/version.Version=$(VERSION) \
 	-X $(MODULE)/internal/version.Commit=$(COMMIT) \
 	-X $(MODULE)/internal/version.BuildDate=$(BUILD_DATE)"
 
+# BUILD_TAGS selects the embedded find_symbol grammar set. grammar_set_core
+# ships the curated Core100 languages (smaller binary) instead of all ~200; the
+# release build (.goreleaser.yaml) uses the same tag. Tests use it too so
+# coverage matches what ships.
+BUILD_TAGS := grammar_set_core
+
 .PHONY: build test vet lint race clean tools vulncheck e2e e2e-mock release-snapshot
 
 build: $(BINARY)
 
 $(BINARY): go.mod go.sum $(GO_SOURCES)
 	@mkdir -p $(BIN_DIR)
-	$(GO) build $(LDFLAGS) -o $(BINARY) ./cmd/sagittarius
+	$(GO) build -tags '$(BUILD_TAGS)' $(LDFLAGS) -o $(BINARY) ./cmd/sagittarius
 
 test:
-	$(GO) test ./...
+	$(GO) test -tags '$(BUILD_TAGS)' ./...
 
 # e2e runs the live end-to-end suite against real providers using cheap models.
 # Requires at least one provider API key (Gemini, OpenAI). Makes billable calls.
@@ -49,13 +55,13 @@ e2e-mock: $(BINARY)
 	SAGITTARIUS_E2E_MOCK=1 SAGITTARIUS_BIN=$(abspath $(BINARY)) $(GO) test -count=1 ./tests/e2e/...
 
 vet:
-	$(GO) vet ./...
+	$(GO) vet -tags '$(BUILD_TAGS)' ./...
 
 lint:
 	$(GO) run $(GOLANGCI_LINT) run ./...
 
 race:
-	$(GO) test -race ./...
+	$(GO) test -tags '$(BUILD_TAGS)' -race ./...
 
 clean:
 	rm -rf $(BIN_DIR)

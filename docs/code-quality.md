@@ -71,7 +71,43 @@ and tokens.
 }
 ```
 
-## 3. Optional: Go code intelligence via gopls (MCP)
+## 3. Code navigation via find_symbol
+
+The built-in `find_symbol` tool answers "where is this defined / referenced?"
+across many languages using a syntax-aware parser (a pure-Go tree-sitter
+runtime). Prefer it over `grep_search` when you know a symbol name and want its
+definition or call sites; with no `symbol` argument it returns an outline of all
+definitions in a file or directory.
+
+It is stateless: each call parses only the files needed to answer that call, in
+memory, and keeps no index, cache, or background watcher. There is nothing to
+reindex when files change — the next call reparses from scratch. Because it is
+read-only, it is available in every interaction mode (including `plan` and
+`ask`).
+
+It is on by default. To turn it off (for example to rely on an external
+code-intelligence MCP instead), set:
+
+```json
+{
+  "sagittarius": {
+    "symbols": {
+      "enabled": false
+    }
+  }
+}
+```
+
+`symbols.preferGopls` (default `true`) only controls whether the tool's
+description points at gopls MCP tools on Go modules; it never couples the tools
+at runtime. Both keys resolve project-over-global.
+
+Release binaries embed the curated Core100 grammar set (the `grammar_set_core`
+build tag in the `Makefile` and `.goreleaser.yaml`) rather than all ~200
+grammars, keeping the binary smaller. If you need `find_symbol` for a language
+outside that set, build from source without the tag (`go build ./cmd/sagittarius`).
+
+## 4. Optional: Go code intelligence via gopls (MCP)
 
 For richer Go diagnostics and navigation (definitions, references, hover,
 workspace diagnostics), Sagittarius can talk to `gopls`'s built-in MCP server

@@ -97,6 +97,9 @@ type Options struct {
 	Interactive    bool
 	IsGitRepo      bool
 	SandboxEnabled bool
+	// SymbolsEnabled reports whether the find_symbol tool is registered, so the
+	// prompt can steer the model toward it for symbol lookups.
+	SymbolsEnabled bool
 }
 
 // Build returns the system prompt base (without user memory or mode suffix,
@@ -134,13 +137,17 @@ func renderIdentity(id Identity, roleNoun, helpClause string) string {
 
 // Shared condensed sections used by programmer lite and stub personalities.
 
-func liteToolUsage() string {
+func liteToolUsage(symbolsEnabled bool) string {
+	search := "**Search before reading.** Use `" + tools.GrepToolName + "` to find specific strings or patterns and `" + tools.ListDirectoryToolName + "` to explore directories. Do not read entire files unless necessary — target specific line ranges with `" + tools.ReadFileToolName + "`."
+	if symbolsEnabled {
+		search += " When you know a symbol name (function, type, class) and want its definition or call sites, prefer `" + tools.FindSymbolToolName + "` over `" + tools.GrepToolName + "`."
+	}
 	return join(
 		"## Tool Usage",
 		"",
 		"You have tools to read, search, and create or update files, and to run shell commands.",
 		"",
-		"**Search before reading.** Use `"+tools.GrepToolName+"` to find specific strings or patterns and `"+tools.ListDirectoryToolName+"` to explore directories. Do not read entire files unless necessary — target specific line ranges with `"+tools.ReadFileToolName+"`.",
+		search,
 		"",
 		"**Always read before modifying.** Never change a file you have not read first. Use `"+tools.WriteFileToolName+"` to create new files or write updated contents.",
 		"",

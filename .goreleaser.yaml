@@ -17,6 +17,10 @@ builds:
       - arm64
     env:
       - CGO_ENABLED=0
+    # grammar_set_core embeds the curated Core100 find_symbol grammar set instead
+    # of all ~200, keeping the release binary smaller. Matches the Makefile.
+    flags:
+      - -tags=grammar_set_core
     ldflags:
       - -s -w -X github.com/undeadindustries/sagittarius/internal/version.Version={{.Version}} -X github.com/undeadindustries/sagittarius/internal/version.Commit={{.ShortCommit}} -X github.com/undeadindustries/sagittarius/internal/version.BuildDate={{.Date}}
 
