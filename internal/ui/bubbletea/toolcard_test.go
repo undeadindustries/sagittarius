@@ -3,6 +3,8 @@ package bubbletea
 import (
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestToolDisplayName(t *testing.T) {
@@ -109,5 +111,37 @@ func TestRenderToolCardMCPBadge(t *testing.T) {
 	out := renderCard(m, c)
 	if !strings.Contains(out, "query") || !strings.Contains(out, "(context7)") {
 		t.Fatalf("MCP card missing tool/server badge:\n%s", out)
+	}
+}
+
+func TestRenderToolCardWidthInvariants(t *testing.T) {
+	t.Parallel()
+	m := newTestModel()
+
+	const width = 40
+	code := 1
+
+	// Complex card combining all the edge cases that trigger soft-wrap
+	c := &toolCard{
+		toolName:    wireShell,
+		displayName: "Shell",
+		// CJK characters to stress runewidth vs byte len
+		summary: "运行一些带有中文的命令 to test truncateVisible",
+		// Tabs, CR, and ANSI to stress padOrTruncate and cell wrapping
+		body:     "\x1b[31mThis line has a tab\there and a\r\ncarriage return\rthat should be sanitized.\n\x1b[0m",
+		phase:    toolSuccess,
+		exitCode: &code,
+	}
+
+	lines := m.renderToolCard(c, width)
+	for i, line := range lines {
+		// lipgloss.Width correctly handles ANSI
+		gotWidth := lipgloss.Width(line)
+
+		// The rendered card line width must not exceed the target terminal width,
+		// otherwise the terminal will soft-wrap and break the UI.
+		if gotWidth > width {
+			t.Errorf("card line %d exceeds width: got %d, max %d\nline text: %q", i, gotWidth, width, line)
+		}
 	}
 }

@@ -45,7 +45,7 @@ func (m *model) renderThinkingBox() string {
 	if !m.thinkingBoxVisible() {
 		return ""
 	}
-	return renderThinkingBox(m.spin, m.thinking, m.th, m.width)
+	return renderThinkingBox(m.spin, m.thinking, m.th, m.wrapWidth())
 }
 
 // renderThinkingBox draws a rounded box whose top edge carries the working
@@ -56,6 +56,8 @@ func renderThinkingBox(s spinner.Model, thinking string, th theme.Theme, width i
 	if width < 8 {
 		width = 8
 	}
+	thinking = sanitizeDisplayText(thinking)
+
 	inner := width - 4 // "│ " + content + " │"
 	if inner < 1 {
 		inner = 1

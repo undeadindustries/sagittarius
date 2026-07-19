@@ -27,3 +27,37 @@ func padOrTruncate(line string, width int) string {
 	}
 	return line
 }
+
+// sanitizeDisplayText normalizes text for display inside borders by stripping
+// raw carriage returns, expanding tabs to 8 spaces, and stripping ANSI so
+// unprintable/color sequences don't corrupt the box layout width.
+func sanitizeDisplayText(s string) string {
+	s = strings.ReplaceAll(s, "\r\n", "\n")
+	s = strings.ReplaceAll(s, "\r", "")
+	s = ansi.Strip(s)
+
+	if !strings.Contains(s, "\t") {
+		return s
+	}
+
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		if !strings.Contains(line, "\t") {
+			continue
+		}
+		var b strings.Builder
+		col := 0
+		for _, r := range line {
+			if r == '\t' {
+				spaces := 8 - (col % 8)
+				b.WriteString(strings.Repeat(" ", spaces))
+				col += spaces
+			} else {
+				b.WriteRune(r)
+				col += lipgloss.Width(string(r))
+			}
+		}
+		lines[i] = b.String()
+	}
+	return strings.Join(lines, "\n")
+}

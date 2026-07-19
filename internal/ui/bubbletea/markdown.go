@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/undeadindustries/sagittarius/internal/ui/theme"
 )
@@ -119,15 +120,7 @@ func styleInline(line string, th theme.Theme) string {
 	return line
 }
 
-// truncateVisible cuts a string to at most width visible columns. Code lines
-// have no ANSI codes at this point, so a rune-count cut is sufficient.
+// truncateVisible cuts a string to at most width visible columns.
 func truncateVisible(s string, width int) string {
-	if lipgloss.Width(s) <= width {
-		return s
-	}
-	runes := []rune(s)
-	if width > len(runes) {
-		width = len(runes)
-	}
-	return string(runes[:max(width, 0)])
+	return ansi.Truncate(s, width, "")
 }
