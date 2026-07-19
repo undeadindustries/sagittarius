@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
+
 	"github.com/undeadindustries/sagittarius/internal/ui"
 )
 
@@ -111,6 +113,26 @@ func TestThinkingBufferClearsOnDone(t *testing.T) {
 	}
 	if m.thinkingBoxVisible() {
 		t.Fatal("box should auto-hide once the turn is done")
+	}
+}
+
+func TestThinkingBoxWidthInvariants(t *testing.T) {
+	t.Parallel()
+	m := newTestModel()
+	m.width = 80 // Set explicit width
+
+	// Reasoning with tabs, CRs, and wide characters
+	reasoning := "Evaluating the fix\n\t* Check \r\nsoft-wrap\n\t* Ensure 宽度 limits are respected"
+
+	box := renderThinkingBox(m.spin, reasoning, m.th, m.wrapWidth()) // Use wrapWidth() budget
+	lines := strings.Split(box, "\n")
+
+	targetWidth := m.wrapWidth()
+	for i, line := range lines {
+		gotWidth := lipgloss.Width(line)
+		if gotWidth > targetWidth {
+			t.Errorf("thinking box line %d exceeds width: got %d, max %d\nline text: %q", i, gotWidth, targetWidth, line)
+		}
 	}
 }
 

@@ -145,14 +145,23 @@ func (m *model) renderToolCard(c *toolCard, width int) []string {
 	if width < 8 {
 		width = 8
 	}
-	border := lipgloss.NewStyle().Foreground(m.toolCardBorderColor(c))
+
+	// Create a sanitized copy of the card to prevent layout corruption
+	// from unprintable characters, raw carriage returns, or unexpanded tabs.
+	clean := *c
+	clean.body = sanitizeDisplayText(clean.body)
+	clean.diff = sanitizeDisplayText(clean.diff)
+	clean.summary = sanitizeDisplayText(clean.summary)
+	clean.askQuestion = sanitizeDisplayText(clean.askQuestion)
+
+	border := lipgloss.NewStyle().Foreground(m.toolCardBorderColor(&clean))
 	inner := width - 4 // "│ " + content + " │"
 	if inner < 1 {
 		inner = 1
 	}
 
-	out := []string{m.toolCardTop(c, border, width)}
-	for _, line := range m.toolCardBody(c, inner) {
+	out := []string{m.toolCardTop(&clean, border, width)}
+	for _, line := range m.toolCardBody(&clean, inner) {
 		out = append(out, border.Render("│")+" "+padOrTruncate(line, inner)+" "+border.Render("│"))
 	}
 	out = append(out, border.Render("╰"+strings.Repeat("─", width-2)+"╯"))

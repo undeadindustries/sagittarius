@@ -10,10 +10,10 @@ import (
 )
 
 type fakeDeps struct {
-	preparedID    string
-	presetID      string
-	models        []string
-	complete      struct {
+	preparedID string
+	presetID   string
+	models     []string
+	complete   struct {
 		providerID string
 		model      string
 	}

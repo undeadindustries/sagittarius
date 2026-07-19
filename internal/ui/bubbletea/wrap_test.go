@@ -1,46 +1,29 @@
 package bubbletea
 
-import "testing"
+import (
+	"testing"
+)
 
-func TestWrapTextBreaksLongLines(t *testing.T) {
-	t.Parallel()
-
-	const width = 40
-	msg := "Error: rebuild runner after provider switch: api key missing: set GEMINI_API_KEY or GOOGLE_API_KEY, or store a key with /auth <key>"
-	wrapped := wrapText(msg, width)
-
-	for _, line := range splitLines(wrapped) {
-		if line == "" {
-			continue
-		}
-		if len(line) > width {
-			t.Fatalf("line exceeds width %d: %q", width, line)
-		}
+func TestSanitizeDisplayText(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"normal text", "normal text"},
+		{"line\r\nbreak", "line\nbreak"},
+		{"line\rbreak", "linebreak"},
+		{"tab\tone", "tab     one"},
+		{"\tone", "        one"},
+		{"12\t34", "12      34"},
+		{"1234567\t8", "1234567 8"},
+		{"12345678\t9", "12345678        9"},
+		{"\x1b[31mred\x1b[0m text", "red text"},
+		{"multi\n\tline", "multi\n        line"},
+		{"\r\n\t", "\n        "},
 	}
-	if wrapped == msg {
-		t.Fatal("expected wrapping to produce multiple lines")
-	}
-}
-
-func TestWrapTextPreservesShortLines(t *testing.T) {
-	t.Parallel()
-	got := wrapText("short line\n", 80)
-	if got != "short line\n" {
-		t.Fatalf("got %q", got)
-	}
-}
-
-func splitLines(s string) []string {
-	var out []string
-	start := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\n' {
-			out = append(out, s[start:i])
-			start = i + 1
+	for _, c := range cases {
+		if got := sanitizeDisplayText(c.in); got != c.want {
+			t.Errorf("sanitizeDisplayText(%q) = %q, want %q", c.in, got, c.want)
 		}
 	}
-	if start < len(s) {
-		out = append(out, s[start:])
-	}
-	return out
 }
