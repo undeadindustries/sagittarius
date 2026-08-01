@@ -18,6 +18,10 @@ var reservedSagittariusKeys = map[string]struct{}{
 	"verify":        {},
 	"web":           {},
 	"symbols":       {},
+	"update":        {},
+	"goal":          {},
+	"grill":         {},
+	"maxToolRounds": {},
 }
 
 var reservedSagittariusModeKeys = map[string]struct{}{
@@ -739,6 +743,12 @@ func unmarshalSagittarius(raw json.RawMessage) (*SagittariusSettings, error) {
 				return nil, fmt.Errorf("decode sagittarius.grill: %w", err)
 			}
 			s.Grill = g
+		case "update":
+			u, err := unmarshalUpdateConfig(val)
+			if err != nil {
+				return nil, err
+			}
+			s.Update = u
 		case "maxToolRounds":
 			var n int
 			if err := json.Unmarshal(val, &n); err != nil {
@@ -862,6 +872,13 @@ func marshalSagittarius(s *SagittariusSettings) (json.RawMessage, error) {
 			return nil, err
 		}
 		obj["grill"] = b
+	}
+	if s.Update != nil {
+		b, err := marshalUpdateConfig(s.Update)
+		if err != nil {
+			return nil, err
+		}
+		obj["update"] = b
 	}
 	if err := add("maxToolRounds", s.MaxToolRounds); err != nil {
 		return nil, err
@@ -1033,6 +1050,52 @@ func marshalGrillConfig(c *SagittariusGrillConfig) (json.RawMessage, error) {
 			return nil, err
 		}
 		obj["recommend"] = b
+	}
+	for key, val := range c.Extra {
+		obj[key] = val
+	}
+	if len(obj) == 0 {
+		return json.RawMessage("{}"), nil
+	}
+	return json.Marshal(obj)
+}
+
+func unmarshalUpdateConfig(data []byte) (*SagittariusUpdateConfig, error) {
+	var c SagittariusUpdateConfig
+	c.Extra = make(map[string]json.RawMessage)
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("decode sagittarius.update: %w", err)
+	}
+	for key, val := range raw {
+		switch key {
+		case "autoCheck":
+			var b bool
+			if err := json.Unmarshal(val, &b); err != nil {
+				return nil, fmt.Errorf("decode sagittarius.update.autoCheck: %w", err)
+			}
+			c.AutoCheck = &b
+		default:
+			c.Extra[key] = val
+		}
+	}
+	if len(c.Extra) == 0 {
+		c.Extra = nil
+	}
+	return &c, nil
+}
+
+func marshalUpdateConfig(c *SagittariusUpdateConfig) (json.RawMessage, error) {
+	if c == nil {
+		return nil, nil
+	}
+	obj := make(map[string]json.RawMessage)
+	if c.AutoCheck != nil {
+		b, err := json.Marshal(*c.AutoCheck)
+		if err != nil {
+			return nil, err
+		}
+		obj["autoCheck"] = b
 	}
 	for key, val := range c.Extra {
 		obj[key] = val

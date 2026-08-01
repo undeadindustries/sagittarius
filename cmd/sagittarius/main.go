@@ -24,6 +24,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/grill"
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
+	"github.com/undeadindustries/sagittarius/internal/selfupdate"
 	"github.com/undeadindustries/sagittarius/internal/session"
 	"github.com/undeadindustries/sagittarius/internal/snapshot"
 	"github.com/undeadindustries/sagittarius/internal/storage"
@@ -53,6 +54,7 @@ func run(args []string) int {
 
 	showVersion := fs.Bool("version", false, "print version and exit")
 	showVersionShort := fs.Bool("v", false, "print version and exit")
+	selfUpdate := fs.Bool("self-update", false, "download and install the latest update, then exit")
 	screenReader := fs.Bool("screen-reader", false, "plain terminal mode for screen readers (reduced TUI)")
 	prompt := fs.String("prompt", "", "non-interactive prompt; writes streamed text to stdout")
 	promptShort := fs.String("p", "", "shorthand for --prompt")
@@ -184,6 +186,10 @@ func run(args []string) int {
 		approvalMode:  approvalMode,
 		modeOverride:  modeOverride,
 		logVerbose:    *logVerbose,
+	}
+
+	if *selfUpdate {
+		return runSelfUpdate()
 	}
 
 	// --slash: run a single slash command headlessly and exit. Mutually
@@ -929,6 +935,38 @@ func persistentSessionID() string {
 		return id
 	}
 	return fmt.Sprintf("sagittarius-%d", os.Getpid())
+}
+
+func runSelfUpdate() int {
+	if version.Version == "dev" {
+		fmt.Fprintln(os.Stderr, "Cannot self-update a dev build.")
+		return 1
+	}
+	targetPath, err := selfupdate.CurrentExecutablePath()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error getting executable path: %v\n", err)
+		return 1
+	}
+
+	opts := selfupdate.InstallOptions{
+		Repo:           "undeadindustries/sagittarius",
+		CurrentVersion: version.Version,
+		TargetPath:     targetPath,
+	}
+
+	fmt.Printf("Checking for updates (current: %s)...\n", version.Version)
+	res, err := selfupdate.Install(context.Background(), opts)
+	if err != nil {
+		if err.Error() == "already at latest version" {
+			fmt.Println("Sagittarius is up to date.")
+			return 0
+		}
+		fmt.Fprintf(os.Stderr, "Update failed: %v\n", err)
+		return 1
+	}
+
+	fmt.Printf("Successfully installed %s. Restart sagittarius to use it.\n", res.Version)
+	return 0
 }
 
 // historyToScrollback converts a provider message history into ui.ScrollbackEntry

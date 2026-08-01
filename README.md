@@ -67,6 +67,16 @@ Or without Make:
 go build -o bin/sagittarius ./cmd/sagittarius
 ```
 
+### Keeping Sagittarius up to date
+
+Sagittarius includes a built-in updater. Run `/update` in the TUI to check for a new version, and `/update install` to download and replace the running binary automatically. 
+
+If Sagittarius is installed in a root-owned directory like `/usr/local/bin`, the in-app update may fail with a permission error. In that case, run the headless updater with `sudo`:
+
+```bash
+sudo sagittarius --self-update
+```
+
 ## Development
 
 ```bash

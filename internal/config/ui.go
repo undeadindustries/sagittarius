@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // UISettings is the typed view of the passthrough "ui" section of settings.json.
@@ -22,6 +23,10 @@ type UISettings struct {
 	ShowThinking bool `json:"showThinking,omitempty"`
 	// ToolkitChecklistDismissed marks whether the user has permanently dismissed the host toolkit checklist.
 	ToolkitChecklistDismissed bool `json:"toolkitChecklistDismissed,omitempty"`
+	// UpdateCheckedAt is the RFC3339 timestamp of the last background update
+	// check, used to throttle checks to at most once per day. Global-only cache,
+	// not a user preference.
+	UpdateCheckedAt string `json:"updateCheckedAt,omitempty"`
 }
 
 // UI returns the parsed ui.* section, or the zero value when absent or invalid.
@@ -101,6 +106,24 @@ func (s *Settings) SetUIToolkitChecklistDismissed(dismissed bool) error {
 			return nil
 		}
 		ui["toolkitChecklistDismissed"] = []byte("true")
+		return nil
+	})
+}
+
+// SetUIUpdateCheckedAt records the last update check time under ui.updateCheckedAt.
+// A zero time clears the key.
+func (s *Settings) SetUIUpdateCheckedAt(t time.Time) error {
+	return s.mutateUISection(func(ui map[string]json.RawMessage) error {
+		if t.IsZero() {
+			delete(ui, "updateCheckedAt")
+			return nil
+		}
+		// Format as RFC3339 string
+		encoded, err := json.Marshal(t.Format(time.RFC3339))
+		if err != nil {
+			return fmt.Errorf("encode ui updateCheckedAt: %w", err)
+		}
+		ui["updateCheckedAt"] = encoded
 		return nil
 	})
 }
