@@ -143,7 +143,7 @@ type geminiModelEntry struct {
 func DiscoverGeminiModels(ctx context.Context, apiKey string, client *http.Client) ([]ModelInfo, error) {
 	apiKey = strings.TrimSpace(apiKey)
 	if apiKey == "" {
-		return nil, fmt.Errorf("Gemini API key required to list models — set one in /providers first")
+		return nil, fmt.Errorf("no Gemini API key configured — set one in /providers first")
 	}
 	if client == nil {
 		client = &http.Client{Timeout: defaultDiscoveryTimeout}

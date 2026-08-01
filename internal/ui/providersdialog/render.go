@@ -359,7 +359,7 @@ func (m Model) renderRemove() string {
 	}
 	var b strings.Builder
 	b.WriteString("Remove provider\n\n")
-	b.WriteString(fmt.Sprintf("Provider: %s\n\n", name))
+	fmt.Fprintf(&b, "Provider: %s\n\n", name)
 	b.WriteString(m.th.Dim.Render("This removes the provider definition, its instance settings, and its stored API key."))
 	return b.String()
 }
@@ -371,8 +371,7 @@ func (m Model) renderRow(label string, selected bool) string {
 func (m Model) renderWireToggle(wire config.WireFormat) string {
 	sel := m.th.Accent
 	dim := m.th.Dim
-	chat := "openai-chat"
-	responses := "openai-responses"
+	var chat, responses string
 	if wire == config.WireFormatOpenAIChat {
 		chat = sel.Render("[openai-chat]")
 		responses = dim.Render(" openai-responses ")

@@ -85,7 +85,7 @@ func mockChatServer(t *testing.T, model, writePath, writeContent string) *httpte
 				"choices": []map[string]any{{"index": 0, "delta": map[string]any{"role": "assistant", "content": "done."}, "finish_reason": "stop"}},
 			})
 		}
-		fmt.Fprint(w, "data: [DONE]\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}
@@ -96,7 +96,7 @@ func mockChatServer(t *testing.T, model, writePath, writeContent string) *httpte
 
 func emitSSE(w http.ResponseWriter, chunk map[string]any) {
 	data, _ := json.Marshal(chunk)
-	fmt.Fprintf(w, "data: %s\n\n", data)
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
 }
 
 // mockHome writes an isolated home with settings.json pointing the openai

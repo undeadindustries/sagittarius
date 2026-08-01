@@ -39,16 +39,16 @@ func handleGoal(ctx *Context) Result {
 func handleGoalStart(ctx *Context) Result {
 	g := ctx.Deps.Hooks.GoalStatus()
 	if g != nil && g.Status != goal.StatusComplete {
-		return ErrorResult(fmt.Errorf("Goal error: goal already exists. Clear it before starting a new one."))
+		return ErrorResult(fmt.Errorf("goal error: a goal already exists; clear it before starting a new one"))
 	}
 
 	mode, _ := ctx.Deps.Hooks.InteractionMode()
 	if mode.String() == "plan" || mode.String() == "ask" {
-		return ErrorResult(fmt.Errorf("Goal error: agent mode is required for goals (current mode is %s)", mode.String()))
+		return ErrorResult(fmt.Errorf("goal error: agent mode is required for goals (current mode is %s)", mode.String()))
 	}
 
 	if ctx.Args == "" {
-		return ErrorResult(fmt.Errorf("Usage: /goal <objective>"))
+		return ErrorResult(fmt.Errorf("usage: /goal <objective>"))
 	}
 
 	if err := ctx.Deps.Hooks.SetGoal(ctx.Args, nil); err != nil {
@@ -57,7 +57,7 @@ func handleGoalStart(ctx *Context) Result {
 
 	return Result{
 		Handled:      true,
-		Messages:     []string{fmt.Sprintf("Goal created. Starting autonomous loop...")},
+		Messages:     []string{"Goal created. Starting autonomous loop..."},
 		SubmitPrompt: ctx.Args,
 	}
 }

@@ -91,7 +91,7 @@ func gemmaWriteReproServer(t *testing.T, model, logDir string) *httptest.Server 
 		default:
 			emitSSE(w, textChunk("done."))
 		}
-		fmt.Fprint(w, "data: [DONE]\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
 		}

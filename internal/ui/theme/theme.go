@@ -174,10 +174,10 @@ func (t Theme) GradientText(text string, style lipgloss.Style, hexStops []string
 		var r, g, b uint8
 		hex = strings.TrimPrefix(hex, "#")
 		if len(hex) == 3 {
-			fmt.Sscanf(hex, "%1x%1x%1x", &r, &g, &b)
+			_, _ = fmt.Sscanf(hex, "%1x%1x%1x", &r, &g, &b)
 			r, g, b = r*17, g*17, b*17
 		} else if len(hex) == 6 {
-			fmt.Sscanf(hex, "%02x%02x%02x", &r, &g, &b)
+			_, _ = fmt.Sscanf(hex, "%02x%02x%02x", &r, &g, &b)
 		} else {
 			continue // skip invalid
 		}

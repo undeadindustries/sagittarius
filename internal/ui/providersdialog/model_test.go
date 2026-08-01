@@ -557,7 +557,7 @@ func TestActivationSwitchesLiveModelWhenDeactivated(t *testing.T) {
 	m, _ = send(m, cmd())
 
 	// Uncheck the live model (qwen3, index 0), then save.
-	m, _ = send(m, key(" "), key("enter"))
+	_, _ = send(m, key(" "), key("enter"))
 
 	got := deps.activeModels["openai"]
 	if len(got) != 2 || got[0] != "llama3" || got[1] != "mistral" {
@@ -584,7 +584,7 @@ func TestActivationKeepsLiveModelWhenStillChecked(t *testing.T) {
 	m, _ = send(m, cmd())
 
 	// Uncheck mistral (index 2), leaving the live model qwen3 checked.
-	m, _ = send(m, key("down"), key("down"), key(" "), key("enter"))
+	_, _ = send(m, key("down"), key("down"), key(" "), key("enter"))
 
 	if _, ok := deps.setModel["openai"]; ok {
 		t.Fatalf("SetModel should not be called when live model stays checked, got %v", deps.setModel)

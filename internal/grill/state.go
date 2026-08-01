@@ -80,11 +80,7 @@ func (s *Session) ToSnapshot() *Snapshot {
 	}
 	decisions := make([]DecisionSnapshot, 0, len(s.Decisions))
 	for _, d := range s.Decisions {
-		decisions = append(decisions, DecisionSnapshot{
-			Question:  d.Question,
-			Answer:    d.Answer,
-			Rationale: d.Rationale,
-		})
+		decisions = append(decisions, DecisionSnapshot(d))
 	}
 	return &Snapshot{
 		Topic:         s.Topic,
@@ -108,11 +104,7 @@ func FromSnapshot(s *Snapshot) *Session {
 	}
 	decisions := make([]Decision, 0, len(s.Decisions))
 	for _, d := range s.Decisions {
-		decisions = append(decisions, Decision{
-			Question:  d.Question,
-			Answer:    d.Answer,
-			Rationale: d.Rationale,
-		})
+		decisions = append(decisions, Decision(d))
 	}
 	return &Session{
 		Topic:         s.Topic,

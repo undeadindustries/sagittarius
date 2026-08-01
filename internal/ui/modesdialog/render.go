@@ -80,7 +80,7 @@ func (m Model) renderModes() string {
 func (m Model) renderPicker() string {
 	dim := m.th.Dim
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Assign model for %s mode\n\n", m.targetMode))
+	fmt.Fprintf(&b, "Assign model for %s mode\n\n", m.targetMode)
 	if len(m.models) <= 1 { // only the sentinel, no real models
 		b.WriteString(dim.Render("No active models. Open /providers and activate some first."))
 		return b.String()

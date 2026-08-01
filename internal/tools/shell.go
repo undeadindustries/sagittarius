@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/vt"
 	"github.com/creack/pty"
+
 	"github.com/undeadindustries/sagittarius/internal/bgproc"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 )
@@ -132,7 +133,7 @@ func (t *shellTool) run(ctx context.Context, command string, explicitBackground 
 	}
 	jobsPath := jobsFile.Name()
 	_ = jobsFile.Close()
-	defer os.Remove(jobsPath)
+	defer func() { _ = os.Remove(jobsPath) }()
 
 	wrappedCommand := fmt.Sprintf(`trap 'jobs -p > %q' EXIT; %s`, jobsPath, command)
 

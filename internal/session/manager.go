@@ -293,7 +293,7 @@ func FormatSessionList(infos []SessionInfo) string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("\nAvailable sessions for this project (%d):\n\n", len(infos)))
+	fmt.Fprintf(&sb, "\nAvailable sessions for this project (%d):\n\n", len(infos))
 	for _, s := range infos {
 		current := ""
 		if s.IsCurrentSession {
@@ -303,13 +303,13 @@ func FormatSessionList(infos []SessionInfo) string {
 		if len(title) > 100 {
 			title = title[:97] + "..."
 		}
-		sb.WriteString(fmt.Sprintf("  %d. %s (%s%s) [%s]\n",
+		fmt.Fprintf(&sb, "  %d. %s (%s%s) [%s]\n",
 			s.Index,
 			title,
 			FormatRelativeTime(s.LastUpdated),
 			current,
 			s.ID[:8],
-		))
+		)
 	}
 	return sb.String()
 }

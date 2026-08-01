@@ -308,7 +308,10 @@ func deriveFileKey(sessionID string) string {
 
 func isHexString(s string) bool {
 	for _, c := range s {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) {
+		isDigit := c >= '0' && c <= '9'
+		isLower := c >= 'a' && c <= 'f'
+		isUpper := c >= 'A' && c <= 'F'
+		if !isDigit && !isLower && !isUpper {
 			return false
 		}
 	}

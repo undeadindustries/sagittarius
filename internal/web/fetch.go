@@ -217,11 +217,11 @@ func FetchURL(ctx context.Context, u string, maxBytes int) ([]byte, error) {
 
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
 			lastErr = fmt.Errorf("http %d", resp.StatusCode)
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			continue
 		}
 
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode >= 400 {
 			return nil, fmt.Errorf("http %d: %s", resp.StatusCode, resp.Status)
 		}
@@ -283,7 +283,7 @@ func HTMLToText(htmlBytes []byte, baseURL string) string {
 
 				text := strings.TrimSpace(innerText.String())
 				if text != "" && href != "" {
-					buf.WriteString(fmt.Sprintf("%s (%s) ", text, href))
+					fmt.Fprintf(&buf, "%s (%s) ", text, href)
 				} else if text != "" {
 					buf.WriteString(text + " ")
 				} else if href != "" {

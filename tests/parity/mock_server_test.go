@@ -53,9 +53,9 @@ func newMockOpenAIServer(t *testing.T, responseText string) *httptest.Server {
 		chunks := buildSSEChunks(responseText, stop)
 		for _, chunk := range chunks {
 			data, _ := json.Marshal(chunk)
-			fmt.Fprintf(w, "data: %s\n\n", data)
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
 		}
-		fmt.Fprint(w, "data: [DONE]\n\n")
+		_, _ = fmt.Fprint(w, "data: [DONE]\n\n")
 
 		if f, ok := w.(http.Flusher); ok {
 			f.Flush()
