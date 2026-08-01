@@ -36,7 +36,7 @@ func readCapped(abs string, budget int) (content string, truncated bool, err err
 	if err != nil {
 		return "", false, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	buf := make([]byte, limit+1)
 	n, err := io.ReadFull(f, buf)

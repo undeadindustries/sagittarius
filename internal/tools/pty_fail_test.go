@@ -21,8 +21,8 @@ func TestPTYFail(t *testing.T) {
 		fmt.Printf("Read %d bytes: %q\n", len(b), string(b))
 	}()
 
-	cmd.Wait()
+	_ = cmd.Wait()
 	time.Sleep(10 * time.Millisecond) // Give Read a chance
-	f.Close()
+	_ = f.Close()
 	time.Sleep(10 * time.Millisecond)
 }

@@ -109,7 +109,9 @@ func (v *verboseLog) LogInfo(text string) {
 func (v *verboseLog) writeSection(kind, body string) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	fmt.Fprintf(v.out, "\n===== %s | %s =====\n%s\n", time.Now().Format(time.RFC3339), kind, strings.TrimRight(body, "\n"))
+	// Best-effort: this is a debug transcript, not a durable record, so a
+	// write failure here must never propagate into the turn loop.
+	_, _ = fmt.Fprintf(v.out, "\n===== %s | %s =====\n%s\n", time.Now().Format(time.RFC3339), kind, strings.TrimRight(body, "\n"))
 }
 
 // Close closes the underlying writer. Safe to call on a nil *verboseLog.

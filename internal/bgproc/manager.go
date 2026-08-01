@@ -204,7 +204,7 @@ func (m *Manager) Output(pid int) string {
 	if err != nil {
 		return ""
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if fi, statErr := f.Stat(); statErr == nil && fi.Size() > tailBytes {
 		if _, seekErr := f.Seek(-tailBytes, io.SeekEnd); seekErr != nil {
 			return ""
