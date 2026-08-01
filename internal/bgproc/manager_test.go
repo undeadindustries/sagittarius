@@ -16,7 +16,7 @@ func TestManager(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	go cmd.Wait()
+	go func() { _ = cmd.Wait() }()
 
 	mgr.Register(cmd.Process.Pid, cmd.Process.Pid, "sleep 2", "")
 

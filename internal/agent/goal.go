@@ -150,7 +150,7 @@ func (r *Runner) SetGoal(g *goal.Goal) {
 	r.activeGoal = g
 	// Note: in a real implementation we would write to session JSONL here.
 	if r.sessionRecorder != nil {
-		r.sessionRecorder.SetGoal(g.ToSnapshot())
+		_ = r.sessionRecorder.SetGoal(g.ToSnapshot())
 	}
 }
 

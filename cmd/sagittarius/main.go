@@ -554,7 +554,9 @@ func openVerboseChatLog(sessionID string) (*os.File, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}
-	fmt.Fprintf(f, "\n########## sagittarius --log-verbose started %s (session %s) ##########\n",
+	// Best-effort header line: this is a debug transcript, so a write
+	// failure here must not abort startup.
+	_, _ = fmt.Fprintf(f, "\n########## sagittarius --log-verbose started %s (session %s) ##########\n",
 		time.Now().Format(time.RFC3339), sessionID)
 	return f, nil
 }

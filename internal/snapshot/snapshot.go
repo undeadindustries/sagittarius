@@ -348,7 +348,7 @@ func (m *Manager) rewriteIndexLocked() {
 	if err != nil {
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	enc := json.NewEncoder(f)
 	for _, c := range m.stack {
 		_ = enc.Encode(c)
@@ -426,7 +426,7 @@ func (m *Manager) appendIndex(c change) {
 	if err != nil {
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	enc := json.NewEncoder(f)
 	_ = enc.Encode(c)
 }
