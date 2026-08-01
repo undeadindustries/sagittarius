@@ -108,6 +108,16 @@ func ProviderDisplayID(canonicalID string) string {
 	return canonicalID
 }
 
+func ProviderDefaultContextLimit(id string) int {
+	if def, ok := LookupBuiltInProvider(id); ok {
+		return def.DefaultContextLimit
+	}
+	if p, ok := LookupProviderPreset(NormalizeProviderID(id)); ok {
+		return p.DefaultContextLimit
+	}
+	return 0
+}
+
 // openAIChatSettingKeys are the per-instance keys editable for an openai-chat
 // provider. Mirrors fork providerRegistry.ts OPENAI_COMPAT_SETTING_KEYS plus the
 // Sagittarius per-provider tool-output masking knobs (AD-015), which are modelled

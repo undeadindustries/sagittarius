@@ -468,6 +468,26 @@ func unmarshalVerifyConfig(raw json.RawMessage) (*SagittariusVerifyConfig, error
 			if err := json.Unmarshal(val, &cfg.AllowFix); err != nil {
 				return nil, err
 			}
+		case "autoCheckAfterWrite":
+			if err := json.Unmarshal(val, &cfg.AutoCheckAfterWrite); err != nil {
+				return nil, err
+			}
+		case "autoCheckModuleWide":
+			if err := json.Unmarshal(val, &cfg.AutoCheckModuleWide); err != nil {
+				return nil, err
+			}
+		case "autoCheckTimeoutSeconds":
+			if err := json.Unmarshal(val, &cfg.AutoCheckTimeoutSeconds); err != nil {
+				return nil, err
+			}
+		case "repoLocalTools":
+			if err := json.Unmarshal(val, &cfg.RepoLocalTools); err != nil {
+				return nil, err
+			}
+		case "editLoopThreshold":
+			if err := json.Unmarshal(val, &cfg.EditLoopThreshold); err != nil {
+				return nil, err
+			}
 		default:
 			cfg.Extra[key] = val
 		}
@@ -498,6 +518,21 @@ func marshalVerifyConfig(cfg *SagittariusVerifyConfig) (json.RawMessage, error) 
 		return nil, err
 	}
 	if err := add("allowFix", cfg.AllowFix); err != nil {
+		return nil, err
+	}
+	if err := add("autoCheckAfterWrite", cfg.AutoCheckAfterWrite); err != nil {
+		return nil, err
+	}
+	if err := add("autoCheckModuleWide", cfg.AutoCheckModuleWide); err != nil {
+		return nil, err
+	}
+	if err := add("autoCheckTimeoutSeconds", cfg.AutoCheckTimeoutSeconds); err != nil {
+		return nil, err
+	}
+	if err := add("repoLocalTools", cfg.RepoLocalTools); err != nil {
+		return nil, err
+	}
+	if err := add("editLoopThreshold", cfg.EditLoopThreshold); err != nil {
 		return nil, err
 	}
 	for key, val := range cfg.Extra {

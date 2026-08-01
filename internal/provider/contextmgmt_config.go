@@ -7,13 +7,19 @@ import "github.com/undeadindustries/sagittarius/internal/config"
 // getLocalContextLimit fallback.
 const DefaultLocalContextLimit = 32_768
 
-// ContextManagementConfig holds the resolved Phase 11 context-management knobs
+// ContextManagementConfig holds the resolved context-management knobs
 // for the active provider. Zero-valued fraction/threshold fields mean "use the
 // contextmgmt package default" — callers must not treat 0 as a literal value.
 type ContextManagementConfig struct {
-	// Enabled is true only when the active provider uses openai-chat wire
-	// format (fork isLocalMode). Every defense is gated on this.
+	// Enabled is true when the active provider uses a supported wire format
+	// (openai-chat or gemini). Every defense is gated on this. openai-responses
+	// is disabled because it chains turns server-side via previous_response_id,
+	// so mutating history client-side desynchronizes the chain.
 	Enabled bool
+
+	// Adaptive is true when adaptive threshold tightening is enabled. This is
+	// tuned for small local windows and is disabled on large-context endpoints.
+	Adaptive bool
 
 	// ContextLimit is the model context window in tokens.
 	ContextLimit int
@@ -55,7 +61,8 @@ func ResolveContextManagement(settings *config.Settings, liveModel string) Conte
 	if err != nil {
 		return cm
 	}
-	cm.Enabled = endpoint.WireFormat == config.WireFormatOpenAIChat
+	cm.Enabled = endpoint.WireFormat == config.WireFormatOpenAIChat || endpoint.WireFormat == config.WireFormatGemini
+	cm.Adaptive = endpoint.WireFormat == config.WireFormatOpenAIChat
 
 	providerID := endpoint.ProviderID
 	// Use the caller-supplied live model for per-model lookup; fall back to the
@@ -64,14 +71,22 @@ func ResolveContextManagement(settings *config.Settings, liveModel string) Conte
 	if modelForLookup == "" {
 		modelForLookup = endpoint.Model
 	}
-	cm.ContextLimit = resolveContextLimit(settings, providerID, modelForLookup, cm.ContextLimit)
+	fallbackLimit := config.ProviderDefaultContextLimit(endpoint.ProviderID)
+	if fallbackLimit == 0 {
+		fallbackLimit = DefaultLocalContextLimit
+	}
+	cm.ContextLimit = resolveContextLimit(settings, providerID, modelForLookup, fallbackLimit)
 	applyInstanceContextKnobs(&cm, providerInstance(settings, providerID))
 	if !cm.CompressionThresholdUserSet {
-		// Seed an unpinned threshold from the system-prompt variant so lite
-		// presets compress earlier. UserSet stays false so adaptive tightening
-		// still applies on top of this base.
-		variant := config.ResolveVariant(settings, providerID, modelForLookup)
-		cm.CompressionThreshold = config.VariantCompressionThreshold(variant)
+		if endpoint.WireFormat == config.WireFormatGemini {
+			cm.CompressionThreshold = 0.5
+		} else {
+			// Seed an unpinned threshold from the system-prompt variant so lite
+			// presets compress earlier. UserSet stays false so adaptive tightening
+			// still applies on top of this base.
+			variant := config.ResolveVariant(settings, providerID, modelForLookup)
+			cm.CompressionThreshold = config.VariantCompressionThreshold(variant)
+		}
 	}
 	return cm
 }

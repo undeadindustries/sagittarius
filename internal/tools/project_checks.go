@@ -1,10 +1,8 @@
 package tools
 
 import (
-	"bytes"
 	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -111,8 +109,8 @@ func (t *projectChecksTool) Execute(ctx context.Context, args map[string]any) (m
 			continue
 		}
 
-		argv := checkArgv(check, paths)
-		ok, exitCode, output := runCheck(runCtx, t.ws.Root(), check, argv)
+		argv := checks.Argv(check, paths)
+		ok, exitCode, output := checks.Run(runCtx, t.ws.Root(), check, argv)
 		if !ok {
 			allOK = false
 		}
@@ -166,60 +164,4 @@ func (t *projectChecksTool) scopePaths(args map[string]any) ([]string, error) {
 		out = append(out, s)
 	}
 	return out, nil
-}
-
-// checkArgv builds the final argument vector, narrowing file-scoped checks to
-// the caller's paths by replacing the trailing default target.
-func checkArgv(check checks.Check, paths []string) []string {
-	if !check.FileScoped || len(paths) == 0 || len(check.Args) == 0 {
-		return check.Args
-	}
-	argv := make([]string, 0, len(check.Args)-1+len(paths))
-	argv = append(argv, check.Args[:len(check.Args)-1]...)
-	argv = append(argv, paths...)
-	return argv
-}
-
-func runCheck(ctx context.Context, dir string, check checks.Check, argv []string) (ok bool, exitCode int, output string) {
-	cmd := exec.CommandContext(ctx, check.Command, argv...)
-	cmd.Dir = dir
-	cmd.Env = os.Environ()
-
-	var buf bytes.Buffer
-	cmd.Stdout = &buf
-	cmd.Stderr = &buf
-
-	runErr := cmd.Run()
-	out := strings.TrimSpace(buf.String())
-
-	ok = true
-	if runErr != nil {
-		ok = false
-		if exitErr, isExit := runErr.(*exec.ExitError); isExit {
-			exitCode = exitErr.ExitCode()
-		} else {
-			exitCode = -1
-			if out != "" {
-				out += "\n"
-			}
-			out += runErr.Error()
-		}
-	}
-	// Some checks (e.g. `gofmt -l`) exit 0 but list offending files; treat any
-	// output as a failure for those.
-	if ok && check.FailOnOutput && out != "" {
-		ok = false
-	}
-
-	if out == "" {
-		out = "(empty)"
-	}
-	return ok, exitCode, truncateOutput(out)
-}
-
-func truncateOutput(s string) string {
-	if len(s) <= maxCheckOutputBytes {
-		return s
-	}
-	return s[:maxCheckOutputBytes] + "\n... (output truncated)"
 }

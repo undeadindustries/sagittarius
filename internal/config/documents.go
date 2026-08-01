@@ -546,6 +546,11 @@ func mergeVerifyConfig(global, project *SagittariusVerifyConfig) *SagittariusVer
 	merged := *global
 	merged.SuggestAfterWrite = overlayPtr(global.SuggestAfterWrite, project.SuggestAfterWrite)
 	merged.AllowFix = overlayPtr(global.AllowFix, project.AllowFix)
+	merged.AutoCheckAfterWrite = overlayPtr(global.AutoCheckAfterWrite, project.AutoCheckAfterWrite)
+	merged.AutoCheckModuleWide = overlayPtr(global.AutoCheckModuleWide, project.AutoCheckModuleWide)
+	merged.AutoCheckTimeoutSeconds = overlayPtr(global.AutoCheckTimeoutSeconds, project.AutoCheckTimeoutSeconds)
+	merged.RepoLocalTools = overlayPtr(global.RepoLocalTools, project.RepoLocalTools)
+	merged.EditLoopThreshold = overlayPtr(global.EditLoopThreshold, project.EditLoopThreshold)
 	return &merged
 }
 

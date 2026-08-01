@@ -30,6 +30,8 @@ func Catalog() []Group {
 			Items: []Item{
 				{Name: "python", Commands: []string{"python3", "python"}, InstallHint: "install from python.org"},
 				{Name: "ruff", Commands: []string{"ruff"}, InstallHint: "pip install ruff"},
+				{Name: "mypy", Commands: []string{"mypy"}, InstallHint: "pip install mypy"},
+				{Name: "pytest", Commands: []string{"pytest"}, InstallHint: "pip install pytest"},
 			},
 		},
 		{
@@ -37,6 +39,10 @@ func Catalog() []Group {
 			Items: []Item{
 				{Name: "node", Commands: []string{"node"}, InstallHint: "install from nodejs.org"},
 				{Name: "npm", Commands: []string{"npm"}, InstallHint: "install from nodejs.org"},
+				{Name: "eslint", Commands: []string{"eslint"}, InstallHint: "npm install -g eslint"},
+				{Name: "prettier", Commands: []string{"prettier"}, InstallHint: "npm install -g prettier"},
+				{Name: "tsc", Commands: []string{"tsc"}, InstallHint: "npm install -g typescript"},
+				{Name: "jest", Commands: []string{"jest"}, InstallHint: "npm install -g jest"},
 			},
 		},
 		{
@@ -71,6 +77,8 @@ func Catalog() []Group {
 			Items: []Item{
 				{Name: "rustc", Commands: []string{"rustc"}, InstallHint: "install via rustup.rs"},
 				{Name: "cargo", Commands: []string{"cargo"}, InstallHint: "included with rustup"},
+				{Name: "clippy", Commands: []string{"cargo-clippy"}, InstallHint: "rustup component add clippy"},
+				{Name: "rustfmt", Commands: []string{"rustfmt"}, InstallHint: "rustup component add rustfmt"},
 			},
 		},
 		{
@@ -78,6 +86,19 @@ func Catalog() []Group {
 			Items: []Item{
 				{Name: "compiler", Commands: []string{"gcc", "clang"}, InstallHint: "install build-essential or xcode-select"},
 				{Name: "make", Commands: []string{"make"}, InstallHint: "install via package manager"},
+				{Name: "clang-format", Commands: []string{"clang-format"}, InstallHint: "install via package manager"},
+				{Name: "clang-tidy", Commands: []string{"clang-tidy"}, InstallHint: "install via package manager"},
+			},
+		},
+		{
+			Name: "Infra/Config",
+			Items: []Item{
+				{Name: "shellcheck", Commands: []string{"shellcheck"}, InstallHint: "install via package manager"},
+				{Name: "jq", Commands: []string{"jq"}, InstallHint: "install via package manager"},
+				{Name: "yq", Commands: []string{"yq"}, InstallHint: "install via package manager"},
+				{Name: "terraform", Commands: []string{"terraform", "tofu"}, InstallHint: "install via package manager"},
+				{Name: "docker", Commands: []string{"docker"}, InstallHint: "install via package manager"},
+				{Name: "hadolint", Commands: []string{"hadolint"}, InstallHint: "install via package manager"},
 			},
 		},
 		{

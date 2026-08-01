@@ -7,20 +7,23 @@ import (
 )
 
 // TestResolveContextManagementGating proves the context-management defenses are
-// enabled only for the openai-chat wire format. Gemini-native and
-// openai-responses paths must report Enabled=false so the agent builds no
-// manager and never masks or compresses client-side (AD-014/AD-015).
+// enabled only for the openai-chat and gemini wire formats. The
+// openai-responses path must report Enabled=false so the agent builds no
+// manager and never masks or compresses client-side (because it chains turns
+// server-side via previous_response_id).
 func TestResolveContextManagementGating(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name        string
-		active      string
-		wantEnabled bool
+		name         string
+		active       string
+		wantEnabled  bool
+		wantAdaptive bool
+		wantFallback int
 	}{
-		{"openai-chat is enabled", string(config.BuiltInOpenAI), true},
-		{"gemini-native is not masked", string(config.BuiltInGeminiAPIKey), false},
-		{"openai-responses is not masked", string(config.BuiltInOpenAIResponses), false},
+		{"openai-chat is enabled and adaptive", string(config.BuiltInOpenAI), true, true, DefaultLocalContextLimit},
+		{"gemini-native is enabled but not adaptive", string(config.BuiltInGeminiAPIKey), true, false, 1_048_576},
+		{"openai-responses is not masked", string(config.BuiltInOpenAIResponses), false, false, DefaultLocalContextLimit},
 	}
 
 	for _, tt := range tests {
@@ -32,6 +35,12 @@ func TestResolveContextManagementGating(t *testing.T) {
 			cm := ResolveContextManagement(settings, "")
 			if cm.Enabled != tt.wantEnabled {
 				t.Fatalf("Enabled = %v, want %v", cm.Enabled, tt.wantEnabled)
+			}
+			if cm.Adaptive != tt.wantAdaptive {
+				t.Fatalf("Adaptive = %v, want %v", cm.Adaptive, tt.wantAdaptive)
+			}
+			if cm.ContextLimit != tt.wantFallback {
+				t.Fatalf("ContextLimit = %v, want %v", cm.ContextLimit, tt.wantFallback)
 			}
 		})
 	}
@@ -85,5 +94,25 @@ func TestResolveContextManagementHonorsOverrides(t *testing.T) {
 	}
 	if cm.MaskingEnabled {
 		t.Error("MaskingEnabled should reflect the explicit false override")
+	}
+}
+
+func TestResolveContextManagementGeminiFallback(t *testing.T) {
+	t.Parallel()
+
+	settings := &config.Settings{
+		Providers: &config.ProvidersSettings{Active: string(config.BuiltInGeminiAPIKey)},
+	}
+	cm := ResolveContextManagement(settings, "")
+
+	// 1,048,576 is the builtin Gemini default
+	if cm.ContextLimit != 1_048_576 {
+		t.Errorf("ContextLimit = %d, want 1_048_576", cm.ContextLimit)
+	}
+	if cm.CompressionThreshold != 0.5 {
+		t.Errorf("CompressionThreshold = %v, want 0.5", cm.CompressionThreshold)
+	}
+	if cm.Adaptive {
+		t.Error("Adaptive should be false for Gemini")
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/bgproc"
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/extensions"
+	"github.com/undeadindustries/sagittarius/internal/lsp"
 	"github.com/undeadindustries/sagittarius/internal/mcp"
 	"github.com/undeadindustries/sagittarius/internal/skills"
 	"github.com/undeadindustries/sagittarius/internal/tools"
@@ -20,6 +21,7 @@ type Runtime struct {
 	Agents   *agents.Registry
 	Settings *config.Settings
 	BgMgr    *bgproc.Manager
+	LSPPool  *lsp.Pool
 	workDir  string
 }
 
@@ -85,6 +87,7 @@ func NewRuntime(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 		Agents:   agents.NewRegistry(ws.Root(), cfg.Trusted),
 		Settings: cfg.Settings,
 		BgMgr:    bgMgr,
+		LSPPool:  lsp.NewPool(),
 		workDir:  ws.Root(),
 	}
 	if _, err := rt.Agents.Reload(ctx, extLoader.ActiveAgents()); err != nil {
@@ -157,13 +160,16 @@ func (r *Runtime) ReloadAgents(ctx context.Context) (agents.ReloadSummary, error
 	return r.Agents.Reload(ctx, r.Catalog.ExtensionLoader().ActiveAgents())
 }
 
-// Close releases MCP connections and stops the background-process reaper.
+// Close releases MCP connections, stops the background-process reaper, and shuts down LSP servers.
 func (r *Runtime) Close() error {
 	if r == nil {
 		return nil
 	}
 	if r.BgMgr != nil {
 		_ = r.BgMgr.Close()
+	}
+	if r.LSPPool != nil {
+		r.LSPPool.Close()
 	}
 	if r.Catalog == nil {
 		return nil
