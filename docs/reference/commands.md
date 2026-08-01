@@ -53,6 +53,12 @@ to later phases — see [Deferred commands](#deferred-commands).
   and `recommend` (whether the agent should suggest an answer) — see
   `/settings`.
 
+### `/update`
+
+- **Description:** Check for and install Sagittarius updates.
+- **Usage:** `/update` (checks only), `/update install` (downloads and replaces binary).
+- **Note:** Downloads the latest GitHub Release matching your OS/arch and replaces the running executable in place. If it fails with a permission error (e.g. installed in `/usr/local/bin`), run `sudo sagittarius --self-update` outside the TUI.
+
 ### `/quit`
 
 - **Description:** Exit the interactive session.

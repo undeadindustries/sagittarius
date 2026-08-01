@@ -136,6 +136,7 @@ func (r *Registry) registerBuiltins() {
 		goalCommand(),
 		grillCommand(),
 		toolkitCommand(),
+		updateCommand(),
 	}
 	r.sortCommandTree(r.commands)
 }

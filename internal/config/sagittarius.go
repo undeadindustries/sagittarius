@@ -90,6 +90,8 @@ type SagittariusSettings struct {
 	Web *SagittariusWebConfig `json:"web,omitempty"`
 	// Symbols configures the built-in find_symbol code-navigation tool.
 	Symbols *SagittariusSymbolsConfig `json:"symbols,omitempty"`
+	// Update configures the self-update feature.
+	Update *SagittariusUpdateConfig `json:"update,omitempty"`
 	// Goal configures the /goal autonomous mode parameters.
 	Goal *SagittariusGoalConfig `json:"goal,omitempty"`
 	// Grill configures the /grill interrogation mode parameters.
@@ -99,6 +101,13 @@ type SagittariusSettings struct {
 	// Set higher for tasks that write many files; set lower to cap runaway loops.
 	MaxToolRounds *int                       `json:"maxToolRounds,omitempty"`
 	Extra         map[string]json.RawMessage `json:"-"`
+}
+
+// SagittariusUpdateConfig configures the self-update feature.
+type SagittariusUpdateConfig struct {
+	// AutoCheck controls the background startup update check. Default true.
+	AutoCheck *bool                      `json:"autoCheck,omitempty"`
+	Extra     map[string]json.RawMessage `json:"-"`
 }
 
 // SagittariusWebConfig configures the built-in google_web_search and web_fetch tools.

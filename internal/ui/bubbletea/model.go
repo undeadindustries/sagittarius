@@ -128,6 +128,22 @@ func runToolkitScanCmd(app ui.App) tea.Cmd {
 	}
 }
 
+type updateCheckMsg struct {
+	banner string
+}
+
+func runUpdateCheckCmd(app ui.App) tea.Cmd {
+	return func() tea.Msg {
+		type updateChecker interface {
+			CheckForUpdate() string
+		}
+		if s, ok := app.(updateChecker); ok {
+			return updateCheckMsg{banner: s.CheckForUpdate()}
+		}
+		return nil
+	}
+}
+
 // scrollRole classifies a scrollback block so the renderer can apply a
 // consistent prefix glyph and color per message kind.
 type scrollRole int
@@ -399,14 +415,16 @@ func (m *model) setTheme(name string) {
 }
 
 func (m *model) Init() tea.Cmd {
+	cmds := []tea.Cmd{textarea.Blink}
 	if m.opts.NeedsOnboarding {
 		m.openOnboarding()
-		return textarea.Blink
+		return tea.Batch(cmds...)
 	}
 	if !m.opts.ToolkitChecklistDismissed {
-		return tea.Batch(textarea.Blink, runToolkitScanCmd(m.app))
+		cmds = append(cmds, runToolkitScanCmd(m.app))
 	}
-	return textarea.Blink
+	cmds = append(cmds, runUpdateCheckCmd(m.app))
+	return tea.Batch(cmds...)
 }
 
 // beginQuit marks the session as quitting, captures the goodbye summary (so the
@@ -440,6 +458,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case toolkitScanMsg:
 		if msg.report != "" {
 			m.addBlock(roleInfo, msg.report+"\n\n/toolkit dismiss to never show again · /toolkit to re-run")
+			m.syncViewportContent()
+		}
+		return m, nil
+	case updateCheckMsg:
+		if msg.banner != "" {
+			m.addBlock(roleInfo, msg.banner)
 			m.syncViewportContent()
 		}
 		return m, nil

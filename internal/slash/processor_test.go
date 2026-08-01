@@ -16,6 +16,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/mcp"
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
+	"github.com/undeadindustries/sagittarius/internal/selfupdate"
 	"github.com/undeadindustries/sagittarius/internal/session"
 	"github.com/undeadindustries/sagittarius/internal/skills"
 	"github.com/undeadindustries/sagittarius/internal/slash"
@@ -256,6 +257,14 @@ func (m *mockHooks) SetReasoningOverride(effort string) {
 
 func (m *mockHooks) ClearReasoningOverride() {
 	m.reasoningOverride = ""
+}
+
+func (m *mockHooks) CheckForUpdate(ctx context.Context, force bool) (*selfupdate.CheckResult, error) {
+	return nil, nil
+}
+
+func (m *mockHooks) InstallUpdate(ctx context.Context) (*selfupdate.InstallResult, error) {
+	return &selfupdate.InstallResult{Version: "v1.0.0"}, nil
 }
 
 func testDeps(t *testing.T, settings *config.Settings) (slash.Deps, *config.Loader, *mockHooks) {
@@ -579,5 +588,28 @@ func TestReasoningMandatoryRejectsDisable(t *testing.T) {
 	}
 	if hooks.reasoningOverride != "" {
 		t.Fatalf("override should not have been set, got: %q", hooks.reasoningOverride)
+	}
+}
+
+func TestUpdateCommand(t *testing.T) {
+	deps, _, _ := testDeps(t, nil)
+	p := slash.NewProcessor()
+
+	// bare /update
+	res := p.Process(context.Background(), "/update", deps)
+	if res.Err != nil {
+		t.Fatalf("expected no error for bare /update, got: %v", res.Err)
+	}
+
+	// /update install
+	res = p.Process(context.Background(), "/update install", deps)
+	if res.Err != nil {
+		t.Fatalf("expected no error for /update install, got: %v", res.Err)
+	}
+
+	// /update unknown
+	res = p.Process(context.Background(), "/update unknown", deps)
+	if res.Err == nil {
+		t.Fatalf("expected error for /update unknown, got nil")
 	}
 }

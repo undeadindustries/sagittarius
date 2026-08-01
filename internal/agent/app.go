@@ -25,12 +25,14 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/mcp"
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
+	"github.com/undeadindustries/sagittarius/internal/selfupdate"
 	"github.com/undeadindustries/sagittarius/internal/session"
 	"github.com/undeadindustries/sagittarius/internal/skills"
 	"github.com/undeadindustries/sagittarius/internal/slash"
 	"github.com/undeadindustries/sagittarius/internal/toolkit"
 	"github.com/undeadindustries/sagittarius/internal/tools"
 	"github.com/undeadindustries/sagittarius/internal/ui"
+	"github.com/undeadindustries/sagittarius/internal/version"
 )
 
 // AppConfig wires the interactive agent loop with slash command support.
@@ -148,6 +150,16 @@ func (a *App) HandleInput(ctx context.Context, input string) (<-chan ui.StreamEv
 // ToolkitReport delegates to the hooks implementation to satisfy the TUI toolkitScanner interface.
 func (a *App) ToolkitReport() string {
 	return a.deps.Hooks.ToolkitReport()
+}
+
+// CheckForUpdate delegates to the hooks implementation to satisfy the TUI updateChecker interface.
+// Returns a ready-to-display banner string, or "" if there is nothing to show.
+func (a *App) CheckForUpdate() string {
+	res, err := a.deps.Hooks.CheckForUpdate(context.Background(), false)
+	if err != nil || res == nil || !res.Available {
+		return ""
+	}
+	return fmt.Sprintf("Update available: %s -> %s. Run /update install to upgrade.", res.Current, res.Latest)
 }
 
 // Status returns footer metadata for the TUI status bar.
@@ -1579,6 +1591,85 @@ func (h *appHooks) ToolkitDismiss() error {
 	return docs.MutateGlobal(func(s *config.Settings) error {
 		return s.SetUIToolkitChecklistDismissed(true)
 	})
+}
+
+func (h *appHooks) CheckForUpdate(ctx context.Context, force bool) (*selfupdate.CheckResult, error) {
+	if h.app == nil || h.app.docs == nil {
+		return nil, fmt.Errorf("app or docs not available")
+	}
+
+	currentVer := version.Version
+	if currentVer == "dev" {
+		return nil, nil
+	}
+
+	effective := h.app.docs.Merged()
+	if !force && !config.UpdateAutoCheckEnabled(h.app.docs.Global, h.app.docs.Project) {
+		return nil, nil // Skipped because autoCheck is disabled
+	}
+
+	// Throttle to 24h if not forced
+	if !force && effective != nil {
+		ui := effective.UI()
+		if ui.UpdateCheckedAt != "" {
+			if parsed, err := time.Parse(time.RFC3339, ui.UpdateCheckedAt); err == nil {
+				if time.Since(parsed) < 24*time.Hour {
+					return nil, nil // Throttled
+				}
+			}
+		}
+	}
+
+	repo := "undeadindustries/sagittarius" // Hardcoded repo
+	rel, err := selfupdate.CheckLatest(ctx, repo)
+	if err != nil {
+		// Log the error but don't surface it to the user in background checks
+		return nil, err
+	}
+
+	// Persist the throttle timestamp
+	_ = h.app.docs.MutateGlobal(func(s *config.Settings) error {
+		return s.SetUIUpdateCheckedAt(time.Now())
+	})
+
+	isNewer := selfupdate.IsNewer(currentVer, rel.TagName)
+	return &selfupdate.CheckResult{
+		Available: isNewer,
+		Current:   currentVer,
+		Latest:    rel.TagName,
+		URL:       rel.HTMLURL,
+	}, nil
+}
+
+func (h *appHooks) InstallUpdate(ctx context.Context) (*selfupdate.InstallResult, error) {
+	currentVer := version.Version
+	if currentVer == "dev" {
+		return nil, fmt.Errorf("cannot self-update dev builds")
+	}
+
+	targetPath, err := selfupdate.CurrentExecutablePath()
+	if err != nil {
+		return nil, err
+	}
+
+	opts := selfupdate.InstallOptions{
+		Repo:           "undeadindustries/sagittarius",
+		CurrentVersion: currentVer,
+		TargetPath:     targetPath,
+	}
+
+	res, err := selfupdate.Install(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	// Refresh throttle timestamp on successful install as well
+	if h.app != nil && h.app.docs != nil {
+		_ = h.app.docs.MutateGlobal(func(s *config.Settings) error {
+			return s.SetUIUpdateCheckedAt(time.Now())
+		})
+	}
+	return res, nil
 }
 
 // ReasoningOverride implements slash.Hooks.

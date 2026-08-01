@@ -11,6 +11,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/mcp"
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
+	"github.com/undeadindustries/sagittarius/internal/selfupdate"
 	"github.com/undeadindustries/sagittarius/internal/session"
 	"github.com/undeadindustries/sagittarius/internal/skills"
 	"github.com/undeadindustries/sagittarius/internal/tools"
@@ -114,6 +115,9 @@ type Hooks interface {
 	// ToolkitChecklist hooks
 	ToolkitReport() string
 	ToolkitDismiss() error
+
+	CheckForUpdate(ctx context.Context, force bool) (*selfupdate.CheckResult, error)
+	InstallUpdate(ctx context.Context) (*selfupdate.InstallResult, error)
 
 	// Reasoning hooks (AD-077). The override is ephemeral (never persisted)
 	// and scoped to the live (provider, model) pair; it self-invalidates on a
