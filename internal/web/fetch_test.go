@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -102,17 +103,53 @@ func TestHTMLToText(t *testing.T) {
 	}
 }
 
-func TestFetchURL(t *testing.T) {
+// TestFetchURLBlocksPrivateIP relies on httptest binding to 127.0.0.1: the SSRF
+// guard in safeHTTPClient must refuse to dial a loopback address, so a fetch
+// against a local test server is expected to fail.
+func TestFetchURLBlocksPrivateIP(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("hello world"))
 	}))
 	defer srv.Close()
 
-	// Wait, httptest.NewServer binds to 127.0.0.1 which is private.
-	// FetchURL uses safeHTTPClient which blocks 127.0.0.1.
-	// So FetchURL on srv.URL should fail!
-	_, err := FetchURL(context.Background(), srv.URL, 1024)
-	if err == nil {
+	if _, err := FetchURL(context.Background(), srv.URL, 1024); err == nil {
 		t.Fatal("expected fetch to fail due to private IP block, but it succeeded")
+	}
+}
+
+// TestReadCappedZeroBudgetUsesDefault guards the regression where a caller that
+// passed maxBytes=0 got io.LimitReader(body, 1) and therefore empty content.
+func TestReadCappedZeroBudgetUsesDefault(t *testing.T) {
+	body := strings.Repeat("a", 4096)
+
+	for _, tc := range []struct {
+		name     string
+		maxBytes int
+		wantLen  int
+	}{
+		{name: "zero budget reads up to the default", maxBytes: 0, wantLen: 4096},
+		{name: "negative budget reads up to the default", maxBytes: -1, wantLen: 4096},
+		{name: "explicit budget truncates", maxBytes: 10, wantLen: 10},
+		{name: "budget above body size keeps it whole", maxBytes: 1 << 20, wantLen: 4096},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := readCapped(strings.NewReader(body), tc.maxBytes)
+			if err != nil {
+				t.Fatalf("readCapped: %v", err)
+			}
+			if len(got) != tc.wantLen {
+				t.Errorf("read %d bytes; want %d", len(got), tc.wantLen)
+			}
+		})
+	}
+}
+
+func TestReadCappedTruncatesAtDefault(t *testing.T) {
+	got, err := readCapped(strings.NewReader(strings.Repeat("b", DefaultMaxBytes+500)), 0)
+	if err != nil {
+		t.Fatalf("readCapped: %v", err)
+	}
+	if len(got) != DefaultMaxBytes {
+		t.Errorf("read %d bytes; want the default cap %d", len(got), DefaultMaxBytes)
 	}
 }

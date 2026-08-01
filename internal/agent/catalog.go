@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/undeadindustries/sagittarius/internal/bgproc"
 	"github.com/undeadindustries/sagittarius/internal/config"
@@ -26,6 +27,8 @@ type Catalog struct {
 	symbolsPreferGopls bool
 	webSearchEnabled   bool
 	webFetchEnabled    bool
+	webDirectFetch     bool
+	webMaxFetchBytes   int
 	webUtilityClient   *provider.GeminiUtilityClient
 }
 
@@ -70,9 +73,19 @@ func NewCatalog(cfg CatalogConfig) (*Catalog, error) {
 	}
 	var webUtilityClient *provider.GeminiUtilityClient
 	if cfg.WebSearchEnabled || cfg.WebFetchEnabled {
-		// Ignore error; the tools will degrade gracefully or return useful errors.
-		webUtilityClient, _ = provider.NewGeminiUtilityClient(context.Background(), "")
+		// A missing Gemini key is an expected configuration, not a failure: the
+		// registry skips google_web_search when the client is nil and web_fetch
+		// falls back to its key-free Go HTTP path. Log at debug so the reason is
+		// still recoverable when a user asks why search is absent.
+		client, err := provider.NewGeminiUtilityClient(context.Background(),
+			config.WebUtilityModel(cfg.Settings, nil))
+		if err != nil {
+			slog.Debug("web tools: gemini utility client unavailable", "error", err)
+		} else {
+			webUtilityClient = client
+		}
 	}
+	directFetch := config.WebDirectFetch(cfg.Settings, nil)
 
 	return &Catalog{
 		ws:                 cfg.Workspace,
@@ -86,17 +99,92 @@ func NewCatalog(cfg CatalogConfig) (*Catalog, error) {
 		symbolsPreferGopls: cfg.SymbolsPreferGopls,
 		webSearchEnabled:   cfg.WebSearchEnabled,
 		webFetchEnabled:    cfg.WebFetchEnabled,
+		webDirectFetch:     directFetch,
+		webMaxFetchBytes:   config.WebMaxFetchBytes(cfg.Settings, nil, directFetch),
 		webUtilityClient:   webUtilityClient,
 	}, nil
 }
 
+// RefreshBuiltinToggles re-resolves the built-in tool toggles from the given
+// settings document and reports whether any of them changed. Callers rebuild the
+// registry only on a true result, so a mode switch or model pick stays cheap
+// while a /settings toggle still takes effect without a restart.
+//
+// CatalogConfig's flags seed the initial state; from the first refresh on, the
+// settings document is authoritative. main.go derives those flags from the same
+// resolvers, so the two agree at startup.
+func (c *Catalog) RefreshBuiltinToggles(s *config.Settings) bool {
+	if c == nil {
+		return false
+	}
+	next := c.resolveToggles(s)
+	changed := next != c.toggles()
+	c.applyToggles(next)
+	return changed
+}
+
+// builtinToggles is the full set of settings-driven built-in tool configuration.
+// It is deliberately comparable so change detection is one comparison and adding
+// a field cannot silently escape it.
+type builtinToggles struct {
+	symbolsEnabled     bool
+	symbolsPreferGopls bool
+	webSearchEnabled   bool
+	webFetchEnabled    bool
+	webDirectFetch     bool
+	webMaxFetchBytes   int
+}
+
+func (c *Catalog) resolveToggles(s *config.Settings) builtinToggles {
+	directFetch := config.WebDirectFetch(s, nil)
+	return builtinToggles{
+		symbolsEnabled:     config.SymbolsEnabled(s, nil),
+		symbolsPreferGopls: config.SymbolsPreferGopls(s, nil),
+		// The auto-default for search is "on when a Gemini key resolved", which
+		// the already-built client answers. A key added mid-session only takes
+		// effect on the next launch, when the client is constructed.
+		webSearchEnabled: config.WebSearchEnabled(s, nil, c.webUtilityClient != nil),
+		webFetchEnabled:  config.WebFetchEnabled(s, nil),
+		webDirectFetch:   directFetch,
+		webMaxFetchBytes: config.WebMaxFetchBytes(s, nil, directFetch),
+	}
+}
+
+func (c *Catalog) toggles() builtinToggles {
+	return builtinToggles{
+		symbolsEnabled:     c.symbolsEnabled,
+		symbolsPreferGopls: c.symbolsPreferGopls,
+		webSearchEnabled:   c.webSearchEnabled,
+		webFetchEnabled:    c.webFetchEnabled,
+		webDirectFetch:     c.webDirectFetch,
+		webMaxFetchBytes:   c.webMaxFetchBytes,
+	}
+}
+
+func (c *Catalog) applyToggles(t builtinToggles) {
+	c.symbolsEnabled = t.symbolsEnabled
+	c.symbolsPreferGopls = t.symbolsPreferGopls
+	c.webSearchEnabled = t.webSearchEnabled
+	c.webFetchEnabled = t.webFetchEnabled
+	c.webDirectFetch = t.webDirectFetch
+	c.webMaxFetchBytes = t.webMaxFetchBytes
+}
+
 // BuildRegistry assembles the current registry without reconnecting MCP servers.
+// Built-in tool toggles come from the fields RefreshBuiltinToggles maintains, so
+// a /settings change takes effect on the next rebuild without a restart.
 func (c *Catalog) BuildRegistry() *tools.Registry {
 	reg := tools.NewBuiltinRegistry(c.ws,
 		tools.WithAllowFix(c.allowFix),
 		tools.WithBackgroundManager(c.bgMgr),
 		tools.WithSymbols(c.symbolsEnabled, c.symbolsPreferGopls),
-		tools.WithWebTools(c.webSearchEnabled, c.webFetchEnabled, c.webUtilityClient, false, 0),
+		tools.WithWebTools(
+			c.webSearchEnabled,
+			c.webFetchEnabled,
+			c.webUtilityClient,
+			c.webDirectFetch,
+			c.webMaxFetchBytes,
+		),
 	)
 	reg.Register(tools.NewActivateSkillTool(c.skills))
 	for _, tool := range c.mcp.Tools() {

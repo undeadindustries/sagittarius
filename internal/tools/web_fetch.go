@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 	"github.com/undeadindustries/sagittarius/internal/web"
 )
@@ -16,6 +17,14 @@ type webFetchTool struct {
 }
 
 func newWebFetchTool(client *provider.GeminiUtilityClient, directWebFetch bool, maxFetchBytes int) *webFetchTool {
+	// A non-positive budget would cap every fetch at zero bytes, so fall back to
+	// the documented default instead of returning empty pages.
+	if maxFetchBytes <= 0 {
+		maxFetchBytes = config.DefaultMaxFetchBytes
+		if directWebFetch {
+			maxFetchBytes = config.DefaultMaxExperimentalFetchBytes
+		}
+	}
 	return &webFetchTool{
 		utilityClient:  client,
 		directWebFetch: directWebFetch,

@@ -15,6 +15,13 @@ import (
 	"golang.org/x/net/html"
 )
 
+// DefaultMaxBytes is the per-request download cap FetchURL falls back to when
+// the caller passes a non-positive budget. config.DefaultMaxFetchBytes is the
+// user-facing settings default and mirrors this value; internal/web stays a
+// stdlib-only leaf, so the two are pinned together by a test in internal/tools
+// rather than by an import.
+const DefaultMaxBytes = 250 * 1024
+
 // ParsePrompt extracts all http/https URLs from a prompt text, matching
 // the heuristic logic from gemini-cli.
 func ParsePrompt(text string) (validUrls []string, errs []string) {
@@ -183,7 +190,14 @@ var safeHTTPClient = &http.Client{
 
 // FetchURL fetches a URL using the safe client, enforcing SSRF rules, rate limits,
 // and a max bytes cap. It retries 5xx and 429 up to 3 times.
+//
+// A non-positive maxBytes falls back to DefaultMaxBytes rather than capping the
+// body at zero, so a caller that forgets to thread its configured budget gets a
+// sane download instead of silently-empty content.
 func FetchURL(ctx context.Context, u string, maxBytes int) ([]byte, error) {
+	if maxBytes <= 0 {
+		maxBytes = DefaultMaxBytes
+	}
 	parsed, err := url.Parse(u)
 	if err != nil {
 		return nil, err
@@ -226,19 +240,26 @@ func FetchURL(ctx context.Context, u string, maxBytes int) ([]byte, error) {
 			return nil, fmt.Errorf("http %d: %s", resp.StatusCode, resp.Status)
 		}
 
-		// Read up to maxBytes + 1
-		lr := io.LimitReader(resp.Body, int64(maxBytes)+1)
-		data, err := io.ReadAll(lr)
-		if err != nil {
-			return nil, err
-		}
-		if len(data) > maxBytes {
-			// truncate
-			return data[:maxBytes], nil
-		}
-		return data, nil
+		return readCapped(resp.Body, maxBytes)
 	}
 	return nil, fmt.Errorf("fetch failed after 3 attempts: %v", lastErr)
+}
+
+// readCapped reads at most maxBytes from r, truncating anything beyond it. A
+// non-positive maxBytes means DefaultMaxBytes; it never means "read nothing".
+func readCapped(r io.Reader, maxBytes int) ([]byte, error) {
+	if maxBytes <= 0 {
+		maxBytes = DefaultMaxBytes
+	}
+	// One byte past the cap distinguishes "exactly at the cap" from "truncated".
+	data, err := io.ReadAll(io.LimitReader(r, int64(maxBytes)+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxBytes {
+		return data[:maxBytes], nil
+	}
+	return data, nil
 }
 
 // HTMLToText is a simple heuristic text extractor that preserves basic links.

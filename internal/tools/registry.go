@@ -140,7 +140,11 @@ func NewBuiltinRegistry(ws *Workspace, opts ...RegistryOption) *Registry {
 	if cfg.symbolsEnabled {
 		r.Register(newFindSymbolTool(ws, cfg.symbolsPreferGopls))
 	}
-	if cfg.webSearchEnabled {
+	// google_web_search only works through Gemini grounding, so skip it entirely
+	// when no utility client could be built (missing/invalid key) rather than
+	// advertising a tool whose every call fails. web_fetch still registers: its
+	// Go HTTP path needs no key.
+	if cfg.webSearchEnabled && cfg.webUtilityClient != nil {
 		r.Register(newGoogleWebSearchTool(cfg.webUtilityClient))
 	}
 	if cfg.webFetchEnabled {

@@ -736,7 +736,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 
 	allowFix, suggestVerify := resolveVerifyFlags(settings)
 	symbolsEnabled, symbolsPreferGopls := resolveSymbolsFlags(settings)
-	webSearchEnabled, webFetchEnabled := resolveWebFlags(settings)
+	webSearchEnabled, webFetchEnabled := resolveWebFlags(ctx, settings)
 
 	runtime, err := agent.NewRuntime(ctx, agent.RuntimeConfig{
 		Settings:           settings,
@@ -905,14 +905,15 @@ func resolveSymbolsFlags(merged *config.Settings) (enabled, preferGopls bool) {
 		config.SymbolsPreferGopls(merged, nil)
 }
 
-func resolveWebFlags(merged *config.Settings) (searchEnabled, fetchEnabled bool) {
+// resolveWebFlags reads the web-tool flags from the already-merged settings.
+// google_web_search defaults to on only when a Gemini key is resolvable, so the
+// probe must go through the full credential chain (env → keychain → encrypted
+// file) — checking env vars alone would hide search from the common
+// keychain-only setup.
+func resolveWebFlags(ctx context.Context, merged *config.Settings) (searchEnabled, fetchEnabled bool) {
 	hasKey := false
-	if merged != nil {
-		// Just a simple check if the env var is present for Gemini, as we don't have
-		// full cred resolution here.
-		if os.Getenv("GEMINI_API_KEY") != "" || os.Getenv("GOOGLE_API_KEY") != "" {
-			hasKey = true
-		}
+	if key, err := credentials.ResolveProviderAPIKey(ctx, string(config.BuiltInGeminiAPIKey)); err == nil && key != "" {
+		hasKey = true
 	}
 	return config.WebSearchEnabled(merged, nil, hasKey), config.WebFetchEnabled(merged, nil)
 }

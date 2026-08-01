@@ -27,11 +27,13 @@ You can customize the web tools in your `settings.json`:
 }
 ```
 
-- **`searchEnabled`**: Controls whether the `google_web_search` tool is registered.
-- **`fetchEnabled`**: Controls whether the `web_fetch` tool is registered.
+- **`searchEnabled`**: Controls whether the `google_web_search` tool is registered. When unset it follows Gemini key availability, resolved through the full credential chain (environment variable, OS keychain, then the encrypted file fallback). Because Gemini grounding is this tool's only backend, it is skipped entirely when no key resolves rather than being registered and failing on every call.
+- **`fetchEnabled`**: Controls whether the `web_fetch` tool is registered. Defaults to on with or without a Gemini key, since it has a key-free Go HTTP fallback.
 - **`directWebFetch`**: By default, `web_fetch` expects a prompt containing URLs and uses an LLM to summarize the fetched content based on the prompt. Enabling `directWebFetch` changes the tool to accept a single URL parameter and return the raw, converted text without LLM summarization. This is useful for building agents that need to parse raw text themselves.
 - **`utilityModel`**: The Gemini model to use for the utility client (default: `gemini-2.5-flash`).
-- **`maxFetchBytes`**: The maximum number of bytes to download per fetch request (default: 250 KiB).
+- **`maxFetchBytes`**: The maximum number of bytes to download per fetch request. Defaults to 250 KiB, or 10 MiB in `directWebFetch` mode where the raw text goes to the caller instead of into one turn's context. A zero or negative value is treated as unset.
+
+All of these resolve project-over-global and are re-read when settings are saved, so a `/settings` change takes effect without restarting.
 
 ## Security and Confirmation
 
