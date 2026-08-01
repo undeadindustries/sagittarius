@@ -18,15 +18,30 @@ You can set specific models for different modes (agent, plan, ask), choose diffe
 
 ### From GitHub Releases
 
-Pre-compiled binaries for Linux and macOS are available on the [GitHub Releases](https://github.com/undeadindustries/sagittarius/releases) page.
+Pre-compiled binaries for Linux and macOS (amd64 and arm64) are available on the [GitHub Releases](https://github.com/undeadindustries/sagittarius/releases) page.
 
-Download the appropriate archive, extract it, and move the binary to a directory in your `PATH` (for example, `/usr/local/bin`):
+This detects your platform, resolves the latest release, and installs into `/usr/local/bin`:
 
 ```bash
-# Example for Linux AMD64
-curl -sSLO "https://github.com/undeadindustries/sagittarius/releases/download/v0.1.0/sagittarius_0.1.0_linux_amd64.tar.gz"
-tar -xzf sagittarius_0.1.0_linux_amd64.tar.gz
+VERSION=$(curl -sS https://api.github.com/repos/undeadindustries/sagittarius/releases/latest \
+  | grep -o '"tag_name": *"[^"]*"' | cut -d'"' -f4)
+OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+ARCH=$(uname -m); case "$ARCH" in x86_64) ARCH=amd64 ;; aarch64|arm64) ARCH=arm64 ;; esac
+ASSET="sagittarius_${VERSION#v}_${OS}_${ARCH}.tar.gz"
+
+curl -sSLO "https://github.com/undeadindustries/sagittarius/releases/download/${VERSION}/${ASSET}"
+tar -xzf "$ASSET"
 sudo mv sagittarius /usr/local/bin/
+sagittarius --version
+```
+
+To pin a specific version instead, set `VERSION=v0.2.0` by hand and skip the first command.
+
+Optionally verify the download against the release's `checksums.txt`:
+
+```bash
+curl -sSLO "https://github.com/undeadindustries/sagittarius/releases/download/${VERSION}/checksums.txt"
+sha256sum -c checksums.txt --ignore-missing
 ```
 
 #### Note for macOS Users (Gatekeeper)
