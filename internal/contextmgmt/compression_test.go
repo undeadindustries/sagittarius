@@ -78,7 +78,14 @@ func TestFindCompressSplitPoint(t *testing.T) {
 		{name: "last index fraction", contents: five, fraction: 0.9, want: 4},
 		{name: "after last index", contents: four, fraction: 0.8, want: 4},
 		{name: "earlier splitpoint when trailing function call", contents: withFC, fraction: 0.99, want: 2},
-		{name: "gemini function call sequence splits safely", contents: withGeminiSig, fraction: 0.5, want: 0}, // No user turn without a FunctionResponse exists, must fall back to 0
+		// Only two candidate split points are FunctionResponse-free user turns
+		// (indices 0 and 3), and neither's cumulative char count reaches 50% of
+		// the total, so the fraction-based walk never returns early. The
+		// history's last message is a clean model turn with no pending
+		// FunctionCall, so the trailing-turn fallback applies: compressing
+		// everything (rather than the conservative index-0 no-op) is always
+		// safe here because nothing is left raw to desync a call/response pair.
+		{name: "gemini function call sequence splits safely", contents: withGeminiSig, fraction: 0.5, want: len(withGeminiSig)},
 		{name: "single item", contents: []Message{msg("user", "Message 1")}, fraction: 0.5, want: 0},
 	}
 
@@ -160,10 +167,14 @@ func TestCompressGeminiToolCallPairIntegrity(t *testing.T) {
 
 	q := &queuedSummarizer{responses: []string{"compressed summary"}}
 	c := newCompressor(q)
-	
-	// Force a compress that should split at "Turn 2 user message"
+
+	// Force a compress that should split at "Turn 2 user message". Given this
+	// fixture's char-weight distribution, PreserveFraction must keep the
+	// compression fraction (1-PreserveFraction) at or below ~42% so the safe
+	// split candidate at that message (the only FunctionResponse-free user
+	// turn before the end) is what crosses the target.
 	res, err := c.Compress(context.Background(), CompressOptions{
-		History: history, Threshold: 0.1, EffectiveLimit: 100, Force: true,
+		History: history, OriginalTokenCount: 100_000, Threshold: 0.1, EffectiveLimit: 100, Force: true, PreserveFraction: 0.6,
 	})
 	if err != nil {
 		t.Fatalf("Compress: %v", err)

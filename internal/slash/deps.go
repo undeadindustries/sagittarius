@@ -8,7 +8,6 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/goal"
 	"github.com/undeadindustries/sagittarius/internal/grill"
-	"github.com/undeadindustries/sagittarius/internal/lsp"
 	"github.com/undeadindustries/sagittarius/internal/mcp"
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
@@ -126,9 +125,6 @@ type Hooks interface {
 	ReasoningOverride() string
 	SetReasoningOverride(effort string)
 	ClearReasoningOverride()
-	
-	// LSPPool returns the LSP client pool if available.
-	LSPPool() *lsp.Pool
 }
 
 // Deps supplies slash command dependencies (injectable for tests).

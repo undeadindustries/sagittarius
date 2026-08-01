@@ -22,7 +22,6 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/credentials"
 	"github.com/undeadindustries/sagittarius/internal/goal"
 	"github.com/undeadindustries/sagittarius/internal/grill"
-	"github.com/undeadindustries/sagittarius/internal/lsp"
 	"github.com/undeadindustries/sagittarius/internal/mcp"
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
@@ -1671,13 +1670,6 @@ func (h *appHooks) InstallUpdate(ctx context.Context) (*selfupdate.InstallResult
 		})
 	}
 	return res, nil
-}
-
-func (h *appHooks) LSPPool() *lsp.Pool {
-	if h.app == nil || h.app.runtime == nil {
-		return nil
-	}
-	return h.app.runtime.LSPPool
 }
 
 // ReasoningOverride implements slash.Hooks.

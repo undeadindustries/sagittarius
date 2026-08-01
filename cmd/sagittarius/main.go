@@ -740,7 +740,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 
 	sessID := persistentSessionID()
 
-	allowFix, suggestVerify := resolveVerifyFlags(settings)
+	allowFix := config.VerifyAllowFix(settings, nil)
 	symbolsEnabled, symbolsPreferGopls := resolveSymbolsFlags(settings)
 	webSearchEnabled, webFetchEnabled := resolveWebFlags(ctx, settings)
 
@@ -828,28 +828,22 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 	}
 
 	runnerCfg := agent.RunnerConfig{
-		Runtime:                 runtime,
-		Generator:               gen,
-		Model:                   model,
-		Interactive:             interactive,
-		ApprovalMode:            opts.approvalMode,
-		SessionRecorder:         sessRecorder,
-		InitialHistory:          initialHistory,
-		InitialSessionGrants:    initialGrants,
-		InitialGoal:             initialGoal,
-		InitialGrill:            initialGrill,
-		Settings:                settings,
-		InitialMode:             initialMode,
-		ModelPinned:             modelPinned,
-		ProjectBoundary:         boundary,
-		Snapshotter:             snapMgr,
-		AllowFix:                allowFix,
-		SuggestVerifyAfterWrite: suggestVerify,
-		AutoCheckAfterWrite:     config.VerifyAutoCheckAfterWrite(settings, nil),
-		AutoCheckModuleWide:     config.VerifyAutoCheckModuleWide(settings, nil),
-		AutoCheckTimeoutSeconds: config.VerifyAutoCheckTimeoutSeconds(settings, nil),
-		RepoLocalTools:          config.VerifyRepoLocalTools(settings, nil),
-		EditLoopThreshold:       config.VerifyEditLoopThreshold(settings, nil),
+		Runtime:              runtime,
+		Generator:            gen,
+		Model:                model,
+		Interactive:          interactive,
+		ApprovalMode:         opts.approvalMode,
+		SessionRecorder:      sessRecorder,
+		InitialHistory:       initialHistory,
+		InitialSessionGrants: initialGrants,
+		InitialGoal:          initialGoal,
+		InitialGrill:         initialGrill,
+		Settings:             settings,
+		InitialMode:          initialMode,
+		ModelPinned:          modelPinned,
+		ProjectBoundary:      boundary,
+		Snapshotter:          snapMgr,
+		AllowFix:             allowFix,
 	}
 	// Assign only when non-nil: a nil *os.File stored in the io.WriteCloser
 	// field would be a non-nil interface wrapping a nil pointer, breaking the
@@ -901,13 +895,6 @@ func resolveBoundaryAndSnapshots(merged *config.Settings, projectRoot, sessID st
 		return boundary, nil
 	}
 	return boundary, mgr
-}
-
-// resolveVerifyFlags reads the verify-workflow flags from the already-merged
-// settings. Both flags default to false.
-func resolveVerifyFlags(merged *config.Settings) (allowFix, suggestAfterWrite bool) {
-	return config.VerifyAllowFix(merged, nil),
-		config.VerifySuggestAfterWrite(merged, nil)
 }
 
 // resolveSymbolsFlags reads the find_symbol tool flags from the already-merged

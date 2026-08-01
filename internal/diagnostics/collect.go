@@ -3,9 +3,11 @@ package diagnostics
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +15,8 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/tools/checks"
 )
 
+// Severity classifies how serious a diagnostic Finding is, driving whether it
+// is surfaced to the model (error/warning) and/or the user (style included).
 type Severity string
 
 const (
@@ -40,6 +44,24 @@ type MissingTool struct {
 	InstallHint string
 }
 
+// RepoLocalPolicy controls whether a toolResolver may run a binary resolved
+// from inside the workspace (e.g. node_modules/.bin, .venv/bin) rather than a
+// system-wide install. Repo-local binaries execute code checked into the
+// repository being worked on, so this is a deliberate trust decision.
+type RepoLocalPolicy string
+
+const (
+	// RepoLocalPrompt asks ApproveRepoLocal once per tool command per Collect
+	// run. Without an ApproveRepoLocal callback (e.g. headless runs) it
+	// denies automatically rather than prompting.
+	RepoLocalPrompt RepoLocalPolicy = "prompt"
+	// RepoLocalAllow always runs repo-local binaries without asking.
+	RepoLocalAllow RepoLocalPolicy = "allow"
+	// RepoLocalDeny never runs repo-local binaries; they are skipped silently
+	// (not reported as a missing tool).
+	RepoLocalDeny RepoLocalPolicy = "deny"
+)
+
 // Options configure the behavior of a diagnostics run.
 type Options struct {
 	Root       string
@@ -47,11 +69,23 @@ type Options struct {
 	ModuleWide bool
 	Timeout    time.Duration
 	LSP        Diagnoser // nil when unavailable
+
+	// RepoLocalPolicy governs whether a tool binary resolved from inside Root
+	// may run. Defaults to RepoLocalPrompt.
+	RepoLocalPolicy RepoLocalPolicy
+	// ApproveRepoLocal is consulted once per tool command when RepoLocalPolicy
+	// is RepoLocalPrompt; it receives the tool's command name and its
+	// resolved repo-local path. Nil denies repo-local tools without
+	// prompting.
+	ApproveRepoLocal func(tool, path string) bool
 }
 
-// Diagnoser is the interface for querying diagnostics (implemented by LSP clients).
+// Diagnoser is the interface for querying diagnostics (implemented by LSP
+// clients via lsp.PoolDiagnoser). root is the language's resolved module/
+// workspace root (see findRoot), used to start or reuse the correct server
+// instance — it is not necessarily Options.Root.
 type Diagnoser interface {
-	Diagnostics(ctx context.Context, absPaths []string) ([]Finding, error)
+	Diagnostics(ctx context.Context, root string, absPaths []string) ([]Finding, error)
 }
 
 // Tool represents an external binary check (linter or formatter).
@@ -102,22 +136,82 @@ func cachedLookPath(file string) (string, error) {
 	return path, err
 }
 
-// resolveTool checks preconditions and resolves the command on the PATH.
-func resolveTool(root string, t Tool) (*Tool, error) {
+// toolResolver resolves check binaries on PATH for the lifetime of one
+// Collect run, applying the repo-local approval policy and memoizing prompt
+// decisions per command so the user is asked at most once per run.
+type toolResolver struct {
+	wsRoot  string
+	policy  RepoLocalPolicy
+	approve func(tool, path string) bool
+	decided map[string]bool
+}
+
+func newToolResolver(opts Options) *toolResolver {
+	policy := opts.RepoLocalPolicy
+	if policy == "" {
+		policy = RepoLocalPrompt
+	}
+	return &toolResolver{
+		wsRoot:  opts.Root,
+		policy:  policy,
+		approve: opts.ApproveRepoLocal,
+		decided: make(map[string]bool),
+	}
+}
+
+// resolve checks preconditions and resolves the command on the PATH, gating
+// repo-local binaries behind the configured RepoLocalPolicy.
+func (tr *toolResolver) resolve(root string, t Tool) (*Tool, error) {
 	if t.Precondition != nil && !t.Precondition(root) {
 		return nil, nil // Not an error, just skip silently
 	}
-	
-	_, err := cachedLookPath(t.Command)
+
+	path, err := cachedLookPath(t.Command)
 	if err == nil {
+		if tr.isRepoLocal(path) && !tr.approved(t.Command, path) {
+			return nil, nil // policy-denied, not a missing tool
+		}
 		return &t, nil
 	}
 
 	if t.Fallback != nil {
-		return resolveTool(root, *t.Fallback)
+		return tr.resolve(root, *t.Fallback)
 	}
 
 	return nil, err
+}
+
+// isRepoLocal reports whether resolvedPath lives inside the workspace root.
+func (tr *toolResolver) isRepoLocal(resolvedPath string) bool {
+	if tr.wsRoot == "" {
+		return false
+	}
+	rel, err := filepath.Rel(tr.wsRoot, resolvedPath)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return true
+}
+
+// approved applies the repo-local policy for command, prompting (and
+// memoizing the answer) at most once per Collect run under RepoLocalPrompt.
+func (tr *toolResolver) approved(command, path string) bool {
+	switch tr.policy {
+	case RepoLocalAllow:
+		return true
+	case RepoLocalDeny:
+		return false
+	default: // RepoLocalPrompt
+		if v, ok := tr.decided[command]; ok {
+			return v
+		}
+		if tr.approve == nil {
+			return false // headless / no prompt available: deny by default
+		}
+		v := tr.approve(command, path)
+		tr.decided[command] = v
+		return v
+	}
 }
 
 // exists is a helper for preconditions.
@@ -145,9 +239,9 @@ var registry = []Language{
 			{Name: "build", Command: "go", Args: []string{"build", "./..."}, Severity: SeverityError},
 		},
 		Server: &ServerSpec{
-			Command: "gopls",
+			Command:      "gopls",
 			Precondition: func(root string) bool { return exists(root, "go.mod") },
-			InstallHint: "go install golang.org/x/tools/gopls@latest",
+			InstallHint:  "go install golang.org/x/tools/gopls@latest",
 		},
 	},
 	{
@@ -160,7 +254,7 @@ var registry = []Language{
 			{Name: "mypy", Command: "mypy", Args: []string{}, Severity: SeverityError, Precondition: func(root string) bool { return exists(root, "mypy.ini") || exists(root, "pyproject.toml") }},
 		},
 		Server: &ServerSpec{
-			Command: "pyright",
+			Command:     "pyright",
 			InstallHint: "npm install -g pyright",
 		},
 	},
@@ -169,17 +263,19 @@ var registry = []Language{
 		Extensions:  []string{".ts", ".tsx"},
 		RootMarkers: []string{"package.json", "tsconfig.json"},
 		FileChecks: []Tool{
-			{Name: "eslint", Command: "eslint", Args: []string{}, Severity: SeverityWarning, Precondition: func(root string) bool { return exists(root, "eslint.config.js") || exists(root, ".eslintrc.js") || exists(root, ".eslintrc.json") }, InstallHint: "npm install eslint", Fallback: &Tool{Name: "node check", Command: "node", Args: []string{"--check"}, Severity: SeverityError}},
+			{Name: "eslint", Command: "eslint", Args: []string{}, Severity: SeverityWarning, Precondition: func(root string) bool {
+				return exists(root, "eslint.config.js") || exists(root, ".eslintrc.js") || exists(root, ".eslintrc.json")
+			}, InstallHint: "npm install eslint", Fallback: &Tool{Name: "node check", Command: "node", Args: []string{"--check"}, Severity: SeverityError}},
 			{Name: "prettier", Command: "prettier", Args: []string{"--check"}, Severity: SeverityStyle, Precondition: func(root string) bool { return exists(root, ".prettierrc") || exists(root, ".prettierrc.json") }},
 		},
 		ModuleChecks: []Tool{
 			{Name: "tsc", Command: "tsc", Args: []string{"--noEmit"}, Severity: SeverityError, Precondition: func(root string) bool { return exists(root, "tsconfig.json") }},
 		},
 		Server: &ServerSpec{
-			Command: "typescript-language-server",
-			Args: []string{"--stdio"},
+			Command:      "typescript-language-server",
+			Args:         []string{"--stdio"},
 			Precondition: func(root string) bool { return exists(root, "package.json") || exists(root, "tsconfig.json") },
-			InstallHint: "npm install -g typescript-language-server typescript",
+			InstallHint:  "npm install -g typescript-language-server typescript",
 		},
 	},
 	{
@@ -187,14 +283,16 @@ var registry = []Language{
 		Extensions:  []string{".js", ".jsx", ".mjs", ".cjs"},
 		RootMarkers: []string{"package.json"},
 		FileChecks: []Tool{
-			{Name: "eslint", Command: "eslint", Args: []string{}, Severity: SeverityWarning, Precondition: func(root string) bool { return exists(root, "eslint.config.js") || exists(root, ".eslintrc.js") || exists(root, ".eslintrc.json") }, InstallHint: "npm install eslint", Fallback: &Tool{Name: "node check", Command: "node", Args: []string{"--check"}, Severity: SeverityError}},
+			{Name: "eslint", Command: "eslint", Args: []string{}, Severity: SeverityWarning, Precondition: func(root string) bool {
+				return exists(root, "eslint.config.js") || exists(root, ".eslintrc.js") || exists(root, ".eslintrc.json")
+			}, InstallHint: "npm install eslint", Fallback: &Tool{Name: "node check", Command: "node", Args: []string{"--check"}, Severity: SeverityError}},
 			{Name: "prettier", Command: "prettier", Args: []string{"--check"}, Severity: SeverityStyle, Precondition: func(root string) bool { return exists(root, ".prettierrc") || exists(root, ".prettierrc.json") }},
 		},
 		Server: &ServerSpec{
-			Command: "typescript-language-server",
-			Args: []string{"--stdio"},
+			Command:      "typescript-language-server",
+			Args:         []string{"--stdio"},
 			Precondition: func(root string) bool { return exists(root, "package.json") },
-			InstallHint: "npm install -g typescript-language-server typescript",
+			InstallHint:  "npm install -g typescript-language-server typescript",
 		},
 	},
 	{
@@ -208,9 +306,9 @@ var registry = []Language{
 			{Name: "clippy", Command: "cargo", Args: []string{"clippy"}, Severity: SeverityWarning},
 		},
 		Server: &ServerSpec{
-			Command: "rust-analyzer",
+			Command:      "rust-analyzer",
 			Precondition: func(root string) bool { return exists(root, "Cargo.toml") },
-			InstallHint: "install rust-analyzer via rustup or package manager",
+			InstallHint:  "install rust-analyzer via rustup or package manager",
 		},
 	},
 	{
@@ -223,7 +321,9 @@ var registry = []Language{
 		},
 		Server: &ServerSpec{
 			Command: "clangd",
-			Precondition: func(root string) bool { return exists(root, "compile_commands.json") || exists(root, "compile_flags.txt") },
+			Precondition: func(root string) bool {
+				return exists(root, "compile_commands.json") || exists(root, "compile_flags.txt")
+			},
 			InstallHint: "install clangd",
 		},
 	},
@@ -236,7 +336,9 @@ var registry = []Language{
 		},
 		Server: &ServerSpec{
 			Command: "jdtls",
-			Precondition: func(root string) bool { return exists(root, "pom.xml") || exists(root, "build.gradle") || exists(root, "build.gradle.kts") },
+			Precondition: func(root string) bool {
+				return exists(root, "pom.xml") || exists(root, "build.gradle") || exists(root, "build.gradle.kts")
+			},
 			InstallHint: "install eclipse.jdt.ls",
 		},
 	},
@@ -249,7 +351,9 @@ var registry = []Language{
 		},
 		Server: &ServerSpec{
 			Command: "kotlin-language-server",
-			Precondition: func(root string) bool { return exists(root, "build.gradle.kts") || exists(root, "build.gradle") || exists(root, "pom.xml") },
+			Precondition: func(root string) bool {
+				return exists(root, "build.gradle.kts") || exists(root, "build.gradle") || exists(root, "pom.xml")
+			},
 			InstallHint: "install kotlin-language-server",
 		},
 	},
@@ -259,14 +363,16 @@ var registry = []Language{
 		RootMarkers: []string{"composer.json"},
 		FileChecks: []Tool{
 			{Name: "php syntax", Command: "php", Args: []string{"-l"}, Severity: SeverityError, InstallHint: "install php"},
-			{Name: "php-cs-fixer", Command: "php-cs-fixer", Args: []string{"fix", "--dry-run", "--diff"}, Severity: SeverityStyle, Precondition: func(root string) bool { return exists(root, ".php-cs-fixer.dist.php") || exists(root, ".php-cs-fixer.php") }, InstallHint: "composer require --dev friendsofphp/php-cs-fixer"},
+			{Name: "php-cs-fixer", Command: "php-cs-fixer", Args: []string{"fix", "--dry-run", "--diff"}, Severity: SeverityStyle, Precondition: func(root string) bool {
+				return exists(root, ".php-cs-fixer.dist.php") || exists(root, ".php-cs-fixer.php")
+			}, InstallHint: "composer require --dev friendsofphp/php-cs-fixer"},
 			{Name: "phpcs", Command: "phpcs", Args: []string{}, Severity: SeverityWarning, Precondition: func(root string) bool { return exists(root, "phpcs.xml") || exists(root, "phpcs.xml.dist") }, InstallHint: "composer require --dev squizlabs/php_codesniffer"},
 		},
 		Server: &ServerSpec{
-			Command: "intelephense",
-			Args: []string{"--stdio"},
+			Command:      "intelephense",
+			Args:         []string{"--stdio"},
 			Precondition: func(root string) bool { return exists(root, "composer.json") },
-			InstallHint: "npm install -g intelephense",
+			InstallHint:  "npm install -g intelephense",
 		},
 	},
 	{
@@ -285,10 +391,10 @@ var registry = []Language{
 			{Name: "rubocop", Command: "rubocop", Args: []string{}, Severity: SeverityWarning, Precondition: func(root string) bool { return exists(root, ".rubocop.yml") }, InstallHint: "gem install rubocop", Fallback: &Tool{Name: "ruby syntax", Command: "ruby", Args: []string{"-c"}, Severity: SeverityError}},
 		},
 		Server: &ServerSpec{
-			Command: "solargraph",
-			Args: []string{"stdio"},
+			Command:      "solargraph",
+			Args:         []string{"stdio"},
 			Precondition: func(root string) bool { return exists(root, "Gemfile") },
-			InstallHint: "gem install solargraph",
+			InstallHint:  "gem install solargraph",
 		},
 	},
 	{
@@ -300,8 +406,8 @@ var registry = []Language{
 			{Name: "shfmt", Command: "shfmt", Args: []string{"-d"}, Severity: SeverityStyle, InstallHint: "install shfmt"},
 		},
 		Server: &ServerSpec{
-			Command: "bash-language-server",
-			Args: []string{"start"},
+			Command:     "bash-language-server",
+			Args:        []string{"start"},
 			InstallHint: "npm install -g bash-language-server",
 		},
 	},
@@ -372,7 +478,7 @@ func FindLanguage(path string) *Language {
 		// e.g. "Dockerfile"
 		ext = filepath.Base(path)
 	}
-	
+
 	for i := range registry {
 		for _, e := range registry[i].Extensions {
 			if strings.EqualFold(e, ext) {
@@ -422,12 +528,13 @@ func Collect(ctx context.Context, opts Options) (Report, error) {
 
 	var r Report
 	seenMissing := make(map[string]bool)
+	tr := newToolResolver(opts)
 
 	// Group files by directory and language
 	type runTarget struct {
-		Lang *Language
-		Root string
-		Dir  string // Where to run if no root found
+		Lang  *Language
+		Root  string
+		Dir   string // Where to run if no root found
 		Files []string
 	}
 	targets := make(map[string]*runTarget)
@@ -441,7 +548,7 @@ func Collect(ctx context.Context, opts Options) (Report, error) {
 
 		dir := filepath.Dir(absPath)
 		root := findRoot(dir, opts.Root, lang.RootMarkers)
-		
+
 		key := fmt.Sprintf("%s:%s", lang.ID, root)
 		if root == "" {
 			// No root found (e.g. out-of-workspace sysadmin write).
@@ -453,9 +560,9 @@ func Collect(ctx context.Context, opts Options) (Report, error) {
 			t.Files = append(t.Files, absPath)
 		} else {
 			targets[key] = &runTarget{
-				Lang: lang,
-				Root: root,
-				Dir:  dir,
+				Lang:  lang,
+				Root:  root,
+				Dir:   dir,
 				Files: []string{absPath},
 			}
 		}
@@ -467,27 +574,21 @@ func Collect(ctx context.Context, opts Options) (Report, error) {
 			runDir = t.Dir
 		}
 
-		// LSP diagnostics (if available) replace module checks
+		// LSP diagnostics (if available) replace module checks.
 		lspHandled := false
 		if opts.LSP != nil && t.Lang.Server != nil {
-			// Instead of asking the LSP to only look at one Language, the pool
-			// Diagnoser takes all paths and groups them itself. But wait! Collect
-			// has split things into `t.Files` per language group. Let's just pass
-			// t.Files directly to the pool diagnoser here.
-			
-			findings, err := opts.LSP.Diagnostics(runCtx, t.Files)
+			findings, err := opts.LSP.Diagnostics(runCtx, runDir, t.Files)
 			if err == nil {
 				r.Findings = append(r.Findings, findings...)
 				lspHandled = true
 			} else {
-				// Log but continue to fallbacks
-				fmt.Fprintf(os.Stderr, "LSP diagnostics failed for %s: %v\n", t.Lang.ID, err)
+				slog.Debug("LSP diagnostics failed", "language", t.Lang.ID, "root", runDir, "error", err)
 			}
 		}
 
 		// File checks (lint, format) always run
 		for _, check := range t.Lang.FileChecks {
-			tool, err := resolveTool(runDir, check)
+			tool, err := tr.resolve(runDir, check)
 			if err != nil {
 				if !seenMissing[check.Command] {
 					seenMissing[check.Command] = true
@@ -509,25 +610,25 @@ func Collect(ctx context.Context, opts Options) (Report, error) {
 				}
 			}
 
-			// Some tools like prettier or eslint need the target paths
-			// Some tools like php -l operate strictly per-file. For now, we pass all relPaths
-			// to the command. checks.Argv handles this cleanly.
-
+			// The registry stores each check's Args as pure flags with no
+			// trailing default target (unlike run_project_checks's
+			// checks.Check, whose Args end in a replaceable "." / "./...").
+			// checks.Argv narrows a trailing target; here there is none to
+			// narrow, so the file paths are simply appended.
 			cc := checks.Check{
-				Name: tool.Name,
-				Command: tool.Command,
-				Args: tool.Args,
+				Name:         tool.Name,
+				Command:      tool.Command,
+				Args:         tool.Args,
 				FailOnOutput: tool.FailOnOutput,
-				FileScoped: true, // by definition for FileChecks
 			}
-			argv := checks.Argv(cc, relPaths)
-			
+			argv := append(slices.Clone(tool.Args), relPaths...)
+
 			ok, _, output := checks.Run(runCtx, runDir, cc, argv)
 			if !ok {
 				r.Findings = append(r.Findings, Finding{
-					Tool: tool.Name,
+					Tool:     tool.Name,
 					Severity: tool.Severity,
-					Message: output,
+					Message:  output,
 				})
 			}
 		}
@@ -535,7 +636,7 @@ func Collect(ctx context.Context, opts Options) (Report, error) {
 		// Module checks (vet, build) run if enabled and not subsumed by LSP
 		if opts.ModuleWide && !lspHandled && t.Root != "" {
 			for _, check := range t.Lang.ModuleChecks {
-				tool, err := resolveTool(runDir, check)
+				tool, err := tr.resolve(runDir, check)
 				if err != nil {
 					if !seenMissing[check.Command] {
 						seenMissing[check.Command] = true
@@ -548,18 +649,18 @@ func Collect(ctx context.Context, opts Options) (Report, error) {
 				}
 
 				cc := checks.Check{
-					Name: tool.Name,
-					Command: tool.Command,
-					Args: tool.Args,
+					Name:         tool.Name,
+					Command:      tool.Command,
+					Args:         tool.Args,
 					FailOnOutput: tool.FailOnOutput,
 				}
-				
+
 				ok, _, output := checks.Run(runCtx, runDir, cc, tool.Args) // Module checks don't get relPaths
 				if !ok {
 					r.Findings = append(r.Findings, Finding{
-						Tool: tool.Name,
+						Tool:     tool.Name,
 						Severity: tool.Severity,
-						Message: output,
+						Message:  output,
 					})
 				}
 			}

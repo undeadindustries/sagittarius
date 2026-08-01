@@ -76,27 +76,18 @@ type RunnerConfig struct {
 	// ModelPinned skips mode-based routing when true (CLI -m override).
 	ModelPinned bool
 	// AllowFix permits run_project_checks to run mutating formatters (fix=true).
-	// Resolved from sagittarius.verify.allowFix; default false.
+	// Resolved from sagittarius.verify.allowFix; default false. Only seeds the
+	// placeholder registry built by NewRunner — the live value is a
+	// Catalog.builtinToggles field re-resolved by RefreshBuiltinToggles on
+	// every settings change (see internal/agent/catalog.go), so a /settings
+	// edit takes effect on the next registry rebuild without a restart.
 	AllowFix bool
-	// SuggestVerifyAfterWrite emits a single info reminder to verify after a turn
-	// that wrote files. Resolved from sagittarius.verify.suggestAfterWrite;
-	// default false. It never runs checks automatically.
-	SuggestVerifyAfterWrite bool
-	// AutoCheckAfterWrite runs read-only checks automatically after a turn that
-	// wrote files. Resolved from sagittarius.verify.autoCheckAfterWrite.
-	AutoCheckAfterWrite bool
-	// AutoCheckModuleWide includes module-wide checks in automatic checks.
-	// Resolved from sagittarius.verify.autoCheckModuleWide.
-	AutoCheckModuleWide bool
-	// AutoCheckTimeoutSeconds is the timeout for automatic checks.
-	// Resolved from sagittarius.verify.autoCheckTimeoutSeconds.
-	AutoCheckTimeoutSeconds int
-	// RepoLocalTools defines the policy for running repo-local tools.
-	// Resolved from sagittarius.verify.repoLocalTools.
-	RepoLocalTools config.RepoLocalToolsPolicy
-	// EditLoopThreshold is the threshold for repeated edit detection.
-	// Resolved from sagittarius.verify.editLoopThreshold.
-	EditLoopThreshold int
+	// The remaining sagittarius.verify.* behaviors (suggestAfterWrite,
+	// autoCheckAfterWrite, autoCheckModuleWide, autoCheckTimeoutSeconds,
+	// repoLocalTools, editLoopThreshold) are read directly from the live
+	// settings snapshot at use time (see the verify* helpers in postwrite.go)
+	// rather than cached here, so /settings changes apply on the very next
+	// turn with no RunnerConfig field or restart required.
 	// InitialGoal pre-populates the active session goal from a resumed session.
 	InitialGoal *goal.Snapshot
 	// InitialGrill pre-populates the active grill-me session from a resumed session.
@@ -113,7 +104,7 @@ type Runner struct {
 	genMu  sync.RWMutex
 	gen    provider.ContentGenerator
 	genErr error
-	
+
 	runtime *Runtime
 	// modelMu guards model, providerDefaultModel, modelPinned, and the
 	// system-prompt fields (system, systemBase, memory) that model resolution
@@ -139,37 +130,41 @@ type Runner struct {
 	// systemBase + mode suffix. systemBase is the personality prompt + memory.
 	// memory is the AGENTS.md content alone (re-composed on rebuild). All three
 	// are guarded by modelMu (read alongside model in buildGenerateRequest).
-	system           string
-	systemBase       string
-	memory           string
-	approval         ApprovalMode
-	interactive      bool
-	workDir          string
-	workspace        *tools.Workspace
-	regMu            sync.RWMutex
-	registry         *tools.Registry
-	scheduler        *tools.Scheduler
-	historyMu        sync.RWMutex // guards history + turnCounter
-	history          []provider.Message
-	ctxMgrMu         sync.RWMutex
-	ctxMgr           *contextmgmt.Manager
-	turnCounter      int
-	state            State
-	stateMu          sync.RWMutex
-	lastRequest      *provider.GenerateRequest
-	lastRequestMu    sync.RWMutex
-	sessionRecorder  *session.Recorder
-	metrics          *sessionMetrics
-	projectBoundary  bool
-	snap                    *snapshot.Manager
-	suggestVerify           bool
-	autoCheckAfterWrite     bool
-	autoCheckModuleWide     bool
-	autoCheckTimeoutSeconds int
-	repoLocalTools          config.RepoLocalToolsPolicy
-	editLoopThreshold       int
-	editStats               map[string]int
-	goplsHintPending        bool
+	system          string
+	systemBase      string
+	memory          string
+	approval        ApprovalMode
+	interactive     bool
+	workDir         string
+	workspace       *tools.Workspace
+	regMu           sync.RWMutex
+	registry        *tools.Registry
+	scheduler       *tools.Scheduler
+	historyMu       sync.RWMutex // guards history + turnCounter
+	history         []provider.Message
+	ctxMgrMu        sync.RWMutex
+	ctxMgr          *contextmgmt.Manager
+	turnCounter     int
+	state           State
+	stateMu         sync.RWMutex
+	lastRequest     *provider.GenerateRequest
+	lastRequestMu   sync.RWMutex
+	sessionRecorder *session.Recorder
+	metrics         *sessionMetrics
+	projectBoundary bool
+	snap            *snapshot.Manager
+	// editStatsMu guards editStats and nudgedPaths, the AD-080 repeated-edit
+	// loop detector's per-turn state (see postwrite.go). Both maps are reset
+	// at the start of every RunTurn.
+	editStatsMu sync.Mutex
+	editStats   map[string]int
+	nudgedPaths map[string]bool
+	// repoLocalMu guards repoLocalGrants, the session-lifetime memo of
+	// interactive repo-local tool approvals ("allow for this session"),
+	// mirroring Scheduler.sessionGrants.
+	repoLocalMu      sync.Mutex
+	repoLocalGrants  map[string]bool
+	goplsHintPending bool
 	// loadedMemoryFiles are the AGENTS.md paths that contributed to the system
 	// instruction, captured at construction for the welcome banner.
 	loadedMemoryFiles []string
@@ -273,21 +268,17 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		workDir:              ws.Root(),
 		workspace:            ws,
 		registry:             registry,
-		ctxMgr:                  cfg.ContextManager,
-		state:                   StateIdle,
-		sessionRecorder:         cfg.SessionRecorder,
-		history:                 history,
-		metrics:                 newSessionMetrics(),
-		projectBoundary:         cfg.ProjectBoundary,
-		snap:                    cfg.Snapshotter,
-		suggestVerify:           cfg.SuggestVerifyAfterWrite,
-		autoCheckAfterWrite:     cfg.AutoCheckAfterWrite,
-		autoCheckModuleWide:     cfg.AutoCheckModuleWide,
-		autoCheckTimeoutSeconds: cfg.AutoCheckTimeoutSeconds,
-		repoLocalTools:          cfg.RepoLocalTools,
-		editLoopThreshold:       cfg.EditLoopThreshold,
-		editStats:               make(map[string]int),
-		goplsHintPending:        needsGoplsHint(cfg.Settings, ws.Root()),
+		ctxMgr:               cfg.ContextManager,
+		state:                StateIdle,
+		sessionRecorder:      cfg.SessionRecorder,
+		history:              history,
+		metrics:              newSessionMetrics(),
+		projectBoundary:      cfg.ProjectBoundary,
+		snap:                 cfg.Snapshotter,
+		editStats:            make(map[string]int),
+		nudgedPaths:          make(map[string]bool),
+		repoLocalGrants:      make(map[string]bool),
+		goplsHintPending:     needsGoplsHint(cfg.Settings, ws.Root()),
 		loadedMemoryFiles:    memoryFiles,
 		initialSessionGrants: cfg.InitialSessionGrants,
 		verboseLog:           newVerboseLog(cfg.VerboseLog),
@@ -591,6 +582,7 @@ func (r *Runner) RunTurn(ctx context.Context, userInput string) (<-chan ui.Strea
 	r.verboseLog.LogTurnStart(userInput)
 	r.setState(StateIdle)
 	r.metrics.recordTurn()
+	r.resetEditLoopStats()
 	r.historyMu.Lock()
 	r.history = append(r.history, provider.Message{
 		Role:  provider.RoleUser,
@@ -751,23 +743,24 @@ outerLoop:
 			}
 			r.metrics.recordTools(len(toolCalls), countToolFailures(responses))
 			r.appendFunctionResponses(responses)
-			if r.suggestVerify && !verifyHinted && containsSuccessfulWrite(responses) {
+			if config.VerifySuggestAfterWrite(r.settingsSnapshot(), nil) && !verifyHinted && containsSuccessfulWrite(responses) {
 				verifyHinted = true
 				out <- ui.StreamEvent{Type: ui.StreamInfo, Text: verifyReminder}
 			}
-			
-			// AD-080 Auto-check pipeline
-	if r.autoCheckAfterWrite {
-		writtenPaths := extractWrittenPathsFromHistory(r)
-		if len(writtenPaths) > 0 {
-			r.runPostWriteChecks(ctx, out, emit, writtenPaths)
-			// If loop detection triggered a nudge, it will be injected into history.
-			// We continue the loop so the model can see the diagnostics/nudge.
-			r.setState(StateStreaming)
-			continue 
-		}
-	}
-			
+
+			// AD-080 auto-check pipeline. Only continue the loop (an extra
+			// model round-trip) when runPostWriteChecks actually injected
+			// feedback for the model to react to; a clean check result never
+			// costs a round.
+			if config.VerifyAutoCheckAfterWrite(r.settingsSnapshot(), nil) {
+				if writtenPaths := extractWrittenPathsFromHistory(r); len(writtenPaths) > 0 {
+					if r.runPostWriteChecks(ctx, emit, writtenPaths) {
+						r.setState(StateStreaming)
+						continue
+					}
+				}
+			}
+
 			r.setState(StateStreaming)
 		}
 
@@ -1494,7 +1487,7 @@ func extractWrittenPathsFromHistory(r *Runner) []string {
 	if len(r.history) < 2 {
 		return paths
 	}
-	
+
 	// Find the most recent assistant turn
 	var lastAsst *provider.Message
 	for i := len(r.history) - 1; i >= 0; i-- {
@@ -1541,7 +1534,7 @@ func extractWrittenPathsFromHistory(r *Runner) []string {
 			}
 		}
 	}
-	
+
 	return paths
 }
 

@@ -13,7 +13,6 @@ import (
 
 const (
 	projectChecksTimeout  = 5 * time.Minute
-	maxCheckOutputBytes   = 6000
 	projectChecksToolDesc = "Detects the project's language stack (Go, Node/TypeScript, Python, Rust) " +
 		"from root marker files and runs its read-only verification checks (lint, format check, type check, " +
 		"build, test). Returns a structured report of each check's pass/fail plus any missing tools with an " +

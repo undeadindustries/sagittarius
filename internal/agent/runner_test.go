@@ -732,13 +732,19 @@ func TestRunnerSuggestVerifyAfterWrite(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			root := t.TempDir()
+			suggest := tc.suggest
+			autoCheck := false
+			settings := &config.Settings{Sagittarius: &config.SagittariusSettings{Verify: &config.SagittariusVerifyConfig{
+				SuggestAfterWrite:   &suggest,
+				AutoCheckAfterWrite: &autoCheck,
+			}}}
 			runner, err := NewRunner(RunnerConfig{
-				Generator:               &fakeGenerator{batches: writeThenFinish()},
-				Model:                   "test-model",
-				WorkDir:                 root,
-				ApprovalMode:            ApprovalYolo,
-				Interactive:             false,
-				SuggestVerifyAfterWrite: tc.suggest,
+				Generator:    &fakeGenerator{batches: writeThenFinish()},
+				Model:        "test-model",
+				WorkDir:      root,
+				ApprovalMode: ApprovalYolo,
+				Interactive:  false,
+				Settings:     settings,
 			})
 			if err != nil {
 				t.Fatalf("NewRunner: %v", err)

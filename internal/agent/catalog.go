@@ -127,6 +127,7 @@ func (c *Catalog) RefreshBuiltinToggles(s *config.Settings) bool {
 // It is deliberately comparable so change detection is one comparison and adding
 // a field cannot silently escape it.
 type builtinToggles struct {
+	allowFix           bool
 	symbolsEnabled     bool
 	symbolsPreferGopls bool
 	webSearchEnabled   bool
@@ -138,6 +139,7 @@ type builtinToggles struct {
 func (c *Catalog) resolveToggles(s *config.Settings) builtinToggles {
 	directFetch := config.WebDirectFetch(s, nil)
 	return builtinToggles{
+		allowFix:           config.VerifyAllowFix(s, nil),
 		symbolsEnabled:     config.SymbolsEnabled(s, nil),
 		symbolsPreferGopls: config.SymbolsPreferGopls(s, nil),
 		// The auto-default for search is "on when a Gemini key resolved", which
@@ -152,6 +154,7 @@ func (c *Catalog) resolveToggles(s *config.Settings) builtinToggles {
 
 func (c *Catalog) toggles() builtinToggles {
 	return builtinToggles{
+		allowFix:           c.allowFix,
 		symbolsEnabled:     c.symbolsEnabled,
 		symbolsPreferGopls: c.symbolsPreferGopls,
 		webSearchEnabled:   c.webSearchEnabled,
@@ -162,6 +165,7 @@ func (c *Catalog) toggles() builtinToggles {
 }
 
 func (c *Catalog) applyToggles(t builtinToggles) {
+	c.allowFix = t.allowFix
 	c.symbolsEnabled = t.symbolsEnabled
 	c.symbolsPreferGopls = t.symbolsPreferGopls
 	c.webSearchEnabled = t.webSearchEnabled
