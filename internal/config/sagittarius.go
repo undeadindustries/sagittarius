@@ -181,7 +181,33 @@ type SagittariusVerifyConfig struct {
 	// formatters/auto-fixers (fix=true). Default false because such rewrites are
 	// not captured by /undo.
 	AllowFix *bool                      `json:"allowFix,omitempty"`
-	Extra    map[string]json.RawMessage `json:"-"`
+	
+	AutoCheckAfterWrite     *bool                      `json:"autoCheckAfterWrite,omitempty"`
+	AutoCheckModuleWide     *bool                      `json:"autoCheckModuleWide,omitempty"`
+	AutoCheckTimeoutSeconds *int                       `json:"autoCheckTimeoutSeconds,omitempty"`
+	RepoLocalTools          *string                    `json:"repoLocalTools,omitempty"`
+	EditLoopThreshold       *int                       `json:"editLoopThreshold,omitempty"`
+	Extra                   map[string]json.RawMessage `json:"-"`
+}
+
+// RepoLocalToolsPolicy defines how repo-local tools are handled.
+type RepoLocalToolsPolicy string
+
+const (
+	RepoLocalToolsPrompt RepoLocalToolsPolicy = "prompt"
+	RepoLocalToolsAllow  RepoLocalToolsPolicy = "allow"
+	RepoLocalToolsDeny   RepoLocalToolsPolicy = "deny"
+)
+
+func parseRepoLocalToolsPolicy(s string) RepoLocalToolsPolicy {
+	switch RepoLocalToolsPolicy(s) {
+	case RepoLocalToolsAllow:
+		return RepoLocalToolsAllow
+	case RepoLocalToolsDeny:
+		return RepoLocalToolsDeny
+	default:
+		return RepoLocalToolsPrompt
+	}
 }
 
 // SagittariusSystemPromptConfig is the global default for the system-prompt

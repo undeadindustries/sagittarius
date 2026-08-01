@@ -20,6 +20,7 @@
 // take injected dependencies (token estimator, summarizer, file saver) so they
 // unit-test deterministically.
 //
-// Every defense is a no-op for gemini-native and openai-responses wire formats;
-// gating lives in Manager and the agent runner (see AD-014, AD-015).
+// These defenses are supported for openai-chat and gemini wire formats. They
+// are disabled for openai-responses, which chains turns server-side via
+// previous_response_id and would desynchronize if history mutated client-side.
 package contextmgmt

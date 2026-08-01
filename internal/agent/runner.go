@@ -43,6 +43,7 @@ const (
 
 // RunnerConfig configures a multi-turn agent loop backed by a ContentGenerator.
 type RunnerConfig struct {
+	Runtime      *Runtime
 	Generator    provider.ContentGenerator
 	Model        string
 	WorkDir      string
@@ -81,6 +82,21 @@ type RunnerConfig struct {
 	// that wrote files. Resolved from sagittarius.verify.suggestAfterWrite;
 	// default false. It never runs checks automatically.
 	SuggestVerifyAfterWrite bool
+	// AutoCheckAfterWrite runs read-only checks automatically after a turn that
+	// wrote files. Resolved from sagittarius.verify.autoCheckAfterWrite.
+	AutoCheckAfterWrite bool
+	// AutoCheckModuleWide includes module-wide checks in automatic checks.
+	// Resolved from sagittarius.verify.autoCheckModuleWide.
+	AutoCheckModuleWide bool
+	// AutoCheckTimeoutSeconds is the timeout for automatic checks.
+	// Resolved from sagittarius.verify.autoCheckTimeoutSeconds.
+	AutoCheckTimeoutSeconds int
+	// RepoLocalTools defines the policy for running repo-local tools.
+	// Resolved from sagittarius.verify.repoLocalTools.
+	RepoLocalTools config.RepoLocalToolsPolicy
+	// EditLoopThreshold is the threshold for repeated edit detection.
+	// Resolved from sagittarius.verify.editLoopThreshold.
+	EditLoopThreshold int
 	// InitialGoal pre-populates the active session goal from a resumed session.
 	InitialGoal *goal.Snapshot
 	// InitialGrill pre-populates the active grill-me session from a resumed session.
@@ -97,6 +113,8 @@ type Runner struct {
 	genMu  sync.RWMutex
 	gen    provider.ContentGenerator
 	genErr error
+	
+	runtime *Runtime
 	// modelMu guards model, providerDefaultModel, modelPinned, and the
 	// system-prompt fields (system, systemBase, memory) that model resolution
 	// rewrites together.
@@ -143,9 +161,15 @@ type Runner struct {
 	sessionRecorder  *session.Recorder
 	metrics          *sessionMetrics
 	projectBoundary  bool
-	snap             *snapshot.Manager
-	suggestVerify    bool
-	goplsHintPending bool
+	snap                    *snapshot.Manager
+	suggestVerify           bool
+	autoCheckAfterWrite     bool
+	autoCheckModuleWide     bool
+	autoCheckTimeoutSeconds int
+	repoLocalTools          config.RepoLocalToolsPolicy
+	editLoopThreshold       int
+	editStats               map[string]int
+	goplsHintPending        bool
 	// loadedMemoryFiles are the AGENTS.md paths that contributed to the system
 	// instruction, captured at construction for the welcome banner.
 	loadedMemoryFiles []string
@@ -236,6 +260,7 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 	}
 
 	runner := &Runner{
+		runtime:              cfg.Runtime,
 		gen:                  cfg.Generator,
 		model:                cfg.Model,
 		providerDefaultModel: cfg.Model,
@@ -248,15 +273,21 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		workDir:              ws.Root(),
 		workspace:            ws,
 		registry:             registry,
-		ctxMgr:               cfg.ContextManager,
-		state:                StateIdle,
-		sessionRecorder:      cfg.SessionRecorder,
-		history:              history,
-		metrics:              newSessionMetrics(),
-		projectBoundary:      cfg.ProjectBoundary,
-		snap:                 cfg.Snapshotter,
-		suggestVerify:        cfg.SuggestVerifyAfterWrite,
-		goplsHintPending:     needsGoplsHint(cfg.Settings, ws.Root()),
+		ctxMgr:                  cfg.ContextManager,
+		state:                   StateIdle,
+		sessionRecorder:         cfg.SessionRecorder,
+		history:                 history,
+		metrics:                 newSessionMetrics(),
+		projectBoundary:         cfg.ProjectBoundary,
+		snap:                    cfg.Snapshotter,
+		suggestVerify:           cfg.SuggestVerifyAfterWrite,
+		autoCheckAfterWrite:     cfg.AutoCheckAfterWrite,
+		autoCheckModuleWide:     cfg.AutoCheckModuleWide,
+		autoCheckTimeoutSeconds: cfg.AutoCheckTimeoutSeconds,
+		repoLocalTools:          cfg.RepoLocalTools,
+		editLoopThreshold:       cfg.EditLoopThreshold,
+		editStats:               make(map[string]int),
+		goplsHintPending:        needsGoplsHint(cfg.Settings, ws.Root()),
 		loadedMemoryFiles:    memoryFiles,
 		initialSessionGrants: cfg.InitialSessionGrants,
 		verboseLog:           newVerboseLog(cfg.VerboseLog),
@@ -724,6 +755,19 @@ outerLoop:
 				verifyHinted = true
 				out <- ui.StreamEvent{Type: ui.StreamInfo, Text: verifyReminder}
 			}
+			
+			// AD-080 Auto-check pipeline
+	if r.autoCheckAfterWrite {
+		writtenPaths := extractWrittenPathsFromHistory(r)
+		if len(writtenPaths) > 0 {
+			r.runPostWriteChecks(ctx, out, emit, writtenPaths)
+			// If loop detection triggered a nudge, it will be injected into history.
+			// We continue the loop so the model can see the diagnostics/nudge.
+			r.setState(StateStreaming)
+			continue 
+		}
+	}
+			
 			r.setState(StateStreaming)
 		}
 
@@ -1440,6 +1484,65 @@ func containsSuccessfulWrite(responses []provider.FunctionResponse) bool {
 		}
 	}
 	return false
+}
+
+func extractWrittenPathsFromHistory(r *Runner) []string {
+	r.historyMu.RLock()
+	defer r.historyMu.RUnlock()
+
+	var paths []string
+	if len(r.history) < 2 {
+		return paths
+	}
+	
+	// Find the most recent assistant turn
+	var lastAsst *provider.Message
+	for i := len(r.history) - 1; i >= 0; i-- {
+		if r.history[i].Role == provider.RoleModel {
+			lastAsst = &r.history[i]
+			break
+		}
+	}
+	if lastAsst == nil {
+		return paths
+	}
+
+	// We only care about writes that just succeeded (no error in response).
+	// We check the most recent user turn for the responses.
+	var lastUser *provider.Message
+	for i := len(r.history) - 1; i >= 0; i-- {
+		if r.history[i].Role == provider.RoleUser {
+			lastUser = &r.history[i]
+			break
+		}
+	}
+
+	if lastUser == nil {
+		return paths
+	}
+
+	// Build a map of successful write_file call IDs
+	successfulWrites := make(map[string]bool)
+	for _, p := range lastUser.Parts {
+		if p.FunctionResponse != nil && p.FunctionResponse.Name == tools.WriteFileToolName {
+			if _, failed := p.FunctionResponse.Response["error"]; !failed {
+				successfulWrites[p.FunctionResponse.CallID] = true
+			}
+		}
+	}
+
+	// Now extract the paths from the assistant's calls that matched
+	for _, p := range lastAsst.Parts {
+		if p.FunctionCall != nil && p.FunctionCall.Name == tools.WriteFileToolName {
+			if successfulWrites[p.FunctionCall.ID] {
+				if path, ok := p.FunctionCall.Args["file_path"].(string); ok && path != "" {
+					paths = append(paths, path)
+				}
+			}
+		}
+	}
+	
+	return paths
 }
 
 // goplsHint is the one-time startup nudge shown for Go projects without a gopls

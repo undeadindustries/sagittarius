@@ -22,6 +22,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/credentials"
 	"github.com/undeadindustries/sagittarius/internal/goal"
 	"github.com/undeadindustries/sagittarius/internal/grill"
+	"github.com/undeadindustries/sagittarius/internal/lsp"
 	"github.com/undeadindustries/sagittarius/internal/mcp"
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
@@ -700,7 +701,7 @@ func (h *appHooks) ForceCompressHistory(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("runner not available")
 	}
 	if !h.app.runner.ContextCompressionAvailable() {
-		return "Context compression is only available for OpenAI-compatible chat providers; the current provider manages context server-side.", nil
+		return "Context compression is only available for OpenAI-compatible chat providers and Gemini; the current provider manages context server-side.", nil
 	}
 	info, err := h.app.runner.ForceCompress(ctx)
 	if err != nil {
@@ -1670,6 +1671,13 @@ func (h *appHooks) InstallUpdate(ctx context.Context) (*selfupdate.InstallResult
 		})
 	}
 	return res, nil
+}
+
+func (h *appHooks) LSPPool() *lsp.Pool {
+	if h.app == nil || h.app.runtime == nil {
+		return nil
+	}
+	return h.app.runtime.LSPPool
 }
 
 // ReasoningOverride implements slash.Hooks.

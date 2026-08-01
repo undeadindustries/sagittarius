@@ -47,6 +47,22 @@ func TestFindCompressSplitPoint(t *testing.T) {
 		msg("user", "This is the third message."),
 		fcMsg("foo"),
 	}
+	withGeminiSig := []Message{
+		msg("user", "This is the first message."),
+		{Role: RoleModel, Parts: []Part{
+			{FunctionCall: &ToolCall{Name: "read_file", Args: map[string]any{"file_path": "a"}}, ThoughtSignature: []byte("sigA")},
+		}},
+		{Role: RoleUser, Parts: []Part{
+			{FunctionResponse: &FunctionResponse{Name: "read_file", CallID: "callA", Response: map[string]any{"content": "A"}}},
+		}},
+		{Role: RoleModel, Parts: []Part{
+			{FunctionCall: &ToolCall{Name: "read_file", Args: map[string]any{"file_path": "b"}}, ThoughtSignature: []byte("sigB")},
+		}},
+		{Role: RoleUser, Parts: []Part{
+			{FunctionResponse: &FunctionResponse{Name: "read_file", CallID: "callB", Response: map[string]any{"content": "B"}}},
+		}},
+		msg("model", "Both files read."),
+	}
 
 	tests := []struct {
 		name     string
@@ -62,6 +78,7 @@ func TestFindCompressSplitPoint(t *testing.T) {
 		{name: "last index fraction", contents: five, fraction: 0.9, want: 4},
 		{name: "after last index", contents: four, fraction: 0.8, want: 4},
 		{name: "earlier splitpoint when trailing function call", contents: withFC, fraction: 0.99, want: 2},
+		{name: "gemini function call sequence splits safely", contents: withGeminiSig, fraction: 0.5, want: 0}, // No user turn without a FunctionResponse exists, must fall back to 0
 		{name: "single item", contents: []Message{msg("user", "Message 1")}, fraction: 0.5, want: 0},
 	}
 
@@ -115,6 +132,74 @@ func TestCompressNoOpEmptyHistory(t *testing.T) {
 	}
 	if res.Info.Status != CompressionNoOp || res.NewHistory != nil {
 		t.Errorf("status = %v, history = %v, want NoOp/nil", res.Info.Status, res.NewHistory)
+	}
+}
+
+func TestCompressGeminiToolCallPairIntegrity(t *testing.T) {
+	t.Parallel()
+
+	// A history that simulates Gemini's ToolCall/ThoughtSignature structure across
+	// multiple turns, crossing the compression boundary.
+	history := []Message{
+		msg("user", "Start task"),
+		{Role: RoleModel, Parts: []Part{
+			{FunctionCall: &ToolCall{Name: "read_file", Args: map[string]any{"file_path": "a"}}, ThoughtSignature: []byte("sigA")},
+		}},
+		{Role: RoleUser, Parts: []Part{
+			{FunctionResponse: &FunctionResponse{Name: "read_file", CallID: "callA", Response: map[string]any{"content": "A"}}},
+		}},
+		msg("user", "Turn 2 user message - this is the safe split point"),
+		{Role: RoleModel, Parts: []Part{
+			{FunctionCall: &ToolCall{Name: "read_file", Args: map[string]any{"file_path": "b"}}, ThoughtSignature: []byte("sigB")},
+		}},
+		{Role: RoleUser, Parts: []Part{
+			{FunctionResponse: &FunctionResponse{Name: "read_file", CallID: "callB", Response: map[string]any{"content": "B"}}},
+		}},
+		msg("model", "Done"),
+	}
+
+	q := &queuedSummarizer{responses: []string{"compressed summary"}}
+	c := newCompressor(q)
+	
+	// Force a compress that should split at "Turn 2 user message"
+	res, err := c.Compress(context.Background(), CompressOptions{
+		History: history, Threshold: 0.1, EffectiveLimit: 100, Force: true,
+	})
+	if err != nil {
+		t.Fatalf("Compress: %v", err)
+	}
+
+	newHistory := res.NewHistory
+	if len(newHistory) == 0 {
+		t.Fatal("history is empty")
+	}
+
+	// Verify the synthetic summary prefix
+	if len(newHistory[0].Parts) == 0 || newHistory[0].Parts[0].Text != "compressed summary" {
+		t.Errorf("expected synthetic summary at index 0")
+	}
+
+	// Verify the kept suffix (should start with the Turn 2 user message)
+	var foundSigB bool
+	var foundResponseB bool
+
+	for _, m := range newHistory[2:] { // skip synthetic user + model turns
+		for _, p := range m.Parts {
+			if p.FunctionCall != nil && string(p.ThoughtSignature) == "sigB" {
+				foundSigB = true
+			}
+			if p.FunctionResponse != nil && p.FunctionResponse.CallID == "callB" {
+				foundResponseB = true
+			}
+			// Assert we didn't orphan any response
+			if p.FunctionResponse != nil && p.FunctionResponse.CallID == "callA" {
+				t.Error("found orphaned response A without its call/signature")
+			}
+		}
+	}
+
+	if !foundSigB || !foundResponseB {
+		t.Error("compression dropped ThoughtSignature or FunctionResponse from the kept suffix")
 	}
 }
 

@@ -95,7 +95,7 @@ func NewContextManager(
 		BudgetEnabled:               true,
 		ReservedResponseTokens:      reservedResponseTokens,
 		ProactiveCompressAt:         proactiveCompressAt,
-		AdaptiveEnabled:             true,
+		AdaptiveEnabled:             cm.Adaptive,
 		CompressionThreshold:        cm.CompressionThreshold,
 		CompressionThresholdUserSet: cm.CompressionThresholdUserSet,
 		PreserveFraction:            cm.PreserveFraction,

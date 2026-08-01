@@ -47,7 +47,12 @@ func (d *settingsDialogDeps) ListSettings(scope config.SettingScope) []settingsd
 		}
 		return strconv.Itoa(*p)
 	}
-
+	strVal := func(p *string) string {
+		if p == nil {
+			return notSet
+		}
+		return *p
+	}
 	// --- General ---
 	var maxRounds, maxRoundsMerged string
 	if scopeSettings.Sagittarius != nil {
@@ -116,25 +121,49 @@ func (d *settingsDialogDeps) ListSettings(scope config.SettingScope) []settingsd
 	// --- Verify ---
 	var verifyFix, verifyFixMerged string
 	var verifySuggest, verifySuggestMerged string
+	var verifyAutoCheck, verifyAutoCheckMerged string
+	var verifyModuleWide, verifyModuleWideMerged string
+	var verifyTimeout, verifyTimeoutMerged string
+	var verifyRepoLocal, verifyRepoLocalMerged string
+	var verifyEditLoop, verifyEditLoopMerged string
 	var verifyDefined bool
 	if scopeSettings.Sagittarius != nil && scopeSettings.Sagittarius.Verify != nil {
 		v := scopeSettings.Sagittarius.Verify
 		verifyFix = boolVal(v.AllowFix)
 		verifySuggest = boolVal(v.SuggestAfterWrite)
+		verifyAutoCheck = boolVal(v.AutoCheckAfterWrite)
+		verifyModuleWide = boolVal(v.AutoCheckModuleWide)
+		verifyTimeout = intVal(v.AutoCheckTimeoutSeconds)
+		verifyRepoLocal = strVal(v.RepoLocalTools)
+		verifyEditLoop = intVal(v.EditLoopThreshold)
 		verifyDefined = true
 	} else {
 		verifyFix = notSet
 		verifySuggest = notSet
+		verifyAutoCheck = notSet
+		verifyModuleWide = notSet
+		verifyTimeout = notSet
+		verifyRepoLocal = notSet
+		verifyEditLoop = notSet
 	}
 	if merged.Sagittarius != nil && merged.Sagittarius.Verify != nil {
 		v := merged.Sagittarius.Verify
 		verifyFixMerged = boolVal(v.AllowFix)
 		verifySuggestMerged = boolVal(v.SuggestAfterWrite)
+		verifyAutoCheckMerged = boolVal(v.AutoCheckAfterWrite)
+		verifyModuleWideMerged = boolVal(v.AutoCheckModuleWide)
+		verifyTimeoutMerged = intVal(v.AutoCheckTimeoutSeconds)
+		verifyRepoLocalMerged = strVal(v.RepoLocalTools)
+		verifyEditLoopMerged = intVal(v.EditLoopThreshold)
 	} else {
 		verifyFixMerged = notSet
 		verifySuggestMerged = notSet
+		verifyAutoCheckMerged = notSet
+		verifyModuleWideMerged = notSet
+		verifyTimeoutMerged = notSet
+		verifyRepoLocalMerged = notSet
+		verifyEditLoopMerged = notSet
 	}
-
 	// --- Symbols ---
 	var symEnabled, symEnabledMerged string
 	var symGopls, symGoplsMerged string
@@ -259,6 +288,52 @@ func (d *settingsDialogDeps) ListSettings(scope config.SettingScope) []settingsd
 			DefinedHere: verifyDefined,
 			MergedValue: verifySuggestMerged,
 			Kind:        settingsdialog.KindBool,
+		},
+		{
+			Key:         "sagittarius.verify.autoCheckAfterWrite",
+			Label:       "Auto-check after write",
+			Description: "Automatically run read-only lint/format checks on files after edits",
+			Value:       verifyAutoCheck,
+			DefinedHere: verifyDefined,
+			MergedValue: verifyAutoCheckMerged,
+			Kind:        settingsdialog.KindBool,
+		},
+		{
+			Key:         "sagittarius.verify.autoCheckModuleWide",
+			Label:       "Auto-check module-wide",
+			Description: "Include whole-module checks (vet, tsc) in automatic post-write checks",
+			Value:       verifyModuleWide,
+			DefinedHere: verifyDefined,
+			MergedValue: verifyModuleWideMerged,
+			Kind:        settingsdialog.KindBool,
+		},
+		{
+			Key:         "sagittarius.verify.autoCheckTimeoutSeconds",
+			Label:       "Auto-check timeout (sec)",
+			Description: "Maximum time allowed for post-write checks before aborting",
+			Value:       verifyTimeout,
+			DefinedHere: verifyDefined,
+			MergedValue: verifyTimeoutMerged,
+			Kind:        settingsdialog.KindInt,
+		},
+		{
+			Key:         "sagittarius.verify.repoLocalTools",
+			Label:       "Repo-local tools policy",
+			Description: "Policy for running repo-local linters (e.g. node_modules/.bin)",
+			Value:       verifyRepoLocal,
+			DefinedHere: verifyDefined,
+			MergedValue: verifyRepoLocalMerged,
+			Kind:        settingsdialog.KindEnum,
+			Choices:     []string{"prompt", "allow", "deny"},
+		},
+		{
+			Key:         "sagittarius.verify.editLoopThreshold",
+			Label:       "Edit loop threshold",
+			Description: "Number of failing edits to a single file before triggering a stop-and-re-evaluate nudge (0 to disable)",
+			Value:       verifyEditLoop,
+			DefinedHere: verifyDefined,
+			MergedValue: verifyEditLoopMerged,
+			Kind:        settingsdialog.KindInt,
 		},
 
 		{Label: "Symbols", Kind: settingsdialog.KindHeader},
@@ -417,6 +492,65 @@ func applySettingValue(s *config.Settings, key, value string) error {
 			s.Sagittarius.Verify = &config.SagittariusVerifyConfig{}
 		}
 		s.Sagittarius.Verify.SuggestAfterWrite = &b
+	case "sagittarius.verify.autoCheckAfterWrite":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("autoCheckAfterWrite must be true/false: %w", err)
+		}
+		if s.Sagittarius == nil {
+			s.Sagittarius = &config.SagittariusSettings{}
+		}
+		if s.Sagittarius.Verify == nil {
+			s.Sagittarius.Verify = &config.SagittariusVerifyConfig{}
+		}
+		s.Sagittarius.Verify.AutoCheckAfterWrite = &b
+	case "sagittarius.verify.autoCheckModuleWide":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("autoCheckModuleWide must be true/false: %w", err)
+		}
+		if s.Sagittarius == nil {
+			s.Sagittarius = &config.SagittariusSettings{}
+		}
+		if s.Sagittarius.Verify == nil {
+			s.Sagittarius.Verify = &config.SagittariusVerifyConfig{}
+		}
+		s.Sagittarius.Verify.AutoCheckModuleWide = &b
+	case "sagittarius.verify.autoCheckTimeoutSeconds":
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("autoCheckTimeoutSeconds must be an integer: %w", err)
+		}
+		if s.Sagittarius == nil {
+			s.Sagittarius = &config.SagittariusSettings{}
+		}
+		if s.Sagittarius.Verify == nil {
+			s.Sagittarius.Verify = &config.SagittariusVerifyConfig{}
+		}
+		s.Sagittarius.Verify.AutoCheckTimeoutSeconds = &n
+	case "sagittarius.verify.repoLocalTools":
+		if value != "prompt" && value != "allow" && value != "deny" {
+			return fmt.Errorf("repoLocalTools must be 'prompt', 'allow', or 'deny'")
+		}
+		if s.Sagittarius == nil {
+			s.Sagittarius = &config.SagittariusSettings{}
+		}
+		if s.Sagittarius.Verify == nil {
+			s.Sagittarius.Verify = &config.SagittariusVerifyConfig{}
+		}
+		s.Sagittarius.Verify.RepoLocalTools = &value
+	case "sagittarius.verify.editLoopThreshold":
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("editLoopThreshold must be an integer: %w", err)
+		}
+		if s.Sagittarius == nil {
+			s.Sagittarius = &config.SagittariusSettings{}
+		}
+		if s.Sagittarius.Verify == nil {
+			s.Sagittarius.Verify = &config.SagittariusVerifyConfig{}
+		}
+		s.Sagittarius.Verify.EditLoopThreshold = &n
 	case "sagittarius.symbols.enabled":
 		b, err := strconv.ParseBool(value)
 		if err != nil {
@@ -507,6 +641,26 @@ func clearSettingValue(s *config.Settings, key string) error {
 	case "sagittarius.verify.suggestAfterWrite":
 		if s.Sagittarius != nil && s.Sagittarius.Verify != nil {
 			s.Sagittarius.Verify.SuggestAfterWrite = nil
+		}
+	case "sagittarius.verify.autoCheckAfterWrite":
+		if s.Sagittarius != nil && s.Sagittarius.Verify != nil {
+			s.Sagittarius.Verify.AutoCheckAfterWrite = nil
+		}
+	case "sagittarius.verify.autoCheckModuleWide":
+		if s.Sagittarius != nil && s.Sagittarius.Verify != nil {
+			s.Sagittarius.Verify.AutoCheckModuleWide = nil
+		}
+	case "sagittarius.verify.autoCheckTimeoutSeconds":
+		if s.Sagittarius != nil && s.Sagittarius.Verify != nil {
+			s.Sagittarius.Verify.AutoCheckTimeoutSeconds = nil
+		}
+	case "sagittarius.verify.repoLocalTools":
+		if s.Sagittarius != nil && s.Sagittarius.Verify != nil {
+			s.Sagittarius.Verify.RepoLocalTools = nil
+		}
+	case "sagittarius.verify.editLoopThreshold":
+		if s.Sagittarius != nil && s.Sagittarius.Verify != nil {
+			s.Sagittarius.Verify.EditLoopThreshold = nil
 		}
 	case "sagittarius.symbols.enabled":
 		if s.Sagittarius != nil && s.Sagittarius.Symbols != nil {

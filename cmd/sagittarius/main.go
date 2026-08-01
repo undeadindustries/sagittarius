@@ -828,6 +828,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 	}
 
 	runnerCfg := agent.RunnerConfig{
+		Runtime:                 runtime,
 		Generator:               gen,
 		Model:                   model,
 		Interactive:             interactive,
@@ -844,6 +845,11 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		Snapshotter:             snapMgr,
 		AllowFix:                allowFix,
 		SuggestVerifyAfterWrite: suggestVerify,
+		AutoCheckAfterWrite:     config.VerifyAutoCheckAfterWrite(settings, nil),
+		AutoCheckModuleWide:     config.VerifyAutoCheckModuleWide(settings, nil),
+		AutoCheckTimeoutSeconds: config.VerifyAutoCheckTimeoutSeconds(settings, nil),
+		RepoLocalTools:          config.VerifyRepoLocalTools(settings, nil),
+		EditLoopThreshold:       config.VerifyEditLoopThreshold(settings, nil),
 	}
 	// Assign only when non-nil: a nil *os.File stored in the io.WriteCloser
 	// field would be a non-nil interface wrapping a nil pointer, breaking the
