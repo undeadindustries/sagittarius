@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -31,9 +33,6 @@ type Client struct {
 	pending  map[int64]chan *responseMsg
 	diags    map[string][]diagnostics.Finding
 	diagCond *sync.Cond
-
-	RootURI string
-	Ready   bool
 }
 
 type requestMsg struct {
@@ -62,7 +61,9 @@ type diagParam struct {
 	URI         string `json:"uri"`
 	Diagnostics []struct {
 		Range struct {
-			Start struct{ Line int `json:"line"` } `json:"start"`
+			Start struct {
+				Line int `json:"line"`
+			} `json:"start"`
 		} `json:"range"`
 		Severity int    `json:"severity"`
 		Source   string `json:"source"`
@@ -105,7 +106,6 @@ func Start(ctx context.Context, rootDir, command string, args ...string) (*Clien
 		cancel:  cancel,
 		pending: make(map[int64]chan *responseMsg),
 		diags:   make(map[string][]diagnostics.Finding),
-		RootURI: rootURI,
 	}
 	c.diagCond = sync.NewCond(&c.mu)
 
@@ -122,26 +122,51 @@ func Start(ctx context.Context, rootDir, command string, args ...string) (*Clien
 		},
 	})
 	if err != nil {
-		c.Close()
+		if closeErr := c.Close(); closeErr != nil {
+			slog.Debug("lsp: close after failed initialize", "error", closeErr)
+		}
 		return nil, err
 	}
 
 	// Send initialized
 	if err := c.notify("initialized", map[string]any{}); err != nil {
-		c.Close()
+		if closeErr := c.Close(); closeErr != nil {
+			slog.Debug("lsp: close after failed initialized notify", "error", closeErr)
+		}
 		return nil, err
 	}
 
-	c.Ready = true
 	return c, nil
 }
 
-// Close gracefully shuts down the server.
+// closeTimeout bounds how long Close waits for the server to exit on its own
+// after a shutdown/exit handshake before force-killing the process.
+const closeTimeout = 2 * time.Second
+
+// Close asks the server to shut down cleanly (the "shutdown" request followed
+// by the "exit" notification, per the LSP spec) before tearing down the
+// process. Canceling the process context first — the previous behavior —
+// sends SIGKILL immediately, so cmd.Wait() always reported a kill error even
+// on an orderly exit. If the server doesn't exit within closeTimeout, the
+// process context is canceled to force-kill it.
 func (c *Client) Close() error {
-	c.cancel()
-	c.notify("exit", nil) // best effort
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), closeTimeout)
+	_, _ = c.call(shutdownCtx, "shutdown", nil) // best effort
+	cancelShutdown()
+	_ = c.notify("exit", nil) // best effort
 	_ = c.in.Close()
-	return c.cmd.Wait()
+
+	waitErr := make(chan error, 1)
+	go func() { waitErr <- c.cmd.Wait() }()
+
+	select {
+	case err := <-waitErr:
+		c.cancel()
+		return err
+	case <-time.After(closeTimeout):
+		c.cancel() // force-kill: cancels the CommandContext the process was started with
+		return <-waitErr
+	}
 }
 
 func (c *Client) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
@@ -213,8 +238,10 @@ func (c *Client) readLoop() {
 			if line == "" {
 				break
 			}
-			if strings.HasPrefix(line, "Content-Length:") {
-				fmt.Sscanf(line, "Content-Length: %d", &length)
+			if v, ok := strings.CutPrefix(line, "Content-Length:"); ok {
+				if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil {
+					length = n
+				}
 			}
 		}
 
@@ -235,10 +262,18 @@ func (c *Client) readLoop() {
 
 		if res.ID != 0 {
 			c.mu.Lock()
-			if ch, ok := c.pending[res.ID]; ok {
-				ch <- &res
-			}
+			ch, ok := c.pending[res.ID]
 			c.mu.Unlock()
+			if ok {
+				// Non-blocking: the channel is buffered (size 1) so the
+				// first response always lands. A duplicate/late response
+				// for an id whose caller already gave up must never block
+				// the read loop while holding no lock.
+				select {
+				case ch <- &res:
+				default:
+				}
+			}
 		} else if res.Method == "textDocument/publishDiagnostics" {
 			var p diagParam
 			if err := json.Unmarshal(res.Params, &p); err == nil {
@@ -320,10 +355,32 @@ func (c *Client) DidChange(path string, text string, version int) error {
 	})
 }
 
-// Diagnostics fetches diagnostics for the given paths, waiting for them to arrive.
+// diagnosticsWaitTimeout bounds how long Diagnostics waits for the server to
+// publish results after a didOpen/didChange before returning whatever has
+// arrived so far.
+const diagnosticsWaitTimeout = 2 * time.Second
+
+// Diagnostics fetches diagnostics for the given paths, waiting (up to
+// diagnosticsWaitTimeout) for the server to publish them.
+//
+// Any stale entries for these URIs from a previous call are cleared first, so
+// a second call for an already-fixed file can't instantly return last round's
+// findings before the server has had a chance to republish.
 func (c *Client) Diagnostics(ctx context.Context, absPaths []string) ([]diagnostics.Finding, error) {
-	// First, simulate opening/updating the files if they exist
-	// In a real editor, we'd sync file content. For our CLI, reading from disk is fine
+	uris := make([]string, len(absPaths))
+	for i, p := range absPaths {
+		uris[i] = pathToURI(p)
+	}
+
+	c.mu.Lock()
+	for _, uri := range uris {
+		delete(c.diags, uri)
+	}
+	c.mu.Unlock()
+
+	// Simulate opening/updating the files so the server has fresh content to
+	// analyze. In a real editor we'd track live buffer content; for this CLI,
+	// reading from disk (the write_file tool already flushed it) is fine.
 	for i, p := range absPaths {
 		b, err := os.ReadFile(p)
 		if err == nil {
@@ -332,56 +389,49 @@ func (c *Client) Diagnostics(ctx context.Context, absPaths []string) ([]diagnost
 		}
 	}
 
-	// We need to wait for the server to publish diagnostics.
-	// This is inherently racey because the server sends them asynchronously
-	// when it finishes analyzing. We'll wait a small amount of time, or until
-	// we receive diagnostics for all paths.
-	
-	// Wait up to 2 seconds for diagnostics to arrive
-	waitCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	waitCtx, cancel := context.WithTimeout(ctx, diagnosticsWaitTimeout)
 	defer cancel()
 
-	var allFindings []diagnostics.Finding
-	
-	done := make(chan struct{})
+	// Diagnostics arrive asynchronously via publishDiagnostics notifications
+	// handled by readLoop, which broadcasts diagCond. This goroutine's only
+	// job is to re-broadcast when waitCtx expires so the Wait loop below
+	// can't block forever if the server never publishes for one of uris (it
+	// always exits promptly: waitCtx is canceled at the latest by the
+	// deferred cancel() above when this function returns).
 	go func() {
+		<-waitCtx.Done()
 		c.mu.Lock()
-		defer c.mu.Unlock()
-		
-		for {
-			allArrived := true
-			for _, p := range absPaths {
-				uri := pathToURI(p)
-				if _, ok := c.diags[uri]; !ok {
-					allArrived = false
-					break
-				}
-			}
-			
-			if allArrived {
-				break
-			}
-			c.diagCond.Wait()
-		}
-		
-		for _, p := range absPaths {
-			uri := pathToURI(p)
-			allFindings = append(allFindings, c.diags[uri]...)
-		}
-		close(done)
+		c.diagCond.Broadcast()
+		c.mu.Unlock()
 	}()
 
-	select {
-	case <-waitCtx.Done():
-		// Timeout - return what we have
-		c.mu.Lock()
-		for _, p := range absPaths {
-			uri := pathToURI(p)
-			allFindings = append(allFindings, c.diags[uri]...)
-		}
-		c.mu.Unlock()
-		return allFindings, nil
-	case <-done:
-		return allFindings, nil
+	c.mu.Lock()
+	for !c.allArrivedLocked(uris) && waitCtx.Err() == nil {
+		c.diagCond.Wait()
 	}
+	findings := c.collectLocked(uris)
+	c.mu.Unlock()
+
+	return findings, nil
+}
+
+// allArrivedLocked reports whether every uri has a published (possibly
+// empty) diagnostics entry. c.mu must be held by the caller.
+func (c *Client) allArrivedLocked(uris []string) bool {
+	for _, uri := range uris {
+		if _, ok := c.diags[uri]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+// collectLocked gathers whatever diagnostics have arrived for uris. c.mu must
+// be held by the caller.
+func (c *Client) collectLocked(uris []string) []diagnostics.Finding {
+	var findings []diagnostics.Finding
+	for _, uri := range uris {
+		findings = append(findings, c.diags[uri]...)
+	}
+	return findings
 }

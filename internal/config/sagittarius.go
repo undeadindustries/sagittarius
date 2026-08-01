@@ -180,8 +180,8 @@ type SagittariusVerifyConfig struct {
 	// AllowFix, when true, permits run_project_checks to run mutating
 	// formatters/auto-fixers (fix=true). Default false because such rewrites are
 	// not captured by /undo.
-	AllowFix *bool                      `json:"allowFix,omitempty"`
-	
+	AllowFix *bool `json:"allowFix,omitempty"`
+
 	AutoCheckAfterWrite     *bool                      `json:"autoCheckAfterWrite,omitempty"`
 	AutoCheckModuleWide     *bool                      `json:"autoCheckModuleWide,omitempty"`
 	AutoCheckTimeoutSeconds *int                       `json:"autoCheckTimeoutSeconds,omitempty"`

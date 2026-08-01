@@ -21,9 +21,13 @@ func TestResolveContextManagementGating(t *testing.T) {
 		wantAdaptive bool
 		wantFallback int
 	}{
-		{"openai-chat is enabled and adaptive", string(config.BuiltInOpenAI), true, true, DefaultLocalContextLimit},
+		// openai/openai-responses resolve through their AD-073 provider presets
+		// (internal/config/provider_presets.go), which declare a real
+		// DefaultContextLimit (128k / 400k) rather than falling back to the
+		// generic DefaultLocalContextLimit placeholder.
+		{"openai-chat is enabled and adaptive", string(config.BuiltInOpenAI), true, true, 128_000},
 		{"gemini-native is enabled but not adaptive", string(config.BuiltInGeminiAPIKey), true, false, 1_048_576},
-		{"openai-responses is not masked", string(config.BuiltInOpenAIResponses), false, false, DefaultLocalContextLimit},
+		{"openai-responses is not masked", string(config.BuiltInOpenAIResponses), false, false, 400_000},
 	}
 
 	for _, tt := range tests {
@@ -54,8 +58,12 @@ func TestResolveContextManagementDefaults(t *testing.T) {
 	}
 	cm := ResolveContextManagement(settings, "")
 
-	if cm.ContextLimit != DefaultLocalContextLimit {
-		t.Errorf("ContextLimit = %d, want %d", cm.ContextLimit, DefaultLocalContextLimit)
+	// The "openai" id resolves through its provider preset (AD-073), which
+	// declares a real 128k DefaultContextLimit; DefaultLocalContextLimit is
+	// only the fallback for providers with no known preset/instance default.
+	const wantContextLimit = 128_000
+	if cm.ContextLimit != wantContextLimit {
+		t.Errorf("ContextLimit = %d, want %d", cm.ContextLimit, wantContextLimit)
 	}
 	if !cm.MaskingEnabled {
 		t.Error("MaskingEnabled should default to true")

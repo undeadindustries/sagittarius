@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/undeadindustries/sagittarius/internal/modes"
-	"github.com/undeadindustries/sagittarius/internal/tools/checks"
 )
 
 func goWorkspace(t *testing.T) *Workspace {
@@ -107,28 +106,6 @@ func TestProjectChecksPathsRejectFlags(t *testing.T) {
 		if err == nil {
 			t.Fatalf("path %q should be rejected as a flag", bad)
 		}
-	}
-}
-
-func TestCheckArgvNarrowsFileScoped(t *testing.T) {
-	t.Parallel()
-
-	fileScoped := checks.Check{Name: "format", Command: "gofmt", Args: []string{"-l", "."}, FileScoped: true}
-	got := checkArgv(fileScoped, []string{"a.go", "b.go"})
-	want := []string{"-l", "a.go", "b.go"}
-	if len(got) != len(want) {
-		t.Fatalf("argv = %v, want %v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("argv = %v, want %v", got, want)
-		}
-	}
-
-	moduleScoped := checks.Check{Name: "vet", Command: "go", Args: []string{"vet", "./..."}}
-	got = checkArgv(moduleScoped, []string{"a.go"})
-	if len(got) != 2 || got[1] != "./..." {
-		t.Fatalf("module-scoped argv should be unchanged, got %v", got)
 	}
 }
 

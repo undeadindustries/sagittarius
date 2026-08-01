@@ -3,6 +3,7 @@ package lsp
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -13,13 +14,18 @@ import (
 type Pool struct {
 	mu      sync.Mutex
 	clients map[string]*poolEntry
-	
+
 	// MaxClients limits how many language servers we keep alive.
 	MaxClients int
 }
 
+// poolEntry tracks one pooled client's lifecycle. ready is closed once client
+// (and possibly err) have been set, so concurrent callers requesting the same
+// key can wait for the in-flight Start instead of racing to start their own.
 type poolEntry struct {
 	client *Client
+	err    error
+	ready  chan struct{}
 	last   time.Time
 }
 
@@ -31,7 +37,9 @@ func NewPool() *Pool {
 	}
 }
 
-// GetOrCreate returns an existing client or starts a new one.
+// GetOrCreate returns an existing client or starts a new one. The server
+// process is started off the pool mutex so a slow `initialize` handshake for
+// one language never blocks lookups/starts for another.
 func (p *Pool) GetOrCreate(ctx context.Context, rootDir string, spec *diagnostics.ServerSpec) (*Client, error) {
 	if spec == nil || spec.Command == "" {
 		return nil, fmt.Errorf("invalid server spec")
@@ -40,43 +48,67 @@ func (p *Pool) GetOrCreate(ctx context.Context, rootDir string, spec *diagnostic
 	key := fmt.Sprintf("%s:%s", spec.Command, rootDir)
 
 	p.mu.Lock()
-	defer p.mu.Unlock()
-
 	if entry, ok := p.clients[key]; ok {
 		entry.last = time.Now()
-		return entry.client, nil
+		p.mu.Unlock()
+		<-entry.ready
+		return entry.client, entry.err
 	}
 
-	// Evict oldest if we hit the cap
 	if len(p.clients) >= p.MaxClients {
-		var oldestKey string
-		var oldestTime time.Time
-		first := true
-		for k, v := range p.clients {
-			if first || v.last.Before(oldestTime) {
-				oldestKey = k
-				oldestTime = v.last
-				first = false
-			}
-		}
-		if oldestKey != "" {
-			old := p.clients[oldestKey].client
-			delete(p.clients, oldestKey)
-			go old.Close()
-		}
+		p.evictOldestReadyLocked()
 	}
+
+	entry := &poolEntry{ready: make(chan struct{}), last: time.Now()}
+	p.clients[key] = entry
+	p.mu.Unlock()
 
 	client, err := Start(ctx, rootDir, spec.Command, spec.Args...)
+	entry.client, entry.err = client, err
+	close(entry.ready)
+
 	if err != nil {
-		return nil, err
+		p.mu.Lock()
+		if p.clients[key] == entry {
+			delete(p.clients, key)
+		}
+		p.mu.Unlock()
 	}
 
-	p.clients[key] = &poolEntry{
-		client: client,
-		last:   time.Now(),
-	}
+	return client, err
+}
 
-	return client, nil
+// evictOldestReadyLocked closes and removes the least-recently-used client
+// that has finished starting, to stay under MaxClients. Entries still
+// starting are skipped so eviction never races a concurrent Start. p.mu must
+// be held by the caller.
+func (p *Pool) evictOldestReadyLocked() {
+	var oldestKey string
+	var oldestTime time.Time
+	first := true
+	for k, v := range p.clients {
+		select {
+		case <-v.ready:
+		default:
+			continue // still starting; never evict
+		}
+		if first || v.last.Before(oldestTime) {
+			oldestKey = k
+			oldestTime = v.last
+			first = false
+		}
+	}
+	if oldestKey != "" {
+		old := p.clients[oldestKey].client
+		delete(p.clients, oldestKey)
+		if old != nil {
+			go func() {
+				if err := old.Close(); err != nil {
+					slog.Debug("lsp: close evicted client", "error", err)
+				}
+			}()
+		}
+	}
 }
 
 // Close shuts down all managed clients.
@@ -85,65 +117,73 @@ func (p *Pool) Close() {
 	defer p.mu.Unlock()
 
 	for k, entry := range p.clients {
-		go entry.client.Close()
+		entry := entry
 		delete(p.clients, k)
+		go func() {
+			<-entry.ready
+			if entry.client != nil {
+				if err := entry.client.Close(); err != nil {
+					slog.Debug("lsp: close pooled client", "error", err)
+				}
+			}
+		}()
 	}
 }
 
-// Diagnostics implements the diagnostics.Diagnoser interface by routing the
-// request to the appropriate LSP server in the pool.
-// PoolDiagnoser implements diagnostics.Diagnoser by resolving the correct server
-// from the pool for each file type during the collection run. It allows the
-// collector to abstract away LSP client lifecycles while still having the pool
-// start and query the right servers.
+// PoolDiagnoser implements diagnostics.Diagnoser by resolving the correct
+// server from the pool for each file's language during the collection run. It
+// allows the collector to abstract away LSP client lifecycles while still
+// having the pool start and query the right servers.
 type PoolDiagnoser struct {
 	pool *Pool
-	root string
 }
 
-func NewPoolDiagnoser(pool *Pool, root string) *PoolDiagnoser {
-	return &PoolDiagnoser{pool: pool, root: root}
+// NewPoolDiagnoser builds a PoolDiagnoser backed by pool. The workspace/module
+// root is supplied per call to Diagnostics, not fixed at construction, so one
+// PoolDiagnoser can serve a Collect run spanning multiple nested modules.
+func NewPoolDiagnoser(pool *Pool) *PoolDiagnoser {
+	return &PoolDiagnoser{pool: pool}
 }
 
-func (p *PoolDiagnoser) Diagnostics(ctx context.Context, absPaths []string) ([]diagnostics.Finding, error) {
-	// First group paths by language so we can query the right server
-	
+// Diagnostics implements diagnostics.Diagnoser.
+func (p *PoolDiagnoser) Diagnostics(ctx context.Context, root string, absPaths []string) ([]diagnostics.Finding, error) {
+	// First group paths by language so we can query the right server.
 	type serverGroup struct {
 		spec  *diagnostics.ServerSpec
 		paths []string
 	}
-	
+
 	groups := make(map[string]*serverGroup)
-	
+
 	for _, path := range absPaths {
 		lang := diagnostics.FindLanguage(path)
 		if lang == nil || lang.Server == nil {
 			continue
 		}
-		
+
 		key := lang.Server.Command
 		if g, ok := groups[key]; ok {
 			g.paths = append(g.paths, path)
 		} else {
 			groups[key] = &serverGroup{
-				spec: lang.Server,
+				spec:  lang.Server,
 				paths: []string{path},
 			}
 		}
 	}
-	
+
 	var allFindings []diagnostics.Finding
 	var firstErr error
-	
+
 	for _, g := range groups {
-		client, err := p.pool.GetOrCreate(ctx, p.root, g.spec)
+		client, err := p.pool.GetOrCreate(ctx, root, g.spec)
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
 			}
 			continue
 		}
-		
+
 		findings, err := client.Diagnostics(ctx, g.paths)
 		if err != nil {
 			if firstErr == nil {
@@ -151,9 +191,9 @@ func (p *PoolDiagnoser) Diagnostics(ctx context.Context, absPaths []string) ([]d
 			}
 			continue
 		}
-		
+
 		allFindings = append(allFindings, findings...)
 	}
-	
+
 	return allFindings, firstErr
 }
