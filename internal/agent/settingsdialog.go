@@ -200,6 +200,15 @@ func (d *settingsDialogDeps) ListSettings(scope config.SettingScope) []settingsd
 			MergedValue: strconv.FormatBool(mergedUI.HideBanner),
 			Kind:        settingsdialog.KindBool,
 		},
+		{
+			Key:         "ui.toolkitChecklistDismissed",
+			Label:       "Dismiss toolkit checklist",
+			Description: "Never show the host toolkit checklist on startup",
+			Value:       strconv.FormatBool(scopeUI.ToolkitChecklistDismissed),
+			DefinedHere: uiDefined,
+			MergedValue: strconv.FormatBool(mergedUI.ToolkitChecklistDismissed),
+			Kind:        settingsdialog.KindBool,
+		},
 
 		{Label: "Security", Kind: settingsdialog.KindHeader},
 		{
@@ -342,6 +351,12 @@ func applySettingValue(s *config.Settings, key, value string) error {
 			return fmt.Errorf("hideBanner must be true/false: %w", err)
 		}
 		return setUIBoolField(s, "hideBanner", b)
+	case "ui.toolkitChecklistDismissed":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("toolkitChecklistDismissed must be true/false: %w", err)
+		}
+		return s.SetUIToolkitChecklistDismissed(b)
 	case "security.projectBoundary.enforce":
 		b, err := strconv.ParseBool(value)
 		if err != nil {
@@ -471,6 +486,8 @@ func clearSettingValue(s *config.Settings, key string) error {
 		}
 	case "ui.hideBanner":
 		return setUIBoolField(s, "hideBanner", false)
+	case "ui.toolkitChecklistDismissed":
+		return s.SetUIToolkitChecklistDismissed(false)
 	case "security.projectBoundary.enforce":
 		if s.Security != nil && s.Security.ProjectBoundary != nil {
 			s.Security.ProjectBoundary.Enforce = nil

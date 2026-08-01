@@ -36,6 +36,61 @@ func TestBuildOpenAIChatRequestTemperature(t *testing.T) {
 	}
 }
 
+// TestBuildOpenAIChatRequestReasoning verifies a resolved, enabled
+// ReasoningRequest is translated into the wire "reasoning" object, and that
+// a nil or disabled ReasoningRequest omits the field entirely (unchanged
+// behavior for models with no known reasoning capability).
+func TestBuildOpenAIChatRequestReasoning(t *testing.T) {
+	t.Parallel()
+	base := &GenerateRequest{Messages: []Message{{Role: RoleUser, Parts: []Part{{Text: "hi"}}}}}
+
+	// No Reasoning field at all: today's default behavior is preserved.
+	if body := BuildOpenAIChatRequest(base, "openrouter/model", config.ToolCallParsingLenient, nil); body.Reasoning != nil {
+		t.Fatalf("Reasoning should be nil by default: %+v", body.Reasoning)
+	}
+
+	// Enabled with no pinned effort: OpenRouter's own default_effort applies.
+	enabledNoEffort := *base
+	enabledNoEffort.Reasoning = &ReasoningRequest{Enabled: true}
+	body := BuildOpenAIChatRequest(&enabledNoEffort, "openrouter/model", config.ToolCallParsingLenient, nil)
+	if body.Reasoning == nil || !body.Reasoning.Enabled || body.Reasoning.Effort != "" {
+		t.Fatalf("Reasoning = %+v, want enabled with empty effort", body.Reasoning)
+	}
+
+	// Enabled with a pinned effort.
+	enabledWithEffort := *base
+	enabledWithEffort.Reasoning = &ReasoningRequest{Enabled: true, Effort: "high"}
+	body = BuildOpenAIChatRequest(&enabledWithEffort, "openrouter/model", config.ToolCallParsingLenient, nil)
+	if body.Reasoning == nil || body.Reasoning.Effort != "high" {
+		t.Fatalf("Reasoning = %+v, want effort=high", body.Reasoning)
+	}
+
+	// Enabled=false must omit the field even if Effort is set.
+	disabled := *base
+	disabled.Reasoning = &ReasoningRequest{Enabled: false, Effort: "high"}
+	disabledBody := BuildOpenAIChatRequest(&disabled, "openrouter/model", config.ToolCallParsingLenient, nil)
+	if disabledBody.Reasoning != nil {
+		t.Fatalf("Reasoning should be omitted when Enabled=false: %+v", disabledBody.Reasoning)
+	}
+
+	// Verify the wire JSON shape matches OpenRouter's unified reasoning object.
+	raw, err := json.Marshal(disabledBody)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(raw), `"reasoning"`) {
+		t.Fatalf("disabled reasoning should not appear in wire JSON: %s", raw)
+	}
+
+	raw, err = json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(raw), `"reasoning":{"effort":"high","enabled":true}`) {
+		t.Fatalf("unexpected wire shape: %s", raw)
+	}
+}
+
 func sseResponse(chunks ...string) string {
 	var b strings.Builder
 	for _, chunk := range chunks {

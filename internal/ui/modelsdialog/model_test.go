@@ -2,6 +2,7 @@ package modelsdialog
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -40,6 +41,10 @@ func (f *fakeDeps) ClearModelSetting(_ context.Context, providerID, model, key s
 	return nil
 }
 
+func (f *fakeDeps) ReasoningCapabilityHint(providerID, model string) string {
+	return f.settings[providerID+"/"+model+"/reasoningHint"]
+}
+
 func keyMsg(t tea.KeyType) tea.KeyMsg { return tea.KeyMsg{Type: t} }
 
 // TestEscClosesFromModelList verifies Esc closes the dialog from the top-level
@@ -72,6 +77,29 @@ func TestEnterOpensSettingsSubmenu(t *testing.T) {
 	m, _ = m.Update(keyMsg(tea.KeyEnter))
 	if m.screen != screenSetting {
 		t.Fatalf("after Enter screen = %v, want screenSetting", m.screen)
+	}
+}
+
+// TestSettingsScreenShowsReasoningCapabilityHint verifies the read-only
+// capability hint line appears in the settings submenu view when Deps
+// supplies one, and is absent when it does not.
+func TestSettingsScreenShowsReasoningCapabilityHint(t *testing.T) {
+	deps := &fakeDeps{
+		entries: []ModelEntry{
+			{ProviderID: "gemini-apikey", ProviderLabel: "gemini", Model: "gemini-3-pro"},
+		},
+		settings: map[string]string{
+			"gemini-apikey/gemini-3-pro/reasoningHint": "adaptive (dynamic thinking) — decides depth per turn",
+		},
+	}
+	m := New(context.Background(), deps)
+	m, _ = m.Update(keyMsg(tea.KeyEnter))
+	if m.screen != screenSetting {
+		t.Fatalf("screen = %v, want screenSetting", m.screen)
+	}
+	view := m.View()
+	if !strings.Contains(view, "Reasoning:") || !strings.Contains(view, "adaptive") {
+		t.Fatalf("view missing reasoning capability hint: %s", view)
 	}
 }
 

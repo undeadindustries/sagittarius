@@ -186,3 +186,100 @@ func TestGeminiStreamerReceivesIncludeThoughtsConfig(t *testing.T) {
 		t.Error("IncludeThoughts = false in streamer call, want true")
 	}
 }
+
+// TestBuildGenerateContentConfigReasoningDynamic verifies an empty-effort,
+// enabled ReasoningRequest sets ThinkingBudget=-1 (adaptive/dynamic), the
+// Gemini-family default per config.ResolveReasoningRequest.
+func TestBuildGenerateContentConfigReasoningDynamic(t *testing.T) {
+	t.Parallel()
+
+	cfg := BuildGenerateContentConfig(&GenerateRequest{
+		Model:     "gemini-3-pro",
+		Reasoning: &ReasoningRequest{Enabled: true},
+	})
+	if cfg.ThinkingConfig == nil {
+		t.Fatal("ThinkingConfig is nil, want non-nil")
+	}
+	if cfg.ThinkingConfig.ThinkingBudget == nil || *cfg.ThinkingConfig.ThinkingBudget != -1 {
+		t.Errorf("ThinkingBudget = %v, want -1 (dynamic)", cfg.ThinkingConfig.ThinkingBudget)
+	}
+	if cfg.ThinkingConfig.ThinkingLevel != "" {
+		t.Errorf("ThinkingLevel = %q, want empty when dynamic", cfg.ThinkingConfig.ThinkingLevel)
+	}
+}
+
+// TestBuildGenerateContentConfigReasoningDisabled verifies "none"/"off"
+// disables thinking via ThinkingBudget=0.
+func TestBuildGenerateContentConfigReasoningDisabled(t *testing.T) {
+	t.Parallel()
+
+	for _, effort := range []string{"none", "off"} {
+		cfg := BuildGenerateContentConfig(&GenerateRequest{
+			Model:     "gemini-3-pro",
+			Reasoning: &ReasoningRequest{Enabled: true, Effort: effort},
+		})
+		if cfg.ThinkingConfig == nil {
+			t.Fatalf("effort=%q: ThinkingConfig is nil, want non-nil", effort)
+		}
+		if cfg.ThinkingConfig.ThinkingBudget == nil || *cfg.ThinkingConfig.ThinkingBudget != 0 {
+			t.Errorf("effort=%q: ThinkingBudget = %v, want 0 (disabled)", effort, cfg.ThinkingConfig.ThinkingBudget)
+		}
+	}
+}
+
+// TestBuildGenerateContentConfigReasoningPinnedLevelGemini3 verifies a pinned
+// level (e.g. "high") on a Gemini 3 model maps to ThinkingLevel, not a raw
+// ThinkingBudget.
+func TestBuildGenerateContentConfigReasoningPinnedLevelGemini3(t *testing.T) {
+	t.Parallel()
+
+	cfg := BuildGenerateContentConfig(&GenerateRequest{
+		Model:     "gemini-3-flash",
+		Reasoning: &ReasoningRequest{Enabled: true, Effort: "high"},
+	})
+	if cfg.ThinkingConfig == nil {
+		t.Fatal("ThinkingConfig is nil, want non-nil")
+	}
+	if cfg.ThinkingConfig.ThinkingLevel != genai.ThinkingLevelHigh {
+		t.Errorf("ThinkingLevel = %q, want %q", cfg.ThinkingConfig.ThinkingLevel, genai.ThinkingLevelHigh)
+	}
+	if cfg.ThinkingConfig.ThinkingBudget != nil {
+		t.Errorf("ThinkingBudget = %v, want nil when ThinkingLevel is set", cfg.ThinkingConfig.ThinkingBudget)
+	}
+}
+
+// TestBuildGenerateContentConfigReasoningPinnedLevelGemini25FallsBackDynamic
+// verifies a pinned level on a Gemini 2.5 model (no ThinkingLevel support)
+// falls back to dynamic ThinkingBudget=-1 rather than guessing a raw budget.
+func TestBuildGenerateContentConfigReasoningPinnedLevelGemini25FallsBackDynamic(t *testing.T) {
+	t.Parallel()
+
+	cfg := BuildGenerateContentConfig(&GenerateRequest{
+		Model:     "gemini-2.5-flash",
+		Reasoning: &ReasoningRequest{Enabled: true, Effort: "high"},
+	})
+	if cfg.ThinkingConfig == nil {
+		t.Fatal("ThinkingConfig is nil, want non-nil")
+	}
+	if cfg.ThinkingConfig.ThinkingLevel != "" {
+		t.Errorf("ThinkingLevel = %q, want empty on Gemini 2.5", cfg.ThinkingConfig.ThinkingLevel)
+	}
+	if cfg.ThinkingConfig.ThinkingBudget == nil || *cfg.ThinkingConfig.ThinkingBudget != -1 {
+		t.Errorf("ThinkingBudget = %v, want -1 (dynamic fallback)", cfg.ThinkingConfig.ThinkingBudget)
+	}
+}
+
+// TestBuildGenerateContentConfigReasoningDisabledIgnored verifies a
+// non-enabled ReasoningRequest never sets ThinkingConfig at all (no
+// IncludeThoughts either).
+func TestBuildGenerateContentConfigReasoningDisabledIgnored(t *testing.T) {
+	t.Parallel()
+
+	cfg := BuildGenerateContentConfig(&GenerateRequest{
+		Model:     "gemini-3-pro",
+		Reasoning: &ReasoningRequest{Enabled: false, Effort: "high"},
+	})
+	if cfg.ThinkingConfig != nil {
+		t.Errorf("ThinkingConfig = %+v, want nil when Reasoning.Enabled=false", cfg.ThinkingConfig)
+	}
+}

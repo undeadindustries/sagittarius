@@ -25,6 +25,20 @@ type ModelInfo struct {
 	// reports it (OpenRouter context_length, vLLM max_model_len, Gemini
 	// inputTokenLimit). 0 means unknown.
 	ContextLimit int
+	// Reasoning is the model's discovered reasoning capability, currently
+	// populated only by OpenRouter's `reasoning` object. Nil when the
+	// provider doesn't report it (every other OpenAI-compat server today).
+	Reasoning *ModelReasoningInfo
+}
+
+// ModelReasoningInfo captures a model's discovered reasoning capability from
+// a provider's models list (see openAIModelReasoning for the OpenRouter wire
+// shape this is parsed from).
+type ModelReasoningInfo struct {
+	SupportedEfforts []string
+	DefaultEffort    string
+	DefaultEnabled   bool
+	Mandatory        bool
 }
 
 // DiscoverModels queries GET {baseUrl}/v1/models best-effort.
@@ -80,10 +94,36 @@ func DiscoverModels(
 		if limit <= 0 {
 			limit = entry.MaxModelLen
 		}
-		out = append(out, ModelInfo{ID: id, ContextLimit: limit})
+		out = append(out, ModelInfo{ID: id, ContextLimit: limit, Reasoning: reasoningInfoFromWire(entry.Reasoning)})
 	}
 	sortModelInfos(out)
 	return out
+}
+
+// reasoningInfoFromWire converts the OpenRouter wire reasoning object into the
+// provider-neutral ModelReasoningInfo, or nil when the provider omitted it.
+func reasoningInfoFromWire(w *openAIModelReasoning) *ModelReasoningInfo {
+	if w == nil {
+		return nil
+	}
+	return &ModelReasoningInfo{
+		SupportedEfforts: append([]string(nil), w.SupportedEfforts...),
+		DefaultEffort:    w.DefaultEffort,
+		DefaultEnabled:   w.DefaultEnabled,
+		Mandatory:        w.Mandatory,
+	}
+}
+
+// ReasoningInfoForModel returns the discovered reasoning capability for
+// modelID from a discovery list, or nil when absent/unknown.
+func ReasoningInfoForModel(models []ModelInfo, modelID string) *ModelReasoningInfo {
+	modelID = strings.TrimSpace(modelID)
+	for _, m := range models {
+		if m.ID == modelID {
+			return m.Reasoning
+		}
+	}
+	return nil
 }
 
 type geminiModelsResponse struct {

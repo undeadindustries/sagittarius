@@ -113,6 +113,11 @@ and resets to off on the next launch.
 - **Usage:** `/theme` (show), `/theme default`, `/theme greyscale`. `Alt+T`
   cycles between the two live.
 
+### `/toolkit`
+
+- **Description:** Re-run the host toolkit checklist to see missing tools and install hints.
+- **Usage:** `/toolkit` (run the scan), `/toolkit dismiss` (permanently dismiss it on startup).
+
 ### `/providers`
 
 - **Description:** Manage provider connections — edit definitions, API keys, and
@@ -317,26 +322,61 @@ See also: [MCP server configuration](../tools/mcp-server.md).
 
 ### `/reasoning`
 
-- **Description:** Show or override reasoning effort for OpenAI Responses API providers (`wireFormat: openai-responses`).
+- **Description:** Show or override the reasoning effort / thinking depth for
+  the active `{Provider}/{Model}`. Sagittarius defaults to genuine
+  provider-native **adaptive** thinking where one exists (Gemini 3 / 2.5) and
+  a capability-validated default everywhere else, rather than requiring an
+  explicit opt-in per provider (AD-077).
+- **Capability-aware:** the accepted levels and default behavior depend on the
+  live model's resolved reasoning mechanism, not a fixed wire-format gate:
+  - **Gemini 3 / 2.5 (`gemini-dynamic`):** adaptive by default (the model
+    decides depth per turn via dynamic thinking). Pin a level
+    (`minimal`/`low`/`medium`/`high`) to force one, or disable with
+    `/reasoning none`. Only Gemini 3 supports a genuine fixed-level pin;
+    pinning a level on Gemini 2.5 falls back to adaptive (its raw token budget
+    isn't safely derivable from a generic effort string).
+  - **OpenAI Responses reasoning families (`fixed-effort`)** (gpt-5 / gpt-5.1+
+    / gpt-5.4+ / gpt-5-pro / o3 / o4): accepts that family's documented effort
+    set (see `/reasoning show` for the live list); `gpt-5-pro` is
+    **mandatory** and rejects `/reasoning none`.
+  - **OpenRouter models with a discovered `reasoning` capability:** enabled by
+    default with OpenRouter's own default effort once model discovery has run
+    (`/providers` → discover models); no local effort validation beyond what
+    OpenRouter reports.
+  - **Everything else** (custom/z.ai/DeepSeek-preset/local vLLM endpoints, or
+    any model with no known capability): stays opt-in — `/reasoning show`
+    reports "not applicable" and a level set here is sent as a best-effort
+    OpenRouter-style wire field that most non-OpenRouter servers ignore.
+- **Live immediately:** a session override (or `save`) takes effect on the
+  very next request — no restart or explicit rebuild needed.
 
 #### Sub-commands
 
 - **`show`**
-  - **Description:** Show the resolved reasoning effort and whether it comes from session override or provider settings.
+  - **Description:** Show the resolved reasoning mechanism, effort, its
+    source (session override / pinned setting / discovered default /
+    provider default), and the valid levels for the live model.
   - **Usage:** `/reasoning` or `/reasoning show`
-- **`clear`**
-  - **Description:** Drop the session-only override (does not change `settings.json`).
-  - **Usage:** `/reasoning clear`
+- **`clear`** (alias **`adaptive`**)
+  - **Description:** Drop the session-only override and fall back to the
+    capability-aware adaptive default (does not change `settings.json`).
+  - **Usage:** `/reasoning clear` or `/reasoning adaptive`
 - **`save <level>`**
-  - **Description:** Persist `<level>` to `providers.<active>.reasoningEffort`.
+  - **Description:** Persist `<level>` to `providers.<active>.reasoningEffort`
+    (or the per-model override via `/models`).
   - **Usage:** `/reasoning save low`
-- **`<minimal|low|medium|high>`**
-  - **Description:** Set a session-only reasoning override (not persisted).
+- **`<none|minimal|low|medium|high|xhigh>`**
+  - **Description:** Set a session-only reasoning override (not persisted),
+    validated against the live model's accepted levels when known.
   - **Usage:** `/reasoning medium`
 
 #### Notes
 
-- Only applies when the active provider uses `openai-responses`. Other wire formats return an actionable “not applicable” message.
+- The `/models` per-model settings editor shows a read-only "Reasoning:"
+  capability hint (mechanism + valid levels) sourced from the same resolver.
+- A model with no known reasoning capability (static rule or discovered
+  OpenRouter data) reports "not applicable" — the command is always safe to
+  run, but has no effect for such models beyond the best-effort wire field.
 
 ### `/diff`
 
@@ -365,6 +405,8 @@ exercise it. See [agent-testing.md](../agent-testing.md) for end-to-end recipes.
 | `-y`, `--yolo` | Shorthand for `--approval-mode=yolo`. Cannot be combined with `--approval-mode`. |
 | `--mode <agent\|plan\|ask\|debug>` | Interaction mode for this run, overriding `sagittarius.defaultMode`. `ask` and `plan` enforce read-only tool policy. The fork's `--approval-mode plan` is not accepted; use `--mode plan` (AD-022). |
 | `--slash <command>` | Run a single slash command headlessly (e.g. `--slash "/mode show"`, `--slash "/diff"`, `--slash "/undo"`) and exit. Mutually exclusive with `-p`. Commands that open an interactive dialog (bare `/providers`, `/models`) print a message and exit 2. |
+| `-d`, `--debug` | Raise `slog`'s level to debug for operational log lines (interactive: `~/.sagittarius/logs/sagittarius.log`; headless: stderr). Independent of `--log-verbose` below. |
+| `--log-verbose` | Write a full, human-readable transcript of every request sent to the model, every response, and every tool result to `~/.sagittarius/logs/chat-verbose-<session>.log`. Works with or without `--debug`, in interactive, headless (`-p`), and `--slash` runs. Intended for attaching to bug reports; rarely needed otherwise. Appends across `--resume` of the same session; a failure to open the file is a non-fatal warning, not a startup error. |
 
 The `stream-json` format emits these line types:
 

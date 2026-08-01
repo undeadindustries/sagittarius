@@ -179,10 +179,72 @@ func BuildGenerateContentConfig(req *GenerateRequest) *genai.GenerateContentConf
 	if tools := ToolDeclarationsToGenai(req.Tools); len(tools) > 0 {
 		cfg.Tools = tools
 	}
-	if req.IncludeThoughts {
-		cfg.ThinkingConfig = &genai.ThinkingConfig{IncludeThoughts: true}
+	if req.IncludeThoughts || (req.Reasoning != nil && req.Reasoning.Enabled) {
+		tc := &genai.ThinkingConfig{}
+		if req.IncludeThoughts {
+			tc.IncludeThoughts = true
+		}
+		applyReasoningToThinkingConfig(tc, req.Reasoning, req.Model)
+		cfg.ThinkingConfig = tc
 	}
 	return cfg
+}
+
+// applyReasoningToThinkingConfig translates a resolved ReasoningRequest into
+// Gemini's ThinkingConfig fields. Empty effort means adaptive/dynamic
+// (ThinkingBudget=-1, per config.ResolveReasoningRequest's Gemini-family
+// default); "none"/"off" disables thinking outright (ThinkingBudget=0, works
+// on both Gemini 3 and 2.5); any other level maps to ThinkingLevel, but only
+// for Gemini 3 models — 2.5's ThinkingBudget is a raw, model-specific token
+// count that cannot be safely derived from a generic effort string, so a
+// pinned level falls back to dynamic on 2.5 rather than guessing (AD-077;
+// see the plan's "out of scope" note on Gemini 2.5 fixed-level pinning).
+func applyReasoningToThinkingConfig(tc *genai.ThinkingConfig, reasoning *ReasoningRequest, model string) {
+	if reasoning == nil || !reasoning.Enabled {
+		return
+	}
+	switch strings.ToLower(strings.TrimSpace(reasoning.Effort)) {
+	case "":
+		budget := int32(-1)
+		tc.ThinkingBudget = &budget
+	case "none", "off":
+		budget := int32(0)
+		tc.ThinkingBudget = &budget
+	case "minimal", "low", "medium", "high":
+		if level, ok := geminiThinkingLevel(reasoning.Effort); ok && isGemini3Model(model) {
+			tc.ThinkingLevel = level
+			return
+		}
+		budget := int32(-1)
+		tc.ThinkingBudget = &budget
+	}
+}
+
+// isGemini3Model reports whether model belongs to the Gemini 3 family, the
+// only one whose SDK/API supports ThinkingConfig.ThinkingLevel.
+func isGemini3Model(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if i := strings.LastIndex(m, "/"); i >= 0 {
+		m = m[i+1:]
+	}
+	return strings.Contains(m, "gemini-3")
+}
+
+// geminiThinkingLevel maps a Sagittarius effort string to the genai
+// ThinkingLevel enum.
+func geminiThinkingLevel(effort string) (genai.ThinkingLevel, bool) {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "minimal":
+		return genai.ThinkingLevelMinimal, true
+	case "low":
+		return genai.ThinkingLevelLow, true
+	case "medium":
+		return genai.ThinkingLevelMedium, true
+	case "high":
+		return genai.ThinkingLevelHigh, true
+	default:
+		return "", false
+	}
 }
 
 var emptyObjectSchema = map[string]any{
@@ -345,6 +407,9 @@ func BuildOpenAIChatRequest(req *GenerateRequest, model string, parseMode config
 	}
 	if len(req.StopSequences) > 0 {
 		body.Stop = append([]string(nil), req.StopSequences...)
+	}
+	if req.Reasoning != nil && req.Reasoning.Enabled {
+		body.Reasoning = &openAIReasoning{Effort: req.Reasoning.Effort, Enabled: true}
 	}
 	return body
 }

@@ -85,6 +85,11 @@ type RunnerConfig struct {
 	InitialGoal *goal.Snapshot
 	// InitialGrill pre-populates the active grill-me session from a resumed session.
 	InitialGrill *grill.Snapshot
+	// VerboseLog, when non-nil, receives a full timestamped transcript of every
+	// request sent to the provider and every response/tool result received
+	// (see --log-verbose). It is opt-in and independent of debug logging; the
+	// Runner takes ownership and closes it from Close().
+	VerboseLog io.WriteCloser
 }
 
 // Runner orchestrates conversation history and provider streaming for the agent loop.
@@ -99,9 +104,19 @@ type Runner struct {
 	model                string
 	providerDefaultModel string
 	modelPinned          bool
-	settingsMu           sync.RWMutex
-	settings             *config.Settings
-	modeState            *modes.State
+	// reasoningOverride* implement the ephemeral, per-(provider,model)
+	// /reasoning pin. It replaces a former process-global (provider.
+	// SessionReasoningOverride) that could bleed across Runner instances and
+	// never invalidated itself on a provider/model switch. Storing the
+	// (provider, model) it was set for and comparing on read means the
+	// override self-invalidates the moment the live model changes, with no
+	// explicit clear-on-switch call required at every switch call site.
+	reasoningOverrideProviderID string
+	reasoningOverrideModel      string
+	reasoningOverrideEffort     string
+	settingsMu                  sync.RWMutex
+	settings                    *config.Settings
+	modeState                   *modes.State
 	// system is the full system instruction sent to the provider:
 	// systemBase + mode suffix. systemBase is the personality prompt + memory.
 	// memory is the AGENTS.md content alone (re-composed on rebuild). All three
@@ -144,6 +159,10 @@ type Runner struct {
 
 	grillMu     sync.RWMutex
 	activeGrill *grill.Session
+
+	// verboseLog is the optional --log-verbose transcript sink; nil-safe (see
+	// verboselog.go) so hot-path call sites never need to check for nil.
+	verboseLog *verboseLog
 }
 
 // LoadedMemoryFiles returns the AGENTS.md paths that contributed to the system
@@ -157,6 +176,17 @@ func (r *Runner) LoadedMemoryFiles() []string {
 // Used by the TUI to drive "@path" file-mention autocompletion.
 func (r *Runner) Workspace() *tools.Workspace {
 	return r.workspace
+}
+
+// Close releases resources the runner owns directly — currently only the
+// optional --log-verbose transcript file. Safe to call on a nil *Runner or
+// when verbose logging is disabled. Callers should defer this alongside
+// Runtime.Close().
+func (r *Runner) Close() error {
+	if r == nil {
+		return nil
+	}
+	return r.verboseLog.Close()
 }
 
 // NewRunner constructs a Runner and discovers project memory for the system prompt.
@@ -229,6 +259,7 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		goplsHintPending:     needsGoplsHint(cfg.Settings, ws.Root()),
 		loadedMemoryFiles:    memoryFiles,
 		initialSessionGrants: cfg.InitialSessionGrants,
+		verboseLog:           newVerboseLog(cfg.VerboseLog),
 	}
 
 	if cfg.InitialGoal != nil {
@@ -292,6 +323,14 @@ func (r *Runner) DebugRequest() ([]byte, error) {
 	if req == nil {
 		return nil, fmt.Errorf("no provider request recorded yet — send a message first")
 	}
+	return r.debugRequestBody(req)
+}
+
+// debugRequestBody serializes req as indented JSON, preferring the active
+// generator's exact wire body (openai-chat, openai-responses) when available.
+// Shared by DebugRequest (/chat debug, last request only) and the per-round
+// --log-verbose transcript (every request, as it is built).
+func (r *Runner) debugRequestBody(req *provider.GenerateRequest) ([]byte, error) {
 	r.genMu.RLock()
 	gen := r.gen
 	r.genMu.RUnlock()
@@ -314,6 +353,47 @@ func (r *Runner) Model() string {
 	r.modelMu.RLock()
 	defer r.modelMu.RUnlock()
 	return r.model
+}
+
+// SetReasoningOverride pins an ephemeral (non-persisted) reasoning effort for
+// the live (provider, model) pair, driving /reasoning <level>. It reads
+// providerID before taking modelMu (activeProviderID locks settingsMu
+// separately; the two mutexes are never held nested, so this ordering is
+// safe) so the recorded scope always matches what buildGenerateRequest will
+// see on the next round.
+func (r *Runner) SetReasoningOverride(effort string) {
+	providerID := r.activeProviderID()
+	r.modelMu.Lock()
+	r.reasoningOverrideProviderID = providerID
+	r.reasoningOverrideModel = r.model
+	r.reasoningOverrideEffort = strings.TrimSpace(effort)
+	r.modelMu.Unlock()
+}
+
+// ClearReasoningOverride drops the pinned reasoning override, driving
+// /reasoning clear.
+func (r *Runner) ClearReasoningOverride() {
+	r.modelMu.Lock()
+	r.reasoningOverrideProviderID = ""
+	r.reasoningOverrideModel = ""
+	r.reasoningOverrideEffort = ""
+	r.modelMu.Unlock()
+}
+
+// ReasoningOverride returns the pinned reasoning override for the live
+// (provider, model) pair, or "" when none is set or it was set for a
+// different provider/model (a switch since then self-invalidates it).
+func (r *Runner) ReasoningOverride() string {
+	providerID := r.activeProviderID()
+	r.modelMu.RLock()
+	defer r.modelMu.RUnlock()
+	if r.reasoningOverrideEffort == "" {
+		return ""
+	}
+	if r.reasoningOverrideProviderID != providerID || r.reasoningOverrideModel != r.model {
+		return ""
+	}
+	return r.reasoningOverrideEffort
 }
 
 // CompressionModel returns the model used for context compression /
@@ -477,6 +557,7 @@ func (r *Runner) RunTurn(ctx context.Context, userInput string) (<-chan ui.Strea
 		return ch, nil
 	}
 
+	r.verboseLog.LogTurnStart(userInput)
 	r.setState(StateIdle)
 	r.metrics.recordTurn()
 	r.historyMu.Lock()
@@ -575,16 +656,24 @@ outerLoop:
 			currentProvider := r.activeProviderID()
 			currentMode := r.InteractionMode().String()
 
+			if r.verboseLog != nil {
+				body, dbgErr := r.debugRequestBody(req)
+				r.verboseLog.LogRequest(round, body, dbgErr)
+			}
+
 			respCh, err := gen.GenerateContentStream(ctx, req)
 			if err != nil {
+				r.verboseLog.LogError(err)
 				out <- ui.StreamEvent{Type: ui.StreamError, Err: err}
 				return
 			}
 
 			toolCalls, modelText, modelParts, streamUsage, streamErr := r.consumeStream(ctx, respCh, out)
 			if streamErr != nil {
+				r.verboseLog.LogError(streamErr)
 				return
 			}
+			r.verboseLog.LogResponse(round, modelText, toolCalls, streamUsage)
 			// Record token usage: prefer provider-reported counts; fall back to heuristics.
 			if streamUsage != nil {
 				r.metrics.recordTurnUsage(currentProvider, currentModel, currentMode,
@@ -622,8 +711,12 @@ outerLoop:
 
 			responses, err := r.toolScheduler().Execute(ctx, toolCalls, emit)
 			if err != nil {
+				r.verboseLog.LogError(err)
 				out <- ui.StreamEvent{Type: ui.StreamError, Err: err}
 				return
+			}
+			for _, resp := range responses {
+				r.verboseLog.LogToolResult(resp)
 			}
 			r.metrics.recordTools(len(toolCalls), countToolFailures(responses))
 			r.appendFunctionResponses(responses)
@@ -643,6 +736,7 @@ outerLoop:
 	}
 
 	r.setState(StateDone)
+	r.verboseLog.LogInfo("max tool rounds exceeded")
 	out <- ui.StreamEvent{Type: ui.StreamError, Text: "max tool rounds exceeded"}
 	out <- ui.StreamEvent{Type: ui.StreamDone}
 }
@@ -719,6 +813,12 @@ func (r *Runner) buildGenerateRequest() *provider.GenerateRequest {
 	// adapter uses this to set ThinkingConfig.IncludeThoughts; other adapters
 	// ignore the field.
 	req.IncludeThoughts = config.ResolveShowThinking(settings, providerID, model)
+	// Resolve adaptive/fixed reasoning defaults per round so a mid-session
+	// model or /reasoning change takes effect on the very next request; see
+	// config.ResolveReasoningRequest for the precedence order.
+	if resolution := config.ResolveReasoningRequest(settings, providerID, model, r.ReasoningOverride()); resolution != nil {
+		req.Reasoning = &provider.ReasoningRequest{Effort: resolution.Effort, Enabled: resolution.Enabled}
+	}
 	return req
 }
 

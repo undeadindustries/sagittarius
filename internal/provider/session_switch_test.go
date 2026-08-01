@@ -8,12 +8,16 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/config"
 )
 
-// TestSaveActiveProviderClearsSessionState verifies that switching the active
-// provider invalidates the session reasoning override scoped to the previous
-// backend. The Responses API chaining id is now per-generator (invalidated by
-// building a fresh generator on switch), so it is no longer a global concern
-// here. Not parallel: it mutates the process-wide session singleton.
-func TestSaveActiveProviderClearsSessionState(t *testing.T) {
+// TestSaveActiveProviderSwitchesAndPersists verifies SaveActiveProvider both
+// updates providers.active in memory and persists it to disk. The former
+// session-only reasoning override assertion moved to
+// internal/agent.TestRunnerReasoningOverrideSelfInvalidates: the override is
+// now Runner-owned and self-invalidates by (provider, model) comparison
+// rather than needing an explicit clear on every provider-switch call site
+// (see AD-077).
+func TestSaveActiveProviderSwitchesAndPersists(t *testing.T) {
+	t.Parallel()
+
 	path := filepath.Join(t.TempDir(), "settings.json")
 	if err := os.WriteFile(path, []byte("{}"), 0o644); err != nil {
 		t.Fatalf("seed settings: %v", err)
@@ -27,14 +31,18 @@ func TestSaveActiveProviderClearsSessionState(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	SetSessionReasoningOverride("high")
-	t.Cleanup(ClearSessionReasoningOverride)
-
 	if err := SaveActiveProvider(loader, settings, string(config.BuiltInOpenAI)); err != nil {
 		t.Fatalf("SaveActiveProvider: %v", err)
 	}
+	if got := settings.ActiveProvider(); got != string(config.BuiltInOpenAI) {
+		t.Fatalf("ActiveProvider() = %q, want %q", got, config.BuiltInOpenAI)
+	}
 
-	if got := SessionReasoningOverride(); got != "" {
-		t.Errorf("SessionReasoningOverride after switch = %q, want empty", got)
+	reloaded, err := loader.Load()
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if got := reloaded.ActiveProvider(); got != string(config.BuiltInOpenAI) {
+		t.Fatalf("persisted ActiveProvider() = %q, want %q", got, config.BuiltInOpenAI)
 	}
 }

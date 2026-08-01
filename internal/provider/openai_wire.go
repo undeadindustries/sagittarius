@@ -61,6 +61,19 @@ type openAIChatRequest struct {
 	Temperature   *float64        `json:"temperature,omitempty"`
 	MaxTokens     *int32          `json:"max_tokens,omitempty"`
 	Stop          []string        `json:"stop,omitempty"`
+	// Reasoning is OpenRouter's unified reasoning request object. Servers that
+	// don't recognize it (most openai-chat endpoints) simply ignore an unknown
+	// field, so it is safe to send whenever GenerateRequest.Reasoning resolves
+	// to non-nil regardless of which openai-chat backend is active.
+	Reasoning *openAIReasoning `json:"reasoning,omitempty"`
+}
+
+// openAIReasoning is OpenRouter's unified reasoning request object: Effort
+// pins a level; Enabled alone (Effort == "") asks the provider to reason using
+// its own default effort — the adaptive-by-default case.
+type openAIReasoning struct {
+	Effort  string `json:"effort,omitempty"`
+	Enabled bool   `json:"enabled,omitempty"`
 }
 
 type streamOptions struct {
@@ -131,6 +144,17 @@ type openAIModelEntry struct {
 	// vLLM/OpenAI-compat field. Either may be absent (0).
 	ContextLength int `json:"context_length"`
 	MaxModelLen   int `json:"max_model_len"`
+	// Reasoning is OpenRouter's per-model reasoning capability object. Other
+	// OpenAI-compat servers omit this field entirely, which unmarshals as nil.
+	Reasoning *openAIModelReasoning `json:"reasoning,omitempty"`
+}
+
+// openAIModelReasoning mirrors OpenRouter's GET /v1/models `reasoning` object.
+type openAIModelReasoning struct {
+	SupportedEfforts []string `json:"supported_efforts,omitempty"`
+	DefaultEffort    string   `json:"default_effort,omitempty"`
+	DefaultEnabled   bool     `json:"default_enabled,omitempty"`
+	Mandatory        bool     `json:"mandatory,omitempty"`
 }
 
 const (

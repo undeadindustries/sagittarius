@@ -62,6 +62,23 @@ type GenerateRequest struct {
 	// ThinkingConfig.IncludeThoughts; for OpenAI-family adapters the field is
 	// ignored (they expose reasoning through their own wire fields).
 	IncludeThoughts bool
+	// Reasoning carries the resolved reasoning ask for this round (see
+	// config.ResolveReasoningRequest), or nil when nothing should be sent
+	// (current default behavior). Each adapter interprets it in terms of its
+	// own wire mechanism: Gemini maps it to ThinkingConfig.ThinkingBudget/
+	// ThinkingLevel, OpenAI Responses maps it to reasoning.effort, and
+	// openai-chat maps it to a unified reasoning:{enabled,effort} object.
+	Reasoning *ReasoningRequest
+}
+
+// ReasoningRequest describes the resolved reasoning ask for one round.
+// Effort pins a level (minimal/low/medium/high/xhigh/none); empty means
+// "no pinned level". Enabled, when Effort is empty, means "turn reasoning
+// on and let the provider apply its own default effort" -- the closest
+// thing to adaptive that a fixed-effort-only wire format offers.
+type ReasoningRequest struct {
+	Effort  string
+	Enabled bool
 }
 
 // Usage holds provider-reported token counts and optional cost for one request.

@@ -114,6 +114,7 @@ Interactive shortcuts, headless flags, and slash commands for the same features 
 | **Resume session** | `/resume`, `/chat resume` | `--resume`, `-r` (id, index, or `latest`) |
 | **List / delete sessions** | — | `--list-sessions`; `--delete-session` (id or index) |
 | **Debug logging** | — | `--debug`, `-d` (writes to `~/.sagittarius/logs/sagittarius.log` in the TUI) |
+| **Full chat transcript for bug reports** | — | `--log-verbose` (every request/response/tool result to `~/.sagittarius/logs/chat-verbose-<session>.log`; works with or without `--debug`) |
 | **Screen-reader TUI** | — | `--screen-reader` |
 | **Version** | — | `--version`, `-v` |
 | **Git worktree** (stub) | — | `--worktree`, `-w` |
@@ -200,6 +201,10 @@ The alt-screen is cleared when Sagittarius exits. The exit summary (session stat
 - **`/mode`**, **`/model`**, **`/modes`**: full pickers and override editors.
 
 Per-repo routing defaults save to **project** scope (`.sagittarius/settings.json`); provider keys and definitions stay **global**. See [docs/home-directory.md](docs/home-directory.md).
+
+### Host Toolkit Checklist
+
+On first launch (or by running **`/toolkit`**), Sagittarius scans your `PATH` for recommended tools (linters, language stacks, sysadmin utilities) and prints install hints for anything missing. You can permanently dismiss the startup scan with **`/toolkit dismiss`**.
 
 ### Skills (`SKILL.md`)
 

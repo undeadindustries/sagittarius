@@ -126,11 +126,11 @@ func TestResponsesFunctionCall(t *testing.T) {
 	}
 }
 
+// TestReasoningEffortInRequest verifies the generator's construction-time
+// reasoningEffort is used by default, and that a per-round GenerateRequest.Reasoning
+// overrides it (the shape Runner uses to apply a live /reasoning pin).
 func TestReasoningEffortInRequest(t *testing.T) {
 	t.Parallel()
-
-	ClearSessionReasoningOverride()
-	t.Cleanup(ClearSessionReasoningOverride)
 
 	var captured map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -167,9 +167,9 @@ func TestReasoningEffortInRequest(t *testing.T) {
 		t.Errorf("effort = %v, want low", got)
 	}
 
-	SetSessionReasoningOverride("high")
 	ch2, err := gen.GenerateContentStream(testContext(t), &GenerateRequest{
-		Messages: []Message{{Role: RoleUser, Parts: []Part{{Text: "again"}}}},
+		Messages:  []Message{{Role: RoleUser, Parts: []Part{{Text: "again"}}}},
+		Reasoning: &ReasoningRequest{Effort: "high", Enabled: true},
 	})
 	if err != nil {
 		t.Fatalf("second stream: %v", err)

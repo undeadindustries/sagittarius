@@ -70,8 +70,12 @@ func (m Model) renderList() string {
 func (m Model) renderSettings() string {
 	dim := m.th.Dim
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Settings for %s/%s\n\n",
+	b.WriteString(fmt.Sprintf("Settings for %s/%s\n",
 		m.targetProvider, m.targetModel))
+	if m.capabilityHint != "" {
+		b.WriteString(dim.Render(m.wrap("Reasoning: "+m.capabilityHint)) + "\n")
+	}
+	b.WriteString("\n")
 	for i, item := range m.settingItems {
 		label := item.label
 		if item.key != "back" {

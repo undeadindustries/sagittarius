@@ -110,6 +110,17 @@ type Hooks interface {
 	// Result.SubmitPrompt.
 	EndGrill(note string) (specPrompt string, err error)
 	ClearGrill(note string) error
+
+	// ToolkitChecklist hooks
+	ToolkitReport() string
+	ToolkitDismiss() error
+
+	// Reasoning hooks (AD-077). The override is ephemeral (never persisted)
+	// and scoped to the live (provider, model) pair; it self-invalidates on a
+	// provider/model switch (see Runner.ReasoningOverride).
+	ReasoningOverride() string
+	SetReasoningOverride(effort string)
+	ClearReasoningOverride()
 }
 
 // Deps supplies slash command dependencies (injectable for tests).

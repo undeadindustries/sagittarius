@@ -76,6 +76,11 @@ type registryConfig struct {
 	bgMgr              *bgproc.Manager
 	symbolsEnabled     bool
 	symbolsPreferGopls bool
+	webSearchEnabled   bool
+	webFetchEnabled    bool
+	webUtilityClient   *provider.GeminiUtilityClient
+	webDirectFetch     bool
+	webMaxFetchBytes   int
 }
 
 // WithBackgroundManager provides a background process manager to tools.
@@ -97,6 +102,17 @@ func WithSymbols(enabled, preferGopls bool) RegistryOption {
 	return func(c *registryConfig) {
 		c.symbolsEnabled = enabled
 		c.symbolsPreferGopls = preferGopls
+	}
+}
+
+// WithWebTools toggles registration of google_web_search and web_fetch tools.
+func WithWebTools(searchEnabled, fetchEnabled bool, client *provider.GeminiUtilityClient, directWebFetch bool, maxFetchBytes int) RegistryOption {
+	return func(c *registryConfig) {
+		c.webSearchEnabled = searchEnabled
+		c.webFetchEnabled = fetchEnabled
+		c.webUtilityClient = client
+		c.webDirectFetch = directWebFetch
+		c.webMaxFetchBytes = maxFetchBytes
 	}
 }
 
@@ -123,6 +139,12 @@ func NewBuiltinRegistry(ws *Workspace, opts ...RegistryOption) *Registry {
 	}
 	if cfg.symbolsEnabled {
 		r.Register(newFindSymbolTool(ws, cfg.symbolsPreferGopls))
+	}
+	if cfg.webSearchEnabled {
+		r.Register(newGoogleWebSearchTool(cfg.webUtilityClient))
+	}
+	if cfg.webFetchEnabled {
+		r.Register(newWebFetchTool(cfg.webUtilityClient, cfg.webDirectFetch, cfg.webMaxFetchBytes))
 	}
 	return r
 }

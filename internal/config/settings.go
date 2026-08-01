@@ -91,8 +91,17 @@ type ProviderModelConfig struct {
 	ReasoningEffort string `json:"reasoningEffort,omitempty"`
 	// ShowThinking overrides the provider/global thinking-box visibility for
 	// this model only. Nil inherits the provider instance value.
-	ShowThinking *bool                      `json:"showThinking,omitempty"`
-	Extra        map[string]json.RawMessage `json:"-"`
+	ShowThinking *bool `json:"showThinking,omitempty"`
+	// ReasoningSupported and ReasoningMandatory cache a model's reasoning
+	// capability as discovered from the provider's models list (currently only
+	// OpenRouter reports this). They are written by
+	// provider.MaybeSetReasoningCapability and read by ResolveReasoningRequest;
+	// both are nil until discovery runs at least once for this model. Neither
+	// field pins an effort itself — ReasoningEffort above remains the explicit
+	// user pin, which always wins over the discovered default.
+	ReasoningSupported *bool                      `json:"reasoningSupported,omitempty"`
+	ReasoningMandatory *bool                      `json:"reasoningMandatory,omitempty"`
+	Extra              map[string]json.RawMessage `json:"-"`
 }
 
 // UnmarshalJSON decodes the known per-model fields and preserves unknown keys.
@@ -130,6 +139,14 @@ func (c *ProviderModelConfig) UnmarshalJSON(data []byte) error {
 			}
 		case "showThinking":
 			if err := json.Unmarshal(val, &c.ShowThinking); err != nil {
+				return err
+			}
+		case "reasoningSupported":
+			if err := json.Unmarshal(val, &c.ReasoningSupported); err != nil {
+				return err
+			}
+		case "reasoningMandatory":
+			if err := json.Unmarshal(val, &c.ReasoningMandatory); err != nil {
 				return err
 			}
 		default:
@@ -186,6 +203,20 @@ func (c ProviderModelConfig) MarshalJSON() ([]byte, error) {
 			return nil, err
 		}
 		obj["showThinking"] = b
+	}
+	if c.ReasoningSupported != nil {
+		b, err := json.Marshal(*c.ReasoningSupported)
+		if err != nil {
+			return nil, err
+		}
+		obj["reasoningSupported"] = b
+	}
+	if c.ReasoningMandatory != nil {
+		b, err := json.Marshal(*c.ReasoningMandatory)
+		if err != nil {
+			return nil, err
+		}
+		obj["reasoningMandatory"] = b
 	}
 	for key, val := range c.Extra {
 		obj[key] = val

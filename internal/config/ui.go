@@ -20,6 +20,8 @@ type UISettings struct {
 	// ShowThinking reveals the model reasoning ("thinking") box by default.
 	// Off by default; toggled live with Ctrl+T or per-provider/model settings.
 	ShowThinking bool `json:"showThinking,omitempty"`
+	// ToolkitChecklistDismissed marks whether the user has permanently dismissed the host toolkit checklist.
+	ToolkitChecklistDismissed bool `json:"toolkitChecklistDismissed,omitempty"`
 }
 
 // UI returns the parsed ui.* section, or the zero value when absent or invalid.
@@ -85,6 +87,20 @@ func (s *Settings) SetUITheme(name string) error {
 			return fmt.Errorf("encode ui theme: %w", err)
 		}
 		ui["theme"] = encoded
+		return nil
+	})
+}
+
+// SetUIToolkitChecklistDismissed records the toolkit checklist dismissal state
+// under ui.toolkitChecklistDismissed, preserving other ui.* keys. A false value
+// clears the key (off is the implicit default). The caller flushes via Loader.Save.
+func (s *Settings) SetUIToolkitChecklistDismissed(dismissed bool) error {
+	return s.mutateUISection(func(ui map[string]json.RawMessage) error {
+		if !dismissed {
+			delete(ui, "toolkitChecklistDismissed")
+			return nil
+		}
+		ui["toolkitChecklistDismissed"] = []byte("true")
 		return nil
 	})
 }
