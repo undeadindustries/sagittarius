@@ -550,6 +550,13 @@ func (h *appHooks) RebuildRunner(ctx context.Context) (string, string, error) {
 		h.app.runner.RefreshModelFromMode()
 	}
 
+	// A /settings save routes here, so built-in tool toggles
+	// (sagittarius.symbols.*, sagittarius.web.*) must reach the live registry or
+	// they would appear to apply yet do nothing until restart. The registry is
+	// rebuilt only when a toggle actually changed, keeping mode switches and
+	// model picks free of registry churn.
+	h.app.refreshBuiltinToolToggles(effectiveSettings)
+
 	resolvedModel := h.app.runner.Model()
 
 	// Rebuild the context manager so local-context defenses track the new wire
@@ -652,6 +659,26 @@ func (a *App) rebuildToolRegistry() error {
 	}
 	a.runner.SetRegistry(reg)
 	return nil
+}
+
+// refreshBuiltinToolToggles re-resolves the built-in tool toggles from the given
+// settings and reinstalls a rebuilt registry when one of them changed. It never
+// reconnects MCP servers (the rebuild reuses the discovered tool cache) and is a
+// no-op when nothing changed.
+func (a *App) refreshBuiltinToolToggles(s *config.Settings) {
+	if a == nil || a.runtime == nil || a.runtime.Catalog == nil || a.runner == nil {
+		return
+	}
+	a.runtime.SetSettings(s)
+	if !a.runtime.Catalog.RefreshBuiltinToggles(s) {
+		return
+	}
+	reg, err := a.runtime.RebuildToolRegistry()
+	if err != nil {
+		slog.Warn("rebuild tool registry after settings change", "error", err)
+		return
+	}
+	a.runner.SetRegistry(reg)
 }
 
 // ForceCompressHistory manually compresses the live conversation context and

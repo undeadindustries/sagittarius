@@ -52,6 +52,11 @@ func (w *webSearchTool) Execute(ctx context.Context, args map[string]interface{}
 	if !ok || query == "" {
 		return nil, fmt.Errorf("%s requires a non-empty string parameter %q", w.Name(), ParamQuery)
 	}
+	// Gemini grounding is the only backend for this tool; without a client there
+	// is nothing to fall back to, so report it instead of dereferencing nil.
+	if w.utilityClient == nil {
+		return nil, fmt.Errorf("%s is unavailable: no Gemini API key is configured (add one with /providers)", w.Name())
+	}
 
 	text, meta, err := w.utilityClient.Search(ctx, query)
 	if err != nil {
