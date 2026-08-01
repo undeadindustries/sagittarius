@@ -135,7 +135,6 @@ func SelectCurrentModel(loader *config.Loader, settings *config.Settings, provid
 			return err
 		}
 	}
-	ClearSessionReasoningOverride()
 	return nil
 }
 
@@ -179,11 +178,12 @@ func SetActiveProvider(settings *config.Settings, providerID string) error {
 
 // SaveActiveProvider sets the active provider and persists settings via loader.
 //
-// Switching providers invalidates session state scoped to the previous backend:
-// the session-only reasoning override is cleared here. The Responses API
-// previous_response_id (a chained id is meaningless to another endpoint) is now
-// per-generator state, so it is invalidated automatically when the switch builds
-// a fresh generator — no global clear is needed.
+// Switching providers invalidates session state scoped to the previous
+// backend automatically rather than via an explicit clear here: the
+// Runner-owned /reasoning override self-invalidates because it is keyed to
+// the (provider, model) pair it was set for (see Runner.ReasoningOverride),
+// and the Responses API previous_response_id is per-generator state,
+// invalidated by building a fresh generator on switch.
 func SaveActiveProvider(loader *config.Loader, settings *config.Settings, providerID string) error {
 	if loader == nil {
 		return fmt.Errorf("save active provider: loader is required")
@@ -191,11 +191,7 @@ func SaveActiveProvider(loader *config.Loader, settings *config.Settings, provid
 	if err := SetActiveProvider(settings, providerID); err != nil {
 		return err
 	}
-	if err := loader.Save(settings); err != nil {
-		return err
-	}
-	ClearSessionReasoningOverride()
-	return nil
+	return loader.Save(settings)
 }
 
 // SetProviderModel updates the model override for providerID.
@@ -852,7 +848,8 @@ func ClearModelConfig(settings *config.Settings, providerID, model, key string) 
 		cfg.Models = make(map[string]config.ProviderModelConfig)
 	}
 	if mc.Temperature == nil && mc.ContextLimit == nil && mc.ReasoningEffort == "" &&
-		mc.ShowThinking == nil && mc.Personality == "" && mc.PromptMode == "" && mc.Extra == nil {
+		mc.ShowThinking == nil && mc.Personality == "" && mc.PromptMode == "" && mc.Extra == nil &&
+		mc.ReasoningSupported == nil && mc.ReasoningMandatory == nil {
 		delete(cfg.Models, model)
 	} else {
 		cfg.Models[model] = mc

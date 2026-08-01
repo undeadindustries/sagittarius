@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -27,6 +28,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/session"
 	"github.com/undeadindustries/sagittarius/internal/skills"
 	"github.com/undeadindustries/sagittarius/internal/slash"
+	"github.com/undeadindustries/sagittarius/internal/toolkit"
 	"github.com/undeadindustries/sagittarius/internal/tools"
 	"github.com/undeadindustries/sagittarius/internal/ui"
 )
@@ -141,6 +143,11 @@ func (a *App) HandleInput(ctx context.Context, input string) (<-chan ui.StreamEv
 		return a.handleSlash(ctx, input)
 	}
 	return a.runner.RunTurn(ctx, input)
+}
+
+// ToolkitReport delegates to the hooks implementation to satisfy the TUI toolkitScanner interface.
+func (a *App) ToolkitReport() string {
+	return a.deps.Hooks.ToolkitReport()
 }
 
 // Status returns footer metadata for the TUI status bar.
@@ -1502,6 +1509,73 @@ func (h *appHooks) ApplyProjectSystemPromptPreset(ctx context.Context, presetID 
 		return "", err
 	}
 	return fmt.Sprintf("System prompt → %s (saved to .sagittarius/settings.json)", preset.Label), nil
+}
+
+func (h *appHooks) ToolkitReport() string {
+	if h.app == nil || h.app.deps.Settings == nil {
+		return ""
+	}
+
+	effective := h.app.deps.Settings
+	if h.app.docs != nil {
+		effective = h.app.docs.Merged()
+	}
+
+	webReady := false
+	if effective != nil && effective.Sagittarius != nil && effective.Sagittarius.Web != nil {
+		if (effective.Sagittarius.Web.SearchEnabled != nil && *effective.Sagittarius.Web.SearchEnabled) ||
+			(effective.Sagittarius.Web.FetchEnabled != nil && *effective.Sagittarius.Web.FetchEnabled) {
+			webReady = true
+		}
+	} else if effective != nil {
+		webReady = false
+	}
+
+	cfg := toolkit.ScanConfig{
+		Settings: effective,
+		WebReady: webReady,
+		GOOS:     runtime.GOOS,
+	}
+	rep := toolkit.Scan(cfg)
+	return rep.RenderPlain()
+}
+
+func (h *appHooks) ToolkitDismiss() error {
+	if h.app == nil {
+		return fmt.Errorf("app not available")
+	}
+	docs := h.app.docs
+	if docs == nil {
+		return fmt.Errorf("settings documents not loaded")
+	}
+
+	return docs.MutateGlobal(func(s *config.Settings) error {
+		return s.SetUIToolkitChecklistDismissed(true)
+	})
+}
+
+// ReasoningOverride implements slash.Hooks.
+func (h *appHooks) ReasoningOverride() string {
+	if h.app == nil || h.app.runner == nil {
+		return ""
+	}
+	return h.app.runner.ReasoningOverride()
+}
+
+// SetReasoningOverride implements slash.Hooks.
+func (h *appHooks) SetReasoningOverride(effort string) {
+	if h.app == nil || h.app.runner == nil {
+		return
+	}
+	h.app.runner.SetReasoningOverride(effort)
+}
+
+// ClearReasoningOverride implements slash.Hooks.
+func (h *appHooks) ClearReasoningOverride() {
+	if h.app == nil || h.app.runner == nil {
+		return
+	}
+	h.app.runner.ClearReasoningOverride()
 }
 
 // systemPromptStatusDetail returns the human-readable system-prompt preset label

@@ -27,4 +27,10 @@ type Deps interface {
 	SetModelSetting(ctx context.Context, providerID, model, key, value string) error
 	// ClearModelSetting removes a per-model override so it inherits the provider default.
 	ClearModelSetting(ctx context.Context, providerID, model, key string) error
+	// ReasoningCapabilityHint returns a one-line, read-only description of the
+	// model's resolved reasoning mechanism (e.g. "Adaptive (dynamic thinking)
+	// — Gemini decides depth per turn.", "Fixed effort — none, low, medium,
+	// high (default: none)", "Not supported for this model."), sourced from
+	// the same resolver /reasoning show uses. Empty means no hint to display.
+	ReasoningCapabilityHint(providerID, model string) string
 }

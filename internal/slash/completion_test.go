@@ -60,11 +60,11 @@ func TestCompleteSubcommandsAreSorted(t *testing.T) {
 
 	// Verify /reasoning subcommands are NOT sorted
 	got = reg.Complete("/reasoning ", Deps{})
-	if len(got.Items) < 7 {
-		t.Fatalf("/reasoning completion items = %d, want at least 7", len(got.Items))
+	if len(got.Items) < 10 {
+		t.Fatalf("/reasoning completion items = %d, want at least 10", len(got.Items))
 	}
-	// Verify order matches definition (minimal, low, medium, high)
-	expectedOrder := []string{"show", "clear", "save", "minimal", "low", "medium", "high"}
+	// Verify order matches definition (none, minimal, low, medium, high, xhigh)
+	expectedOrder := []string{"show", "clear", "adaptive", "save", "none", "minimal", "low", "medium", "high", "xhigh"}
 	actual := labels(got.Items)
 	for i, want := range expectedOrder {
 		if i >= len(actual) || actual[i] != want {

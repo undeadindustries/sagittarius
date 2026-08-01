@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"golang.org/x/term"
 
@@ -59,6 +60,7 @@ func run(args []string) int {
 	modelShort := fs.String("m", "", "shorthand for --model")
 	debug := fs.Bool("debug", false, "enable debug logging")
 	debugShort := fs.Bool("d", false, "shorthand for --debug")
+	logVerbose := fs.Bool("log-verbose", false, "log the full chat (every request sent to the model, every response, and every tool result) to ~/.sagittarius/logs/chat-verbose-<session>.log; independent of --debug, rarely needed outside bug reports")
 
 	// Approval policy (fork-aligned) and Sagittarius interaction mode overrides.
 	approvalModeFlag := fs.String("approval-mode", "", "tool approval policy: default|autoEdit|yolo")
@@ -181,6 +183,7 @@ func run(args []string) int {
 		resume:        resume,
 		approvalMode:  approvalMode,
 		modeOverride:  modeOverride,
+		logVerbose:    *logVerbose,
 	}
 
 	// --slash: run a single slash command headlessly and exit. Mutually
@@ -346,6 +349,7 @@ func runHeadless(prompt string, opts runnerOptions, fmt_ outputFormat) int {
 		return 1
 	}
 	defer func() { _ = runtime.Close() }()
+	defer func() { _ = runner.Close() }()
 
 	switch fmt_ {
 	case outputFormatJSON:
@@ -382,6 +386,7 @@ func runSlash(command string, opts runnerOptions) int {
 		return 1
 	}
 	defer func() { _ = runtime.Close() }()
+	defer func() { _ = runner.Close() }()
 
 	providerLabel := "ready"
 	if endpoint, epErr := provider.ResolveEndpointConfig(docs.Merged()); epErr == nil {
@@ -524,6 +529,36 @@ func configureInteractiveLogging(debug bool) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{Level: level})))
 }
 
+// openVerboseChatLog opens (creating if needed) the --log-verbose transcript
+// file for sessionID under ~/.sagittarius/logs/, appending across resumes of
+// the same session. Distinct from configureInteractiveLogging's
+// sagittarius.log: this file is a full record of every request sent to the
+// model and every response/tool result received (see internal/agent/verboselog.go),
+// not operational log lines, so it stays separate and human-readable even when
+// --debug is off.
+func openVerboseChatLog(sessionID string) (*os.File, error) {
+	dir, err := storage.EnsureGlobalHome()
+	if err != nil {
+		return nil, fmt.Errorf("resolve sagittarius home: %w", err)
+	}
+	logsDir := filepath.Join(dir, "logs")
+	if err := os.MkdirAll(logsDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create logs dir: %w", err)
+	}
+	name := strings.TrimSpace(sessionID)
+	if name == "" {
+		name = time.Now().Format("20060102-150405")
+	}
+	path := filepath.Join(logsDir, fmt.Sprintf("chat-verbose-%s.log", name))
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", path, err)
+	}
+	fmt.Fprintf(f, "\n########## sagittarius --log-verbose started %s (session %s) ##########\n",
+		time.Now().Format(time.RFC3339), sessionID)
+	return f, nil
+}
+
 func runInteractive(screenReader bool, debug bool, opts runnerOptions) int {
 	configureInteractiveLogging(debug)
 
@@ -536,6 +571,7 @@ func runInteractive(screenReader bool, debug bool, opts runnerOptions) int {
 		return 1
 	}
 	defer func() { _ = runtime.Close() }()
+	defer func() { _ = runner.Close() }()
 
 	needsOnboarding := agent.NeedsProviderSetup(ctx, docs.Merged())
 
@@ -575,19 +611,20 @@ func runInteractive(screenReader bool, debug bool, opts runnerOptions) int {
 
 	uiCfg := docs.Merged().UI()
 	termUI := bubbletea.NewTerminal(ui.Options{
-		ScreenReader:      screenReader,
-		BannerTitle:       "Sagittarius",
-		Version:           version.String(),
-		InitialStatus:     app.Status(),
-		Notice:            notice,
-		ThemeName:         uiCfg.Theme,
-		NoColor:           noColorEnv(),
-		HideBanner:        uiCfg.HideBanner,
-		HideTips:          uiCfg.HideTips,
-		ShowThinking:      uiCfg.ShowThinking,
-		NeedsOnboarding:   needsOnboarding,
-		LoadedMemoryFiles: runner.LoadedMemoryFiles(),
-		InitialScrollback: historyToScrollback(runner.History()),
+		ScreenReader:              screenReader,
+		BannerTitle:               "Sagittarius",
+		Version:                   version.String(),
+		InitialStatus:             app.Status(),
+		Notice:                    notice,
+		ThemeName:                 uiCfg.Theme,
+		NoColor:                   noColorEnv(),
+		HideBanner:                uiCfg.HideBanner,
+		HideTips:                  uiCfg.HideTips,
+		ToolkitChecklistDismissed: uiCfg.ToolkitChecklistDismissed,
+		ShowThinking:              uiCfg.ShowThinking,
+		NeedsOnboarding:           needsOnboarding,
+		LoadedMemoryFiles:         runner.LoadedMemoryFiles(),
+		InitialScrollback:         historyToScrollback(runner.History()),
 	})
 
 	if err := termUI.Run(ctx, app); err != nil {
@@ -610,6 +647,9 @@ type runnerOptions struct {
 	resume        string
 	approvalMode  agent.ApprovalMode
 	modeOverride  *modes.Mode
+	// logVerbose enables --log-verbose: a full request/response/tool-result
+	// transcript written to disk for bug reports (see openVerboseChatLog).
+	logVerbose bool
 }
 
 // buildRunner constructs a Runner, optionally loading a resumed session.
@@ -694,6 +734,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 
 	allowFix, suggestVerify := resolveVerifyFlags(settings)
 	symbolsEnabled, symbolsPreferGopls := resolveSymbolsFlags(settings)
+	webSearchEnabled, webFetchEnabled := resolveWebFlags(settings)
 
 	runtime, err := agent.NewRuntime(ctx, agent.RuntimeConfig{
 		Settings:           settings,
@@ -703,6 +744,8 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		AllowFix:           allowFix,
 		SymbolsEnabled:     symbolsEnabled,
 		SymbolsPreferGopls: symbolsPreferGopls,
+		WebSearchEnabled:   webSearchEnabled,
+		WebFetchEnabled:    webFetchEnabled,
 	})
 	if err != nil {
 		return nil, nil, nil, "", "", err
@@ -765,7 +808,18 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 	// Resolve project-boundary + snapshot policy from the already-merged settings.
 	boundary, snapMgr := resolveBoundaryAndSnapshots(settings, projectRoot, sessID)
 
-	runner, err := agent.NewRunner(agent.RunnerConfig{
+	// --log-verbose is opt-in and rarely used (bug reports only); a failure to
+	// open the transcript file is never fatal to the run.
+	var verboseLog *os.File
+	if opts.logVerbose {
+		verboseLog, err = openVerboseChatLog(sessID)
+		if err != nil {
+			slog.Warn("verbose chat logging disabled", "error", err)
+			verboseLog = nil
+		}
+	}
+
+	runnerCfg := agent.RunnerConfig{
 		Generator:               gen,
 		Model:                   model,
 		Interactive:             interactive,
@@ -782,8 +836,18 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		Snapshotter:             snapMgr,
 		AllowFix:                allowFix,
 		SuggestVerifyAfterWrite: suggestVerify,
-	})
+	}
+	// Assign only when non-nil: a nil *os.File stored in the io.WriteCloser
+	// field would be a non-nil interface wrapping a nil pointer, breaking the
+	// nil-safety contract verboseLog.go relies on.
+	if verboseLog != nil {
+		runnerCfg.VerboseLog = verboseLog
+	}
+	runner, err := agent.NewRunner(runnerCfg)
 	if err != nil {
+		if verboseLog != nil {
+			_ = verboseLog.Close()
+		}
 		_ = runtime.Close()
 		return nil, nil, nil, "", "", err
 	}
@@ -837,6 +901,18 @@ func resolveVerifyFlags(merged *config.Settings) (allowFix, suggestAfterWrite bo
 func resolveSymbolsFlags(merged *config.Settings) (enabled, preferGopls bool) {
 	return config.SymbolsEnabled(merged, nil),
 		config.SymbolsPreferGopls(merged, nil)
+}
+
+func resolveWebFlags(merged *config.Settings) (searchEnabled, fetchEnabled bool) {
+	hasKey := false
+	if merged != nil {
+		// Just a simple check if the env var is present for Gemini, as we don't have
+		// full cred resolution here.
+		if os.Getenv("GEMINI_API_KEY") != "" || os.Getenv("GOOGLE_API_KEY") != "" {
+			hasKey = true
+		}
+	}
+	return config.WebSearchEnabled(merged, nil, hasKey), config.WebFetchEnabled(merged, nil)
 }
 
 // persistentSessionID returns a stable per-process identifier.

@@ -1,70 +1,30 @@
 package provider
 
-import (
-	"strings"
-	"sync"
-)
+import "strings"
 
 // ReasoningEffortLevel is a valid reasoning.effort value for the Responses API.
 type ReasoningEffortLevel string
 
 const (
+	ReasoningNone    ReasoningEffortLevel = "none"
 	ReasoningMinimal ReasoningEffortLevel = "minimal"
 	ReasoningLow     ReasoningEffortLevel = "low"
 	ReasoningMedium  ReasoningEffortLevel = "medium"
 	ReasoningHigh    ReasoningEffortLevel = "high"
+	ReasoningXHigh   ReasoningEffortLevel = "xhigh"
 )
 
-// ValidReasoningLevels lists accepted reasoning effort values.
+// ValidReasoningLevels lists accepted reasoning effort values across every
+// known family (see config.ModelReasoningRule for which subset a given model
+// actually accepts — this is the generic settings-validation superset, used
+// where the specific model isn't known, e.g. persisting a raw settings value).
 var ValidReasoningLevels = []ReasoningEffortLevel{
+	ReasoningNone,
 	ReasoningMinimal,
 	ReasoningLow,
 	ReasoningMedium,
 	ReasoningHigh,
-}
-
-// sessionState holds the process-wide reasoning override.
-//
-// TODO(plan 02 — docs/plans/concurrency-cohesion-2026-06/02-provider-streaming-session.md):
-// the /reasoning override is still a hidden process global. The clean version
-// injects it onto the live generator (construction + a setter the slash command
-// drives), but that rewire crosses the slash→app→runner→generator seam and risks
-// losing the override on generator rebuild, so it is deferred. The Responses
-// chaining id (the actual cross-session-bleed bug) is now per-generator.
-type sessionState struct {
-	mu                sync.RWMutex
-	reasoningOverride string
-}
-
-var defaultSession = &sessionState{}
-
-// SetSessionReasoningOverride sets a session-only reasoning effort override.
-func SetSessionReasoningOverride(level string) {
-	defaultSession.mu.Lock()
-	defer defaultSession.mu.Unlock()
-	defaultSession.reasoningOverride = strings.TrimSpace(level)
-}
-
-// ClearSessionReasoningOverride drops the session reasoning override.
-func ClearSessionReasoningOverride() {
-	defaultSession.mu.Lock()
-	defer defaultSession.mu.Unlock()
-	defaultSession.reasoningOverride = ""
-}
-
-// SessionReasoningOverride returns the active session override, if any.
-func SessionReasoningOverride() string {
-	defaultSession.mu.RLock()
-	defer defaultSession.mu.RUnlock()
-	return defaultSession.reasoningOverride
-}
-
-// ResolveReasoningEffort returns session override, then persisted provider value.
-func ResolveReasoningEffort(persisted string) string {
-	if override := SessionReasoningOverride(); override != "" {
-		return override
-	}
-	return strings.TrimSpace(persisted)
+	ReasoningXHigh,
 }
 
 // IsValidReasoningLevel reports whether level is an accepted effort value.

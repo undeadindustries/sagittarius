@@ -213,7 +213,16 @@ func (g *OpenAIResponsesGenerator) buildRequestBody(req *GenerateRequest, model 
 	if instructions != "" {
 		body.Instructions = instructions
 	}
-	if effort := ResolveReasoningEffort(g.reasoningEffort); effort != "" {
+	// req.Reasoning (resolved fresh per round by Runner.buildGenerateRequest
+	// via config.ResolveReasoningRequest) wins over the generator's
+	// construction-time effort, which remains the fallback for callers that
+	// build a GenerateRequest directly (DebugWireRequest, tests) without
+	// going through the Runner.
+	effort := strings.TrimSpace(g.reasoningEffort)
+	if req.Reasoning != nil && req.Reasoning.Effort != "" {
+		effort = req.Reasoning.Effort
+	}
+	if effort != "" {
 		body.Reasoning = &responsesReasoning{Effort: effort}
 	}
 	if g.useResponseChaining && previousID != "" {

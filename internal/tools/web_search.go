@@ -8,8 +8,12 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/web"
 )
 
-// webSearchTool implements the google_web_search tool using Gemini's native
+// newGoogleWebSearchTool implements the google_web_search tool using Gemini's native
 // GoogleSearch grounding feature.
+func newGoogleWebSearchTool(client *provider.GeminiUtilityClient) *webSearchTool {
+	return &webSearchTool{utilityClient: client}
+}
+
 type webSearchTool struct {
 	utilityClient *provider.GeminiUtilityClient
 }

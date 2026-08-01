@@ -110,6 +110,24 @@ type submitMsg struct {
 	line string
 }
 
+type toolkitScanMsg struct {
+	report string
+}
+
+func runToolkitScanCmd(app ui.App) tea.Cmd {
+	return func() tea.Msg {
+		// App implements Hooks host interface in app_hooks.go (actually app.go).
+		// We'll extract it using a defined interface.
+		type toolkitScanner interface {
+			ToolkitReport() string
+		}
+		if s, ok := app.(toolkitScanner); ok {
+			return toolkitScanMsg{report: s.ToolkitReport()}
+		}
+		return nil
+	}
+}
+
 // scrollRole classifies a scrollback block so the renderer can apply a
 // consistent prefix glyph and color per message kind.
 type scrollRole int
@@ -383,6 +401,10 @@ func (m *model) setTheme(name string) {
 func (m *model) Init() tea.Cmd {
 	if m.opts.NeedsOnboarding {
 		m.openOnboarding()
+		return textarea.Blink
+	}
+	if !m.opts.ToolkitChecklistDismissed {
+		return tea.Batch(textarea.Blink, runToolkitScanCmd(m.app))
 	}
 	return textarea.Blink
 }
@@ -415,6 +437,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case tea.KeyMsg:
 		return m.handleKey(msg)
+	case toolkitScanMsg:
+		if msg.report != "" {
+			m.addBlock(roleInfo, msg.report+"\n\n/toolkit dismiss to never show again · /toolkit to re-run")
+			m.syncViewportContent()
+		}
+		return m, nil
 	case submitMsg:
 		return m.handleSubmit(msg.line)
 	case concurrentStreamEventMsg:
@@ -534,6 +562,9 @@ func (m *model) updateOverlay(msg tea.Msg) (tea.Model, tea.Cmd) {
 		next, cmd := m.onboardingOverlay.Update(msg)
 		if next.Done() {
 			m.closeOverlay(next.Status())
+			if !m.opts.ToolkitChecklistDismissed {
+				return m, tea.Batch(cmd, runToolkitScanCmd(m.app))
+			}
 			return m, cmd
 		}
 		m.onboardingOverlay = &next
@@ -2123,6 +2154,7 @@ func (m *model) wrapWidth() int {
 }
 
 func (m *model) syncViewportContent() {
+	m.viewport.Height = m.bodyHeight()
 	m.viewport.SetContent(m.renderScrollback(m.wrapWidth()))
 	if m.followBottom {
 		m.viewport.GotoBottom()

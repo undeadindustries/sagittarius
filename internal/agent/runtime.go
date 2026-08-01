@@ -36,6 +36,10 @@ type RuntimeConfig struct {
 	SymbolsEnabled bool
 	// SymbolsPreferGopls tweaks find_symbol's description on Go modules.
 	SymbolsPreferGopls bool
+	// WebSearchEnabled toggles the google_web_search tool.
+	WebSearchEnabled bool
+	// WebFetchEnabled toggles the web_fetch tool.
+	WebFetchEnabled bool
 }
 
 // NewRuntime constructs and performs an initial tool catalog reload.
@@ -67,6 +71,8 @@ func NewRuntime(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 		AllowFix:           cfg.AllowFix,
 		SymbolsEnabled:     cfg.SymbolsEnabled,
 		SymbolsPreferGopls: cfg.SymbolsPreferGopls,
+		WebSearchEnabled:   cfg.WebSearchEnabled,
+		WebFetchEnabled:    cfg.WebFetchEnabled,
 	})
 	if err != nil {
 		return nil, err

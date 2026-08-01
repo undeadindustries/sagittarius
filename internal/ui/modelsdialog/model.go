@@ -45,6 +45,9 @@ type Model struct {
 
 	settingItems  []settingItem
 	settingValues map[string]string // current values for the target model
+	// capabilityHint is a read-only one-line description of the target
+	// model's resolved reasoning mechanism, shown above the settings list.
+	capabilityHint string
 
 	// for screenEditField
 	editKey   string
@@ -170,6 +173,7 @@ func (m Model) openSettingsFor(idx int) (Model, tea.Cmd) {
 	m.targetModel = e.Model
 	m.settingItems = settingsMenu
 	m.settingValues = m.deps.GetModelSettings(e.ProviderID, e.Model)
+	m.capabilityHint = m.deps.ReasoningCapabilityHint(e.ProviderID, e.Model)
 	m.screen = screenSetting
 	m.cursor = 0
 	m.errMsg = ""

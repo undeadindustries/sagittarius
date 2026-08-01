@@ -37,6 +37,9 @@ type Options struct {
 	// startup setting (ui.showThinking / per-provider override). Ctrl+T toggles
 	// it during the session.
 	ShowThinking bool
+	// ToolkitChecklistDismissed prevents the host toolkit checklist from showing
+	// at startup (settings ui.toolkitChecklistDismissed).
+	ToolkitChecklistDismissed bool
 	// NeedsOnboarding opens the first-run provider setup overlay before the
 	// first chat turn when no provider or API key is configured.
 	NeedsOnboarding bool

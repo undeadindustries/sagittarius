@@ -24,6 +24,9 @@ type Catalog struct {
 	allowFix           bool
 	symbolsEnabled     bool
 	symbolsPreferGopls bool
+	webSearchEnabled   bool
+	webFetchEnabled    bool
+	webUtilityClient   *provider.GeminiUtilityClient
 }
 
 // CatalogConfig configures tool catalog assembly.
@@ -42,6 +45,10 @@ type CatalogConfig struct {
 	SymbolsEnabled bool
 	// SymbolsPreferGopls tweaks find_symbol's description on Go modules.
 	SymbolsPreferGopls bool
+	// WebSearchEnabled toggles the google_web_search tool.
+	WebSearchEnabled bool
+	// WebFetchEnabled toggles the web_fetch tool.
+	WebFetchEnabled bool
 }
 
 // NewCatalog constructs a tool catalog.
@@ -61,6 +68,12 @@ func NewCatalog(cfg CatalogConfig) (*Catalog, error) {
 	if cfg.Extensions == nil {
 		cfg.Extensions = extensions.NewLoader()
 	}
+	var webUtilityClient *provider.GeminiUtilityClient
+	if cfg.WebSearchEnabled || cfg.WebFetchEnabled {
+		// Ignore error; the tools will degrade gracefully or return useful errors.
+		webUtilityClient, _ = provider.NewGeminiUtilityClient(context.Background(), "")
+	}
+
 	return &Catalog{
 		ws:                 cfg.Workspace,
 		mcp:                cfg.MCP,
@@ -71,6 +84,9 @@ func NewCatalog(cfg CatalogConfig) (*Catalog, error) {
 		allowFix:           cfg.AllowFix,
 		symbolsEnabled:     cfg.SymbolsEnabled,
 		symbolsPreferGopls: cfg.SymbolsPreferGopls,
+		webSearchEnabled:   cfg.WebSearchEnabled,
+		webFetchEnabled:    cfg.WebFetchEnabled,
+		webUtilityClient:   webUtilityClient,
 	}, nil
 }
 
@@ -80,6 +96,7 @@ func (c *Catalog) BuildRegistry() *tools.Registry {
 		tools.WithAllowFix(c.allowFix),
 		tools.WithBackgroundManager(c.bgMgr),
 		tools.WithSymbols(c.symbolsEnabled, c.symbolsPreferGopls),
+		tools.WithWebTools(c.webSearchEnabled, c.webFetchEnabled, c.webUtilityClient, false, 0),
 	)
 	reg.Register(tools.NewActivateSkillTool(c.skills))
 	for _, tool := range c.mcp.Tools() {

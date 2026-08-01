@@ -91,6 +91,56 @@ func MaybeSetContextLimit(settings *config.Settings, providerID string, limit in
 	return true, setProviderInstance(settings, canonical, cfg)
 }
 
+// ReasoningCapabilityKnown reports whether a model's reasoning capability has
+// already been cached (by a prior MaybeSetReasoningCapability call), so
+// callers can skip a redundant discovery round-trip.
+func ReasoningCapabilityKnown(settings *config.Settings, providerID, model string) bool {
+	inst := providerInstance(settings, config.NormalizeProviderID(providerID))
+	if inst == nil {
+		return false
+	}
+	mc, ok := config.LookupModelConfig(inst, model)
+	return ok && mc.ReasoningSupported != nil
+}
+
+// MaybeSetReasoningCapability caches a discovered per-model reasoning
+// capability (currently only OpenRouter reports one) unless the user has
+// already pinned an explicit reasoningEffort for this model — pinning is a
+// stronger, explicit signal that should never be overwritten by discovery. A
+// nil info is a no-op (nothing discovered). Mirrors MaybeSetContextLimit.
+func MaybeSetReasoningCapability(settings *config.Settings, providerID, model string, info *ModelReasoningInfo) (bool, error) {
+	if settings == nil {
+		return false, fmt.Errorf("set reasoning capability: settings are required")
+	}
+	if info == nil || model == "" {
+		return false, nil
+	}
+	canonical := config.NormalizeProviderID(providerID)
+	if inst := providerInstance(settings, canonical); inst != nil {
+		if mc, ok := config.LookupModelConfig(inst, model); ok && mc.ReasoningEffort != "" {
+			return false, nil
+		}
+	}
+	cfg, err := ensureProviderInstance(settings, canonical)
+	if err != nil {
+		return false, err
+	}
+	if cfg.Models == nil {
+		cfg.Models = make(map[string]config.ProviderModelConfig)
+	}
+	mc := cfg.Models[model]
+	supported := info.DefaultEnabled
+	mandatory := info.Mandatory
+	if mc.ReasoningSupported != nil && *mc.ReasoningSupported == supported &&
+		mc.ReasoningMandatory != nil && *mc.ReasoningMandatory == mandatory {
+		return false, nil
+	}
+	mc.ReasoningSupported = &supported
+	mc.ReasoningMandatory = &mandatory
+	cfg.Models[model] = mc
+	return true, setProviderInstance(settings, canonical, cfg)
+}
+
 // CurrentSystemPromptPreset returns the preset id that matches the provider's
 // stored personality + promptMode, falling back to the resolved global defaults.
 func CurrentSystemPromptPreset(settings *config.Settings, providerID string) string {

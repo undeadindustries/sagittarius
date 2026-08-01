@@ -279,20 +279,31 @@ func discoverModelInfos(ctx context.Context, settings *config.Settings, id strin
 }
 
 // applyDiscoveredContextLimit best-effort sets a provider's contextLimit to the
-// model's reported window when the user has not pinned it. It does not persist;
-// the caller's Save flushes the mutation. Failures are ignored so a switch never
-// blocks on discovery.
+// model's reported window when the user has not pinned it, and (AD-077) caches
+// the model's discovered reasoning capability (OpenRouter only) so adaptive
+// reasoning defaults apply without a dedicated round-trip. It does not
+// persist; the caller's Save flushes the mutation. Failures are ignored so a
+// switch never blocks on discovery, and the network call is skipped whenever
+// both facts are already known (static context limit + cached reasoning
+// capability) to avoid a redundant request on every model switch.
 func applyDiscoveredContextLimit(ctx context.Context, settings *config.Settings, providerID, model string) {
 	if settings == nil || strings.TrimSpace(model) == "" {
 		return
 	}
 	limit := provider.StaticContextLimit(model)
+	needReasoning := !provider.ReasoningCapabilityKnown(settings, providerID, model)
+	var infos []provider.ModelInfo
+	if limit == 0 || needReasoning {
+		infos, _ = discoverModelInfos(ctx, settings, providerID)
+	}
 	if limit == 0 {
-		infos, _ := discoverModelInfos(ctx, settings, providerID)
 		limit = provider.ContextLimitForModel(infos, model)
 	}
 	if limit > 0 {
 		_, _ = provider.MaybeSetContextLimit(settings, providerID, limit)
+	}
+	if reasoning := provider.ReasoningInfoForModel(infos, model); reasoning != nil {
+		_, _ = provider.MaybeSetReasoningCapability(settings, providerID, model, reasoning)
 	}
 }
 
@@ -598,6 +609,13 @@ func (d *modelsDialogDeps) SetModelSetting(ctx context.Context, providerID, mode
 		return err
 	}
 	return d.rebuildIfActive(ctx, providerID)
+}
+
+func (d *modelsDialogDeps) ReasoningCapabilityHint(providerID, model string) string {
+	if d.settings() == nil {
+		return ""
+	}
+	return config.DescribeReasoningCapability(d.settings(), providerID, model)
 }
 
 func (d *modelsDialogDeps) ClearModelSetting(ctx context.Context, providerID, model, key string) error {

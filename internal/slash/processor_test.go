@@ -36,10 +36,16 @@ type mockHooks struct {
 	// interactionMode backs InteractionMode(); defaults to modes.ModeAgent
 	// (the zero value) so most tests need not set it explicitly.
 	interactionMode modes.Mode
+	// interactionModel overrides InteractionMode()'s model; empty defaults to
+	// "gpt-4o-mini" (the historical mock default).
+	interactionModel string
 	// grillSession backs GrillStatus()/SetGrill()/... for a stateful mock,
 	// so /grill command tests can assert real start/pause/resume/done/clear
 	// transitions rather than fixed stubs.
 	grillSession *grill.Session
+	// reasoningOverride backs ReasoningOverride()/SetReasoningOverride()/
+	// ClearReasoningOverride(), mirroring Runner's ephemeral /reasoning pin.
+	reasoningOverride string
 }
 
 func (m *mockHooks) RebuildRunner(context.Context) (string, string, error) {
@@ -109,6 +115,9 @@ func (m *mockHooks) SetInteractionMode(context.Context, modes.Mode) (string, err
 }
 
 func (m *mockHooks) InteractionMode() (modes.Mode, string) {
+	if m.interactionModel != "" {
+		return m.interactionMode, m.interactionModel
+	}
 	return m.interactionMode, "gpt-4o-mini"
 }
 
@@ -227,6 +236,26 @@ func (m *mockHooks) EndGrill(note string) (string, error) {
 func (m *mockHooks) ClearGrill(note string) error {
 	m.grillSession = nil
 	return nil
+}
+
+func (m *mockHooks) ToolkitReport() string {
+	return "mock toolkit report"
+}
+
+func (m *mockHooks) ToolkitDismiss() error {
+	return nil
+}
+
+func (m *mockHooks) ReasoningOverride() string {
+	return m.reasoningOverride
+}
+
+func (m *mockHooks) SetReasoningOverride(effort string) {
+	m.reasoningOverride = effort
+}
+
+func (m *mockHooks) ClearReasoningOverride() {
+	m.reasoningOverride = ""
 }
 
 func testDeps(t *testing.T, settings *config.Settings) (slash.Deps, *config.Loader, *mockHooks) {
@@ -461,12 +490,13 @@ func TestMemoryReloadStub(t *testing.T) {
 	}
 }
 
-// TestReasoningNotApplicableOnGemini mutates the package-level provider session
-// override global, so it is intentionally NOT parallel: it must not interleave
-// with TestReasoningApplicableOnResponses, which sets and asserts the same global.
-func TestReasoningNotApplicableOnGemini(t *testing.T) {
-	provider.ClearSessionReasoningOverride()
-	t.Cleanup(provider.ClearSessionReasoningOverride)
+// TestReasoningShowOnGeminiUnmatchedModel verifies /reasoning show degrades
+// gracefully (no session override, no pin, no matched family rule) for a
+// Gemini model that isn't a gemini-3/2.5 dynamic-thinking family member — the
+// mock's fixed InteractionMode model ("gpt-4o-mini") never matches the Gemini
+// wire-format rules, exercising the "no known reasoning capability" path.
+func TestReasoningShowOnGeminiUnmatchedModel(t *testing.T) {
+	t.Parallel()
 
 	settings := &config.Settings{
 		Providers: &config.ProvidersSettings{
@@ -483,18 +513,17 @@ func TestReasoningNotApplicableOnGemini(t *testing.T) {
 		t.Fatalf("unexpected error: %v", result.Err)
 	}
 	combined := strings.Join(result.Messages, "\n")
-	if !strings.Contains(combined, "not applicable") && !strings.Contains(combined, "only applies to OpenAI Responses") {
-		t.Fatalf("expected not-applicable message, got: %q", combined)
+	if !strings.Contains(combined, "off") {
+		t.Fatalf("expected an 'off' resolution for an unmatched model, got: %q", combined)
 	}
 }
 
-// TestReasoningApplicableOnResponses mutates the package-level provider session
-// override global, so it is intentionally NOT parallel (see the sibling
-// TestReasoningNotApplicableOnGemini): concurrent ClearSessionReasoningOverride
-// calls would otherwise wipe the override this test sets and asserts.
+// TestReasoningApplicableOnResponses verifies /reasoning show reports a
+// pinned providers.<id>.reasoningEffort and that /reasoning <level> sets the
+// mock's ephemeral override (the real override lives on Runner; see
+// runner_reasoning_test.go for that).
 func TestReasoningApplicableOnResponses(t *testing.T) {
-	provider.ClearSessionReasoningOverride()
-	t.Cleanup(provider.ClearSessionReasoningOverride)
+	t.Parallel()
 
 	settings := &config.Settings{
 		Providers: &config.ProvidersSettings{
@@ -503,7 +532,7 @@ func TestReasoningApplicableOnResponses(t *testing.T) {
 		},
 		Raw: map[string]json.RawMessage{},
 	}
-	deps, _, _ := testDeps(t, settings)
+	deps, _, hooks := testDeps(t, settings)
 	p := slash.NewProcessor()
 
 	show := p.Process(context.Background(), "/reasoning show", deps)
@@ -519,7 +548,36 @@ func TestReasoningApplicableOnResponses(t *testing.T) {
 	if set.Err != nil {
 		t.Fatalf("set error: %v", set.Err)
 	}
-	if provider.SessionReasoningOverride() != "high" {
-		t.Fatalf("override = %q, want high", provider.SessionReasoningOverride())
+	if hooks.reasoningOverride != "high" {
+		t.Fatalf("override = %q, want high", hooks.reasoningOverride)
+	}
+}
+
+// TestReasoningMandatoryRejectsDisable verifies a mandatory family (gpt-5-pro)
+// rejects an attempt to disable reasoning via /reasoning none.
+func TestReasoningMandatoryRejectsDisable(t *testing.T) {
+	t.Parallel()
+
+	settings := &config.Settings{
+		Providers: &config.ProvidersSettings{
+			Active:          string(config.BuiltInOpenAIResponses),
+			OpenAIResponses: &config.ProviderInstanceConfig{Model: "gpt-5-pro"},
+		},
+		Raw: map[string]json.RawMessage{},
+	}
+	deps, _, hooks := testDeps(t, settings)
+	hooks.interactionModel = "gpt-5-pro"
+	p := slash.NewProcessor()
+
+	result := p.Process(context.Background(), "/reasoning none", deps)
+	if result.Err != nil {
+		t.Fatalf("unexpected error: %v", result.Err)
+	}
+	combined := strings.Join(result.Messages, "\n")
+	if !strings.Contains(combined, "mandatory") {
+		t.Fatalf("expected mandatory rejection message, got: %q", combined)
+	}
+	if hooks.reasoningOverride != "" {
+		t.Fatalf("override should not have been set, got: %q", hooks.reasoningOverride)
 	}
 }
