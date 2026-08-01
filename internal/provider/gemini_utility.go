@@ -5,9 +5,10 @@ import (
 	"errors"
 	"fmt"
 
+	"google.golang.org/genai"
+
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/credentials"
-	"google.golang.org/genai"
 )
 
 // ErrGeminiRequired is returned when a Gemini-native web tool is invoked but no

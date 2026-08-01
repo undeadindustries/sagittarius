@@ -75,7 +75,7 @@ func (m Model) renderEntry(e SettingEntry, selected bool) string {
 func (m Model) viewEdit() string {
 	e := m.entries[m.cursor]
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Edit: %s\n\n", e.Label))
+	fmt.Fprintf(&b, "Edit: %s\n\n", e.Label)
 	b.WriteString(m.input.View())
 	b.WriteString("\n\n" + m.th.Dim.Render("Enter save • Esc cancel"))
 	return b.String()

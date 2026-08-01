@@ -24,7 +24,6 @@ func (a *App) MCPDialogDeps() mcpdialog.Deps {
 type mcpDialogDeps struct{ baseDialogDeps }
 
 func (d *mcpDialogDeps) settings() *config.Settings { return d.app.deps.Settings }
-func (d *mcpDialogDeps) loader() *config.Loader     { return d.app.deps.Loader }
 func (d *mcpDialogDeps) docs() *config.Documents    { return d.app.docs }
 
 // serverScope returns the scope that owns the named server: Project if it is

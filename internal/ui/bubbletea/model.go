@@ -1494,7 +1494,7 @@ func (m *model) inputAtLastVisualRow() bool {
 // visual line within multi-line text; at the first row move to line start; when
 // already at the start, pop any queued messages or step back through history.
 func (m *model) handleHistoryUp() (tea.Model, tea.Cmd) {
-	if !(m.inputSingleVisualLine() || m.inputAtFirstVisualRow()) {
+	if !m.inputSingleVisualLine() && !m.inputAtFirstVisualRow() {
 		m.input.CursorUp()
 		m.syncInputLayout()
 		return m, nil
@@ -1517,7 +1517,7 @@ func (m *model) handleHistoryUp() (tea.Model, tea.Cmd) {
 // a visual line within multi-line text; at the last row move to line end; when
 // already at the end, step forward through history (and finally the draft).
 func (m *model) handleHistoryDown() (tea.Model, tea.Cmd) {
-	if !(m.inputSingleVisualLine() || m.inputAtLastVisualRow()) {
+	if !m.inputSingleVisualLine() && !m.inputAtLastVisualRow() {
 		m.input.CursorDown()
 		m.syncInputLayout()
 		return m, nil
@@ -2168,13 +2168,13 @@ func (m *model) syncViewportContent() {
 func (m *model) handleScrollKey(key string) bool {
 	switch key {
 	case "pgup":
-		m.viewport.HalfViewUp()
+		m.viewport.HalfPageUp()
 	case "pgdown":
-		m.viewport.HalfViewDown()
+		m.viewport.HalfPageDown()
 	case "shift+up":
-		m.viewport.LineUp(1)
+		m.viewport.ScrollUp(1)
 	case "shift+down":
-		m.viewport.LineDown(1)
+		m.viewport.ScrollDown(1)
 	default:
 		return false
 	}
@@ -2361,8 +2361,8 @@ func (m *model) renderBlock(blk scrollBlock, width int) []string {
 	indent := strings.Repeat(" ", gw)
 
 	var rendered []string
-	switch {
-	case blk.role == roleResponse:
+	switch blk.role {
+	case roleResponse:
 		rendered = renderMarkdown(blk.text, max(width-gw, 1), m.th)
 	default:
 		for _, line := range strings.Split(wrapText(blk.text, max(width-gw, 1)), "\n") {

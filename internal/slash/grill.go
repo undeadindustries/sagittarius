@@ -34,16 +34,16 @@ func handleGrill(ctx *Context) Result {
 func handleGrillStart(ctx *Context) Result {
 	g := ctx.Deps.Hooks.GrillStatus()
 	if g != nil && g.Status != grill.StatusComplete {
-		return ErrorResult(fmt.Errorf("Grill error: a session on %q is already active; finish (/grill done) or clear it before starting a new one", g.Topic))
+		return ErrorResult(fmt.Errorf("grill error: a session on %q is already active; finish (/grill done) or clear it before starting a new one", g.Topic))
 	}
 
 	mode, _ := ctx.Deps.Hooks.InteractionMode()
 	if mode.String() == "plan" || mode.String() == "ask" {
-		return ErrorResult(fmt.Errorf("Grill error: agent mode is required for grill sessions (current mode is %s)", mode.String()))
+		return ErrorResult(fmt.Errorf("grill error: agent mode is required for grill sessions (current mode is %s)", mode.String()))
 	}
 
 	if ctx.Args == "" {
-		return ErrorResult(fmt.Errorf("Usage: /grill <topic>"))
+		return ErrorResult(fmt.Errorf("usage: /grill <topic>"))
 	}
 
 	if err := ctx.Deps.Hooks.SetGrill(ctx.Args); err != nil {

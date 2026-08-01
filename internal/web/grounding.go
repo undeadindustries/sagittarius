@@ -44,7 +44,7 @@ func FormatSearchResult(query, text string, meta *genai.GroundingMetadata) strin
 				var markerBuilder strings.Builder
 				for _, idx := range support.GroundingChunkIndices {
 					// chunk index is 0-based in metadata, we display as 1-based
-					markerBuilder.WriteString(fmt.Sprintf("[%d]", idx+1))
+					fmt.Fprintf(&markerBuilder, "[%d]", idx+1)
 				}
 				insertions = append(insertions, insertion{
 					index:  int(support.Segment.EndIndex),

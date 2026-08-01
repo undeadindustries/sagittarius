@@ -13,7 +13,7 @@ func (r *Report) RenderPlain() string {
 	b.WriteString("----------------------\n")
 
 	for _, g := range r.Groups {
-		b.WriteString(fmt.Sprintf("%s\n", g.Name))
+		fmt.Fprintf(&b, "%s\n", g.Name)
 		for _, it := range g.Items {
 			icon := "[ ]"
 			if it.Installed {

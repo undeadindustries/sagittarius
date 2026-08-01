@@ -14,7 +14,7 @@ type getGoalTool struct {
 	runner *Runner
 }
 
-func (t *getGoalTool) Name() string { return "get_goal" }
+func (t *getGoalTool) Name() string               { return "get_goal" }
 func (t *getGoalTool) RequiresConfirmation() bool { return false }
 func (t *getGoalTool) Declaration() provider.ToolDeclaration {
 	return provider.ToolDeclaration{
@@ -40,7 +40,7 @@ type updateGoalTool struct {
 	runner *Runner
 }
 
-func (t *updateGoalTool) Name() string { return "update_goal" }
+func (t *updateGoalTool) Name() string               { return "update_goal" }
 func (t *updateGoalTool) RequiresConfirmation() bool { return true }
 func (t *updateGoalTool) Declaration() provider.ToolDeclaration {
 	return provider.ToolDeclaration{

@@ -2,9 +2,10 @@ package tools
 
 import (
 	"fmt"
-	"github.com/creack/pty"
 	"os/exec"
 	"testing"
+
+	"github.com/creack/pty"
 )
 
 func TestPTY(t *testing.T) {
@@ -13,7 +14,7 @@ func TestPTY(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	b := make([]byte, 100)
 	n, _ := f.Read(b)
 	fmt.Printf("%q\n", string(b[:n]))

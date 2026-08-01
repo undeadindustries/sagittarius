@@ -104,7 +104,7 @@ func TestHTMLToText(t *testing.T) {
 
 func TestFetchURL(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("hello world"))
+		_, _ = w.Write([]byte("hello world"))
 	}))
 	defer srv.Close()
 

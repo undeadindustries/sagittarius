@@ -48,14 +48,6 @@ func forkParityEnabled() bool {
 	return os.Getenv("SAGITTARIUS_PARITY_FORK") == "1"
 }
 
-// skipUnlessFork calls t.Skip when live-fork tests are not opted in.
-func skipUnlessFork(t *testing.T) {
-	t.Helper()
-	if !forkParityEnabled() {
-		t.Skip("live-fork parity tests disabled; set SAGITTARIUS_PARITY_FORK=1 to enable")
-	}
-}
-
 // projectRoot returns the root of the sagittarius repo, derived from this
 // file's location.  Tests in tests/parity/ are two directories below root.
 func projectRoot(t *testing.T) string {
@@ -191,26 +183,10 @@ func buildSettings(baseURL string) map[string]interface{} {
 	}
 }
 
-// invokeSagittarius runs the sagittarius binary with the given arguments,
-// isolated HOME (SAGITTARIUS_HOME), and optional extra env vars.  Returns
-// combined stdout output.  Fails the test if the process exits non-zero.
-func invokeSagittarius(ctx context.Context, t *testing.T, bin, home string, extraEnv []string, args ...string) string {
-	t.Helper()
-	cmd := exec.CommandContext(ctx, bin, args...)
-	cmd.Env = append(baseEnv(home), extraEnv...)
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("sagittarius %v: %v\nstdout=%q\nstderr=%q", args, err, stdout.String(), stderr.String())
-	}
-	return stdout.String()
-}
-
-// invokeSagittariusOutput is like invokeSagittarius but does not fail on
-// non-zero exit; it returns stdout, stderr and exit code.
+// invokeSagittariusOutput runs the sagittarius binary with the given
+// arguments, isolated HOME (SAGITTARIUS_HOME), and optional extra env vars.
+// It does not fail the test on non-zero exit; it returns stdout, stderr, and
+// the exit code for the caller to assert on.
 func invokeSagittariusOutput(ctx context.Context, t *testing.T, bin, home string, extraEnv []string, args ...string) (stdout, stderr string, exitCode int) {
 	t.Helper()
 	cmd := exec.CommandContext(ctx, bin, args...)
@@ -237,37 +213,9 @@ func invokeSagittariusOutput(ctx context.Context, t *testing.T, bin, home string
 	return outBuf.String(), errBuf.String(), exitCode
 }
 
-// invokeFork runs the fork via `npm start -- <args>` with the given isolated
-// HOME directory. Strips npm/tsx noise from stdout. Returns cleaned stdout.
-// Skips the test if the fork directory is not accessible.
-func invokeFork(ctx context.Context, t *testing.T, home string, args ...string) string {
-	t.Helper()
-	dir := forkDir()
-	if _, err := os.Stat(dir); err != nil {
-		t.Skipf("fork directory %s not accessible: %v", dir, err)
-	}
-
-	forkInvokeMu.Lock()
-	defer forkInvokeMu.Unlock()
-
-	npmArgs := append([]string{"start", "--"}, args...)
-	cmd := exec.CommandContext(ctx, "npm", npmArgs...)
-	cmd.Dir = dir
-	cmd.Env = append(baseEnv(home), "PATH="+os.Getenv("PATH"))
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		t.Logf("fork stderr: %s", stderr.String())
-		t.Skipf("fork invocation failed (not a blocker): %v", err)
-	}
-	return stripForkNoise(stdout.String())
-}
-
-// invokeForkLoose is like invokeFork but does not skip on non-zero exit;
-// returns cleaned stdout regardless.
+// invokeForkLoose runs the fork via `npm start -- <args>` with the given
+// isolated HOME directory, strips npm/tsx noise from stdout, and does not
+// skip or fail on non-zero exit; it returns cleaned stdout regardless.
 func invokeForkLoose(ctx context.Context, t *testing.T, home string, args ...string) (out string, ok bool) {
 	t.Helper()
 	dir := forkDir()

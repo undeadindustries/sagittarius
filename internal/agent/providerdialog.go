@@ -678,8 +678,6 @@ type modelPickDialogDeps struct {
 	baseDialogDeps
 }
 
-func (d *modelPickDialogDeps) settings() *config.Settings { return d.app.deps.Settings }
-
 func (d *modelPickDialogDeps) AllActiveModels() []modelpickdialog.ModelEntry {
 	s := d.effective()
 	if s == nil {
@@ -884,13 +882,4 @@ func (d *modesDialogDeps) maybeRebuildActiveMode(ctx context.Context, modifiedMo
 		// app's status bar all at once.
 		_, _ = d.app.deps.Hooks.SetInteractionMode(ctx, currentMode)
 	}
-}
-
-func containsStr(ss []string, s string) bool {
-	for _, v := range ss {
-		if v == s {
-			return true
-		}
-	}
-	return false
 }

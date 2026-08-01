@@ -71,13 +71,13 @@ func NewContextManager(
 	}
 
 	return contextmgmt.NewManager(contextmgmt.ManagerConfig{
-		Enabled:                     true,
-		ContextLimit:                cm.ContextLimit,
-		SessionID:                   sessionID,
-		MaskingEnabled:              cm.MaskingEnabled,
-		MaskingProtectionFraction:   cm.MaskingProtectionFraction,
-		MaskingPrunableFraction:     cm.MaskingPrunableFraction,
-		MaskingProtectLatestTurn:    cm.MaskingProtectLatestTurn,
+		Enabled:                   true,
+		ContextLimit:              cm.ContextLimit,
+		SessionID:                 sessionID,
+		MaskingEnabled:            cm.MaskingEnabled,
+		MaskingProtectionFraction: cm.MaskingProtectionFraction,
+		MaskingPrunableFraction:   cm.MaskingPrunableFraction,
+		MaskingProtectLatestTurn:  cm.MaskingProtectLatestTurn,
 		// Write-file content ejection is disabled (AD-068). It rewrote the
 		// content arg of stale write_file calls in history, but models template
 		// off their own prior tool calls and copied whatever we left there into
@@ -89,10 +89,10 @@ func NewContextManager(
 		// (summarizes old turns to text). Do not re-enable without a
 		// mimicry-resistant representation (e.g. converting ejected calls to a
 		// plain text note rather than a write_file call the model imitates).
-		EjectionEnabled:          false,
-		EjectionMinAgeTurns:      ejectionMinAgeTurns,
-		EjectionMinTokensPerCall: ejectionMinTokensPerCall,
-		BudgetEnabled:            true,
+		EjectionEnabled:             false,
+		EjectionMinAgeTurns:         ejectionMinAgeTurns,
+		EjectionMinTokensPerCall:    ejectionMinTokensPerCall,
+		BudgetEnabled:               true,
 		ReservedResponseTokens:      reservedResponseTokens,
 		ProactiveCompressAt:         proactiveCompressAt,
 		AdaptiveEnabled:             true,

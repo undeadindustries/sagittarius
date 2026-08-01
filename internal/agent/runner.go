@@ -1020,17 +1020,6 @@ func (r *Runner) attachInteractionModeGate() {
 	)
 }
 
-func (r *Runner) newToolScheduler(registry *tools.Registry) *tools.Scheduler {
-	return tools.NewScheduler(
-		registry,
-		approvalToPolicy(r.approval),
-		r.interactive,
-		r.InteractionMode,
-		r.workspace,
-		r.schedulerOptions()...,
-	)
-}
-
 // schedulerOptions returns the project-boundary and snapshot options shared by
 // every scheduler the runner builds. A nil snapshot manager is passed as a nil
 // Snapshotter interface (not a typed-nil) so the scheduler's nil check works.

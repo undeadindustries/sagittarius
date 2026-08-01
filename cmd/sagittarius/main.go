@@ -516,7 +516,7 @@ func configureInteractiveLogging(debug bool) {
 	if debug {
 		level = slog.LevelDebug
 	}
-	var w io.Writer = io.Discard
+	w := io.Discard
 	if dir, err := storage.EnsureGlobalHome(); err == nil {
 		logsDir := filepath.Join(dir, "logs")
 		if mkErr := os.MkdirAll(logsDir, 0o700); mkErr == nil {

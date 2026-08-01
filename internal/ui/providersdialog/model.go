@@ -527,16 +527,6 @@ func (m Model) listLen() int {
 	return 0
 }
 
-func (m Model) customProviders() []ProviderEntry {
-	out := make([]ProviderEntry, 0, len(m.providers))
-	for _, p := range m.providers {
-		if p.IsCustom {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
 // ---- selection dispatch --------------------------------------------------
 
 func (m Model) selectCurrent() (Model, tea.Cmd) {
@@ -792,7 +782,7 @@ func (m Model) selectEdit() (Model, tea.Cmd) {
 		return m, nil
 	case editToggleBool:
 		// Toggle enableTools in place against the effective current value.
-		next := "false"
+		var next string
 		if currentBool(m.deps.EffectiveProviderSettings(m.targetID), item.key, true) {
 			next = "false"
 		} else {

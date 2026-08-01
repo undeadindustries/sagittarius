@@ -94,7 +94,7 @@ func TestSpaceTogglesMCPTool(t *testing.T) {
 		}
 		m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	}
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
 	if len(deps.toggles) != 1 {
 		t.Fatalf("expected one toggle, got %d", len(deps.toggles))
 	}
@@ -112,7 +112,7 @@ func TestSpaceOnBuiltinIsNoop(t *testing.T) {
 	if r.kind != rowBuiltin {
 		t.Fatalf("expected first selectable row to be builtin, got %v", r.kind)
 	}
-	m, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeySpace})
 	if len(deps.toggles) != 0 {
 		t.Fatal("space on a built-in tool must not toggle anything")
 	}
@@ -121,7 +121,7 @@ func TestSpaceOnBuiltinIsNoop(t *testing.T) {
 func TestReloadKey(t *testing.T) {
 	deps := newFake()
 	m := New(context.Background(), deps)
-	m, _ = m.Update(keyRunes("r"))
+	_, _ = m.Update(keyRunes("r"))
 	if deps.reloaded != 1 {
 		t.Fatalf("reload count = %d, want 1", deps.reloaded)
 	}

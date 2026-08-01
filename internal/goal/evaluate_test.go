@@ -82,7 +82,7 @@ func (f *fakeGenerator) GenerateContentStream(ctx context.Context, req *provider
 func TestRunModelEvaluator(t *testing.T) {
 	ctx := context.Background()
 	gen := &fakeGenerator{text: `{"done": true, "reason": "looks good"}`}
-	
+
 	dec, err := runModelEvaluator(ctx, "fix stuff", gen, "transcript", "checks")
 	if err != nil {
 		t.Fatal(err)
