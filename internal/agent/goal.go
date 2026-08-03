@@ -36,21 +36,11 @@ func (r *Runner) evaluateGoalTurn(ctx context.Context, out chan<- ui.StreamEvent
 		timeoutSecs = *settings.Sagittarius.Goal.EvaluatorTimeout
 	}
 
-	gen, err := r.generator()
+	gen, err := r.auxGenerator(ctx)
 	if err != nil {
 		slog.Error("goal evaluation: generator error", "err", err)
 		out <- ui.StreamEvent{Type: ui.StreamError, Err: fmt.Errorf("goal: generator: %w", err)}
 		return false
-	}
-	// Use evaluator model if configured
-	if settings != nil && settings.Sagittarius != nil && settings.Sagittarius.Goal != nil {
-		gCfg := settings.Sagittarius.Goal
-		if gCfg.EvaluatorProvider != "" || gCfg.EvaluatorModel != "" {
-			// For v1, we use the primary generator for simplicity unless a new generator
-			// needs to be instantiated. If we need to instantiate one:
-			// TODO: support different generator for evaluator
-			slog.Warn("evaluator model override not fully supported yet, using active generator")
-		}
 	}
 
 	// We need the transcript

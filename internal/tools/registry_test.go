@@ -66,6 +66,32 @@ func TestRegistryListEntriesClassifiesSources(t *testing.T) {
 	}
 }
 
+func TestRegistryEditTool(t *testing.T) {
+	t.Parallel()
+
+	ws, err := NewWorkspace(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewWorkspace() error = %v", err)
+	}
+
+	// Default: edit tool is registered
+	reg1 := NewBuiltinRegistry(ws)
+	if _, ok := reg1.Lookup(EditToolName); !ok {
+		t.Errorf("expected %s to be registered by default", EditToolName)
+	}
+
+	// Opt-out: edit tool is omitted
+	reg2 := NewBuiltinRegistry(ws, WithEdit(false))
+	if _, ok := reg2.Lookup(EditToolName); ok {
+		t.Errorf("expected %s to be omitted when editEnabled=false", EditToolName)
+	}
+
+	// The rest of the tools should still be present
+	if _, ok := reg2.Lookup(ReadFileToolName); !ok {
+		t.Errorf("expected other tools to be registered when editEnabled=false")
+	}
+}
+
 type stubTool struct {
 	name string
 	desc string

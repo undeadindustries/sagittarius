@@ -16,6 +16,7 @@ var readOnlyBuiltinTools = map[string]bool{
 	ProjectChecksToolName:   true,
 	GoogleWebSearchToolName: true,
 	WebFetchToolName:        true,
+	TaskToolName:            true,
 }
 
 // projectChecksFixRequested reports whether a run_project_checks call asks for
@@ -101,7 +102,7 @@ func planModeAllow(name string, args map[string]any, ws *Workspace) (bool, strin
 		return true, ""
 	}
 	switch name {
-	case WriteFileToolName:
+	case WriteFileToolName, EditToolName:
 		if args == nil {
 			return true, ""
 		}

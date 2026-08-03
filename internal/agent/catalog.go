@@ -23,6 +23,8 @@ type Catalog struct {
 	settings           *config.Settings
 	bgMgr              *bgproc.Manager
 	allowFix           bool
+	subagentsEnabled   bool
+	editEnabled        bool
 	symbolsEnabled     bool
 	symbolsPreferGopls bool
 	webSearchEnabled   bool
@@ -43,7 +45,9 @@ type CatalogConfig struct {
 	ClientName string
 	Version    string
 	// AllowFix permits run_project_checks to run mutating formatters (fix=true).
-	AllowFix bool
+	AllowFix         bool
+	SubagentsEnabled bool
+	EditEnabled      bool
 	// SymbolsEnabled toggles registration of the find_symbol tool (default true).
 	SymbolsEnabled bool
 	// SymbolsPreferGopls tweaks find_symbol's description on Go modules.
@@ -95,6 +99,8 @@ func NewCatalog(cfg CatalogConfig) (*Catalog, error) {
 		settings:           cfg.Settings,
 		bgMgr:              cfg.BgMgr,
 		allowFix:           cfg.AllowFix,
+		subagentsEnabled:   cfg.SubagentsEnabled,
+		editEnabled:        cfg.EditEnabled,
 		symbolsEnabled:     cfg.SymbolsEnabled,
 		symbolsPreferGopls: cfg.SymbolsPreferGopls,
 		webSearchEnabled:   cfg.WebSearchEnabled,
@@ -128,6 +134,8 @@ func (c *Catalog) RefreshBuiltinToggles(s *config.Settings) bool {
 // a field cannot silently escape it.
 type builtinToggles struct {
 	allowFix           bool
+	subagentsEnabled   bool
+	editEnabled        bool
 	symbolsEnabled     bool
 	symbolsPreferGopls bool
 	webSearchEnabled   bool
@@ -140,6 +148,8 @@ func (c *Catalog) resolveToggles(s *config.Settings) builtinToggles {
 	directFetch := config.WebDirectFetch(s, nil)
 	return builtinToggles{
 		allowFix:           config.VerifyAllowFix(s, nil),
+		subagentsEnabled:   config.SubagentsEnabled(s, nil),
+		editEnabled:        config.EditEnabled(s, nil),
 		symbolsEnabled:     config.SymbolsEnabled(s, nil),
 		symbolsPreferGopls: config.SymbolsPreferGopls(s, nil),
 		// The auto-default for search is "on when a Gemini key resolved", which
@@ -155,6 +165,8 @@ func (c *Catalog) resolveToggles(s *config.Settings) builtinToggles {
 func (c *Catalog) toggles() builtinToggles {
 	return builtinToggles{
 		allowFix:           c.allowFix,
+		subagentsEnabled:   c.subagentsEnabled,
+		editEnabled:        c.editEnabled,
 		symbolsEnabled:     c.symbolsEnabled,
 		symbolsPreferGopls: c.symbolsPreferGopls,
 		webSearchEnabled:   c.webSearchEnabled,
@@ -166,6 +178,8 @@ func (c *Catalog) toggles() builtinToggles {
 
 func (c *Catalog) applyToggles(t builtinToggles) {
 	c.allowFix = t.allowFix
+	c.subagentsEnabled = t.subagentsEnabled
+	c.editEnabled = t.editEnabled
 	c.symbolsEnabled = t.symbolsEnabled
 	c.symbolsPreferGopls = t.symbolsPreferGopls
 	c.webSearchEnabled = t.webSearchEnabled
@@ -181,6 +195,7 @@ func (c *Catalog) BuildRegistry() *tools.Registry {
 	reg := tools.NewBuiltinRegistry(c.ws,
 		tools.WithAllowFix(c.allowFix),
 		tools.WithBackgroundManager(c.bgMgr),
+		tools.WithEdit(c.editEnabled),
 		tools.WithSymbols(c.symbolsEnabled, c.symbolsPreferGopls),
 		tools.WithWebTools(
 			c.webSearchEnabled,

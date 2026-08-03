@@ -60,6 +60,16 @@ func chatCommand() Command {
 				ArgComplete: tagComplete,
 			},
 			{
+				Name:        "rename",
+				Description: "Set the current session's title shown in session lists",
+				Handler:     handleChatRename,
+			},
+			{
+				Name:        "fork",
+				Description: "Copy the current conversation into a new session and switch to it",
+				Handler:     handleChatFork,
+			},
+			{
 				Name:        "debug",
 				Description: "Write the most recent provider request to a JSON file",
 				Handler:     handleChatDebug,
@@ -206,6 +216,65 @@ func handleChatDelete(ctx *Context) Result {
 		return ErrorResult(err)
 	}
 	return InfoResult(fmt.Sprintf("Deleted checkpoint %q", tag))
+}
+
+// sessionTitleMaxRunes caps a session title so it can never bloat a JSONL
+// metadata line.
+const sessionTitleMaxRunes = 80
+
+// handleChatRename sets the current session's title. The title is sanitized
+// (trimmed, control characters stripped, length-capped) so it can never corrupt
+// a JSONL metadata line.
+func handleChatRename(ctx *Context) Result {
+	if ctx.Deps.Hooks == nil {
+		return InfoResult("Chat commands unavailable.")
+	}
+	title, err := sanitizeSessionTitle(ctx.Args)
+	if err != nil {
+		return ErrorResult(err)
+	}
+	if err := ctx.Deps.Hooks.RenameSession(title); err != nil {
+		return ErrorResult(err)
+	}
+	return InfoResult(fmt.Sprintf("Session renamed to %q", title))
+}
+
+// handleChatFork copies the current conversation into a new session and
+// switches the recorder onto it, reporting the new session id.
+func handleChatFork(ctx *Context) Result {
+	if ctx.Deps.Hooks == nil {
+		return InfoResult("Chat commands unavailable.")
+	}
+	newID, _, err := ctx.Deps.Hooks.ForkSession()
+	if err != nil {
+		return ErrorResult(err)
+	}
+	return InfoResult(fmt.Sprintf("Forked session → new session %s (recording continues there)", newID))
+}
+
+// sanitizeSessionTitle validates and cleans a session title: it must be
+// non-empty after trimming, is capped at sessionTitleMaxRunes, and has newlines
+// and control characters stripped so it can never corrupt a JSONL line.
+func sanitizeSessionTitle(raw string) (string, error) {
+	t := strings.TrimSpace(raw)
+	// Strip newlines and control characters.
+	var b strings.Builder
+	b.Grow(len(t))
+	for _, r := range t {
+		if r == '\n' || r == '\r' || (r < 0x20 && r != ' ') || r == 0x7f {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	t = strings.TrimSpace(b.String())
+	if t == "" {
+		return "", fmt.Errorf("session title cannot be empty: /chat rename <title>")
+	}
+	runes := []rune(t)
+	if len(runes) > sessionTitleMaxRunes {
+		t = string(runes[:sessionTitleMaxRunes])
+	}
+	return t, nil
 }
 
 // handleChatDebug writes the most recent provider request to a JSON file in the

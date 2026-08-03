@@ -41,7 +41,7 @@ func TestForceCompressRefreshesContextTokens(t *testing.T) {
 	runner.SetContextManager(mgr)
 
 	// Stale high gauge from the last API turn (footer stuck at ~100%).
-	runner.metrics.recordTurnUsage("openai", "gpt-4o", "agent", 7500, 100, 0, false)
+	runner.metrics.recordTurnUsage("openai", "gpt-4o", "agent", "main", 7500, 100, 0, false)
 	before := runner.Stats()
 	if before.ContextLimit != 8000 {
 		t.Fatalf("ContextLimit = %d, want 8000", before.ContextLimit)

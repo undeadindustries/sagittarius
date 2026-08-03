@@ -13,6 +13,29 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/session"
 )
 
+func TestRecorderRotateToFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	rec := session.NewRecorder(dir, "old-session", "hash", "main")
+	oldPath := rec.FilePath()
+
+	newID := session.NewSessionID()
+	// Deliberately use a filename with a different minute so we can prove
+	// RotateToFile uses it instead of minting its own.
+	filename := "sagittarius-session-1999-12-31T23-59-" + newID[:8] + ".jsonl"
+
+	rec.RotateToFile(newID, filename)
+
+	newPath := rec.FilePath()
+	if newPath == oldPath {
+		t.Fatalf("expected path to change, stayed %s", oldPath)
+	}
+	if filepath.Base(newPath) != filename {
+		t.Errorf("got filename %q, want %q", filepath.Base(newPath), filename)
+	}
+}
+
 // TestSessionRoundTrip verifies that messages written by Recorder can be read
 // back by LoadSession with matching content.
 func TestSessionRoundTrip(t *testing.T) {
@@ -22,7 +45,7 @@ func TestSessionRoundTrip(t *testing.T) {
 	sessID := "test-session-abc12345"
 	hash := session.ProjectHash(dir)
 
-	rec := session.NewRecorder(dir, sessID, hash)
+	rec := session.NewRecorder(dir, sessID, hash, "main")
 	if rec == nil {
 		t.Fatal("NewRecorder returned nil")
 	}
@@ -126,7 +149,7 @@ func TestResumeLatest(t *testing.T) {
 
 	for i, s := range sessions {
 		hash := session.ProjectHash(dir)
-		rec := session.NewRecorder(dir, s.id, hash)
+		rec := session.NewRecorder(dir, s.id, hash, "main")
 		if rec.FilePath() == "" {
 			t.Fatalf("recorder %d is disabled", i)
 		}
@@ -161,7 +184,7 @@ func TestResumeByIndex(t *testing.T) {
 
 	ids := []string{"sess-idx-0001", "sess-idx-0002", "sess-idx-0003"}
 	for i, id := range ids {
-		rec := session.NewRecorder(dir, id, hash)
+		rec := session.NewRecorder(dir, id, hash, "main")
 		rec.RecordUserMessage(fmt.Sprintf("message %d", i+1))
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -187,7 +210,7 @@ func TestResumeByUUID(t *testing.T) {
 	target := "sess-uuid-target-1234"
 
 	for _, id := range []string{"sess-uuid-other-0001", target, "sess-uuid-other-0002"} {
-		rec := session.NewRecorder(dir, id, hash)
+		rec := session.NewRecorder(dir, id, hash, "main")
 		rec.RecordUserMessage("hello")
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -209,7 +232,7 @@ func TestResumeInvalidIdentifier(t *testing.T) {
 
 	dir := t.TempDir()
 	hash := session.ProjectHash(dir)
-	rec := session.NewRecorder(dir, "some-session", hash)
+	rec := session.NewRecorder(dir, "some-session", hash, "main")
 	rec.RecordUserMessage("hi")
 
 	sel := session.NewSelector(dir, "")
@@ -254,7 +277,7 @@ func TestConvertToProviderHistory(t *testing.T) {
 
 	dir := t.TempDir()
 	hash := session.ProjectHash(dir)
-	rec := session.NewRecorder(dir, "convert-test", hash)
+	rec := session.NewRecorder(dir, "convert-test", hash, "main")
 
 	rec.RecordUserMessage("what is 2+2?")
 	rec.RecordModelMessage("The answer is 4.", nil)
@@ -285,7 +308,7 @@ func TestDeleteSession(t *testing.T) {
 
 	dir := t.TempDir()
 	hash := session.ProjectHash(dir)
-	rec := session.NewRecorder(dir, "delete-test", hash)
+	rec := session.NewRecorder(dir, "delete-test", hash, "main")
 	rec.RecordUserMessage("will be deleted")
 
 	fp := rec.FilePath()
@@ -349,7 +372,7 @@ func TestConvertToProviderHistoryToolRoundTrip(t *testing.T) {
 
 	dir := t.TempDir()
 	hash := session.ProjectHash(dir)
-	rec := session.NewRecorder(dir, "tool-roundtrip", hash)
+	rec := session.NewRecorder(dir, "tool-roundtrip", hash, "main")
 
 	rec.RecordUserMessage("read the file")
 	rec.RecordModelMessage("sure", []provider.ToolCall{{
@@ -475,7 +498,7 @@ func TestRecorderRotateStartsNewFile(t *testing.T) {
 
 	dir := t.TempDir()
 	hash := session.ProjectHash(dir)
-	rec := session.NewRecorder(dir, "rotate-test-abc123", hash)
+	rec := session.NewRecorder(dir, "rotate-test-abc123", hash, "main")
 
 	rec.RecordUserMessage("before clear")
 	firstPath := rec.FilePath()
@@ -520,7 +543,7 @@ func TestListSessionsRespectsRewind(t *testing.T) {
 
 	dir := t.TempDir()
 	hash := session.ProjectHash(dir)
-	rec := session.NewRecorder(dir, "rewind-list-test", hash)
+	rec := session.NewRecorder(dir, "rewind-list-test", hash, "main")
 
 	rec.RecordUserMessage("first prompt")
 	rec.RecordModelMessage("first reply", nil)
@@ -568,7 +591,7 @@ func TestSessionGrantsPersistAndLoad(t *testing.T) {
 
 	dir := t.TempDir()
 	hash := session.ProjectHash(dir)
-	rec := session.NewRecorder(dir, "grants-test", hash)
+	rec := session.NewRecorder(dir, "grants-test", hash, "main")
 
 	if err := rec.RecordSessionGrant("write_file"); err != nil {
 		t.Fatalf("RecordSessionGrant: %v", err)
@@ -596,6 +619,161 @@ func TestSessionGrantsPersistAndLoad(t *testing.T) {
 		if !found {
 			t.Fatalf("SessionGrants %v missing %q", record.SessionGrants, g)
 		}
+	}
+}
+
+// TestListSessionsIsCurrentSession verifies that IsCurrentSession is set from
+// an exact metadata session-id match, not the broken filename substring check.
+// The default id is "sagittarius-<pid>" while the filename carries a random
+// hex key, so a substring match on the first 8 chars ("sagittar") never fires.
+func TestListSessionsIsCurrentSession(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name        string
+		sessionID   string
+		currentID   string
+		wantCurrent bool
+	}{
+		{"pid-style id exact match", "sagittarius-4242", "sagittarius-4242", true},
+		{"pid-style id no match", "sagittarius-4242", "sagittarius-9999", false},
+		{"uuid id exact match", "3f6b9a2c-1111-4111-8111-222233334444", "3f6b9a2c-1111-4111-8111-222233334444", true},
+		{"uuid id no match", "3f6b9a2c-1111-4111-8111-222233334444", "aaaaaaaa-bbbb-4111-8111-ccccddddeeee", false},
+		{"empty current id", "sagittarius-4242", "", false},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			hash := session.ProjectHash(dir)
+			rec := session.NewRecorder(dir, tc.sessionID, hash, "main")
+			rec.RecordUserMessage("hello")
+
+			infos, err := session.ListSessions(dir, tc.currentID)
+			if err != nil {
+				t.Fatalf("ListSessions: %v", err)
+			}
+			if len(infos) != 1 {
+				t.Fatalf("expected 1 session, got %d", len(infos))
+			}
+			if infos[0].IsCurrentSession != tc.wantCurrent {
+				t.Errorf("IsCurrentSession = %v, want %v", infos[0].IsCurrentSession, tc.wantCurrent)
+			}
+		})
+	}
+}
+
+// TestSetSummaryRoundTrip verifies that a SetSummary write persists and is
+// preferred as the display name after a LoadSession + ListSessions cycle.
+func TestSetSummaryRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	hash := session.ProjectHash(dir)
+	rec := session.NewRecorder(dir, "summary-test", hash, "main")
+	rec.RecordUserMessage("an unremarkable first prompt")
+
+	if err := rec.SetSummary("Fix LSP pool race"); err != nil {
+		t.Fatalf("SetSummary: %v", err)
+	}
+
+	record, err := session.LoadSession(rec.FilePath())
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if record.Summary != "Fix LSP pool race" {
+		t.Errorf("Summary = %q, want %q", record.Summary, "Fix LSP pool race")
+	}
+
+	infos, err := session.ListSessions(dir, "")
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(infos) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(infos))
+	}
+	if infos[0].DisplayName != "Fix LSP pool race" {
+		t.Errorf("DisplayName = %q, want summary %q", infos[0].DisplayName, "Fix LSP pool race")
+	}
+}
+
+// TestBranchRoundTrip verifies that a SetBranch write persists through
+// LoadSession and surfaces on the SessionInfo list view. A no-repo session
+// must round-trip with an empty branch and no error.
+func TestBranchRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	hash := session.ProjectHash(dir)
+
+	rec := session.NewRecorder(dir, "branch-test", hash, "main")
+	rec.RecordUserMessage("hello")
+	if err := rec.SetBranch("feature/lsp-pool"); err != nil {
+		t.Fatalf("SetBranch: %v", err)
+	}
+
+	record, err := session.LoadSession(rec.FilePath())
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if record.Branch != "feature/lsp-pool" {
+		t.Errorf("Branch = %q, want %q", record.Branch, "feature/lsp-pool")
+	}
+
+	infos, err := session.ListSessions(dir, "")
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if len(infos) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(infos))
+	}
+	if infos[0].Branch != "feature/lsp-pool" {
+		t.Errorf("SessionInfo.Branch = %q, want %q", infos[0].Branch, "feature/lsp-pool")
+	}
+
+	// A session that never recorded a branch must load with an empty Branch.
+	rec2 := session.NewRecorder(dir, "branch-none", hash, "main")
+	rec2.RecordUserMessage("no branch here")
+	record2, err := session.LoadSession(rec2.FilePath())
+	if err != nil {
+		t.Fatalf("LoadSession (no branch): %v", err)
+	}
+	if record2.Branch != "" {
+		t.Errorf("expected empty Branch, got %q", record2.Branch)
+	}
+}
+
+// TestCleanExitRoundTrip verifies the clean-exit marker persists and that a
+// session without it reads as an unclean exit.
+func TestCleanExitRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	hash := session.ProjectHash(dir)
+
+	clean := session.NewRecorder(dir, "clean-exit", hash, "main")
+	clean.RecordUserMessage("hi")
+	if err := clean.SetCleanExit(); err != nil {
+		t.Fatalf("SetCleanExit: %v", err)
+	}
+	record, err := session.LoadSession(clean.FilePath())
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	if !record.CleanExit {
+		t.Error("expected CleanExit true after SetCleanExit")
+	}
+
+	abandoned := session.NewRecorder(dir, "abandoned", hash, "main")
+	abandoned.RecordUserMessage("still running")
+	record2, err := session.LoadSession(abandoned.FilePath())
+	if err != nil {
+		t.Fatalf("LoadSession (abandoned): %v", err)
+	}
+	if record2.CleanExit {
+		t.Error("expected CleanExit false for a session with no exit marker")
 	}
 }
 

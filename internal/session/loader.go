@@ -48,7 +48,9 @@ func LoadSession(filePath string) (*ConversationRecord, error) {
 		StartTime:     coalesce(meta.StartTime, time.Now().UTC().Format(time.RFC3339)),
 		LastUpdated:   coalesce(meta.LastUpdated, time.Now().UTC().Format(time.RFC3339)),
 		Summary:       meta.Summary,
+		Branch:        meta.Branch,
 		Kind:          meta.Kind,
+		CleanExit:     meta.CleanExit,
 		SessionGrants: meta.SessionGrants,
 		Goal:          meta.Goal,
 		Grill:         meta.Grill,
@@ -265,9 +267,18 @@ func loadSessionInfo(filePath, currentSessionID string) (*sessionLoad, error) {
 	baseName := strings.TrimSuffix(filepath.Base(filePath), filepath.Ext(filePath))
 	fileName := filepath.Base(filePath)
 
+	// Prefer an exact match on the parsed metadata session id. The legacy
+	// filename substring check was unsound: the default id is "sagittarius-<pid>"
+	// while deriveFileKey substitutes a random hex key for non-UUID ids, so the
+	// filename never contains the id and the match always failed. Keep the
+	// filename fallback for files whose metadata predates reliable SessionID.
 	isCurrentSession := false
-	if currentSessionID != "" && len(currentSessionID) >= 8 {
-		isCurrentSession = strings.Contains(fileName, currentSessionID[:8])
+	if currentSessionID != "" {
+		if meta.SessionID == currentSessionID {
+			isCurrentSession = true
+		} else if len(currentSessionID) >= 8 {
+			isCurrentSession = strings.Contains(fileName, currentSessionID[:8])
+		}
 	}
 
 	displayName := cleanMessage(firstUserMsg)
@@ -290,6 +301,8 @@ func loadSessionInfo(filePath, currentSessionID string) (*sessionLoad, error) {
 			LastUpdated:      lastUpdated,
 			MessageCount:     msgCount,
 			DisplayName:      displayName,
+			Branch:           meta.Branch,
+			CleanExit:        meta.CleanExit,
 			FirstUserMessage: cleanMessage(firstUserMsg),
 			IsCurrentSession: isCurrentSession,
 		},
@@ -321,6 +334,12 @@ func applyMetaUpdate(dst, src *MetadataRecord) {
 	}
 	if src.Summary != "" {
 		dst.Summary = src.Summary
+	}
+	if src.Branch != "" {
+		dst.Branch = src.Branch
+	}
+	if src.CleanExit {
+		dst.CleanExit = true
 	}
 	if src.Kind != "" {
 		dst.Kind = src.Kind

@@ -52,3 +52,26 @@ and are not yet user-configurable.
 
 Compression and summarization always use the **active provider model**; there is
 no separate summarizer/compressor model setting.
+
+## Sagittarius settings (`sagittarius.*`)
+
+These live under the top-level `sagittarius` key. Leaf names are typed and
+validated; unknown keys pass through untouched.
+
+### Sessions (`sagittarius.sessions.*`)
+
+| Key | Type | Default | Purpose |
+|-----|------|---------|---------|
+| `autoTitle` | string | `prompt` | Automatic session titling after your first full exchange. `prompt` applies the proposed title and shows a one-time `Named "…" — Ctrl+E rename` hint on the status row (Ctrl+E opens a rename editor, Enter on an empty input dismisses, everything else stays passive). `auto` applies the title silently. `off` disables titling entirely and leaves the first-message fallback. `/chat rename` always overrides manually. |
+
+### Example
+
+```json
+{
+  "sagittarius": {
+    "sessions": {
+      "autoTitle": "auto"
+    }
+  }
+}
+```

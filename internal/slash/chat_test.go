@@ -118,3 +118,81 @@ func TestChatShareMarkdown(t *testing.T) {
 		t.Fatalf("share file missing header:\n%s", data)
 	}
 }
+
+func TestChatRename(t *testing.T) {
+	t.Parallel()
+	deps, _, hooks := testDeps(t, nil)
+	p := slash.NewProcessor()
+
+	res := p.Process(context.Background(), "/chat rename Fix LSP pool race", deps)
+	if res.Err != nil {
+		t.Fatalf("unexpected error: %v", res.Err)
+	}
+	if hooks.renamedTitle != "Fix LSP pool race" {
+		t.Fatalf("renamed title = %q, want %q", hooks.renamedTitle, "Fix LSP pool race")
+	}
+}
+
+func TestChatRenameSanitizes(t *testing.T) {
+	t.Parallel()
+	deps, _, hooks := testDeps(t, nil)
+	p := slash.NewProcessor()
+
+	// Newlines, carriage returns and control chars are stripped; title survives.
+	raw := "fix the\nLSP pool\r\nrace\tnow\x01"
+	res := p.Process(context.Background(), "/chat rename "+raw, deps)
+	if res.Err != nil {
+		t.Fatalf("unexpected error: %v", res.Err)
+	}
+	got := hooks.renamedTitle
+	if strings.ContainsAny(got, "\n\r\x01") {
+		t.Fatalf("control characters survived sanitize: %q", got)
+	}
+	if !strings.Contains(got, "LSP pool") {
+		t.Fatalf("content lost during sanitize: %q", got)
+	}
+}
+
+func TestChatRenameEmptyRejected(t *testing.T) {
+	t.Parallel()
+	deps, _, _ := testDeps(t, nil)
+	p := slash.NewProcessor()
+
+	res := p.Process(context.Background(), "/chat rename   ", deps)
+	if res.Err == nil {
+		t.Fatal("expected error for empty title")
+	}
+	if !strings.Contains(res.Err.Error(), "cannot be empty") {
+		t.Fatalf("unexpected error: %v", res.Err)
+	}
+}
+
+func TestChatRenameTruncatesLongTitle(t *testing.T) {
+	t.Parallel()
+	deps, _, hooks := testDeps(t, nil)
+	p := slash.NewProcessor()
+
+	long := strings.Repeat("word ", 40) // 200 runes
+	res := p.Process(context.Background(), "/chat rename "+long, deps)
+	if res.Err != nil {
+		t.Fatalf("unexpected error: %v", res.Err)
+	}
+	if n := len([]rune(hooks.renamedTitle)); n > 80 {
+		t.Fatalf("title not capped at 80 runes: %d", n)
+	}
+}
+
+func TestChatFork(t *testing.T) {
+	t.Parallel()
+	deps, _, _ := testDeps(t, nil)
+	p := slash.NewProcessor()
+
+	res := p.Process(context.Background(), "/chat fork", deps)
+	if res.Err != nil {
+		t.Fatalf("unexpected error: %v", res.Err)
+	}
+	joined := strings.Join(res.Messages, "\n")
+	if !strings.Contains(joined, "forked-session-id") {
+		t.Fatalf("fork output missing new session id: %q", joined)
+	}
+}

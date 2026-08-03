@@ -18,7 +18,7 @@ func buildProgrammerPrompt(opts Options) string {
 func programmerLite(opts Options) string {
 	sections := []string{
 		renderIdentity(opts.Identity, programmerProfile.roleNoun, programmerProfile.helpClause),
-		liteToolUsage(opts.SymbolsEnabled),
+		liteToolUsage(opts.SymbolsEnabled, opts.EditEnabled),
 		liteWorkflow(),
 		liteEditRules(),
 		liteShellSafety(opts.Interactive),
@@ -52,7 +52,7 @@ func programmerFull(opts Options) string {
 	sections := []string{
 		fullPreamble(opts),
 		fullCoreMandates(),
-		fullPrimaryWorkflow(opts.Interactive, opts.SymbolsEnabled),
+		fullPrimaryWorkflow(opts.Interactive, opts.SymbolsEnabled, opts.EditEnabled),
 		fullOperationalGuidelines(),
 	}
 	if opts.IsGitRepo {
@@ -102,7 +102,7 @@ func fullCoreMandates() string {
 	)
 }
 
-func fullPrimaryWorkflow(interactive, symbolsEnabled bool) string {
+func fullPrimaryWorkflow(interactive, symbolsEnabled, editEnabled bool) string {
 	clarify := "Work autonomously; only clarify if the request is critically underspecified."
 	if !interactive {
 		clarify = "Work autonomously, as no further user input is available."
@@ -112,6 +112,13 @@ func fullPrimaryWorkflow(interactive, symbolsEnabled bool) string {
 		research += " When you know a symbol name and want its definition or call sites, use `" + tools.FindSymbolToolName + "` for precise, syntax-aware navigation instead of text search."
 	}
 	research += " Prefer parallel, scoped searches over reading many files individually. " + clarify
+	var exec string
+	if editEnabled {
+		exec = "   - **Act:** Apply targeted, surgical changes with `" + tools.EditToolName + "` for partial changes and `" + tools.WriteFileToolName + "` for full rewrites. Include necessary automated tests; a change is incomplete without verification logic. Avoid unrelated refactoring."
+	} else {
+		exec = "   - **Act:** Apply targeted, surgical changes with `" + tools.WriteFileToolName + "` and `" + tools.ShellToolName + "` in the same turn — do not describe a planned write or shell command without invoking it. Include necessary automated tests; a change is incomplete without verification logic. Avoid unrelated refactoring."
+	}
+
 	return join(
 		"# Primary Workflow",
 		"",
@@ -121,7 +128,7 @@ func fullPrimaryWorkflow(interactive, symbolsEnabled bool) string {
 		"2. **Strategy:** Form a concrete implementation and testing approach grounded in the conventions you observed.",
 		"3. **Execution:** For each sub-task:",
 		"   - **Plan:** Define the implementation approach and the testing strategy to verify it.",
-		"   - **Act:** Apply targeted, surgical changes with `"+tools.WriteFileToolName+"` and `"+tools.ShellToolName+"` in the same turn — do not describe a planned write or shell command without invoking it. Include necessary automated tests; a change is incomplete without verification logic. Avoid unrelated refactoring.",
+		exec,
 		"   - **Validate:** Run the project's build, lint, format check, type-check, and tests to confirm the change and catch regressions. Use `"+tools.ProjectChecksToolName+"` to auto-detect and run the stack's checks, or `"+tools.ShellToolName+"` for project-specific scripts. Prefer the project's own tooling (scripts in `Makefile`/`package.json`, config like `.golangci.yml`/`eslint`/`ruff`) over generic commands. If a needed checker is not installed, tell the user the exact install command instead of skipping verification.",
 		"",
 		"**Validation is the only path to finality.** Never assume success or settle for unverified changes. A task is complete only when behavioral correctness is verified and structural integrity is confirmed in the full project context.",

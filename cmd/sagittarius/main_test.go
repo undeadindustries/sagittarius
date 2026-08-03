@@ -217,7 +217,7 @@ func TestBuildRunnerResumeUsesResumedSessionID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ChatsDir: %v", err)
 	}
-	rec := session.NewRecorder(chatsDir, resumedID, session.ProjectHash(project))
+	rec := session.NewRecorder(chatsDir, resumedID, session.ProjectHash(project), "main")
 	rec.RecordUserMessage("hello from prior session")
 
 	runner, _, runtime, sessID, _, err := buildRunner(context.Background(), runnerOptions{

@@ -74,6 +74,7 @@ type RegistryOption func(*registryConfig)
 type registryConfig struct {
 	allowFix           bool
 	bgMgr              *bgproc.Manager
+	editEnabled        bool
 	symbolsEnabled     bool
 	symbolsPreferGopls bool
 	webSearchEnabled   bool
@@ -92,6 +93,14 @@ func WithBackgroundManager(mgr *bgproc.Manager) RegistryOption {
 // (fix=true). When false (the default), fix requests are rejected.
 func WithAllowFix(allow bool) RegistryOption {
 	return func(c *registryConfig) { c.allowFix = allow }
+}
+
+// WithEdit controls the edit tool. enabled toggles its registration (it is
+// registered by default).
+func WithEdit(enabled bool) RegistryOption {
+	return func(c *registryConfig) {
+		c.editEnabled = enabled
+	}
 }
 
 // WithSymbols controls the find_symbol tool. enabled toggles its registration
@@ -119,7 +128,7 @@ func WithWebTools(searchEnabled, fetchEnabled bool, client *provider.GeminiUtili
 // NewBuiltinRegistry registers all core built-in tools for a workspace.
 func NewBuiltinRegistry(ws *Workspace, opts ...RegistryOption) *Registry {
 	// find_symbol is on by default; a caller must opt out via WithSymbols(false, …).
-	cfg := registryConfig{symbolsEnabled: true, symbolsPreferGopls: true}
+	cfg := registryConfig{editEnabled: true, symbolsEnabled: true, symbolsPreferGopls: true}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
@@ -136,6 +145,9 @@ func NewBuiltinRegistry(ws *Workspace, opts ...RegistryOption) *Registry {
 		newProjectChecksTool(ws, cfg.allowFix),
 	} {
 		r.Register(tool)
+	}
+	if cfg.editEnabled {
+		r.Register(newEditTool(ws))
 	}
 	if cfg.symbolsEnabled {
 		r.Register(newFindSymbolTool(ws, cfg.symbolsPreferGopls))

@@ -143,6 +143,59 @@ func TestViewNeverExceedsTerminalWidth(t *testing.T) {
 	}
 }
 
+// TestTitleAnnouncementLatchAndDismiss verifies the prompt-mode auto-title is
+// latched from the app, persists across renders (peek, never consumed), and is
+// hidden once dismissed.
+func TestTitleAnnouncementLatchAndDismiss(t *testing.T) {
+	t.Parallel()
+	opts := ui.Options{ThemeName: "greyscale"}
+	app := statusApp{cs: ui.ComposerStatus{
+		ApprovalMode:          "default",
+		TitleAnnouncementText: `Named "Fix LSP pool race" — Ctrl+E rename`,
+	}}
+	m := newModel(opts, app, NewTerminal(ui.Options{}))
+	m.width = 120
+
+	row := stripANSI(m.renderStatusRow())
+	if !strings.Contains(row, `Named "Fix LSP pool race"`) {
+		t.Fatalf("announcement not rendered\n%s", row)
+	}
+	// Second render must still show it (latched, not consumed on first read).
+	row2 := stripANSI(m.renderStatusRow())
+	if !strings.Contains(row2, `Named "Fix LSP pool race"`) {
+		t.Fatalf("announcement not persisted across renders\n%s", row2)
+	}
+	// Dismiss: hidden from then on.
+	m.titleDismissed = true
+	row3 := stripANSI(m.renderStatusRow())
+	if strings.Contains(row3, "Named") {
+		t.Fatalf("announcement still shown after dismiss\n%s", row3)
+	}
+}
+
+// TestTitleAnnouncementDismissedOnSubmit verifies submitting a real message
+// clears the announcement so it does not linger as a stale status line.
+func TestTitleAnnouncementDismissedOnSubmit(t *testing.T) {
+	t.Parallel()
+	opts := ui.Options{ThemeName: "greyscale"}
+	app := statusApp{cs: ui.ComposerStatus{
+		TitleAnnouncementText: `Named "X" — Ctrl+E rename`,
+	}}
+	m := newModel(opts, app, NewTerminal(ui.Options{}))
+	m.width = 120
+	m.input.SetValue("next question")
+
+	_ = stripANSI(m.renderStatusRow()) // latch
+	if m.titleAnnouncement == "" {
+		t.Fatal("announcement not latched before submit")
+	}
+	m2, _ := m.handleEnter()
+	mm := m2.(*model)
+	if !mm.titleDismissed {
+		t.Fatal("submitting a message did not dismiss the announcement")
+	}
+}
+
 func TestScrollShortcutHintsForGOOS(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

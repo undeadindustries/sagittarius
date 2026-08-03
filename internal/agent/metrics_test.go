@@ -8,8 +8,8 @@ func TestSessionMetricsRecordTurnUsage(t *testing.T) {
 	t.Parallel()
 
 	m := newSessionMetrics()
-	m.recordTurnUsage("openai", "gpt-4o", "agent", 100, 40, 0, false)
-	m.recordTurnUsage("openai", "gpt-4o", "agent", 200, 80, 0, false)
+	m.recordTurnUsage("openai", "gpt-4o", "agent", "main", 100, 40, 0, false)
+	m.recordTurnUsage("openai", "gpt-4o", "agent", "main", 200, 80, 0, false)
 
 	turns, _, _, inTok, outTok, _, costUSD, costKnown, _, lastIn, lastOut, lastCost, lastCostKnown := m.snapshot()
 	if turns != 0 { // recordTurnUsage does not increment turns; recordTurn does
@@ -46,8 +46,8 @@ func TestSessionMetricsOpenRouterCost(t *testing.T) {
 	t.Parallel()
 
 	m := newSessionMetrics()
-	m.recordTurnUsage("openrouter", "mistral/7b", "plan", 50, 20, 0.0010, true)
-	m.recordTurnUsage("openrouter", "mistral/7b", "plan", 60, 25, 0.0012, true)
+	m.recordTurnUsage("openrouter", "mistral/7b", "plan", "main", 50, 20, 0.0010, true)
+	m.recordTurnUsage("openrouter", "mistral/7b", "plan", "main", 60, 25, 0.0012, true)
 
 	_, _, _, _, _, _, costUSD, costKnown, _, lastIn, _, lastCost, lastCostKnown := m.snapshot()
 	if !costKnown {
@@ -72,7 +72,7 @@ func TestSessionMetricsSetContextTokens(t *testing.T) {
 	t.Parallel()
 
 	m := newSessionMetrics()
-	m.recordTurnUsage("openai", "gpt-4o", "agent", 9000, 40, 0, false)
+	m.recordTurnUsage("openai", "gpt-4o", "agent", "main", 9000, 40, 0, false)
 	m.setContextTokens(1200)
 
 	_, _, _, _, _, ctxTok, _, _, _, lastIn, _, _, _ := m.snapshot()
@@ -88,9 +88,9 @@ func TestSessionMetricsAuxDoesNotUpdateLastTurn(t *testing.T) {
 	t.Parallel()
 
 	m := newSessionMetrics()
-	m.recordTurnUsage("openai", "gpt-4o", "agent", 100, 40, 0, false)
+	m.recordTurnUsage("openai", "gpt-4o", "agent", "main", 100, 40, 0, false)
 	// Compression should not overwrite last-turn snapshot.
-	m.recordAuxUsage("openai", "gpt-4o-mini", "agent", 50, 15, 0, false)
+	m.recordAuxUsage("openai", "gpt-4o-mini", "agent", "main", 50, 15, 0, false)
 
 	_, _, _, inTok, outTok, _, _, _, _, lastIn, lastOut, _, _ := m.snapshot()
 	if inTok != 150 {
@@ -112,9 +112,9 @@ func TestSessionMetricsPerKeyBreakdown(t *testing.T) {
 	t.Parallel()
 
 	m := newSessionMetrics()
-	m.recordTurnUsage("openai", "gpt-4o", "agent", 100, 40, 0, false)
-	m.recordTurnUsage("openrouter", "claude-3.5", "plan", 60, 20, 0.0015, true)
-	m.recordAuxUsage("openai", "gpt-4o-mini", "agent", 30, 10, 0, false)
+	m.recordTurnUsage("openai", "gpt-4o", "agent", "main", 100, 40, 0, false)
+	m.recordTurnUsage("openrouter", "claude-3.5", "plan", "main", 60, 20, 0.0015, true)
+	m.recordAuxUsage("openai", "gpt-4o-mini", "agent", "main", 30, 10, 0, false)
 
 	stats := m.usageSnapshot()
 	if len(stats) != 3 {

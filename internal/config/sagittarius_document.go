@@ -17,10 +17,12 @@ var reservedSagittariusKeys = map[string]struct{}{
 	"snapshots":     {},
 	"verify":        {},
 	"web":           {},
+	"edit":          {},
 	"symbols":       {},
 	"update":        {},
 	"goal":          {},
 	"grill":         {},
+	"sessions":      {},
 	"maxToolRounds": {},
 }
 
@@ -238,6 +240,14 @@ func unmarshalSubagents(raw json.RawMessage) (*SagittariusSubagents, error) {
 			s.Default = cfg
 			continue
 		}
+		if key == "enabled" {
+			var b bool
+			if err := json.Unmarshal(val, &b); err != nil {
+				return nil, fmt.Errorf("decode sagittarius.subagents.enabled: %w", err)
+			}
+			s.Enabled = &b
+			continue
+		}
 		if _, reserved := reservedSagittariusSubagentKeys[key]; reserved {
 			continue
 		}
@@ -261,6 +271,13 @@ func marshalSubagents(s *SagittariusSubagents) (json.RawMessage, error) {
 		return nil, nil
 	}
 	obj := make(map[string]json.RawMessage)
+	if s.Enabled != nil {
+		b, err := json.Marshal(*s.Enabled)
+		if err != nil {
+			return nil, err
+		}
+		obj["enabled"] = b
+	}
 	if s.Default.Model != "" || len(s.Default.Extra) > 0 {
 		b, err := marshalSubagentConfig(s.Default)
 		if err != nil {
@@ -629,6 +646,25 @@ func marshalWebConfig(cfg *SagittariusWebConfig) (json.RawMessage, error) {
 	return json.Marshal(obj)
 }
 
+func unmarshalEditConfig(raw json.RawMessage) (*SagittariusEditConfig, error) {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, err
+	}
+	cfg := &SagittariusEditConfig{Extra: make(map[string]json.RawMessage)}
+	for key, val := range obj {
+		switch key {
+		case "enabled":
+			if err := json.Unmarshal(val, &cfg.Enabled); err != nil {
+				return nil, err
+			}
+		default:
+			cfg.Extra[key] = val
+		}
+	}
+	return cfg, nil
+}
+
 func unmarshalSymbolsConfig(raw json.RawMessage) (*SagittariusSymbolsConfig, error) {
 	if len(raw) == 0 {
 		return nil, nil
@@ -656,6 +692,26 @@ func unmarshalSymbolsConfig(raw json.RawMessage) (*SagittariusSymbolsConfig, err
 		cfg.Extra = nil
 	}
 	return cfg, nil
+}
+
+func marshalEditConfig(cfg *SagittariusEditConfig) ([]byte, error) {
+	if cfg == nil {
+		return nil, nil
+	}
+	obj := make(map[string]any)
+	add := func(k string, v any) {
+		if !isEmptyValue(v) {
+			obj[k] = v
+		}
+	}
+	add("enabled", cfg.Enabled)
+	for k, v := range cfg.Extra {
+		obj[k] = v
+	}
+	if len(obj) == 0 {
+		return nil, nil
+	}
+	return json.Marshal(obj)
 }
 
 func marshalSymbolsConfig(cfg *SagittariusSymbolsConfig) (json.RawMessage, error) {
@@ -760,6 +816,12 @@ func unmarshalSagittarius(raw json.RawMessage) (*SagittariusSettings, error) {
 				return nil, fmt.Errorf("decode sagittarius.web: %w", err)
 			}
 			s.Web = w
+		case "edit":
+			ed, err := unmarshalEditConfig(val)
+			if err != nil {
+				return nil, fmt.Errorf("decode sagittarius.edit: %w", err)
+			}
+			s.Edit = ed
 		case "symbols":
 			sym, err := unmarshalSymbolsConfig(val)
 			if err != nil {
@@ -784,6 +846,12 @@ func unmarshalSagittarius(raw json.RawMessage) (*SagittariusSettings, error) {
 				return nil, err
 			}
 			s.Update = u
+		case "sessions":
+			sc, err := unmarshalSessionsConfig(val)
+			if err != nil {
+				return nil, err
+			}
+			s.Sessions = sc
 		case "maxToolRounds":
 			var n int
 			if err := json.Unmarshal(val, &n); err != nil {
@@ -837,6 +905,12 @@ func marshalSagittarius(s *SagittariusSettings) (json.RawMessage, error) {
 			return nil, err
 		}
 		obj["modes"] = b
+	}
+	if s.Edit != nil {
+		b, err := marshalEditConfig(s.Edit)
+		if err == nil {
+			obj["edit"] = b
+		}
 	}
 	if s.Subagents != nil {
 		b, err := marshalSubagents(s.Subagents)
@@ -914,6 +988,13 @@ func marshalSagittarius(s *SagittariusSettings) (json.RawMessage, error) {
 			return nil, err
 		}
 		obj["update"] = b
+	}
+	if s.Sessions != nil {
+		b, err := marshalSessionsConfig(s.Sessions)
+		if err != nil {
+			return nil, err
+		}
+		obj["sessions"] = b
 	}
 	if err := add("maxToolRounds", s.MaxToolRounds); err != nil {
 		return nil, err
@@ -1131,6 +1212,52 @@ func marshalUpdateConfig(c *SagittariusUpdateConfig) (json.RawMessage, error) {
 			return nil, err
 		}
 		obj["autoCheck"] = b
+	}
+	for key, val := range c.Extra {
+		obj[key] = val
+	}
+	if len(obj) == 0 {
+		return json.RawMessage("{}"), nil
+	}
+	return json.Marshal(obj)
+}
+
+func unmarshalSessionsConfig(data []byte) (*SagittariusSessionsConfig, error) {
+	var c SagittariusSessionsConfig
+	c.Extra = make(map[string]json.RawMessage)
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("decode sagittarius.sessions: %w", err)
+	}
+	for key, val := range raw {
+		switch key {
+		case "autoTitle":
+			var s string
+			if err := json.Unmarshal(val, &s); err != nil {
+				return nil, fmt.Errorf("decode sagittarius.sessions.autoTitle: %w", err)
+			}
+			c.AutoTitle = &s
+		default:
+			c.Extra[key] = val
+		}
+	}
+	if len(c.Extra) == 0 {
+		c.Extra = nil
+	}
+	return &c, nil
+}
+
+func marshalSessionsConfig(c *SagittariusSessionsConfig) (json.RawMessage, error) {
+	if c == nil {
+		return nil, nil
+	}
+	obj := make(map[string]json.RawMessage)
+	if c.AutoTitle != nil {
+		b, err := json.Marshal(*c.AutoTitle)
+		if err != nil {
+			return nil, err
+		}
+		obj["autoTitle"] = b
 	}
 	for key, val := range c.Extra {
 		obj[key] = val

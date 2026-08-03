@@ -73,6 +73,12 @@ type Hooks interface {
 	// plus the restored conversation for scrollback repaint.
 	ResumeCheckpoint(ctx context.Context, tag string) (summary string, history []provider.Message, err error)
 	DeleteCheckpoint(tag string) error
+	// RenameSession sets the current session's title (its Summary metadata).
+	// The title is sanitized before this hook is called.
+	RenameSession(title string) error
+	// ForkSession writes the current conversation to a new session and switches
+	// the recorder onto it, returning the new session id and file path.
+	ForkSession() (newSessionID, path string, err error)
 	// ForceCompressHistory manually compresses the conversation context into a
 	// summary and returns a human-readable result message.
 	ForceCompressHistory(ctx context.Context) (string, error)
