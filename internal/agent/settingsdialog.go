@@ -164,6 +164,57 @@ func (d *settingsDialogDeps) ListSettings(scope config.SettingScope) []settingsd
 		verifyRepoLocalMerged = notSet
 		verifyEditLoopMerged = notSet
 	}
+	// --- Subagents ---
+	var subEnabled, subEnabledMerged string
+	var subDefined bool
+	if scopeSettings.Sagittarius != nil && scopeSettings.Sagittarius.Subagents != nil {
+		s := scopeSettings.Sagittarius.Subagents
+		subEnabled = boolVal(s.Enabled)
+		subDefined = true
+	} else {
+		subEnabled = notSet
+	}
+	if merged.Sagittarius != nil && merged.Sagittarius.Subagents != nil {
+		s := merged.Sagittarius.Subagents
+		subEnabledMerged = boolVal(s.Enabled)
+	} else {
+		subEnabledMerged = notSet
+	}
+
+	// --- Sessions ---
+	var sessAutoTitle, sessAutoTitleMerged string
+	var sessDefined bool
+	if scopeSettings.Sagittarius != nil && scopeSettings.Sagittarius.Sessions != nil {
+		s := scopeSettings.Sagittarius.Sessions
+		sessAutoTitle = strVal(s.AutoTitle)
+		sessDefined = true
+	} else {
+		sessAutoTitle = notSet
+	}
+	if merged.Sagittarius != nil && merged.Sagittarius.Sessions != nil {
+		s := merged.Sagittarius.Sessions
+		sessAutoTitleMerged = strVal(s.AutoTitle)
+	} else {
+		sessAutoTitleMerged = notSet
+	}
+
+	// --- Edit ---
+	var editEnabled, editEnabledMerged string
+	var editDefined bool
+	if scopeSettings.Sagittarius != nil && scopeSettings.Sagittarius.Edit != nil {
+		s := scopeSettings.Sagittarius.Edit
+		editEnabled = boolVal(s.Enabled)
+		editDefined = true
+	} else {
+		editEnabled = notSet
+	}
+	if merged.Sagittarius != nil && merged.Sagittarius.Edit != nil {
+		s := merged.Sagittarius.Edit
+		editEnabledMerged = boolVal(s.Enabled)
+	} else {
+		editEnabledMerged = notSet
+	}
+
 	// --- Symbols ---
 	var symEnabled, symEnabledMerged string
 	var symGopls, symGoplsMerged string
@@ -336,6 +387,37 @@ func (d *settingsDialogDeps) ListSettings(scope config.SettingScope) []settingsd
 			Kind:        settingsdialog.KindInt,
 		},
 
+		{Label: "Subagents", Kind: settingsdialog.KindHeader},
+		{
+			Key:         "sagittarius.subagents.enabled",
+			Label:       "Research subagents (task)",
+			Description: "Enable the task tool for launching read-only context-isolated research subagents (default off)",
+			Value:       subEnabled,
+			DefinedHere: subDefined,
+			MergedValue: subEnabledMerged,
+			Kind:        settingsdialog.KindBool,
+		},
+		{Label: "Sessions", Kind: settingsdialog.KindHeader},
+		{
+			Key:         "sagittarius.sessions.autoTitle",
+			Label:       "Auto-title sessions",
+			Description: "Title the conversation after the first exchange: prompt (confirm), auto (silent), or off",
+			Value:       sessAutoTitle,
+			DefinedHere: sessDefined,
+			MergedValue: sessAutoTitleMerged,
+			Kind:        settingsdialog.KindEnum,
+			Choices:     []string{"prompt", "auto", "off"},
+		},
+		{Label: "Edit Tool", Kind: settingsdialog.KindHeader},
+		{
+			Key:         "sagittarius.edit.enabled",
+			Label:       "Edit file (edit)",
+			Description: "Register the edit tool (default on; off to fall back to full write_file only)",
+			Value:       editEnabled,
+			DefinedHere: editDefined,
+			MergedValue: editEnabledMerged,
+			Kind:        settingsdialog.KindBool,
+		},
 		{Label: "Symbols", Kind: settingsdialog.KindHeader},
 		{
 			Key:         "sagittarius.symbols.enabled",
@@ -539,6 +621,17 @@ func applySettingValue(s *config.Settings, key, value string) error {
 			s.Sagittarius.Verify = &config.SagittariusVerifyConfig{}
 		}
 		s.Sagittarius.Verify.RepoLocalTools = &value
+	case "sagittarius.sessions.autoTitle":
+		if value != "prompt" && value != "auto" && value != "off" {
+			return fmt.Errorf("autoTitle must be 'prompt', 'auto', or 'off'")
+		}
+		if s.Sagittarius == nil {
+			s.Sagittarius = &config.SagittariusSettings{}
+		}
+		if s.Sagittarius.Sessions == nil {
+			s.Sagittarius.Sessions = &config.SagittariusSessionsConfig{}
+		}
+		s.Sagittarius.Sessions.AutoTitle = &value
 	case "sagittarius.verify.editLoopThreshold":
 		n, err := strconv.Atoi(value)
 		if err != nil {
@@ -551,6 +644,30 @@ func applySettingValue(s *config.Settings, key, value string) error {
 			s.Sagittarius.Verify = &config.SagittariusVerifyConfig{}
 		}
 		s.Sagittarius.Verify.EditLoopThreshold = &n
+	case "sagittarius.subagents.enabled":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("enabled must be true/false: %w", err)
+		}
+		if s.Sagittarius == nil {
+			s.Sagittarius = &config.SagittariusSettings{}
+		}
+		if s.Sagittarius.Subagents == nil {
+			s.Sagittarius.Subagents = &config.SagittariusSubagents{}
+		}
+		s.Sagittarius.Subagents.Enabled = &b
+	case "sagittarius.edit.enabled":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("enabled must be true/false: %w", err)
+		}
+		if s.Sagittarius == nil {
+			s.Sagittarius = &config.SagittariusSettings{}
+		}
+		if s.Sagittarius.Edit == nil {
+			s.Sagittarius.Edit = &config.SagittariusEditConfig{}
+		}
+		s.Sagittarius.Edit.Enabled = &b
 	case "sagittarius.symbols.enabled":
 		b, err := strconv.ParseBool(value)
 		if err != nil {
@@ -657,6 +774,18 @@ func clearSettingValue(s *config.Settings, key string) error {
 	case "sagittarius.verify.repoLocalTools":
 		if s.Sagittarius != nil && s.Sagittarius.Verify != nil {
 			s.Sagittarius.Verify.RepoLocalTools = nil
+		}
+	case "sagittarius.subagents.enabled":
+		if s.Sagittarius != nil && s.Sagittarius.Subagents != nil {
+			s.Sagittarius.Subagents.Enabled = nil
+		}
+	case "sagittarius.edit.enabled":
+		if s.Sagittarius != nil && s.Sagittarius.Edit != nil {
+			s.Sagittarius.Edit.Enabled = nil
+		}
+	case "sagittarius.sessions.autoTitle":
+		if s.Sagittarius != nil && s.Sagittarius.Sessions != nil {
+			s.Sagittarius.Sessions.AutoTitle = nil
 		}
 	case "sagittarius.verify.editLoopThreshold":
 		if s.Sagittarius != nil && s.Sagittarius.Verify != nil {

@@ -16,7 +16,7 @@ func TestGrillSnapshotPersistsAndLoads(t *testing.T) {
 
 	dir := t.TempDir()
 	hash := session.ProjectHash(dir)
-	rec := session.NewRecorder(dir, "grill-persist-test", hash)
+	rec := session.NewRecorder(dir, "grill-persist-test", hash, "main")
 
 	rec.RecordUserMessage("/grill widget pricing")
 
@@ -67,7 +67,7 @@ func TestGrillSnapshotUpdatesOverwritePriorState(t *testing.T) {
 
 	dir := t.TempDir()
 	hash := session.ProjectHash(dir)
-	rec := session.NewRecorder(dir, "grill-overwrite-test", hash)
+	rec := session.NewRecorder(dir, "grill-overwrite-test", hash, "main")
 
 	active := &grill.Session{Topic: "onboarding", Status: grill.StatusActive, StartedAt: time.Now()}
 	if err := rec.SetGrill(active.ToSnapshot()); err != nil {
@@ -97,7 +97,7 @@ func TestGrillSnapshotAbsentByDefault(t *testing.T) {
 
 	dir := t.TempDir()
 	hash := session.ProjectHash(dir)
-	rec := session.NewRecorder(dir, "no-grill-test", hash)
+	rec := session.NewRecorder(dir, "no-grill-test", hash, "main")
 	rec.RecordUserMessage("hello")
 
 	record, err := session.LoadSession(rec.FilePath())

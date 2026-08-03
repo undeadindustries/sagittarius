@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 
+	"golang.org/x/sync/errgroup"
+
 	"github.com/undeadindustries/sagittarius/internal/diff"
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
@@ -113,17 +115,62 @@ func (s *Scheduler) Execute(
 	calls []provider.ToolCall,
 	emit func(ui.StreamEvent),
 ) ([]provider.FunctionResponse, error) {
-	responses := make([]provider.FunctionResponse, 0, len(calls))
-	for _, call := range calls {
-		resp, err := s.executeOne(ctx, call, emit)
-		if err != nil {
-			return responses, err
-		}
-		if resp != nil {
-			responses = append(responses, *resp)
+	responses := make([]provider.FunctionResponse, len(calls))
+
+	var eg errgroup.Group
+	eg.SetLimit(8) // Max concurrent tasks
+
+	for i, call := range calls {
+		i, call := i, call
+		c := canonicalToolName(call.Name)
+		if c == TaskToolName {
+			eg.Go(func() error {
+				resp, err := s.executeOne(ctx, call, emit)
+				if err != nil {
+					return err
+				}
+				if resp != nil {
+					responses[i] = *resp
+				}
+				return nil
+			})
 		}
 	}
-	return responses, nil
+
+	if err := eg.Wait(); err != nil {
+		// If tasks fail, return the partial array up to the failure?
+		// Better to just return the error. The original stopped at the first error.
+		return responses, err
+	}
+
+	for i, call := range calls {
+		c := canonicalToolName(call.Name)
+		if c != TaskToolName {
+			resp, err := s.executeOne(ctx, call, emit)
+			if err != nil {
+				// To preserve the partial result pattern, we could truncate 'responses'
+				// but since we allocate len(calls) upfront, returning it as is with empty responses at the end might break AD-052 logic if it expects exact lengths or if the caller expects no empty responses.
+				// Wait, the original code aborted and returned the slice so far.
+				// Let's filter out empty responses before returning.
+				return filterValidResponses(responses), err
+			}
+			if resp != nil {
+				responses[i] = *resp
+			}
+		}
+	}
+
+	return filterValidResponses(responses), nil
+}
+
+func filterValidResponses(in []provider.FunctionResponse) []provider.FunctionResponse {
+	var out []provider.FunctionResponse
+	for _, r := range in {
+		if r.Name != "" {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func (s *Scheduler) executeOne(
@@ -183,11 +230,11 @@ func (s *Scheduler) executeOne(
 		}
 	}
 
-	// Compute the write_file diff (before -> after) before the tool mutates the
+	// Compute the mutation diff (before -> after) before the tool mutates the
 	// file so the result line can show exactly what changed.
 	writeDiff := ""
-	if canonicalToolName(name) == WriteFileToolName {
-		writeDiff = s.writeFileDiff(args)
+	if IsFileMutatingTool(name) {
+		writeDiff = s.mutationDiff(name, args)
 	}
 
 	// Snapshot the prior state of a write target before the tool mutates it.
@@ -248,7 +295,7 @@ func (s *Scheduler) snapshotTarget(name string, args map[string]any) string {
 	if s.snapshotter == nil || s.workspace == nil {
 		return ""
 	}
-	if canonicalToolName(name) != WriteFileToolName {
+	if !IsFileMutatingTool(name) {
 		return ""
 	}
 	path, err := stringArg(args, ParamFilePath)
@@ -284,7 +331,7 @@ func (s *Scheduler) requestApproval(
 		ToolName:     toolName,
 		ToolCallID:   callID,
 		Text:         formatConfirmSummary(toolName, args),
-		Diff:         s.writeFileDiff(args),
+		Diff:         s.mutationDiff(toolName, args),
 		ConfirmReply: replyCh,
 	})
 
@@ -343,7 +390,7 @@ func (s *Scheduler) grantSession(toolName string) {
 // change (current on-disk content vs. the new content). It returns "" for
 // non-write_file calls, when the workspace is unavailable, or when the change
 // is a no-op.
-func (s *Scheduler) writeFileDiff(args map[string]any) string {
+func (s *Scheduler) mutationDiff(name string, args map[string]any) string {
 	if s.workspace == nil {
 		return ""
 	}
@@ -351,10 +398,7 @@ func (s *Scheduler) writeFileDiff(args map[string]any) string {
 	if err != nil {
 		return ""
 	}
-	content, err := stringArg(args, WriteFileParamContent)
-	if err != nil {
-		return ""
-	}
+
 	abs, err := s.workspace.ResolvePath(path)
 	if err != nil {
 		return ""
@@ -363,7 +407,40 @@ func (s *Scheduler) writeFileDiff(args map[string]any) string {
 	if b, readErr := os.ReadFile(abs); readErr == nil {
 		before = string(b)
 	}
-	return diff.UnifiedDiff(before, content, filepath.Base(path))
+
+	var after string
+	c := canonicalToolName(name)
+	switch c {
+	case WriteFileToolName:
+		content, err := stringArg(args, WriteFileParamContent)
+		if err != nil {
+			return ""
+		}
+		after = content
+	case EditToolName:
+		oldStr, _ := args[EditParamOldString].(string)
+		newStr, _ := args[EditParamNewString].(string)
+		replaceAll, _ := args[EditParamReplaceAll].(bool)
+
+		hasCRLF := strings.Contains(before, "\r\n")
+		oldStr = normalizeLineEndings(oldStr, hasCRLF)
+		newStr = normalizeLineEndings(newStr, hasCRLF)
+
+		match, matchedOld, matchErr := findMatch(before, oldStr, replaceAll)
+		if matchErr != nil || !match {
+			// If match fails, return empty diff so we don't preview a broken edit
+			return ""
+		}
+		if replaceAll {
+			after = strings.ReplaceAll(before, matchedOld, newStr)
+		} else {
+			after = strings.Replace(before, matchedOld, newStr, 1)
+		}
+	default:
+		return ""
+	}
+
+	return diff.UnifiedDiff(before, after, filepath.Base(path))
 }
 
 func errorResponse(call provider.ToolCall, message string) *provider.FunctionResponse {

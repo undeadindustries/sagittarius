@@ -119,6 +119,24 @@ and resets to off on the next launch.
 - **Usage:** `/theme` (show), `/theme default`, `/theme greyscale`. `Alt+T`
   cycles between the two live.
 
+### `/chat`
+
+- **Description:** Manage conversation checkpoints, title the session, fork it,
+  export the chat, and debug the last request.
+- **Usage:**
+  - `/chat list`: List saved checkpoints and recent sessions.
+  - `/chat save <tag> [force]`: Save the current conversation as a named checkpoint (`force` overwrites).
+  - `/chat resume <tag>` (alias `/chat load`): Restore a checkpoint into the live session.
+  - `/chat delete <tag>`: Delete a saved checkpoint.
+  - `/chat rename <title>`: Set the current session's title (shown in session lists). Titles are trimmed, capped at 80 characters, and have control characters stripped.
+  - `/chat fork`: Copy the current conversation into a **new** session and switch recording to it. The forked session inherits the title with a `" (fork)"` suffix and the recorded git branch. End-of-conversation only; fork-from-a-message is not yet supported.
+  - `/chat share [file.md|file.json]`: Export the conversation to Markdown or JSON.
+  - `/chat debug`: Write the most recent provider request to a JSON file.
+- **Session titles:** After your first full exchange Sagittarius proposes a short
+  title automatically (see `sagittarius.sessions.autoTitle`: `prompt` asks with a
+  one-key rename hint, `auto` applies silently, `off` disables it). `/chat rename`
+  always overrides the title manually.
+
 ### `/toolkit`
 
 - **Description:** Re-run the host toolkit checklist to see missing tools and install hints.
@@ -238,7 +256,8 @@ and resets to off on the next launch.
     the built-in default takes over.
 - **Categories:** General (`sagittarius.maxToolRounds`), UI (`ui.theme`,
   `ui.showThinking`, `ui.hideBanner`), Security (`security.projectBoundary.enforce`),
-  Snapshots (`sagittarius.snapshots.*`), Verify (`sagittarius.verify.*`),
+  Snapshots (`sagittarius.snapshots.*`), Verify (`sagittarius.edit.enabled`
+`sagittarius.verify.*`),
   Symbols (`sagittarius.symbols.*`).
 - **Persistence:** Changes are saved immediately to the target scope file and take
   effect in the current session. Provider API keys and definitions are always global

@@ -99,6 +99,8 @@ type Options struct {
 	SandboxEnabled bool
 	// SymbolsEnabled reports whether the find_symbol tool is registered, so the
 	// prompt can steer the model toward it for symbol lookups.
+	// EditEnabled reports whether the edit tool is registered.
+	EditEnabled    bool
 	SymbolsEnabled bool
 }
 
@@ -137,11 +139,18 @@ func renderIdentity(id Identity, roleNoun, helpClause string) string {
 
 // Shared condensed sections used by programmer lite and stub personalities.
 
-func liteToolUsage(symbolsEnabled bool) string {
+func liteToolUsage(symbolsEnabled, editEnabled bool) string {
 	search := "**Search before reading.** Use `" + tools.GrepToolName + "` to find specific strings or patterns and `" + tools.ListDirectoryToolName + "` to explore directories. Do not read entire files unless necessary — target specific line ranges with `" + tools.ReadFileToolName + "`."
 	if symbolsEnabled {
 		search += " When you know a symbol name (function, type, class) and want its definition or call sites, prefer `" + tools.FindSymbolToolName + "` over `" + tools.GrepToolName + "`."
 	}
+	var write string
+	if editEnabled {
+		write = "**Always read before modifying.** If you are changing an existing file, prefer `edit` over `write_file` because it is faster and safer against truncation. Use `write_file` only to create new files or when intentionally rewriting the whole file. Read first to get the exact string."
+	} else {
+		write = "**Always read before modifying.** You cannot use patch/diff operations. Use `write_file` with the ENTIRE file contents."
+	}
+
 	return join(
 		"## Tool Usage",
 		"",
@@ -149,7 +158,7 @@ func liteToolUsage(symbolsEnabled bool) string {
 		"",
 		search,
 		"",
-		"**Always read before modifying.** Never change a file you have not read first. Use `"+tools.WriteFileToolName+"` to create new files or write updated contents.",
+		write,
 		"",
 		"**No Placeholders:** NEVER use placeholders or elision (like `// ... existing code ...`) in file writes. Tools overwrite files entirely, so you must always provide the COMPLETE file content.",
 		"",

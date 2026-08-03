@@ -55,3 +55,27 @@ func TestWelcomeGreyscaleHasNoColor(t *testing.T) {
 		t.Errorf("greyscale welcome emitted color codes:\n%q", out)
 	}
 }
+
+func TestWelcomeContextualHintsHiddenWhenUnset(t *testing.T) {
+	out := welcomeText(ui.Options{Version: "1.0"}, theme.Greyscale())
+	if strings.Contains(out, "Resume a previous conversation") {
+		t.Errorf("resume hint must be hidden when nothing is resumable:\n%s", out)
+	}
+	if strings.Contains(out, "/chat rename") {
+		t.Errorf("rename nudge must be hidden for a fresh session:\n%s", out)
+	}
+}
+
+func TestWelcomeContextualHintsShownWhenSet(t *testing.T) {
+	out := welcomeText(ui.Options{
+		Version:     "1.0",
+		ResumeHint:  "--resume latest",
+		RenameNudge: true,
+	}, theme.Greyscale())
+	if !strings.Contains(out, "Resume a previous conversation: --resume latest") {
+		t.Errorf("resume hint missing when resumable:\n%s", out)
+	}
+	if !strings.Contains(out, "/chat rename") {
+		t.Errorf("rename nudge missing when session is untitled:\n%s", out)
+	}
+}

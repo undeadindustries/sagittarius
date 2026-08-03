@@ -88,6 +88,8 @@ type SagittariusSettings struct {
 	Verify *SagittariusVerifyConfig `json:"verify,omitempty"`
 	// Web configures the built-in google_web_search and web_fetch tools.
 	Web *SagittariusWebConfig `json:"web,omitempty"`
+	// Edit configures the built-in edit tool.
+	Edit *SagittariusEditConfig `json:"edit,omitempty"`
 	// Symbols configures the built-in find_symbol code-navigation tool.
 	Symbols *SagittariusSymbolsConfig `json:"symbols,omitempty"`
 	// Update configures the self-update feature.
@@ -96,6 +98,8 @@ type SagittariusSettings struct {
 	Goal *SagittariusGoalConfig `json:"goal,omitempty"`
 	// Grill configures the /grill interrogation mode parameters.
 	Grill *SagittariusGrillConfig `json:"grill,omitempty"`
+	// Sessions configures conversation metadata (auto-titling).
+	Sessions *SagittariusSessionsConfig `json:"sessions,omitempty"`
 	// MaxToolRounds caps how many tool-call/response cycles the agent may
 	// execute per turn. Nil means use the compiled-in default (100).
 	// Set higher for tasks that write many files; set lower to cap runaway loops.
@@ -120,6 +124,12 @@ type SagittariusWebConfig struct {
 	RetryFetchErrors *bool                      `json:"retryFetchErrors,omitempty"`
 	MaxFetchBytes    *int                       `json:"maxFetchBytes,omitempty"`
 	Extra            map[string]json.RawMessage `json:"-"`
+}
+
+// SagittariusEditConfig configures the built-in edit tool.
+type SagittariusEditConfig struct {
+	Enabled *bool                      `json:"enabled,omitempty"`
+	Extra   map[string]json.RawMessage `json:"-"`
 }
 
 // SagittariusSymbolsConfig configures the built-in find_symbol tool. Pointers
@@ -199,6 +209,29 @@ const (
 	RepoLocalToolsDeny   RepoLocalToolsPolicy = "deny"
 )
 
+// AutoTitlePolicy defines how session auto-titling behaves after the first
+// exchange. It follows the same string-policy convention as RepoLocalTools.
+type AutoTitlePolicy string
+
+const (
+	// AutoTitlePrompt proposes a title and applies it, announcing it as a
+	// non-blocking composer line the user can confirm, rename, or ignore.
+	AutoTitlePrompt AutoTitlePolicy = "prompt"
+	// AutoTitleAuto applies the title silently with no announcement.
+	AutoTitleAuto AutoTitlePolicy = "auto"
+	// AutoTitleOff skips the title model call entirely, leaving the
+	// first-message display fallback.
+	AutoTitleOff AutoTitlePolicy = "off"
+)
+
+// SagittariusSessionsConfig configures conversation session metadata.
+type SagittariusSessionsConfig struct {
+	// AutoTitle controls session titling after the first exchange:
+	// "prompt" (default), "auto", or "off".
+	AutoTitle *string                    `json:"autoTitle,omitempty"`
+	Extra     map[string]json.RawMessage `json:"-"`
+}
+
 func parseRepoLocalToolsPolicy(s string) RepoLocalToolsPolicy {
 	switch RepoLocalToolsPolicy(s) {
 	case RepoLocalToolsAllow:
@@ -208,6 +241,41 @@ func parseRepoLocalToolsPolicy(s string) RepoLocalToolsPolicy {
 	default:
 		return RepoLocalToolsPrompt
 	}
+}
+
+// parseAutoTitlePolicy normalizes a raw autoTitle string into a known policy,
+// defaulting to AutoTitlePrompt for empty or unrecognized values.
+func parseAutoTitlePolicy(s string) AutoTitlePolicy {
+	switch AutoTitlePolicy(s) {
+	case AutoTitleAuto:
+		return AutoTitleAuto
+	case AutoTitleOff:
+		return AutoTitleOff
+	default:
+		return AutoTitlePrompt
+	}
+}
+
+// SessionsAutoTitle reports the auto-titling policy. Project wins over global;
+// the default is AutoTitlePrompt.
+func SessionsAutoTitle(global, project *Settings) AutoTitlePolicy {
+	if v, ok := sessionsStringValue(project, func(c *SagittariusSessionsConfig) *string { return c.AutoTitle }); ok {
+		return parseAutoTitlePolicy(v)
+	}
+	if v, ok := sessionsStringValue(global, func(c *SagittariusSessionsConfig) *string { return c.AutoTitle }); ok {
+		return parseAutoTitlePolicy(v)
+	}
+	return AutoTitlePrompt
+}
+
+func sessionsStringValue(s *Settings, pick func(*SagittariusSessionsConfig) *string) (string, bool) {
+	if s == nil || s.Sagittarius == nil || s.Sagittarius.Sessions == nil {
+		return "", false
+	}
+	if v := pick(s.Sagittarius.Sessions); v != nil {
+		return *v, true
+	}
+	return "", false
 }
 
 // SagittariusSystemPromptConfig is the global default for the system-prompt
@@ -249,6 +317,7 @@ type SagittariusModeConfig struct {
 
 // SagittariusSubagents holds subagent model routing defaults.
 type SagittariusSubagents struct {
+	Enabled *bool                                `json:"enabled,omitempty"`
 	Default SagittariusSubagentConfig            `json:"default,omitempty"`
 	Named   map[string]SagittariusSubagentConfig `json:"-"`
 	Extra   map[string]json.RawMessage           `json:"-"`

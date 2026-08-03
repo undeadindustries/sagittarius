@@ -31,7 +31,7 @@ func NewManager(projectRoot, sessionID string) (*Manager, error) {
 	}
 
 	hash := ProjectHash(projectRoot)
-	rec := NewRecorder(chatsDir, sessionID, hash)
+	rec := NewRecorder(chatsDir, sessionID, hash, "main")
 
 	return &Manager{
 		chatsDir:  chatsDir,
@@ -56,6 +56,11 @@ func NewManagerForResume(projectRoot, sessionID string, result *SelectionResult)
 		filePath:    result.SessionPath,
 		sessionID:   result.Record.SessionID,
 		projectHash: result.Record.ProjectHash,
+	}
+	// Seed the in-memory title so auto-titling does not overwrite a title that
+	// already exists on disk.
+	if result.Record != nil && result.Record.Summary != "" {
+		rec.SeedSummary(result.Record.Summary)
 	}
 
 	return &Manager{

@@ -12,6 +12,8 @@ const (
 	ProjectChecksToolName   = "run_project_checks"
 	GoogleWebSearchToolName = "google_web_search"
 	WebFetchToolName        = "web_fetch"
+	EditToolName            = "edit"
+	TaskToolName            = "task"
 	// AskUserToolName is the grill-mode structured question tool (registered by
 	// internal/agent, not NewBuiltinRegistry, but its name must be known here so
 	// the scheduler's read-only gate can special-case it).
@@ -29,6 +31,13 @@ const (
 	ReadFileParamStartLine = "start_line"
 	ReadFileParamEndLine   = "end_line"
 	WriteFileParamContent  = "content"
+
+	EditParamOldString  = "old_string"
+	EditParamNewString  = "new_string"
+	EditParamReplaceAll = "replace_all"
+
+	TaskParamDescription = "description"
+	TaskParamPrompt      = "prompt"
 
 	GrepParamIncludePattern    = "include_pattern"
 	GrepParamExcludePattern    = "exclude_pattern"
@@ -61,4 +70,12 @@ var legacyAliases = map[string]string{
 	"grep":                GrepToolName,
 	"shell":               ShellToolName,
 	"run_shell":           ShellToolName,
+}
+
+// IsFileMutatingTool reports whether name mutates a single file whose path is
+// in the file_path argument, so snapshotting, diffing, and post-write
+// diagnostics apply.
+func IsFileMutatingTool(name string) bool {
+	c := canonicalToolName(name)
+	return c == WriteFileToolName || c == EditToolName
 }

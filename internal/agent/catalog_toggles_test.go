@@ -8,6 +8,9 @@ import (
 )
 
 func newToggleCatalog(t *testing.T, cfg CatalogConfig) *Catalog {
+	// Tests explicitly set what they care about, but default edit to true
+	// because it defaults to true in settings.
+	cfg.EditEnabled = true
 	t.Helper()
 	ws, err := tools.NewWorkspace(t.TempDir())
 	if err != nil {
@@ -55,13 +58,43 @@ func TestRefreshBuiltinTogglesAppliesSymbolsChange(t *testing.T) {
 	}
 }
 
+func settingsWithEditEnabled(enabled bool) *config.Settings {
+	return &config.Settings{
+		Sagittarius: &config.SagittariusSettings{
+			Edit: &config.SagittariusEditConfig{Enabled: &enabled},
+		},
+	}
+}
+
+func TestRefreshBuiltinTogglesEditTool(t *testing.T) {
+	cat := newToggleCatalog(t, CatalogConfig{EditEnabled: true})
+
+	if _, ok := cat.BuildRegistry().Lookup(tools.EditToolName); !ok {
+		t.Fatalf("%s should be registered at startup", tools.EditToolName)
+	}
+
+	if changed := cat.RefreshBuiltinToggles(settingsWithEditEnabled(false)); !changed {
+		t.Fatal("disabling edit should report a change")
+	}
+	if _, ok := cat.BuildRegistry().Lookup(tools.EditToolName); ok {
+		t.Errorf("%s should be gone after the toggle is disabled", tools.EditToolName)
+	}
+
+	if changed := cat.RefreshBuiltinToggles(settingsWithEditEnabled(true)); !changed {
+		t.Fatal("re-enabling edit should report a change")
+	}
+	if _, ok := cat.BuildRegistry().Lookup(tools.EditToolName); !ok {
+		t.Errorf("%s should return after the toggle is re-enabled", tools.EditToolName)
+	}
+}
+
 // TestRefreshBuiltinTogglesNoopWhenUnchanged keeps mode switches and model picks
 // free of registry churn: RebuildRunner only reinstalls a registry on a change.
 // Every toggle is set explicitly so the result cannot depend on ambient
 // credentials or on a default changing underneath the test.
 func TestRefreshBuiltinTogglesNoopWhenUnchanged(t *testing.T) {
 	off, on := false, true
-	cat := newToggleCatalog(t, CatalogConfig{SymbolsEnabled: true, SymbolsPreferGopls: true})
+	cat := newToggleCatalog(t, CatalogConfig{SymbolsEnabled: true, SymbolsPreferGopls: true, EditEnabled: true, SubagentsEnabled: false})
 
 	same := &config.Settings{
 		Sagittarius: &config.SagittariusSettings{

@@ -221,6 +221,12 @@ func (a *App) ComposerStatus() ui.ComposerStatus {
 			cs.GrillActive = g.Status != grill.StatusComplete
 			cs.GrillStatusText = fmt.Sprintf("Grill %d — %s", g.QuestionCount, g.Status)
 		}
+		// Surface the pending auto-title announcement (prompt mode). Peek — the
+		// TUI latches it locally and owns the shown-once lifecycle; the composer
+		// never blocks.
+		if title := a.runner.TitleAnnouncement(); title != "" {
+			cs.TitleAnnouncementText = fmt.Sprintf("Named %q — Ctrl+E rename", title)
+		}
 	}
 	if a.runtime != nil && a.runtime.Catalog != nil {
 		cs.SkillCount = len(a.runtime.Catalog.SkillManager().Skills())
@@ -1371,6 +1377,23 @@ func (h *appHooks) DeleteCheckpoint(tag string) error {
 	return nil
 }
 
+// RenameSession sets the current session's title in its JSONL metadata.
+func (h *appHooks) RenameSession(title string) error {
+	if h.app == nil || h.app.runner == nil {
+		return fmt.Errorf("runner not available")
+	}
+	return h.app.runner.RenameSession(title)
+}
+
+// ForkSession copies the current conversation into a new session and switches
+// the recorder onto it.
+func (h *appHooks) ForkSession() (string, string, error) {
+	if h.app == nil || h.app.runner == nil {
+		return "", "", fmt.Errorf("runner not available")
+	}
+	return h.app.runner.ForkSession()
+}
+
 func (h *appHooks) SetInteractionMode(ctx context.Context, mode modes.Mode) (string, error) {
 	if h.app == nil || h.app.runner == nil {
 		return "", fmt.Errorf("runner not available")
@@ -1835,6 +1858,13 @@ func (r *Runner) SetRegistry(registry *tools.Registry) {
 	if registry == nil {
 		return
 	}
+
+	registerGoalTools(r, registry)
+	registerGrillTools(r, registry)
+	if config.SubagentsEnabled(r.settingsSnapshot(), nil) {
+		registry.Register(newTaskTool(r))
+	}
+
 	r.regMu.Lock()
 	r.mergeSchedulerGrantsLocked()
 	scheduler := tools.NewScheduler(

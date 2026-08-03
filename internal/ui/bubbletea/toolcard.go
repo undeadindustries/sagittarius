@@ -86,6 +86,8 @@ func toolDisplayName(name string) string {
 		return "Shell"
 	case wireWriteFile:
 		return "Write file"
+	case "edit":
+		return "Edit file"
 	case wireReadFile:
 		return "Read file"
 	case wireListDir:
@@ -329,5 +331,68 @@ func (m *model) wrapStyled(text string, width int, style lipgloss.Style) []strin
 	for _, line := range strings.Split(wrapText(text, max(width, 1)), "\n") {
 		out = append(out, style.Render(line))
 	}
+	return out
+}
+
+// renderTaskGroup draws the collapsed subagent cards inside one frame.
+func (m *model) renderTaskGroup(tg *taskGroupBlock, width int) []string {
+	if width < 8 {
+		width = 8
+	}
+
+	border := lipgloss.NewStyle().Foreground(m.th.BorderColor)
+	inner := width - 4
+	if inner < 1 {
+		inner = 1
+	}
+
+	out := []string{border.Render("╭" + strings.Repeat("─", width-2) + "╮")}
+	for i, c := range tg.tasks {
+		clean := *c
+		clean.body = sanitizeDisplayText(clean.body)
+		clean.summary = sanitizeDisplayText(clean.summary)
+
+		var glyph string
+		switch clean.phase {
+		case toolRunning:
+			glyph = " " // spinner handled in view if we want, or just generic here
+		case toolSuccess:
+			glyph = m.th.Success.Render("✓")
+		case toolError:
+			glyph = m.th.Error.Render("✗")
+		default:
+			glyph = "?"
+		}
+
+		title := clean.summary
+		if title == "" {
+			title = "Task"
+		}
+
+		prefix := " "
+		if i == tg.selectedIdx {
+			prefix = ">"
+		}
+
+		line1 := prefix + " " + glyph + " " + title
+		out = append(out, border.Render("│")+" "+padOrTruncate(line1, inner)+" "+border.Render("│"))
+
+		if i != tg.selectedIdx {
+			activity := clean.body
+			if activity != "" {
+				line2 := "     " + m.th.Dim.Render(activity)
+				out = append(out, border.Render("│")+" "+padOrTruncate(line2, inner)+" "+border.Render("│"))
+			}
+		} else {
+			for _, line := range m.toolCardBody(&clean, inner-4) {
+				out = append(out, border.Render("│")+"     "+padOrTruncate(line, inner-4)+" "+border.Render("│"))
+			}
+		}
+
+		if i < len(tg.tasks)-1 {
+			out = append(out, border.Render("│")+" "+strings.Repeat(" ", inner)+" "+border.Render("│"))
+		}
+	}
+	out = append(out, border.Render("╰"+strings.Repeat("─", width-2)+"╯"))
 	return out
 }

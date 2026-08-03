@@ -10,6 +10,7 @@ require (
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/charmbracelet/x/vt v0.0.0-20260622092256-25656177ba8e
 	github.com/creack/pty v1.1.24
+	github.com/google/uuid v1.6.0
 	github.com/mattn/go-runewidth v0.0.24
 	github.com/modelcontextprotocol/go-sdk v1.6.1
 	github.com/muesli/termenv v0.16.0

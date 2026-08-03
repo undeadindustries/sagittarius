@@ -47,6 +47,15 @@ type Options struct {
 	// instruction; shown on the welcome banner so the user knows what context
 	// was loaded. Empty omits the line.
 	LoadedMemoryFiles []string
+	// ResumeHint, when non-empty, is the resume command a user can run (e.g.
+	// "--resume latest"); it renders a "something is resumable" hint line on the
+	// welcome screen. Empty omits the line (nothing resumable), keeping startup
+	// hints contextual rather than constant.
+	ResumeHint string
+	// RenameNudge, when true, renders a hint that the session has content but no
+	// title yet, pointing at /chat rename. False omits it (fresh/empty session or
+	// already titled).
+	RenameNudge bool
 	// InitialScrollback seeds the TUI with a restored conversation on startup.
 	// Used by --resume so the user can see the prior turns, not just have them
 	// silently loaded into the model's context.

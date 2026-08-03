@@ -121,11 +121,31 @@ func (m *model) statusRowParts() (left, right string) {
 		left = hints
 	}
 
+	// Latch the auto-title announcement the first time the app surfaces it so
+	// the status-row line persists across frames (the provider peeks, never
+	// consumes). Dismissal is local (titleDismissed).
+	if ok && cs.TitleAnnouncementText != "" && !m.titleDismissed {
+		m.titleAnnouncement = cs.TitleAnnouncementText
+	}
+
 	right = contextSummary(len(m.opts.LoadedMemoryFiles), 0)
 	if ok {
 		right = contextSummary(len(m.opts.LoadedMemoryFiles), cs.SkillCount)
 		right = prependStatus(right, cs.GoalStatusText)
 		right = prependStatus(right, cs.GrillStatusText)
+		if !m.titleDismissed {
+			right = prependStatus(right, m.titleAnnouncement)
+		}
+	}
+
+	nWorking := 0
+	for _, c := range m.cardByID {
+		if c.toolName == "task" && c.phase == toolRunning {
+			nWorking++
+		}
+	}
+	if nWorking > 0 {
+		right = prependStatus(right, fmt.Sprintf("%d Working", nWorking))
 	}
 	return left, right
 }

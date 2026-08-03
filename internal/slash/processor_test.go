@@ -33,6 +33,7 @@ type mockHooks struct {
 	workDir       string
 	lastAssistant string
 	lastUITheme   string
+	renamedTitle  string
 
 	// interactionMode backs InteractionMode(); defaults to modes.ModeAgent
 	// (the zero value) so most tests need not set it explicitly.
@@ -171,6 +172,15 @@ func (m *mockHooks) ResumeCheckpoint(_ context.Context, tag string) (string, []p
 }
 
 func (m *mockHooks) DeleteCheckpoint(string) error { return nil }
+
+func (m *mockHooks) RenameSession(title string) error {
+	m.renamedTitle = title
+	return nil
+}
+
+func (m *mockHooks) ForkSession() (string, string, error) {
+	return "forked-session-id", "/tmp/forked-session.jsonl", nil
+}
 
 func (m *mockHooks) ForceCompressHistory(context.Context) (string, error) {
 	return "Compressed context: 100 → 20 tokens.", nil

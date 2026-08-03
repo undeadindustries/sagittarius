@@ -52,6 +52,10 @@ func welcomeText(opts ui.Options, th theme.Theme) string {
 		sections = append(sections, renderTips(th))
 	}
 
+	if line := renderContextualHints(opts, th); line != "" {
+		sections = append(sections, line)
+	}
+
 	if line := renderLoadedMemory(opts, th); line != "" {
 		sections = append(sections, line)
 	}
@@ -133,6 +137,31 @@ func renderTips(th theme.Theme) string {
 	for _, tip := range welcomeTips {
 		b.WriteString("\n")
 		b.WriteString(th.Secondary.Render("  • " + tip))
+	}
+	return b.String()
+}
+
+// renderContextualHints renders startup hints that apply only in specific
+// states — a resume line only when something is resumable, a rename nudge only
+// when the session has content but no title. It returns "" when neither applies
+// so constant "tips you cannot use right now" never crowd the banner.
+func renderContextualHints(opts ui.Options, th theme.Theme) string {
+	var lines []string
+	if hint := strings.TrimSpace(opts.ResumeHint); hint != "" {
+		lines = append(lines, "Resume a previous conversation: "+hint)
+	}
+	if opts.RenameNudge {
+		lines = append(lines, "Name this session for easier recall: /chat rename <title>")
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for i, l := range lines {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(th.Secondary.Render(l))
 	}
 	return b.String()
 }

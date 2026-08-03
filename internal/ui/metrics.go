@@ -13,6 +13,7 @@ type ModelUsageStat struct {
 	Provider  string
 	Model     string
 	Mode      string // "agent", "plan", "ask", "debug"
+	Agent     string // "main", "subagent"
 	Requests  int
 	InTokens  int
 	OutTokens int
@@ -108,6 +109,11 @@ type ComposerStatus struct {
 	GrillActive bool
 	// GrillStatusText summarizes the grill state (e.g. "Grill: 3 questions").
 	GrillStatusText string
+	// TitleAnnouncementText announces an auto-generated session title in prompt
+	// mode (e.g. `Named "Fix LSP pool race" — Ctrl+E rename`). It is rendered as
+	// a passive status-row line that never blocks the composer; the TUI owns the
+	// shown-once / dismissed lifecycle.
+	TitleAnnouncementText string
 }
 
 // ComposerStatusProvider is an optional capability the TUI uses to render the
@@ -209,7 +215,12 @@ func AggregateModelUsage(stats []ModelUsageStat) (rows []ModelUsageRow, showCost
 	rows = make([]ModelUsageRow, 0, len(order))
 	for _, key := range order {
 		row := byKey[key]
-		sort.Slice(row.Modes, func(i, j int) bool { return row.Modes[i].Mode < row.Modes[j].Mode })
+		sort.Slice(row.Modes, func(i, j int) bool {
+			if row.Modes[i].Agent != row.Modes[j].Agent {
+				return row.Modes[i].Agent < row.Modes[j].Agent
+			}
+			return row.Modes[i].Mode < row.Modes[j].Mode
+		})
 		rows = append(rows, *row)
 	}
 	return rows, showCost
@@ -312,7 +323,11 @@ func formatModelTable(stats []ModelUsageStat) string {
 	for _, row := range rows {
 		writeModelTableRow(&b, "  "+row.Label, row.Requests, row.InTokens, row.OutTokens, row.CostUSD, row.CostKnown, showCost)
 		for _, mode := range row.Modes {
-			writeModelTableRow(&b, "    ↳ "+mode.Mode, mode.Requests, mode.InTokens, mode.OutTokens, mode.CostUSD, mode.CostKnown, showCost)
+			lbl := mode.Mode
+			if mode.Agent != "" && mode.Agent != "main" {
+				lbl += " (" + mode.Agent + ")"
+			}
+			writeModelTableRow(&b, "    ↳ "+lbl, mode.Requests, mode.InTokens, mode.OutTokens, mode.CostUSD, mode.CostKnown, showCost)
 		}
 	}
 	return b.String()

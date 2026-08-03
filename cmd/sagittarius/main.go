@@ -617,6 +617,23 @@ func runInteractive(screenReader bool, debug bool, opts runnerOptions) int {
 		}
 	}
 
+	// Resume-after-unclean-exit banner: only on a fresh interactive launch (not
+	// --resume, which already restored a conversation, and not onboarding).
+	if notice == "" && opts.resume == "" && !needsOnboarding {
+		if wd, _ := os.Getwd(); wd != "" {
+			notice = computeResumeOffer(wd, sessID)
+		}
+	}
+
+	// Contextual startup hints: a rename nudge only when the (resumed) session
+	// has content but no title yet; a resume hint only when the banner flagged
+	// something resumable.
+	renameNudge := opts.resume != "" && len(runner.History()) > 0 && runner.SessionSummary() == ""
+	resumeHint := ""
+	if notice != "" && strings.Contains(notice, "--resume latest") {
+		resumeHint = "--resume latest"
+	}
+
 	uiCfg := docs.Merged().UI()
 	termUI := bubbletea.NewTerminal(ui.Options{
 		ScreenReader:              screenReader,
@@ -632,6 +649,8 @@ func runInteractive(screenReader bool, debug bool, opts runnerOptions) int {
 		ShowThinking:              uiCfg.ShowThinking,
 		NeedsOnboarding:           needsOnboarding,
 		LoadedMemoryFiles:         runner.LoadedMemoryFiles(),
+		ResumeHint:                resumeHint,
+		RenameNudge:               renameNudge,
 		InitialScrollback:         historyToScrollback(runner.History()),
 	})
 
@@ -809,12 +828,22 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		if cdErr != nil {
 			slog.Warn("session recording disabled: cannot resolve chats dir", "err", cdErr)
 		} else {
-			sessRecorder = session.NewRecorder(chatsDir, sessID, hash)
+			sessRecorder = session.NewRecorder(chatsDir, sessID, hash, "main")
 		}
 	}
 
 	// Resolve project-boundary + snapshot policy from the already-merged settings.
 	boundary, snapMgr := resolveBoundaryAndSnapshots(settings, projectRoot, sessID)
+
+	// Acquire the session liveness lock so a later launch can tell this running
+	// process apart from an abandoned session. Best-effort: a nil release means
+	// we are simply not registered as the live holder (the process still runs).
+	var livenessRelease func()
+	if projectRoot != "" {
+		if tmpDir, err := storage.ProjectTmpDir(projectRoot); err == nil {
+			livenessRelease = session.Acquire(tmpDir, session.LivenessInfo{SessionID: sessID})
+		}
+	}
 
 	// --log-verbose is opt-in and rarely used (bug reports only); a failure to
 	// open the transcript file is never fatal to the run.
@@ -844,6 +873,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		ProjectBoundary:      boundary,
 		Snapshotter:          snapMgr,
 		AllowFix:             allowFix,
+		LivenessRelease:      livenessRelease,
 	}
 	// Assign only when non-nil: a nil *os.File stored in the io.WriteCloser
 	// field would be a non-nil interface wrapping a nil pointer, breaking the
@@ -915,6 +945,103 @@ func resolveWebFlags(ctx context.Context, merged *config.Settings) (searchEnable
 		hasKey = true
 	}
 	return config.WebSearchEnabled(merged, nil, hasKey), config.WebFetchEnabled(merged, nil)
+}
+
+// resumeWindow bounds how long ago the most recent session may have been
+// updated to still be worth offering a resume. A session older than this is
+// stale context, not an in-progress conversation.
+const resumeWindow = 24 * time.Hour
+
+// computeResumeOffer inspects the project's sessions and decides what the
+// startup banner should say about resuming. It offers a resume only when the
+// newest session was updated recently, lacks a clean-exit marker, and its
+// liveness lock is not held (ProbeFree). When the lock is held or indeterminate
+// it returns an informational line instead — never an offer, so two processes
+// never interleave one JSONL. "" means nothing to say (no resumable session, or
+// the newest session ended cleanly).
+func computeResumeOffer(projectRoot, currentSessionID string) string {
+	if strings.TrimSpace(projectRoot) == "" {
+		return ""
+	}
+	chatsDir, err := session.ChatsDir(projectRoot)
+	if err != nil {
+		return ""
+	}
+	infos, err := session.ListSessions(chatsDir, currentSessionID)
+	if err != nil || len(infos) == 0 {
+		return ""
+	}
+	// Find the newest session by LastUpdated, skipping the session we are
+	// currently recording (a fresh launch has no turns yet).
+	var newest *session.SessionInfo
+	for i := range infos {
+		info := &infos[i]
+		if info.IsCurrentSession {
+			continue
+		}
+		if newest == nil || sessionInfoTime(info.LastUpdated).After(sessionInfoTime(newest.LastUpdated)) {
+			newest = info
+		}
+	}
+	if newest == nil {
+		return ""
+	}
+	if newest.CleanExit {
+		return ""
+	}
+	last := sessionInfoTime(newest.LastUpdated)
+	if last.IsZero() || time.Since(last) > resumeWindow {
+		return ""
+	}
+
+	tmpDir, err := storage.ProjectTmpDir(projectRoot)
+	if err != nil {
+		return ""
+	}
+	state, info := session.Probe(tmpDir, newest.ID)
+	label := sessionLabel(newest)
+	switch state {
+	case session.ProbeFree:
+		// Abandoned: safe to offer a resume.
+		return fmt.Sprintf("Last session %s ended without a clean exit — resume it with: sagittarius --resume %s (or --resume latest)", label, newest.ID)
+	case session.ProbeLive:
+		// Live elsewhere: informational only, never an offer.
+		if info.PID != 0 {
+			return fmt.Sprintf("A Sagittarius session %s is already running here (pid %d). Two sessions can share a project; that conversation continues in the other terminal.", label, info.PID)
+		}
+		return fmt.Sprintf("A Sagittarius session %s is already running here. Two sessions can share a project; that conversation continues in the other terminal.", label)
+	default:
+		// Indeterminate (e.g. NFS): assume live; never offer.
+		return fmt.Sprintf("A Sagittarius session %s may still be running (its state could not be confirmed). It will not be offered for resume.", label)
+	}
+}
+
+// sessionInfoTime parses a session timestamp, tolerating both RFC3339 and
+// RFC3339Nano (the recorder writes the latter). Zero time on parse failure.
+func sessionInfoTime(ts string) time.Time {
+	if t, err := time.Parse(time.RFC3339Nano, ts); err == nil {
+		return t
+	}
+	t, _ := time.Parse(time.RFC3339, ts)
+	return t
+}
+
+// sessionLabel renders a session for a banner line: the title when present,
+// otherwise the truncated id.
+func sessionLabel(info *session.SessionInfo) string {
+	if t := strings.TrimSpace(info.DisplayName); t != "" {
+		const maxLabel = 40
+		runes := []rune(t)
+		if len(runes) > maxLabel {
+			t = string(runes[:maxLabel])
+		}
+		return fmt.Sprintf("%q", t)
+	}
+	id := info.ID
+	if len(id) > 8 {
+		id = id[:8]
+	}
+	return fmt.Sprintf("%q", id)
 }
 
 // persistentSessionID returns a stable per-process identifier.

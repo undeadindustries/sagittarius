@@ -66,12 +66,17 @@ type MessageRecord struct {
 
 // MetadataRecord is the first line of each JSONL file and any $set update.
 type MetadataRecord struct {
-	SessionID     string          `json:"sessionId"`
-	ProjectHash   string          `json:"projectHash"`
-	StartTime     string          `json:"startTime"`
-	LastUpdated   string          `json:"lastUpdated"`
-	Summary       string          `json:"summary,omitempty"`
-	Kind          string          `json:"kind,omitempty"` // "main" | "subagent"
+	SessionID   string `json:"sessionId"`
+	ProjectHash string `json:"projectHash"`
+	StartTime   string `json:"startTime"`
+	LastUpdated string `json:"lastUpdated"`
+	Summary     string `json:"summary,omitempty"`
+	Branch      string `json:"branch,omitempty"` // display-only; never validated on read
+	Kind        string `json:"kind,omitempty"`   // "main" | "subagent"
+	// CleanExit is set by a $set line when the session's Runner.Close() runs on
+	// a normal shutdown. Its absence is the unclean-exit signal (SIGHUP from a
+	// dropped connection, a crash, or kill -9 all skip deferred cleanup).
+	CleanExit     bool            `json:"cleanExit,omitempty"`
 	SessionGrants []string        `json:"sessionGrants,omitempty"`
 	Goal          *goal.Snapshot  `json:"goal,omitempty"`
 	Grill         *grill.Snapshot `json:"grill,omitempty"`
@@ -94,7 +99,9 @@ type ConversationRecord struct {
 	StartTime     string
 	LastUpdated   string
 	Summary       string
+	Branch        string
 	Kind          string
+	CleanExit     bool
 	SessionGrants []string
 	Goal          *goal.Snapshot
 	Grill         *grill.Snapshot
@@ -117,6 +124,10 @@ type SessionInfo struct {
 	MessageCount int
 	// DisplayName is the first user message (truncated) or summary.
 	DisplayName string
+	// Branch is the recorded git branch (display-only; empty when not a repo).
+	Branch string
+	// CleanExit is true when the session ended via a normal shutdown.
+	CleanExit bool
 	// FirstUserMessage is the raw first user message.
 	FirstUserMessage string
 	// IsCurrentSession is true when this is the session currently being written.

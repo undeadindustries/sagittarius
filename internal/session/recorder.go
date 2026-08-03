@@ -25,17 +25,23 @@ type Recorder struct {
 	filePath    string
 	sessionID   string
 	projectHash string
-	disabled    bool // set on ENOSPC or init failure
+	kind        string
+	// summary is the in-memory view of the session title, kept so auto-titling
+	// can avoid overwriting a title that is already set (manual rename, fork, or
+	// resume). It is updated by SetSummary and cleared by Rotate.
+	summary  string
+	disabled bool // set on ENOSPC or init failure
 }
 
 // NewRecorder creates a new session file under chatsDir and writes the initial
 // metadata line. Returns a disabled (no-op) recorder on error so the caller
 // can always call Record* methods without nil checks.
-func NewRecorder(chatsDir, sessionID, projectHash string) *Recorder {
+func NewRecorder(chatsDir, sessionID, projectHash, kind string) *Recorder {
 	r := &Recorder{
 		chatsDir:    chatsDir,
 		sessionID:   sessionID,
 		projectHash: projectHash,
+		kind:        kind,
 	}
 
 	if err := os.MkdirAll(chatsDir, 0o700); err != nil {
@@ -53,12 +59,15 @@ func NewRecorder(chatsDir, sessionID, projectHash string) *Recorder {
 	filename := fmt.Sprintf("%s%s-%s.jsonl", SessionFilePrefix, ts, fileKey)
 	r.filePath = filepath.Join(chatsDir, filename)
 
+	if kind == "" {
+		kind = "main"
+	}
 	meta := MetadataRecord{
 		SessionID:   sessionID,
 		ProjectHash: projectHash,
 		StartTime:   time.Now().UTC().Format(time.RFC3339Nano),
 		LastUpdated: time.Now().UTC().Format(time.RFC3339Nano),
-		Kind:        "main",
+		Kind:        kind,
 	}
 	if err := r.appendLine(meta); err != nil {
 		slog.Warn("session: cannot write initial metadata, recording disabled", "err", err)
@@ -76,11 +85,35 @@ func (r *Recorder) SessionID() string {
 	return r.sessionID
 }
 
+// Kind returns the session kind ("main" or "subagent"). Guarded by r.mu.
+func (r *Recorder) Kind() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.kind
+}
+
 // FilePath returns the JSONL file path, or "" if recording is disabled.
 func (r *Recorder) FilePath() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.filePath
+}
+
+// Summary returns the in-memory session title ("" if untitled). Seeded on
+// resume via SeedSummary and updated by SetSummary.
+func (r *Recorder) Summary() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.summary
+}
+
+// SeedSummary sets the in-memory title without writing to the file. It is used
+// when resuming an existing session so auto-titling does not overwrite a title
+// that already exists on disk.
+func (r *Recorder) SeedSummary(title string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.summary = title
 }
 
 // Rotate abandons the current session file and begins a new one with a fresh
@@ -89,18 +122,39 @@ func (r *Recorder) FilePath() string {
 // than appended to the cleared conversation. On any filesystem error the
 // recorder becomes disabled (a no-op) instead of writing to the old file.
 func (r *Recorder) Rotate() {
+	id := newID()
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.rotateLocked(id, FilenameForSessionID(id))
+}
+
+// RotateToFile abandons the current session file and begins a new one with the
+// given session id and filename, writing a new metadata line. It backs /chat fork, where
+// WriteHistory has already created the new file with the same id so the
+// recorder and the forked history land in the same session. On any filesystem
+// error the recorder becomes disabled (a no-op) instead of writing to the old
+// file.
+func (r *Recorder) RotateToFile(sessionID, filename string) {
+	if strings.TrimSpace(sessionID) == "" || strings.TrimSpace(filename) == "" {
+		r.Rotate()
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.rotateLocked(sessionID, filename)
+}
+
+// rotateLocked performs the retarget shared by Rotate and RotateToFile; caller must
+// hold r.mu.
+func (r *Recorder) rotateLocked(newSessionID, filename string) {
 	if r.chatsDir == "" {
 		r.disabled = true
 		return
 	}
 
-	newSessionID := newID()
-	ts := time.Now().UTC().Format("2006-01-02T15-04")
-	filename := fmt.Sprintf("%s%s-%s.jsonl", SessionFilePrefix, ts, deriveFileKey(newSessionID))
 	r.filePath = filepath.Join(r.chatsDir, filename)
 	r.sessionID = newSessionID
+	r.summary = ""
 	r.disabled = false
 
 	meta := MetadataRecord{
@@ -108,7 +162,7 @@ func (r *Recorder) Rotate() {
 		ProjectHash: r.projectHash,
 		StartTime:   time.Now().UTC().Format(time.RFC3339Nano),
 		LastUpdated: time.Now().UTC().Format(time.RFC3339Nano),
-		Kind:        "main",
+		Kind:        r.kind,
 	}
 	if err := r.appendLineLocked(meta); err != nil {
 		slog.Warn("session: cannot write metadata after rotate, recording disabled", "err", err)
@@ -269,6 +323,62 @@ func (r *Recorder) SetGrill(g *grill.Snapshot) error {
 	return r.appendLineLocked(set)
 }
 
+// SetSummary appends a session-title metadata update to the session file. The
+// loader already prefers MetadataRecord.Summary over the first user message
+// when building a display name, so this is the single write path for both
+// auto-titles and manual renames.
+func (r *Recorder) SetSummary(title string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.disabled {
+		return nil
+	}
+	set := SetRecord{
+		Set: &MetadataRecord{
+			Summary: title,
+		},
+	}
+	if err := r.appendLineLocked(set); err != nil {
+		return err
+	}
+	r.summary = title
+	return nil
+}
+
+// SetBranch appends a git-branch metadata update to the session file. Callers
+// should write only on change so a long session that crosses branches stays
+// accurate without bloating the JSONL.
+func (r *Recorder) SetBranch(branch string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.disabled {
+		return nil
+	}
+	set := SetRecord{
+		Set: &MetadataRecord{
+			Branch: branch,
+		},
+	}
+	return r.appendLineLocked(set)
+}
+
+// SetCleanExit appends a clean-exit metadata update to the session file. It is
+// called from Runner.Close() on a normal shutdown; the absence of this marker
+// is the unclean-exit signal used to offer a resume on the next launch.
+func (r *Recorder) SetCleanExit() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.disabled {
+		return nil
+	}
+	set := SetRecord{
+		Set: &MetadataRecord{
+			CleanExit: true,
+		},
+	}
+	return r.appendLineLocked(set)
+}
+
 func (r *Recorder) handleWriteError(err error) {
 	if isENOSPC(err) {
 		r.disabled = true
@@ -316,6 +426,21 @@ func isHexString(s string) bool {
 		}
 	}
 	return true
+}
+
+// NewSessionID generates a random UUID v4 session id, exported for callers
+// that must mint an id before creating the recorder (e.g. /chat fork writes
+// the history file first, then retargets the recorder onto that same id).
+func NewSessionID() string {
+	return newID()
+}
+
+// FilenameForSessionID returns the JSONL filename a recorder would use for
+// sessionID right now, so a caller can pre-create the file at the exact path
+// the recorder will adopt (see Runner.ForkSession).
+func FilenameForSessionID(sessionID string) string {
+	ts := time.Now().UTC().Format("2006-01-02T15-04")
+	return fmt.Sprintf("%s%s-%s.jsonl", SessionFilePrefix, ts, deriveFileKey(sessionID))
 }
 
 // newID generates a random UUID v4 using crypto/rand.

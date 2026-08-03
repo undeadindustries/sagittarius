@@ -157,15 +157,17 @@ const (
 	// The block carries a *toolCard whose phase/body update in place across the
 	// invocation's lifecycle.
 	roleToolCard
+	roleTaskGroup
 )
 
 // scrollBlock is one logical message in the scrollback. text may contain
 // embedded newlines; the renderer wraps and prefixes it at paint time. For
 // roleToolCard blocks the content lives on card instead of text.
 type scrollBlock struct {
-	role scrollRole
-	text string
-	card *toolCard
+	role      scrollRole
+	text      string
+	card      *toolCard
+	taskGroup *taskGroupBlock
 }
 
 type model struct {
@@ -276,6 +278,16 @@ type model struct {
 	suggestions    []ui.Suggestion
 	suggestionIdx  int // -1 means nothing highlighted (user is still typing)
 	completionFrom int // byte offset in the input where the active token starts
+
+	// titleAnnouncement is the prompt-mode auto-title shown on the status row
+	// (e.g. `Named "Fix LSP pool race" — Ctrl+E rename`). It is latched from the
+	// app the first time it appears and rendered until titleDismissed, so the
+	// line survives across frames without the provider consuming it. It stays
+	// passive: only Ctrl+E (rename) and Enter-on-empty-input (dismiss) act on it.
+	titleAnnouncement string
+	// titleDismissed is set once the user acknowledges the announcement (dismiss
+	// or rename) so it is not shown again this session.
+	titleDismissed bool
 
 	// history is the prompt-history navigator (Up/Down/Ctrl+P/Ctrl+N at the
 	// input boundaries). queue holds messages typed while a turn is in flight;
@@ -510,7 +522,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.spin, cmd = m.spin.Update(msg)
 		// A running tool card embeds the spinner in its header (inside the
 		// viewport), so re-render the scrollback each tick to animate it.
+		hasRunning := false
 		if m.activeCard != nil && m.activeCard.phase == toolRunning {
+			hasRunning = true
+		} else {
+			for _, c := range m.cardByID {
+				if c.phase == toolRunning {
+					hasRunning = true
+					break
+				}
+			}
+		}
+		if hasRunning {
 			m.syncViewportContent()
 		}
 		return m, cmd
@@ -1182,6 +1205,10 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleAskKey(msg)
 	}
 
+	if m.busy && m.handleTaskGroupKey(msg.String()) {
+		return m, nil
+	}
+
 	if m.confirmReply != nil {
 		switch msg.String() {
 		case "up":
@@ -1273,6 +1300,14 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	// Ctrl+E opens the session rename editor while a title announcement is
+	// pending (prompt-mode auto-title). Passive otherwise.
+	if msg.String() == "ctrl+e" && m.titleAnnouncement != "" && !m.titleDismissed {
+		m.applyHistoryEntry("/chat rename ", cursorEnd)
+		m.titleDismissed = true
+		return m, nil
+	}
+
 	switch msg.String() {
 	case "ctrl+c":
 		return m, m.beginQuit()
@@ -1356,6 +1391,12 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	case "enter":
+		// Enter on an empty input dismisses a pending title announcement; it is
+		// consumed here so it never submits an empty message.
+		if m.titleAnnouncement != "" && !m.titleDismissed && strings.TrimSpace(m.input.Value()) == "" {
+			m.titleDismissed = true
+			return m, nil
+		}
 		return m.handleEnter()
 	}
 
@@ -1380,6 +1421,11 @@ func (m *model) handleEnter() (tea.Model, tea.Cmd) {
 		}
 	}
 	line := strings.TrimSpace(m.input.Value())
+	if line != "" {
+		// The user moved on to the next message; the title announcement has
+		// served its purpose and must not linger as a stale status line.
+		m.titleDismissed = true
+	}
 	m.input.SetValue("")
 	m.clearSuggestions()
 	return m, func() tea.Msg { return submitMsg{line: line} }
@@ -2048,14 +2094,24 @@ func (m *model) addBlock(role scrollRole, text string) {
 // indexing it by call id and marking it active so subsequent output/confirm/
 // result events update it in place.
 func (m *model) startToolCard(ev ui.StreamEvent) {
-	// The model has stopped reasoning for this step and is now acting, so retire
-	// the Thinking box (its buffer is never replayed). A later step that reasons
-	// again repopulates it; otherwise the tool card owns the spinner.
 	m.thinking = ""
 	card := newToolCard(ev)
-	m.blocks = append(m.blocks, scrollBlock{role: roleToolCard, card: card})
+
+	if card.toolName == "task" {
+		if len(m.blocks) > 0 && m.blocks[len(m.blocks)-1].role == roleTaskGroup {
+			// append to existing task group
+			tg := m.blocks[len(m.blocks)-1].taskGroup
+			tg.tasks = append(tg.tasks, card)
+		} else {
+			// new task group
+			tg := &taskGroupBlock{tasks: []*toolCard{card}, selectedIdx: -1}
+			m.blocks = append(m.blocks, scrollBlock{role: roleTaskGroup, taskGroup: tg})
+		}
+	} else {
+		m.blocks = append(m.blocks, scrollBlock{role: roleToolCard, card: card})
+		m.activeCard = card
+	}
 	m.openResponseIdx = -1
-	m.activeCard = card
 	if card.callID != "" {
 		if m.cardByID == nil {
 			m.cardByID = make(map[string]*toolCard)
@@ -2378,6 +2434,12 @@ func (m *model) roleStyle(role scrollRole) (glyph string, prefix, body lipgloss.
 func (m *model) renderBlock(blk scrollBlock, width int) []string {
 	if blk.role == roleToolCard && blk.card != nil {
 		return m.renderToolCard(blk.card, width)
+	}
+	if blk.role == roleTaskGroup && blk.taskGroup != nil {
+		return m.renderTaskGroup(blk.taskGroup, width)
+	}
+	if blk.role == roleTaskGroup && blk.taskGroup != nil {
+		return m.renderTaskGroup(blk.taskGroup, width)
 	}
 
 	glyph, prefix, body := m.roleStyle(blk.role)
@@ -2723,4 +2785,51 @@ func max(a, b int) int {
 		return a
 	}
 	return b
+}
+
+type taskGroupBlock struct {
+	tasks       []*toolCard
+	selectedIdx int
+}
+
+func (m *model) lastTaskGroup() *taskGroupBlock {
+	if len(m.blocks) == 0 {
+		return nil
+	}
+	last := m.blocks[len(m.blocks)-1]
+	if last.role == roleTaskGroup {
+		return last.taskGroup
+	}
+	return nil
+}
+
+func (m *model) handleTaskGroupKey(msg string) bool {
+	tg := m.lastTaskGroup()
+	if tg == nil || len(tg.tasks) == 0 {
+		return false
+	}
+
+	switch msg {
+	case "up":
+		if tg.selectedIdx <= 0 {
+			tg.selectedIdx = len(tg.tasks) - 1
+		} else {
+			tg.selectedIdx--
+		}
+		m.syncViewportContent()
+		return true
+	case "down":
+		if tg.selectedIdx < 0 || tg.selectedIdx >= len(tg.tasks)-1 {
+			tg.selectedIdx = 0
+		} else {
+			tg.selectedIdx++
+		}
+		m.syncViewportContent()
+		return true
+	case "enter":
+		tg.selectedIdx = -1
+		m.syncViewportContent()
+		return true
+	}
+	return false
 }

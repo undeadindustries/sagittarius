@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -97,6 +98,11 @@ type RunnerConfig struct {
 	// (see --log-verbose). It is opt-in and independent of debug logging; the
 	// Runner takes ownership and closes it from Close().
 	VerboseLog io.WriteCloser
+	// LivenessRelease releases the session liveness lock acquired at startup.
+	// It runs in Close() so a normal shutdown drops the lock; a crash or SIGHUP
+	// lets the kernel release it instead, which is exactly the unclean-exit
+	// signal the resume banner relies on. Nil-safe. Best-effort and idempotent.
+	LivenessRelease func()
 }
 
 // Runner orchestrates conversation history and provider streaming for the agent loop.
@@ -156,15 +162,26 @@ type Runner struct {
 	// editStatsMu guards editStats and nudgedPaths, the AD-080 repeated-edit
 	// loop detector's per-turn state (see postwrite.go). Both maps are reset
 	// at the start of every RunTurn.
-	editStatsMu sync.Mutex
-	editStats   map[string]int
-	nudgedPaths map[string]bool
+	editStatsMu       sync.Mutex
+	editStats         map[string]int
+	editMatchFailures map[string]int
+	nudgedPaths       map[string]bool
 	// repoLocalMu guards repoLocalGrants, the session-lifetime memo of
 	// interactive repo-local tool approvals ("allow for this session"),
 	// mirroring Scheduler.sessionGrants.
 	repoLocalMu      sync.Mutex
 	repoLocalGrants  map[string]bool
 	goplsHintPending bool
+	// lastBranch records the git branch most recently written to the session
+	// file so recordBranch only appends a $set line on change (a long session
+	// can cross branches; sampling every turn without this guard would bloat
+	// the JSONL). Empty until the first sample.
+	lastBranch string
+	// autoTitleMu guards autoTitleDone (fire-once titling) and titleAnnouncement
+	// (the passive composer notice shown in prompt mode).
+	autoTitleMu       sync.Mutex
+	autoTitleDone     bool
+	titleAnnouncement string
 	// loadedMemoryFiles are the AGENTS.md paths that contributed to the system
 	// instruction, captured at construction for the welcome banner.
 	loadedMemoryFiles []string
@@ -182,6 +199,9 @@ type Runner struct {
 	// verboseLog is the optional --log-verbose transcript sink; nil-safe (see
 	// verboselog.go) so hot-path call sites never need to check for nil.
 	verboseLog *verboseLog
+	// livenessRelease drops the session liveness lock on Close(); nil when the
+	// lock was not acquired (best-effort acquisition) or recording is disabled.
+	livenessRelease func()
 }
 
 // LoadedMemoryFiles returns the AGENTS.md paths that contributed to the system
@@ -204,6 +224,19 @@ func (r *Runner) Workspace() *tools.Workspace {
 func (r *Runner) Close() error {
 	if r == nil {
 		return nil
+	}
+	// Record a clean exit before tearing anything down. The marker is the only
+	// way a later launch can tell a normal shutdown apart from a dropped
+	// connection or crash, both of which skip this defer. Best-effort: a
+	// failure here is never surfaced, since Close is already unwinding.
+	if r.sessionRecorder != nil {
+		_ = r.sessionRecorder.SetCleanExit()
+	}
+	// Drop the liveness lock on a normal shutdown. A crash or SIGHUP skips this
+	// and the kernel releases the lock instead — the distinction the resume
+	// banner keys off.
+	if r.livenessRelease != nil {
+		r.livenessRelease()
 	}
 	return r.verboseLog.Close()
 }
@@ -276,12 +309,14 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		projectBoundary:      cfg.ProjectBoundary,
 		snap:                 cfg.Snapshotter,
 		editStats:            make(map[string]int),
+		editMatchFailures:    make(map[string]int),
 		nudgedPaths:          make(map[string]bool),
 		repoLocalGrants:      make(map[string]bool),
 		goplsHintPending:     needsGoplsHint(cfg.Settings, ws.Root()),
 		loadedMemoryFiles:    memoryFiles,
 		initialSessionGrants: cfg.InitialSessionGrants,
 		verboseLog:           newVerboseLog(cfg.VerboseLog),
+		livenessRelease:      cfg.LivenessRelease,
 	}
 
 	if cfg.InitialGoal != nil {
@@ -298,6 +333,10 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 
 	registerGoalTools(runner, registry)
 	registerGrillTools(runner, registry)
+
+	if cfg.Settings != nil && config.SubagentsEnabled(cfg.Settings, nil) {
+		registry.Register(newTaskTool(runner))
+	}
 
 	policy := approvalToPolicy(mode)
 	scheduler := tools.NewScheduler(registry, policy, cfg.Interactive, nil, ws)
@@ -539,6 +578,95 @@ func (r *Runner) generator() (provider.ContentGenerator, error) {
 	return nil, errProviderUnavailable
 }
 
+// auxGenerator resolves the provider/model for auxiliary, off-band model calls
+// (goal evaluation and session titling). When sagittarius.goal.evaluatorProvider
+// or evaluatorModel is configured, it builds a fresh generator for that pair via
+// provider.NewContentGenerator against a settings clone with the pair forced
+// active — deliberately bypassing the shared GeneratorCache, since the AD-058
+// OpenAI-Responses lastResponseID chaining state lives on the generator instance
+// and an aux call must never corrupt the main conversation's chaining. When
+// neither is configured it falls back to the active generator, preserving the
+// pre-existing behavior.
+func (r *Runner) auxGenerator(ctx context.Context) (provider.ContentGenerator, error) {
+	settings := r.settingsSnapshot()
+	var evalProvider, evalModel string
+	if settings != nil && settings.Sagittarius != nil && settings.Sagittarius.Goal != nil {
+		evalProvider = settings.Sagittarius.Goal.EvaluatorProvider
+		evalModel = settings.Sagittarius.Goal.EvaluatorModel
+	}
+	if evalProvider == "" && evalModel == "" {
+		return r.generator()
+	}
+
+	clone := *settings
+	active := config.NormalizeProviderID(evalProvider)
+	if active == "" {
+		active = clone.ActiveProvider()
+	}
+	if clone.Providers == nil {
+		clone.Providers = &config.ProvidersSettings{}
+	}
+	prov := *clone.Providers
+	prov.Extra = maps.Clone(prov.Extra)
+	prov.Active = active
+	if evalModel != "" {
+		if err := setProviderInstanceModel(&prov, active, evalModel); err != nil {
+			return nil, fmt.Errorf("aux generator: %w", err)
+		}
+	}
+	clone.Providers = &prov
+
+	gen, err := provider.NewContentGenerator(ctx, &clone)
+	if err != nil {
+		return nil, fmt.Errorf("aux generator: %w", err)
+	}
+	return gen, nil
+}
+
+// setProviderInstanceModel forces Model on the instance block for providerID so
+// ResolveEndpointConfig picks it up, mutating prov in place. It handles the
+// built-in named fields, the typed custom map, and the raw Extra passthrough
+// (where unknown provider instance blocks live).
+func setProviderInstanceModel(prov *config.ProvidersSettings, providerID, model string) error {
+	setModel := func(inst *config.ProviderInstanceConfig) *config.ProviderInstanceConfig {
+		if inst == nil {
+			inst = &config.ProviderInstanceConfig{}
+		}
+		c := *inst
+		c.Model = model
+		return &c
+	}
+	switch providerID {
+	case string(config.BuiltInOpenAI):
+		prov.OpenAI = setModel(prov.OpenAI)
+	case string(config.BuiltInGeminiAPIKey):
+		prov.GeminiAPIKey = setModel(prov.GeminiAPIKey)
+	case string(config.BuiltInOpenAIResponses):
+		prov.OpenAIResponses = setModel(prov.OpenAIResponses)
+	default:
+		// Custom and preset providers resolve their instance from the raw Extra
+		// passthrough (provider.providerInstance); update Model inside the JSON
+		// blob. The typed Custom map holds the definition, not the instance.
+		raw := prov.Extra[providerID]
+		var inst config.ProviderInstanceConfig
+		if len(raw) > 0 {
+			if err := json.Unmarshal(raw, &inst); err != nil {
+				return fmt.Errorf("unmarshal provider instance: %w", err)
+			}
+		}
+		inst.Model = model
+		b, err := json.Marshal(inst)
+		if err != nil {
+			return fmt.Errorf("marshal provider instance: %w", err)
+		}
+		if prov.Extra == nil {
+			prov.Extra = map[string]json.RawMessage{}
+		}
+		prov.Extra[providerID] = b
+	}
+	return nil
+}
+
 // RunTurn handles one user message and streams assistant output events.
 func (r *Runner) RunTurn(ctx context.Context, userInput string) (<-chan ui.StreamEvent, error) {
 	userInput = strings.TrimSpace(userInput)
@@ -583,6 +711,7 @@ func (r *Runner) RunTurn(ctx context.Context, userInput string) (<-chan ui.Strea
 	r.setState(StateIdle)
 	r.metrics.recordTurn()
 	r.resetEditLoopStats()
+	r.recordBranch()
 	r.historyMu.Lock()
 	r.history = append(r.history, provider.Message{
 		Role:  provider.RoleUser,
@@ -658,6 +787,9 @@ func (r *Runner) runAgentLoop(ctx context.Context, out chan<- ui.StreamEvent) {
 
 	verifyHinted := false
 	maxRounds := config.ResolveMaxToolRounds(r.sagittariusSettings(), tools.MaxToolRounds)
+	// Accumulates the assistant's text across this turn's rounds so the fire-once
+	// auto-title sees the whole reply, not just the final round.
+	var turnReply strings.Builder
 
 	emit := func(ev ui.StreamEvent) {
 		select {
@@ -697,9 +829,12 @@ outerLoop:
 				return
 			}
 			r.verboseLog.LogResponse(round, modelText, toolCalls, streamUsage)
+			if modelText != "" {
+				turnReply.WriteString(modelText)
+			}
 			// Record token usage: prefer provider-reported counts; fall back to heuristics.
 			if streamUsage != nil {
-				r.metrics.recordTurnUsage(currentProvider, currentModel, currentMode,
+				r.metrics.recordTurnUsage(currentProvider, currentModel, currentMode, r.agentKind(),
 					streamUsage.InputTokens, streamUsage.OutputTokens,
 					streamUsage.CostUSD, streamUsage.CostKnown)
 			} else {
@@ -708,7 +843,7 @@ outerLoop:
 				if modelText != "" {
 					outTok = contextmgmt.EstimateTokens([]provider.Part{{Text: modelText}})
 				}
-				r.metrics.recordTurnUsage(currentProvider, currentModel, currentMode,
+				r.metrics.recordTurnUsage(currentProvider, currentModel, currentMode, r.agentKind(),
 					inTok, outTok, 0, false)
 			}
 
@@ -725,6 +860,7 @@ outerLoop:
 				if r.evaluateGoalTurn(ctx, out, modelText) {
 					continue outerLoop
 				}
+				r.maybeAutoTitle(ctx, r.firstUserText(), turnReply.String())
 				r.setState(StateDone)
 				out <- ui.StreamEvent{Type: ui.StreamDone}
 				return
@@ -931,6 +1067,7 @@ func (r *Runner) rebuildBasePrompt() {
 		Interactive:    r.interactive,
 		IsGitRepo:      isGitRepo(r.workDir),
 		SandboxEnabled: false, // sandbox not ported (AD-017)
+		EditEnabled:    containsString(toolNames, tools.EditToolName),
 		SymbolsEnabled: containsString(toolNames, tools.FindSymbolToolName),
 	})
 
@@ -1246,6 +1383,24 @@ func (r *Runner) appendModelMessage(text string, toolCalls []provider.ToolCall) 
 	}
 }
 
+// recordBranch samples the git branch for the workspace at the start of a turn
+// and appends a $set line only when it changed since the last recorded value.
+// It is best-effort: a non-git workspace yields "" (recorded once so the
+// metadata reflects "no branch") and a recorder failure is never surfaced,
+// since the branch is display-only metadata.
+func (r *Runner) recordBranch() {
+	if r.sessionRecorder == nil {
+		return
+	}
+	branch := session.CurrentBranch(r.workDir)
+	if branch == r.lastBranch {
+		return
+	}
+	if err := r.sessionRecorder.SetBranch(branch); err == nil {
+		r.lastBranch = branch
+	}
+}
+
 // appendModelParts stores the provider's verbatim model parts (preserving
 // Gemini thought signatures) in history. text and toolCalls are passed through
 // to the session recorder, which persists the provider-neutral projection;
@@ -1341,6 +1496,31 @@ func (r *Runner) LastAssistantText() string {
 	r.historyMu.RLock()
 	defer r.historyMu.RUnlock()
 	return lastAssistantText(r.history)
+}
+
+// firstUserText returns the text of the first user message in history, used as
+// the request half of the exchange the auto-title is generated from.
+func (r *Runner) firstUserText() string {
+	r.historyMu.RLock()
+	defer r.historyMu.RUnlock()
+	for _, m := range r.history {
+		if m.Role != provider.RoleUser {
+			continue
+		}
+		var b strings.Builder
+		for _, p := range m.Parts {
+			if p.Text != "" {
+				if b.Len() > 0 {
+					b.WriteString("\n")
+				}
+				b.WriteString(p.Text)
+			}
+		}
+		if b.Len() > 0 {
+			return b.String()
+		}
+	}
+	return ""
 }
 
 // ReplaceHistory swaps the in-memory conversation history for a copy of h,
@@ -1469,7 +1649,7 @@ const verifyReminder = "Files were written. Verify the changes (lint, format che
 // completed without an error, used to gate the post-write verify reminder.
 func containsSuccessfulWrite(responses []provider.FunctionResponse) bool {
 	for i := range responses {
-		if responses[i].Name != tools.WriteFileToolName {
+		if !tools.IsFileMutatingTool(responses[i].Name) {
 			continue
 		}
 		if _, failed := responses[i].Response["error"]; !failed {
@@ -1517,7 +1697,7 @@ func extractWrittenPathsFromHistory(r *Runner) []string {
 	// Build a map of successful write_file call IDs
 	successfulWrites := make(map[string]bool)
 	for _, p := range lastUser.Parts {
-		if p.FunctionResponse != nil && p.FunctionResponse.Name == tools.WriteFileToolName {
+		if p.FunctionResponse != nil && tools.IsFileMutatingTool(p.FunctionResponse.Name) {
 			if _, failed := p.FunctionResponse.Response["error"]; !failed {
 				successfulWrites[p.FunctionResponse.CallID] = true
 			}
@@ -1526,7 +1706,7 @@ func extractWrittenPathsFromHistory(r *Runner) []string {
 
 	// Now extract the paths from the assistant's calls that matched
 	for _, p := range lastAsst.Parts {
-		if p.FunctionCall != nil && p.FunctionCall.Name == tools.WriteFileToolName {
+		if p.FunctionCall != nil && tools.IsFileMutatingTool(p.FunctionCall.Name) {
 			if successfulWrites[p.FunctionCall.ID] {
 				if path, ok := p.FunctionCall.Args["file_path"].(string); ok && path != "" {
 					paths = append(paths, path)
@@ -1570,7 +1750,28 @@ func needsGoplsHint(settings *config.Settings, root string) bool {
 // carry the optional OpenRouter cost. Attributed as auxiliary (compression) usage
 // so it does not overwrite the last-turn footer snapshot.
 func (r *Runner) RecordUsage(prov, model, mode string, inTok, outTok int, costUSD float64, costKnown bool) {
-	r.metrics.recordAuxUsage(prov, model, mode, inTok, outTok, costUSD, costKnown)
+	r.metrics.recordAuxUsage(prov, model, mode, r.agentKind(), inTok, outTok, costUSD, costKnown)
+}
+
+// setTitleAnnouncement records the title to announce to the user in prompt
+// mode (see maybeAutoTitle). It is read by the UI layer via TitleAnnouncement
+// and rendered as a passive composer line; it never blocks the composer.
+func (r *Runner) setTitleAnnouncement(title string) {
+	r.autoTitleMu.Lock()
+	r.titleAnnouncement = title
+	r.autoTitleMu.Unlock()
+}
+
+// TitleAnnouncement returns the pending auto-title announcement ("" when none)
+// without consuming it, so the composer can render it on every frame. The TUI
+// owns the shown-once / dismissed lifecycle: it latches the first non-empty
+// value locally and clears the latch when the user acts (Ctrl+E rename,
+// Enter-on-empty-input, or starting the next message). Peek semantics keep the
+// value available even if a turn-end render races the latch setup.
+func (r *Runner) TitleAnnouncement() string {
+	r.autoTitleMu.Lock()
+	defer r.autoTitleMu.Unlock()
+	return r.titleAnnouncement
 }
 
 func (r *Runner) Stats() ui.SessionStats {
@@ -1604,6 +1805,11 @@ func (r *Runner) Stats() ui.SessionStats {
 func (r *Runner) RotateSession() {
 	if r.sessionRecorder != nil {
 		r.sessionRecorder.Rotate()
+
+		r.autoTitleMu.Lock()
+		r.autoTitleDone = false
+		r.titleAnnouncement = ""
+		r.autoTitleMu.Unlock()
 	}
 }
 
@@ -1616,6 +1822,78 @@ func (r *Runner) CurrentSessionID() string {
 		return r.sessionRecorder.SessionID()
 	}
 	return ""
+}
+
+// SessionSummary returns the current session title ("" when untitled), used by
+// the startup rename-nudge hint to know whether a content-bearing session has
+// a name yet.
+func (r *Runner) SessionSummary() string {
+	if r.sessionRecorder != nil {
+		return r.sessionRecorder.Summary()
+	}
+	return ""
+}
+
+// ForkSession copies the current conversation into a new session and switches
+// the recorder onto it, returning the new session id and file path. The forked
+// session carries the same history, the current summary with a " (fork)"
+// suffix, the recorded branch, and any session grants. Fork-from-a-chosen-
+// message is deferred; this is end-of-conversation only.
+//
+// The recorder is retargeted via Recorder.RotateTo(newID) so WriteHistory's
+// metadata header stays the earliest line: the loader's latest-$set-wins merge
+// means RotateTo's header (written after WriteHistory's) overrides only the
+// header fields it carries (StartTime etc.), preserving the forked Summary.
+func (r *Runner) ForkSession() (newSessionID, path string, err error) {
+	if r.sessionRecorder == nil {
+		return "", "", fmt.Errorf("no session recorder active")
+	}
+	history := r.History()
+	if len(history) == 0 {
+		return "", "", fmt.Errorf("no conversation to fork yet — send a message first")
+	}
+	workDir := r.WorkDir()
+	if strings.TrimSpace(workDir) == "" {
+		return "", "", fmt.Errorf("no workspace available")
+	}
+	chatsDir, err := session.ChatsDir(workDir)
+	if err != nil {
+		return "", "", err
+	}
+	if err := os.MkdirAll(chatsDir, 0o700); err != nil {
+		return "", "", fmt.Errorf("create chats dir: %w", err)
+	}
+
+	newID := session.NewSessionID()
+	summary := r.sessionRecorder.Summary()
+	if strings.TrimSpace(summary) != "" {
+		summary += " (fork)"
+	}
+	filename := session.FilenameForSessionID(newID)
+	path = filepath.Join(chatsDir, filename)
+	if err := session.WriteHistory(path, newID, "", summary, history, r.SessionGrants()); err != nil {
+		return "", "", err
+	}
+	// Retarget the recorder onto the new file; subsequent turns append there.
+	r.sessionRecorder.RotateToFile(newID, filename)
+	// Re-assert the forked summary and branch via $set lines so they survive
+	// regardless of the recorder's fresh header.
+	if summary != "" {
+		_ = r.sessionRecorder.SetSummary(summary)
+	}
+	if r.lastBranch != "" {
+		_ = r.sessionRecorder.SetBranch(r.lastBranch)
+	}
+	return newID, path, nil
+}
+
+// RenameSession sets the current session's title in its JSONL metadata.
+// The caller (slash handler) sanitizes the title before invoking this.
+func (r *Runner) RenameSession(title string) error {
+	if r.sessionRecorder == nil {
+		return fmt.Errorf("no session recorder active")
+	}
+	return r.sessionRecorder.SetSummary(title)
 }
 
 func (r *Runner) storeLastRequest(req *provider.GenerateRequest) {
@@ -1634,3 +1912,10 @@ func defaultWorkDir() (string, error) {
 
 // getWorkDir is overridden in tests.
 var getWorkDir = os.Getwd
+
+func (r *Runner) agentKind() string {
+	if r.sessionRecorder != nil {
+		return r.sessionRecorder.Kind()
+	}
+	return "main"
+}

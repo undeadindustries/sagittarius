@@ -64,7 +64,7 @@ func (s *sessionMetrics) recordTurn() {
 // recordTurnUsage is the entry point for main-turn token accounting.
 // It updates the session totals, the last-turn snapshot (shown next to the
 // model in the footer), and the per-(provider,model,mode) breakdown.
-func (s *sessionMetrics) recordTurnUsage(prov, model, mode string, inTok, outTok int, costUSD float64, costKnown bool) {
+func (s *sessionMetrics) recordTurnUsage(prov, model, mode, agentType string, inTok, outTok int, costUSD float64, costKnown bool) {
 	s.mu.Lock()
 	s.inputTokens += inTok
 	s.outputTokens += outTok
@@ -81,7 +81,7 @@ func (s *sessionMetrics) recordTurnUsage(prov, model, mode string, inTok, outTok
 	s.lastCostUSD = costUSD
 	s.lastCostKnown = costKnown
 
-	s.updatePerKey(prov, model, mode, inTok, outTok, costUSD, costKnown)
+	s.updatePerKey(prov, model, mode, agentType, inTok, outTok, costUSD, costKnown)
 	s.mu.Unlock()
 }
 
@@ -99,7 +99,7 @@ func (s *sessionMetrics) setContextTokens(tokens int) {
 	s.mu.Unlock()
 }
 
-func (s *sessionMetrics) recordAuxUsage(prov, model, mode string, inTok, outTok int, costUSD float64, costKnown bool) {
+func (s *sessionMetrics) recordAuxUsage(prov, model, mode, agentType string, inTok, outTok int, costUSD float64, costKnown bool) {
 	s.mu.Lock()
 	s.inputTokens += inTok
 	s.outputTokens += outTok
@@ -107,15 +107,15 @@ func (s *sessionMetrics) recordAuxUsage(prov, model, mode string, inTok, outTok 
 	if costKnown {
 		s.costKnown = true
 	}
-	s.updatePerKey(prov, model, mode, inTok, outTok, costUSD, costKnown)
+	s.updatePerKey(prov, model, mode, agentType, inTok, outTok, costUSD, costKnown)
 	s.mu.Unlock()
 }
 
-func (s *sessionMetrics) updatePerKey(prov, model, mode string, inTok, outTok int, costUSD float64, costKnown bool) {
+func (s *sessionMetrics) updatePerKey(prov, model, mode, agentType string, inTok, outTok int, costUSD float64, costKnown bool) {
 	if s.perKey == nil {
 		s.perKey = make(map[string]*modelStats)
 	}
-	key := prov + "\x00" + model + "\x00" + mode
+	key := prov + "\x00" + model + "\x00" + mode + "\x00" + agentType
 	ms := s.perKey[key]
 	if ms == nil {
 		ms = &modelStats{}
@@ -169,6 +169,7 @@ func (s *sessionMetrics) usageSnapshot() []ui.ModelUsageStat {
 			Provider:  parts[0],
 			Model:     parts[1],
 			Mode:      parts[2],
+			Agent:     parts[3],
 			Requests:  ms.requests,
 			InTokens:  ms.inTokens,
 			OutTokens: ms.outTokens,
@@ -179,11 +180,11 @@ func (s *sessionMetrics) usageSnapshot() []ui.ModelUsageStat {
 	return out
 }
 
-func splitKey(k string) [3]string {
-	var out [3]string
+func splitKey(k string) [4]string {
+	var out [4]string
 	idx := 0
 	start := 0
-	for i := 0; i < len(k) && idx < 2; i++ {
+	for i := 0; i < len(k) && idx < 3; i++ {
 		if k[i] == 0 {
 			out[idx] = k[start:i]
 			idx++
