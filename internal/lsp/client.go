@@ -33,6 +33,9 @@ type Client struct {
 	pending  map[int64]chan *responseMsg
 	diags    map[string][]diagnostics.Finding
 	diagCond *sync.Cond
+	// docVersions tracks per-URI LSP document versions, 0 meaning the URI
+	// has never been opened. Guarded by mu, like diags.
+	docVersions map[string]int
 }
 
 type requestMsg struct {
@@ -100,12 +103,13 @@ func Start(ctx context.Context, rootDir, command string, args ...string) (*Clien
 	rootURI := "file://" + filepath.ToSlash(rootDir)
 
 	c := &Client{
-		cmd:     cmd,
-		in:      in,
-		out:     out,
-		cancel:  cancel,
-		pending: make(map[int64]chan *responseMsg),
-		diags:   make(map[string][]diagnostics.Finding),
+		cmd:         cmd,
+		in:          in,
+		out:         out,
+		cancel:      cancel,
+		pending:     make(map[int64]chan *responseMsg),
+		diags:       make(map[string][]diagnostics.Finding),
+		docVersions: make(map[string]int),
 	}
 	c.diagCond = sync.NewCond(&c.mu)
 
@@ -381,12 +385,36 @@ func (c *Client) Diagnostics(ctx context.Context, absPaths []string) ([]diagnost
 	// Simulate opening/updating the files so the server has fresh content to
 	// analyze. In a real editor we'd track live buffer content; for this CLI,
 	// reading from disk (the write_file tool already flushed it) is fine.
-	for i, p := range absPaths {
-		b, err := os.ReadFile(p)
-		if err == nil {
-			_ = c.DidOpen(p, string(b))
-			_ = c.DidChange(p, string(b), i+2)
+	//
+	// Exactly one state-changing notification per URI per call: didOpen the
+	// first time a URI is seen, didChange (with an incrementing version) on
+	// every later call. Sending both unconditionally on every call (as
+	// before) made the server publish diagnostics twice per round; the
+	// second, redundant publish could arrive after a later round had
+	// already cleared diags[uri] for its own wait, resurrecting a stale
+	// finding that the earlier round's edit had already fixed.
+	for i, uri := range uris {
+		b, err := os.ReadFile(absPaths[i])
+		if err != nil {
+			continue
 		}
+		text := string(b)
+
+		c.mu.Lock()
+		version := c.docVersions[uri]
+		c.mu.Unlock()
+
+		if version == 0 {
+			_ = c.DidOpen(absPaths[i], text)
+			version = 1
+		} else {
+			version++
+			_ = c.DidChange(absPaths[i], text, version)
+		}
+
+		c.mu.Lock()
+		c.docVersions[uri] = version
+		c.mu.Unlock()
 	}
 
 	waitCtx, cancel := context.WithTimeout(ctx, diagnosticsWaitTimeout)
