@@ -48,6 +48,10 @@ type mockHooks struct {
 	// reasoningOverride backs ReasoningOverride()/SetReasoningOverride()/
 	// ClearReasoningOverride(), mirroring Runner's ephemeral /reasoning pin.
 	reasoningOverride string
+	// memoryEntries backs AddMemory()/ListMemories()/RemoveMemory() with a
+	// stateful in-memory slice, so /memory command tests can assert real
+	// add/list/remove behavior.
+	memoryEntries []slash.MemoryEntry
 }
 
 func (m *mockHooks) RebuildRunner(context.Context) (string, string, error) {
@@ -62,6 +66,30 @@ func (m *mockHooks) ReloadSystemInstruction(context.Context) error {
 
 func (m *mockHooks) DiscoverModels(context.Context) []provider.ModelInfo {
 	return m.models
+}
+
+func (m *mockHooks) AddMemory(_ context.Context, text string, scope config.SettingScope) (string, error) {
+	path := "/tmp/AGENTS.md"
+	if scope == config.ScopeProject {
+		path = filepath.Join(m.workDir, "AGENTS.md")
+	}
+	m.memoryEntries = append(m.memoryEntries, slash.MemoryEntry{Scope: scope, Path: path, Text: text})
+	m.reloadCalls++ // mirrors appHooks.AddMemory reloading the system instruction
+	return path, nil
+}
+
+func (m *mockHooks) ListMemories() ([]slash.MemoryEntry, error) {
+	return m.memoryEntries, nil
+}
+
+func (m *mockHooks) RemoveMemory(_ context.Context, index int) (string, error) {
+	if index < 1 || index > len(m.memoryEntries) {
+		return "", fmt.Errorf("memory index %d out of range (1-%d)", index, len(m.memoryEntries))
+	}
+	removed := m.memoryEntries[index-1].Text
+	m.memoryEntries = append(m.memoryEntries[:index-1:index-1], m.memoryEntries[index:]...)
+	m.reloadCalls++ // mirrors appHooks.RemoveMemory reloading the system instruction
+	return removed, nil
 }
 
 func (m *mockHooks) SetProviderAPIKey(_ context.Context, providerID, apiKey string) error {
@@ -506,6 +534,191 @@ func TestMemoryReloadStub(t *testing.T) {
 	}
 	if hooks.reloadCalls != 1 {
 		t.Fatalf("reload calls = %d", hooks.reloadCalls)
+	}
+}
+
+func TestMemoryAddDefaultsToGlobalScope(t *testing.T) {
+	t.Parallel()
+	deps, _, hooks := testDeps(t, nil)
+	p := slash.NewProcessor()
+
+	result := p.Process(context.Background(), "/memory add prefers pnpm over npm", deps)
+
+	if result.Err != nil {
+		t.Fatalf("add error: %v", result.Err)
+	}
+	if len(hooks.memoryEntries) != 1 {
+		t.Fatalf("memoryEntries = %#v, want 1 entry", hooks.memoryEntries)
+	}
+	entry := hooks.memoryEntries[0]
+	if entry.Scope != config.ScopeGlobal {
+		t.Errorf("scope = %v, want ScopeGlobal", entry.Scope)
+	}
+	if entry.Text != "prefers pnpm over npm" {
+		t.Errorf("text = %q, want %q", entry.Text, "prefers pnpm over npm")
+	}
+	if hooks.reloadCalls != 1 {
+		t.Errorf("reloadCalls = %d, want 1 (memory add should reload the system instruction)", hooks.reloadCalls)
+	}
+	if len(result.Messages) != 1 || !strings.Contains(result.Messages[0], "Added to") {
+		t.Errorf("messages = %#v, want a confirmation naming the file", result.Messages)
+	}
+}
+
+func TestMemoryAddProjectFlag(t *testing.T) {
+	t.Parallel()
+	deps, _, hooks := testDeps(t, nil)
+	hooks.workDir = "/repo"
+	p := slash.NewProcessor()
+
+	result := p.Process(context.Background(), "/memory add --project CI takes 40 minutes", deps)
+
+	if result.Err != nil {
+		t.Fatalf("add error: %v", result.Err)
+	}
+	if len(hooks.memoryEntries) != 1 {
+		t.Fatalf("memoryEntries = %#v, want 1 entry", hooks.memoryEntries)
+	}
+	entry := hooks.memoryEntries[0]
+	if entry.Scope != config.ScopeProject {
+		t.Errorf("scope = %v, want ScopeProject", entry.Scope)
+	}
+	if entry.Text != "CI takes 40 minutes" {
+		t.Errorf("text = %q, want %q", entry.Text, "CI takes 40 minutes")
+	}
+}
+
+func TestMemoryAddRejectsEmptyText(t *testing.T) {
+	t.Parallel()
+	deps, _, hooks := testDeps(t, nil)
+	p := slash.NewProcessor()
+
+	result := p.Process(context.Background(), "/memory add", deps)
+
+	if result.Err != nil {
+		t.Fatalf("expected a usage message, not an error result: %v", result.Err)
+	}
+	if len(hooks.memoryEntries) != 0 {
+		t.Fatalf("expected no entry to be added, got %#v", hooks.memoryEntries)
+	}
+	if len(result.Messages) != 1 || !strings.Contains(result.Messages[0], "Usage:") {
+		t.Errorf("messages = %#v, want a usage hint", result.Messages)
+	}
+}
+
+func TestMemoryAddRejectsWhitespaceOnlyAfterProjectFlag(t *testing.T) {
+	t.Parallel()
+	deps, _, hooks := testDeps(t, nil)
+	p := slash.NewProcessor()
+
+	result := p.Process(context.Background(), "/memory add --project", deps)
+
+	if result.Err != nil {
+		t.Fatalf("expected a usage message, not an error result: %v", result.Err)
+	}
+	if len(hooks.memoryEntries) != 0 {
+		t.Fatalf("expected no entry to be added, got %#v", hooks.memoryEntries)
+	}
+}
+
+func TestMemoryListNumbersGlobalFirst(t *testing.T) {
+	t.Parallel()
+	deps, _, hooks := testDeps(t, nil)
+	hooks.memoryEntries = []slash.MemoryEntry{
+		{Scope: config.ScopeGlobal, Path: "/home/.sagittarius/AGENTS.md", Text: "global fact"},
+		{Scope: config.ScopeProject, Path: "/repo/AGENTS.md", Text: "project fact"},
+	}
+	p := slash.NewProcessor()
+
+	result := p.Process(context.Background(), "/memory list", deps)
+
+	if result.Err != nil {
+		t.Fatalf("list error: %v", result.Err)
+	}
+	if len(result.Messages) != 1 {
+		t.Fatalf("messages = %#v, want exactly one", result.Messages)
+	}
+	got := result.Messages[0]
+	if !strings.Contains(got, "1. [global] global fact") {
+		t.Errorf("expected numbered global entry, got:\n%s", got)
+	}
+	if !strings.Contains(got, "2. [project] project fact") {
+		t.Errorf("expected numbered project entry, got:\n%s", got)
+	}
+}
+
+func TestMemoryListEmpty(t *testing.T) {
+	t.Parallel()
+	deps, _, _ := testDeps(t, nil)
+	p := slash.NewProcessor()
+
+	result := p.Process(context.Background(), "/memory list", deps)
+
+	if result.Err != nil {
+		t.Fatalf("list error: %v", result.Err)
+	}
+	if len(result.Messages) != 1 || !strings.Contains(result.Messages[0], "No memory entries") {
+		t.Errorf("messages = %#v, want a no-entries message", result.Messages)
+	}
+}
+
+func TestMemoryRemoveByIndex(t *testing.T) {
+	t.Parallel()
+	deps, _, hooks := testDeps(t, nil)
+	hooks.memoryEntries = []slash.MemoryEntry{
+		{Scope: config.ScopeGlobal, Text: "keep me"},
+		{Scope: config.ScopeGlobal, Text: "remove me"},
+	}
+	p := slash.NewProcessor()
+
+	result := p.Process(context.Background(), "/memory remove 2", deps)
+
+	if result.Err != nil {
+		t.Fatalf("remove error: %v", result.Err)
+	}
+	if len(hooks.memoryEntries) != 1 || hooks.memoryEntries[0].Text != "keep me" {
+		t.Fatalf("memoryEntries = %#v, want only %q left", hooks.memoryEntries, "keep me")
+	}
+	if hooks.reloadCalls != 1 {
+		t.Errorf("reloadCalls = %d, want 1 (memory remove should reload the system instruction)", hooks.reloadCalls)
+	}
+	if len(result.Messages) != 1 || !strings.Contains(result.Messages[0], "remove me") {
+		t.Errorf("messages = %#v, want the removed text echoed back", result.Messages)
+	}
+}
+
+func TestMemoryRemoveOutOfRange(t *testing.T) {
+	t.Parallel()
+	deps, _, hooks := testDeps(t, nil)
+	hooks.memoryEntries = []slash.MemoryEntry{{Scope: config.ScopeGlobal, Text: "only entry"}}
+	p := slash.NewProcessor()
+
+	result := p.Process(context.Background(), "/memory remove 5", deps)
+
+	if result.Err == nil {
+		t.Fatal("expected an error for an out-of-range index")
+	}
+	if len(hooks.memoryEntries) != 1 {
+		t.Fatalf("expected no mutation on error, got %#v", hooks.memoryEntries)
+	}
+}
+
+func TestMemoryRemoveNonNumericArgument(t *testing.T) {
+	t.Parallel()
+	deps, _, hooks := testDeps(t, nil)
+	hooks.memoryEntries = []slash.MemoryEntry{{Scope: config.ScopeGlobal, Text: "only entry"}}
+	p := slash.NewProcessor()
+
+	result := p.Process(context.Background(), "/memory remove abc", deps)
+
+	if result.Err != nil {
+		t.Fatalf("expected a usage message, not an error result: %v", result.Err)
+	}
+	if len(result.Messages) != 1 || !strings.Contains(result.Messages[0], "Usage:") {
+		t.Errorf("messages = %#v, want a usage hint", result.Messages)
+	}
+	if len(hooks.memoryEntries) != 1 {
+		t.Fatalf("expected no mutation, got %#v", hooks.memoryEntries)
 	}
 }
 

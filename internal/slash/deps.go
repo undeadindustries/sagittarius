@@ -21,6 +21,16 @@ import (
 type Hooks interface {
 	RebuildRunner(ctx context.Context) (providerLabel, model string, err error)
 	ReloadSystemInstruction(ctx context.Context) error
+	// AddMemory appends text as a new managed-section bullet in scope's
+	// AGENTS.md (creating the file if needed) and reloads the system
+	// instruction, returning the resolved file path.
+	AddMemory(ctx context.Context, text string, scope config.SettingScope) (path string, err error)
+	// ListMemories returns every managed-section entry across both scopes,
+	// global first then project, in the order /memory remove indexes them.
+	ListMemories() ([]MemoryEntry, error)
+	// RemoveMemory deletes the 1-based index-th entry in ListMemories order
+	// and reloads the system instruction, returning the removed text.
+	RemoveMemory(ctx context.Context, index int) (removed string, err error)
 	DiscoverModels(ctx context.Context) []provider.ModelInfo
 	SetProviderAPIKey(ctx context.Context, providerID, apiKey string) error
 	ReloadMCP(ctx context.Context) (string, error)

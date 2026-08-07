@@ -265,10 +265,28 @@ and resets to off on the next launch.
 
 ### `/memory`
 
-- **Description:** Manage project memory files (`AGENTS.md`).
+- **Description:** Manage project memory files (`AGENTS.md`). Added memories live under
+  one `## Sagittarius Added Memories` heading appended to the target file; everything
+  else in the file is left untouched. A model-callable, confirmation-gated `save_memory`
+  tool wraps the same `add` path (append-only — deletion is a user-only action here).
 
 #### Sub-commands
 
+- **`add [--project] <text>`**
+  - **Description:** Append one memory entry. Defaults to the global
+    `~/.sagittarius/AGENTS.md` (matching gemini-cli's `save_memory` target); `--project`
+    targets the current repository's `AGENTS.md` instead (the same file `/init`
+    populates). Reloads the system prompt so it applies to the very next turn.
+  - **Usage:** `/memory add prefers pnpm over npm`, `/memory add --project CI takes about 40 minutes`
+- **`list`**
+  - **Description:** List every saved entry, numbered continuously with global entries
+    first then project, e.g. `1. [global]  Prefers pnpm over npm in this repo.`
+  - **Usage:** `/memory list`
+- **`remove <n>`**
+  - **Description:** Delete entry `n` (from `/memory list`'s numbering) and echo back the
+    removed text. Re-reads the file fresh, so a hand-edit since the last `/memory list`
+    is respected. Removing a file's last entry also removes its now-empty heading.
+  - **Usage:** `/memory remove 2`
 - **`reload`**
   - **Description:** Re-read memory files into the system prompt.
   - **Usage:** `/memory reload`
@@ -462,8 +480,8 @@ incrementally; track gaps in `AGENTS.md`.
 | ACP headless registry | Post-parity |
 
 Implemented: `/about`, `/chat`, `/clear`, `/compress`, `/copy`, `/diff`, `/goal`,
-`/grill`, `/init`, `/memory reload`, `/mcp` (list, reload, add/edit/remove wizard),
+`/grill`, `/init`, `/memory add|list|remove|reload`, `/mcp` (list, reload, add/edit/remove wizard),
 `/modes` (override, clear headlessly), `/model`, `/models`, `/mouse`, `/reasoning`,
 `/resume`, `/settings` (curated browser), `/skills` (list, reload), `/agents`
 (list, reload), `/stats`, `/system-prompt`, `/theme`, `/tools` (list, desc,
-enable/disable), `/undo`, `activate_skill` tool, `ask_user` tool.
+enable/disable), `/undo`, `activate_skill` tool, `ask_user` tool, `save_memory` tool.

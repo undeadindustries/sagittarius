@@ -113,6 +113,30 @@ func TestInteractionModeAllowPlanWritesPlansOnly(t *testing.T) {
 	}
 }
 
+// TestInteractionModeAllowSaveMemoryDeniedInReadOnlyModes ensures the model
+// cannot write memory from plan or ask mode: the user owns deletion, and
+// read-only research subagents (which run in ask mode) should never mutate
+// AGENTS.md.
+func TestInteractionModeAllowSaveMemoryDeniedInReadOnlyModes(t *testing.T) {
+	t.Parallel()
+
+	for _, mode := range []modes.Mode{modes.ModeAsk, modes.ModePlan} {
+		allowed, reason := InteractionModeAllow(mode, SaveMemoryToolName, map[string]any{
+			SaveMemoryParamText: "remember this",
+		}, nil)
+		if allowed || reason == "" {
+			t.Fatalf("%s mode should block save_memory, got allowed=%v reason=%q", mode, allowed, reason)
+		}
+	}
+
+	allowed, _ := InteractionModeAllow(modes.ModeAgent, SaveMemoryToolName, map[string]any{
+		SaveMemoryParamText: "remember this",
+	}, nil)
+	if !allowed {
+		t.Fatal("agent mode should allow save_memory")
+	}
+}
+
 func TestListDeclarationsForMode(t *testing.T) {
 	t.Parallel()
 

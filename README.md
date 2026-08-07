@@ -115,6 +115,13 @@ You can define custom rules and instructions that the agent must follow. These a
 - **Global rules:** Create `~/.sagittarius/AGENTS.md`. The agent will apply these rules across all projects.
 - **Project rules:** Create an `AGENTS.md` file in the root of your project. The agent will read this file when run within the project directory.
 
+Beyond hand-written rules, the agent can also curate its own durable memory in a managed section of these same files:
+
+- **`/memory add [--project] <text>`** — saves one fact or preference as a bullet under a `## Sagittarius Added Memories` heading (global by default; `--project` targets the current repo's `AGENTS.md` instead). Everything else in the file is left untouched.
+- **`/memory list`** — numbers every saved entry, global first then project, e.g. `1. [global] Prefers pnpm over npm in this repo.`
+- **`/memory remove <n>`** — deletes entry `n` from the numbered list and echoes back what was removed.
+- The model can also call a `save_memory` tool to save a fact itself — it always asks for confirmation first, and can only append (deleting a memory is a user-only action via `/memory remove`).
+
 ## Quick reference
 
 Interactive shortcuts, headless flags, and slash commands for the same features where they exist. Full slash-command tree: [docs/reference/commands.md](docs/reference/commands.md).

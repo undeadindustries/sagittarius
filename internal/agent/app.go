@@ -619,6 +619,54 @@ func (h *appHooks) ReloadSystemInstruction(ctx context.Context) error {
 	return h.app.runner.ReloadSystemInstruction()
 }
 
+// AddMemory appends text to scope's AGENTS.md and reloads the system
+// instruction so it applies to the very next turn.
+func (h *appHooks) AddMemory(ctx context.Context, text string, scope config.SettingScope) (string, error) {
+	if h.app == nil || h.app.runner == nil {
+		return "", fmt.Errorf("runner not available")
+	}
+	path, err := AddMemory(scope, h.app.runner.WorkDir(), text)
+	if err != nil {
+		return "", err
+	}
+	if err := h.ReloadSystemInstruction(ctx); err != nil {
+		return "", fmt.Errorf("memory saved to %s, but reload failed: %w", path, err)
+	}
+	return path, nil
+}
+
+// ListMemories returns every managed-section entry across both scopes.
+func (h *appHooks) ListMemories() ([]slash.MemoryEntry, error) {
+	if h.app == nil || h.app.runner == nil {
+		return nil, fmt.Errorf("runner not available")
+	}
+	entries, err := ListMemories(h.app.runner.WorkDir())
+	if err != nil {
+		return nil, err
+	}
+	out := make([]slash.MemoryEntry, len(entries))
+	for i, e := range entries {
+		out[i] = slash.MemoryEntry{Scope: e.Scope, Path: e.Path, Text: e.Text}
+	}
+	return out, nil
+}
+
+// RemoveMemory deletes the given 1-based ListMemories entry and reloads the
+// system instruction.
+func (h *appHooks) RemoveMemory(ctx context.Context, index int) (string, error) {
+	if h.app == nil || h.app.runner == nil {
+		return "", fmt.Errorf("runner not available")
+	}
+	removed, err := RemoveMemory(h.app.runner.WorkDir(), index)
+	if err != nil {
+		return "", err
+	}
+	if err := h.ReloadSystemInstruction(ctx); err != nil {
+		return "", fmt.Errorf("removed %q, but reload failed: %w", removed, err)
+	}
+	return removed, nil
+}
+
 func (h *appHooks) DiscoverModels(ctx context.Context) []provider.ModelInfo {
 	if h.app == nil {
 		return nil
@@ -1864,6 +1912,7 @@ func (r *Runner) SetRegistry(registry *tools.Registry) {
 	if config.SubagentsEnabled(r.settingsSnapshot(), nil) {
 		registry.Register(newTaskTool(r))
 	}
+	registry.Register(newSaveMemoryTool(r))
 
 	r.regMu.Lock()
 	r.mergeSchedulerGrantsLocked()
