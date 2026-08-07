@@ -522,6 +522,10 @@ func formatToolResult(name string, result map[string]any, writeDiff string) (tex
 		}
 	case FindSymbolToolName:
 		return formatFindSymbolResult(result), nil, false
+	case SaveMemoryToolName:
+		if path, ok := result["path"].(string); ok {
+			return fmt.Sprintf("Saved to %s", path), nil, false
+		}
 	}
 
 	// MCP tools (and any other tool) carry their payload under "result".
@@ -652,6 +656,10 @@ func formatConfirmSummary(toolName string, args map[string]any) string {
 			}
 		} else if u, ok := args[ParamURL].(string); ok {
 			return fmt.Sprintf("fetch %s", u)
+		}
+	case SaveMemoryToolName:
+		if text, ok := args[SaveMemoryParamText].(string); ok {
+			return fmt.Sprintf("remember: %s", text)
 		}
 	}
 	return toolName

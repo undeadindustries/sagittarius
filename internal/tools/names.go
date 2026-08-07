@@ -14,6 +14,7 @@ const (
 	WebFetchToolName        = "web_fetch"
 	EditToolName            = "edit"
 	TaskToolName            = "task"
+	SaveMemoryToolName      = "save_memory"
 	// AskUserToolName is the grill-mode structured question tool (registered by
 	// internal/agent, not NewBuiltinRegistry, but its name must be known here so
 	// the scheduler's read-only gate can special-case it).
@@ -38,6 +39,9 @@ const (
 
 	TaskParamDescription = "description"
 	TaskParamPrompt      = "prompt"
+
+	SaveMemoryParamText  = "text"
+	SaveMemoryParamScope = "scope"
 
 	GrepParamIncludePattern    = "include_pattern"
 	GrepParamExcludePattern    = "exclude_pattern"

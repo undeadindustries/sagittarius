@@ -337,6 +337,7 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 	if cfg.Settings != nil && config.SubagentsEnabled(cfg.Settings, nil) {
 		registry.Register(newTaskTool(runner))
 	}
+	registry.Register(newSaveMemoryTool(runner))
 
 	policy := approvalToPolicy(mode)
 	scheduler := tools.NewScheduler(registry, policy, cfg.Interactive, nil, ws)

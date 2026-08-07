@@ -3,6 +3,7 @@ package slash
 import (
 	"fmt"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/undeadindustries/sagittarius/internal/agents"
@@ -313,11 +314,35 @@ func parseScope(s string) (config.SettingScope, error) {
 	}
 }
 
+// MemoryEntry mirrors agent.MemoryEntry without importing internal/agent
+// (which imports internal/slash to implement Hooks), keeping the two
+// packages decoupled.
+type MemoryEntry struct {
+	Scope config.SettingScope
+	Path  string
+	Text  string
+}
+
 func memoryCommand() Command {
 	return Command{
 		Name:        "memory",
 		Description: "Manage project memory (AGENTS.md)",
 		SubCommands: []Command{
+			{
+				Name:        "add",
+				Description: "Add a memory entry: /memory add [--project] <text> (default global)",
+				Handler:     handleMemoryAdd,
+			},
+			{
+				Name:        "list",
+				Description: "List added memory entries, numbered for /memory remove",
+				Handler:     handleMemoryList,
+			},
+			{
+				Name:        "remove",
+				Description: "Remove a memory entry: /memory remove <number> (see /memory list)",
+				Handler:     handleMemoryRemove,
+			},
 			{
 				Name:        "reload",
 				Description: "Reload memory files into the system prompt",
@@ -325,6 +350,75 @@ func memoryCommand() Command {
 			},
 		},
 	}
+}
+
+// handleMemoryAdd adds text as a new memory entry. Global scope is the
+// default (matching gemini-cli's save_memory); "--project" as the first
+// token switches to the project's AGENTS.md instead.
+func handleMemoryAdd(ctx *Context) Result {
+	if ctx.Deps.Hooks == nil {
+		return InfoResult("Memory unavailable.")
+	}
+	scope := config.ScopeGlobal
+	text := strings.TrimSpace(ctx.Args)
+	if rest, cut := cutLeadingFlag(text, "--project"); cut {
+		scope = config.ScopeProject
+		text = rest
+	}
+	if text == "" {
+		return InfoResult("Usage: /memory add [--project] <text>")
+	}
+	path, err := ctx.Deps.Hooks.AddMemory(ctx.Ctx, text, scope)
+	if err != nil {
+		return ErrorResult(fmt.Errorf("add memory: %w", err))
+	}
+	return InfoResult(fmt.Sprintf("Added to %s", path))
+}
+
+// cutLeadingFlag removes flag from the start of args (as its own token) and
+// reports whether it was present.
+func cutLeadingFlag(args, flag string) (rest string, ok bool) {
+	if args == flag {
+		return "", true
+	}
+	if rest, found := strings.CutPrefix(args, flag+" "); found {
+		return strings.TrimSpace(rest), true
+	}
+	return args, false
+}
+
+func handleMemoryList(ctx *Context) Result {
+	if ctx.Deps.Hooks == nil {
+		return InfoResult("Memory unavailable.")
+	}
+	entries, err := ctx.Deps.Hooks.ListMemories()
+	if err != nil {
+		return ErrorResult(fmt.Errorf("list memory: %w", err))
+	}
+	if len(entries) == 0 {
+		return InfoResult("No memory entries. Add one with /memory add <text>.")
+	}
+	lines := make([]string, 0, len(entries))
+	for i, e := range entries {
+		lines = append(lines, fmt.Sprintf("%d. [%s] %s", i+1, e.Scope, e.Text))
+	}
+	return InfoResult(strings.Join(lines, "\n"))
+}
+
+func handleMemoryRemove(ctx *Context) Result {
+	if ctx.Deps.Hooks == nil {
+		return InfoResult("Memory unavailable.")
+	}
+	arg := strings.TrimSpace(ctx.Args)
+	index, err := strconv.Atoi(arg)
+	if err != nil {
+		return InfoResult("Usage: /memory remove <number> (see /memory list)")
+	}
+	removed, err := ctx.Deps.Hooks.RemoveMemory(ctx.Ctx, index)
+	if err != nil {
+		return ErrorResult(fmt.Errorf("remove memory: %w", err))
+	}
+	return InfoResult(fmt.Sprintf("Removed: %s", removed))
 }
 
 func skillsCommand() Command {
