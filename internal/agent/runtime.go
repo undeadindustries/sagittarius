@@ -34,6 +34,10 @@ type RuntimeConfig struct {
 	Trusted       bool
 	// AllowFix permits run_project_checks to run mutating formatters (fix=true).
 	AllowFix bool
+	// EditEnabled toggles registration of the edit tool (default true).
+	EditEnabled bool
+	// SubagentsEnabled toggles subagent registration (default false).
+	SubagentsEnabled bool
 	// SymbolsEnabled toggles registration of the find_symbol tool (default true).
 	SymbolsEnabled bool
 	// SymbolsPreferGopls tweaks find_symbol's description on Go modules.
@@ -71,6 +75,8 @@ func NewRuntime(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 		ClientName:         cfg.ClientName,
 		Version:            cfg.ClientVersion,
 		AllowFix:           cfg.AllowFix,
+		SubagentsEnabled:   cfg.SubagentsEnabled,
+		EditEnabled:        cfg.EditEnabled,
 		SymbolsEnabled:     cfg.SymbolsEnabled,
 		SymbolsPreferGopls: cfg.SymbolsPreferGopls,
 		WebSearchEnabled:   cfg.WebSearchEnabled,
