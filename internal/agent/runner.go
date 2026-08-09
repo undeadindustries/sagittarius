@@ -9,6 +9,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -93,6 +94,10 @@ type RunnerConfig struct {
 	InitialGoal *goal.Snapshot
 	// InitialGrill pre-populates the active grill-me session from a resumed session.
 	InitialGrill *grill.Snapshot
+	// InitialConstraints pre-populates standing session constraints (see
+	// constraints.go) from a resumed session, so a "do not touch X yet" limit
+	// set before --resume survives across the restart.
+	InitialConstraints []string
 	// VerboseLog, when non-nil, receives a full timestamped transcript of every
 	// request sent to the provider and every response/tool result received
 	// (see --log-verbose). It is opt-in and independent of debug logging; the
@@ -196,6 +201,12 @@ type Runner struct {
 	grillMu     sync.RWMutex
 	activeGrill *grill.Session
 
+	// constraintsMu guards constraints, the standing list of user-stated scope
+	// limits ("do not touch AGENTS.md yet") that must survive masking and
+	// compression, unlike a plain history message. See constraints.go.
+	constraintsMu sync.RWMutex
+	constraints   []string
+
 	// verboseLog is the optional --log-verbose transcript sink; nil-safe (see
 	// verboselog.go) so hot-path call sites never need to check for nil.
 	verboseLog *verboseLog
@@ -215,6 +226,39 @@ func (r *Runner) LoadedMemoryFiles() []string {
 // Used by the TUI to drive "@path" file-mention autocompletion.
 func (r *Runner) Workspace() *tools.Workspace {
 	return r.workspace
+}
+
+// skillResolver returns the skill manager backing "@skill:name" mentions, or
+// nil when no catalog is attached (tests, degraded startup). The nil checks are
+// explicit rather than a single return: handing back a nil *skills.Manager
+// would box into a non-nil interface and defeat the caller's nil check.
+func (r *Runner) skillResolver() atmention.SkillResolver {
+	if r.runtime == nil || r.runtime.Catalog == nil {
+		return nil
+	}
+	mgr := r.runtime.Catalog.SkillManager()
+	if mgr == nil {
+		return nil
+	}
+	return mgr
+}
+
+// SkillNames lists the installed, enabled skill names for "@skill:"
+// autocompletion. It returns nil when no catalog is attached.
+func (r *Runner) SkillNames() []string {
+	if r.runtime == nil || r.runtime.Catalog == nil {
+		return nil
+	}
+	mgr := r.runtime.Catalog.SkillManager()
+	if mgr == nil {
+		return nil
+	}
+	defs := mgr.Skills()
+	names := make([]string, 0, len(defs))
+	for _, d := range defs {
+		names = append(names, d.Name)
+	}
+	return names
 }
 
 // Close releases resources the runner owns directly — currently only the
@@ -329,6 +373,9 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 	}
 	if cfg.InitialGrill != nil {
 		runner.activeGrill = grill.FromSnapshot(cfg.InitialGrill)
+	}
+	if len(cfg.InitialConstraints) > 0 {
+		runner.constraints = append([]string(nil), cfg.InitialConstraints...)
 	}
 
 	registerGoalTools(runner, registry)
@@ -693,12 +740,13 @@ func (r *Runner) RunTurn(ctx context.Context, userInput string) (<-chan ui.Strea
 		return ch, nil
 	}
 
-	// Expand "@path" references into the message parts sent to the model. The
-	// scrollback and session history keep the raw text the user typed; only the
-	// model-bound parts gain the injected file content. A resolution failure
-	// (missing file, directory, binary, outside workspace) aborts the turn with a
-	// surfaced error rather than silently dropping context.
-	parts, err := atmention.Expand(r.workspace, userInput)
+	// Expand "@path" and "@skill:name" references into the message parts sent to
+	// the model. The scrollback and session history keep the raw text the user
+	// typed; only the model-bound parts gain the injected file content and skill
+	// instructions. A resolution failure (missing file, directory, binary,
+	// outside workspace, unknown skill) aborts the turn with a surfaced error
+	// rather than silently dropping context.
+	parts, err := atmention.Expand(r.workspace, userInput, r.skillResolver())
 	if err != nil {
 		r.turnActive.Store(false)
 		ch := make(chan ui.StreamEvent, 2)
@@ -1067,9 +1115,10 @@ func (r *Runner) rebuildBasePrompt() {
 		ToolNames:      toolNames,
 		Interactive:    r.interactive,
 		IsGitRepo:      isGitRepo(r.workDir),
-		SandboxEnabled: false, // sandbox not ported (AD-017)
+		OS:             runtime.GOOS,
 		EditEnabled:    containsString(toolNames, tools.EditToolName),
 		SymbolsEnabled: containsString(toolNames, tools.FindSymbolToolName),
+		MemoryEnabled:  containsString(toolNames, tools.SaveMemoryToolName),
 	})
 
 	if memory = strings.TrimSpace(memory); memory != "" {
@@ -1088,6 +1137,18 @@ func (r *Runner) applyModeSystemSuffix() {
 	// summarizing/complete sessions are past the interview phase.
 	if g := r.Grill(); g != nil && g.Status == grill.StatusActive {
 		directive := grill.Directive(g.Topic, r.grillDirectiveConfig())
+		if suffix != "" {
+			suffix = strings.TrimRight(suffix, "\n") + "\n\n" + directive
+		} else {
+			suffix = directive
+		}
+	}
+	// Standing session constraints go last (highest recency) in the suffix,
+	// which is itself appended after systemBase (personality prompt + memory),
+	// so they are the final text the model reads and outrank the mode suffix,
+	// the grill directive, and the tool-invocation mandate baked into systemBase.
+	if constraints := r.Constraints(); len(constraints) > 0 {
+		directive := renderConstraintsDirective(constraints)
 		if suffix != "" {
 			suffix = strings.TrimRight(suffix, "\n") + "\n\n" + directive
 		} else {

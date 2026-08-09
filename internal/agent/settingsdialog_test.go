@@ -41,3 +41,32 @@ func TestApplySettingValueEditAndSubagents(t *testing.T) {
 		t.Errorf("subagents.enabled was not cleared")
 	}
 }
+
+func TestApplySettingValueDefaultMode(t *testing.T) {
+	s := &config.Settings{}
+
+	if err := applySettingValue(s, "sagittarius.defaultMode", "plan"); err != nil {
+		t.Fatalf("apply defaultMode: %v", err)
+	}
+	if s.Sagittarius == nil || s.Sagittarius.DefaultMode != "plan" {
+		t.Errorf("defaultMode = %q, want plan", s.Sagittarius.DefaultMode)
+	}
+
+	if err := clearSettingValue(s, "sagittarius.defaultMode"); err != nil {
+		t.Fatalf("clear defaultMode: %v", err)
+	}
+	if s.Sagittarius.DefaultMode != "" {
+		t.Errorf("defaultMode was not cleared, got %q", s.Sagittarius.DefaultMode)
+	}
+}
+
+func TestApplySettingValueDefaultModeRejectsUnknownValue(t *testing.T) {
+	s := &config.Settings{}
+
+	if err := applySettingValue(s, "sagittarius.defaultMode", "yolo"); err == nil {
+		t.Fatal("expected an error for an unrecognized mode name")
+	}
+	if s.Sagittarius != nil && s.Sagittarius.DefaultMode != "" {
+		t.Errorf("expected no mutation on a rejected value, got %q", s.Sagittarius.DefaultMode)
+	}
+}

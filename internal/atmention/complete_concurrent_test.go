@@ -19,7 +19,7 @@ func TestFilesConcurrentNonBlocking(t *testing.T) {
 		files["dir/file"+itoa(i)+".go"] = "x"
 	}
 	ws := newWorkspace(t, files)
-	idx := NewIndex(ws)
+	idx := NewIndex(ws, nil)
 
 	const goroutines = 32
 	const itersEach = 200

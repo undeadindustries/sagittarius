@@ -54,8 +54,20 @@ func LoadSession(filePath string) (*ConversationRecord, error) {
 		SessionGrants: meta.SessionGrants,
 		Goal:          meta.Goal,
 		Grill:         meta.Grill,
+		Constraints:   derefConstraints(meta.Constraints),
 		Messages:      messages,
 	}, nil
+}
+
+// derefConstraints converts the pointer-indirected wire representation back
+// into a plain slice for consumers: nil pointer (never set) and a pointer to
+// an empty slice (explicitly cleared) both surface as a nil/empty result,
+// since ConversationRecord has no further use for the distinction.
+func derefConstraints(p *[]string) []string {
+	if p == nil {
+		return nil
+	}
+	return *p
 }
 
 // parseLine interprets one JSONL line, updating meta and messages in-place.
@@ -349,6 +361,9 @@ func applyMetaUpdate(dst, src *MetadataRecord) {
 	}
 	if src.Grill != nil {
 		dst.Grill = src.Grill
+	}
+	if src.Constraints != nil {
+		dst.Constraints = src.Constraints
 	}
 	if len(src.SessionGrants) > 0 {
 		for _, g := range src.SessionGrants {

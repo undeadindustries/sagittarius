@@ -784,6 +784,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 	var initialGrants []string
 	var initialGoal *goal.Snapshot
 	var initialGrill *grill.Snapshot
+	var initialConstraints []string
 
 	projectRoot := wd
 	if projectRoot == "" {
@@ -816,6 +817,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		initialGrants = result.Record.SessionGrants
 		initialGoal = result.Record.Goal
 		initialGrill = result.Record.Grill
+		initialConstraints = result.Record.Constraints
 		mgr, mgrErr := session.NewManagerForResume(projectRoot, sessID, result)
 		if mgrErr != nil {
 			slog.Warn("session recording disabled: cannot open recorder for resumed session", "err", mgrErr)
@@ -867,6 +869,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		InitialSessionGrants: initialGrants,
 		InitialGoal:          initialGoal,
 		InitialGrill:         initialGrill,
+		InitialConstraints:   initialConstraints,
 		Settings:             settings,
 		InitialMode:          initialMode,
 		ModelPinned:          modelPinned,

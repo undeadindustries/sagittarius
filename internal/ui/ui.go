@@ -38,7 +38,9 @@ type Options struct {
 	// it during the session.
 	ShowThinking bool
 	// ToolkitChecklistDismissed prevents the host toolkit checklist from showing
-	// at startup (settings ui.toolkitChecklistDismissed).
+	// at startup (settings ui.toolkitChecklistDismissed). Despite the name it now
+	// means "seen or dismissed": the checklist runs on first launch only, marks
+	// this true when its report renders, and afterwards shows only via /toolkit.
 	ToolkitChecklistDismissed bool
 	// NeedsOnboarding opens the first-run provider setup overlay before the
 	// first chat turn when no provider or API key is configured.

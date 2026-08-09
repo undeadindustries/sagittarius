@@ -8,39 +8,27 @@ package prompt
 
 // personaProfile holds role-specific copy shared across personalities.
 type personaProfile struct {
-	// roleNoun completes "You are <model>, ... <roleNoun>." in the identity line.
+	// roleNoun completes "You are Sagittarius, <roleNoun>." in the identity line.
 	roleNoun string
 	// helpClause is the one-sentence role summary after the identity line.
 	helpClause string
-	// header opens the role section for stub personalities (unused by programmer).
-	header string
 	// bullets are role-specific behavioral directives for stub personalities.
 	bullets []string
 }
 
 var programmerProfile = personaProfile{
-	roleNoun:   "an AI coding assistant",
+	roleNoun:   "a senior level programmer with decades of deep experience in programming production-ready, scalable apps",
 	helpClause: "You help users with software engineering tasks using the tools available to you.",
 }
 
 var sysadminProfile = personaProfile{
-	roleNoun:   "an AI system administration assistant",
-	helpClause: "You help users operate, configure, and troubleshoot systems using the tools available to you.",
-	header:     "You are operating as a **system administration assistant**.",
-	bullets: []string{
-		"Treat every system as potentially production: explain a command's purpose and impact before running it, and prefer idempotent, reversible operations.",
-		"Never run destructive or irreversible commands (deleting data, dropping tables, force-pushing, reformatting) without explicit user confirmation.",
-		"Never run commands that are not related to the user's request.",
-		"Always make a backup of files, settings or databases before making changes.",
-		"Respect least privilege and avoid exposing or logging secrets, keys, or credentials.",
-		"**DO NOT** agree just to agree. If the user's approach has a better alternative, say so with a reason.",
-	},
+	roleNoun:   "a senior systems administrator with decades of deep experience setting up and maintaining systems that have high uptime, are secure, and never become inaccessible to the system administrator",
+	helpClause: "You help users operate, configure, and troubleshoot systems, and you write production-grade shell and Python automation, using the tools available to you.",
 }
 
 var personalAssistantProfile = personaProfile{
-	roleNoun:   "an AI personal assistant",
+	roleNoun:   "a personal assistant with decades of deep experience organizing, researching, and drafting so nothing is dropped and nothing is missed",
 	helpClause: "You help users organize, research, draft, and complete everyday tasks using the tools available to you.",
-	header:     "You are operating as a **personal assistant**.",
 	bullets: []string{
 		"Be concise, proactive, and well-organized; surface the next useful step rather than waiting to be asked.",
 		"Ask a clarifying question when a request is ambiguous instead of guessing at intent.",
@@ -50,9 +38,8 @@ var personalAssistantProfile = personaProfile{
 }
 
 var creativeAssistantProfile = personaProfile{
-	roleNoun:   "an AI creative assistant",
+	roleNoun:   "a creative assistant with decades of deep experience in writing, ideation, and iterating creative work to a finished piece",
 	helpClause: "You help users brainstorm, write, and iterate on creative work using the tools available to you.",
-	header:     "You are operating as a **creative assistant**.",
 	bullets: []string{
 		"Offer multiple distinct directions and embrace bold, imaginative ideas while honoring any stated constraints.",
 		"Build on the user's voice and intent rather than overriding it.",
@@ -65,7 +52,7 @@ var creativeAssistantProfile = personaProfile{
 func buildForPersonality(opts Options) string {
 	switch normalizePersonality(opts.Personality) {
 	case PersonalitySysadmin:
-		return personaPrompt(sysadminProfile, opts)
+		return buildSysadminPrompt(opts)
 	case PersonalityPersonalAssistant:
 		return personaPrompt(personalAssistantProfile, opts)
 	case PersonalityCreativeAssistant:
@@ -95,14 +82,11 @@ func personaPrompt(p personaProfile, opts Options) string {
 	if !lite && opts.IsGitRepo {
 		sections = append(sections, liteGit())
 	}
-	if opts.SandboxEnabled {
-		sections = append(sections, liteSandbox())
-	}
 	return joinSections(sections)
 }
 
 func personaRole(p personaProfile, lite bool) string {
-	lines := []string{p.header, ""}
+	var lines []string
 	for _, b := range p.bullets {
 		lines = append(lines, "- "+b)
 	}

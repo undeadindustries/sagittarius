@@ -17,11 +17,33 @@ import "strings"
 // '@' in email addresses or decorators (e.g. "rob@example.com") as a file
 // reference, while still surfacing genuine typos in intended mentions.
 
-// scanMentions returns the unescaped path strings referenced by unescaped '@'
+// skillPrefix marks a mention as a skill reference ("@skill:golang") rather
+// than a workspace path. ':' is not a token delimiter, so scanPath already
+// reads "skill:golang" as one token and classification happens after the scan.
+const skillPrefix = "skill:"
+
+// mentionKind distinguishes a workspace file reference from a skill reference.
+type mentionKind int
+
+const (
+	// kindPath is an "@path/to/file" workspace file reference.
+	kindPath mentionKind = iota
+	// kindSkill is an "@skill:<name>" reference to an installed skill.
+	kindSkill
+)
+
+// mention is one resolved '@' token: a workspace path as the user wrote it, or
+// a skill name with the "skill:" prefix already stripped.
+type mention struct {
+	kind mentionKind
+	name string
+}
+
+// scanMentions returns the unescaped mentions referenced by unescaped '@'
 // tokens in query, in order of appearance. Escaped "\@" is ignored.
-func scanMentions(query string) []string {
+func scanMentions(query string) []mention {
 	runes := []rune(query)
-	var paths []string
+	var out []mention
 	for i := 0; i < len(runes); i++ {
 		if runes[i] != '@' {
 			continue
@@ -29,13 +51,23 @@ func scanMentions(query string) []string {
 		if isEscaped(runes, i) || !isMentionStart(runes, i) {
 			continue
 		}
-		path, next := scanPath(runes, i+1)
-		if path != "" {
-			paths = append(paths, path)
+		token, next := scanPath(runes, i+1)
+		if token != "" {
+			out = append(out, classify(token))
 		}
 		i = next - 1
 	}
-	return paths
+	return out
+}
+
+// classify splits a scanned token into a skill or path mention. A bare
+// "@skill:" with no name stays a path mention so the usual "no such file"
+// error surfaces instead of the token being silently dropped.
+func classify(token string) mention {
+	if len(token) > len(skillPrefix) && strings.EqualFold(token[:len(skillPrefix)], skillPrefix) {
+		return mention{kind: kindSkill, name: token[len(skillPrefix):]}
+	}
+	return mention{kind: kindPath, name: token}
 }
 
 // isMentionStart reports whether the '@' at index i begins a fresh token: it is

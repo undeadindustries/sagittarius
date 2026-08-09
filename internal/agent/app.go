@@ -318,17 +318,29 @@ func (a *App) Complete(input string) ui.Completions {
 	return ui.Completions{Items: items, ReplaceFrom: comp.ReplaceFrom}
 }
 
-// CompleteMention implements ui.MentionCompleter, providing "@path" file
-// completions sourced from the runner's workspace. It is read-only and
-// non-blocking (cached workspace listing) so the TUI can call it per keystroke.
+// CompleteMention implements ui.MentionCompleter, providing "@path" file and
+// "@skill:name" completions sourced from the runner's workspace and skill
+// catalog. It is read-only and non-blocking (cached workspace listing, in-memory
+// skill list) so the TUI can call it per keystroke.
 func (a *App) CompleteMention(input string, cursor int) ui.Completions {
 	if a.runner == nil {
 		return ui.Completions{}
 	}
 	if a.mentions == nil {
-		a.mentions = atmention.NewIndex(a.runner.Workspace())
+		// The skill source is a method value on the App, not a snapshot, so a
+		// /skills reload or a runner rebuild is reflected without discarding
+		// the cached file index.
+		a.mentions = atmention.NewIndex(a.runner.Workspace(), a.skillNames)
 	}
 	return a.mentions.Complete(input, cursor)
+}
+
+// skillNames lists installed skill names for "@skill:" completion.
+func (a *App) skillNames() []string {
+	if a.runner == nil {
+		return nil
+	}
+	return a.runner.SkillNames()
 }
 
 // CycleInteractionMode advances agent → plan → ask → debug → agent.
@@ -1173,6 +1185,30 @@ func (h *appHooks) ClearGrill(note string) error {
 	return nil
 }
 
+// AddConstraint adds a standing session scope limit (see /constraints).
+func (h *appHooks) AddConstraint(text string) error {
+	if h.app == nil || h.app.runner == nil {
+		return fmt.Errorf("runner not available")
+	}
+	return h.app.runner.AddConstraint(text)
+}
+
+// ListConstraints returns the active standing session constraints.
+func (h *appHooks) ListConstraints() []string {
+	if h.app == nil || h.app.runner == nil {
+		return nil
+	}
+	return h.app.runner.Constraints()
+}
+
+// ClearConstraints removes every standing session constraint.
+func (h *appHooks) ClearConstraints() error {
+	if h.app == nil || h.app.runner == nil {
+		return fmt.Errorf("runner not available")
+	}
+	return h.app.runner.ClearConstraints()
+}
+
 // completeGrillAfterSpec flips a summarizing grill session to StatusComplete
 // once its spec-writing turn (Result.SubmitPrompt + CompleteGrillAfter) has
 // finished streaming. A no-op if the session moved on for any other reason
@@ -1654,12 +1690,21 @@ func (h *appHooks) ToolkitDismiss() error {
 	if h.app == nil {
 		return fmt.Errorf("app not available")
 	}
-	docs := h.app.docs
-	if docs == nil {
-		return fmt.Errorf("settings documents not loaded")
-	}
+	return h.app.MarkToolkitChecklistShown()
+}
 
-	return docs.MutateGlobal(func(s *config.Settings) error {
+// MarkToolkitChecklistShown implements ui.ToolkitChecklistMarker. It records
+// that the first-launch checklist report has rendered, persisting
+// ui.toolkitChecklistDismissed so subsequent launches do not auto-run the
+// checklist. This is the same write /toolkit dismiss performs; the two paths
+// differ only in the message shown to the user. Best-effort: a settings write
+// failure is non-fatal and surfaced only via the debug log, never as a startup
+// error. Returns nil when settings documents are not loaded (tests).
+func (a *App) MarkToolkitChecklistShown() error {
+	if a.docs == nil {
+		return nil
+	}
+	return a.docs.MutateGlobal(func(s *config.Settings) error {
 		return s.SetUIToolkitChecklistDismissed(true)
 	})
 }

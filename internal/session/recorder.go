@@ -323,6 +323,28 @@ func (r *Recorder) SetGrill(g *grill.Snapshot) error {
 	return r.appendLineLocked(set)
 }
 
+// SetConstraints appends a standing-constraints metadata update to the
+// session file. constraints is copied into a freshly allocated, non-nil
+// slice (even when empty) so an explicit clear marshals as "[]" rather than
+// "null" — the loader's applyMetaUpdate treats a nil pointer as "untouched"
+// and a non-nil pointer (however short) as "replace", so this is what makes
+// /constraints clear actually stick across a reload.
+func (r *Recorder) SetConstraints(constraints []string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.disabled {
+		return nil
+	}
+	snap := make([]string, len(constraints))
+	copy(snap, constraints)
+	set := SetRecord{
+		Set: &MetadataRecord{
+			Constraints: &snap,
+		},
+	}
+	return r.appendLineLocked(set)
+}
+
 // SetSummary appends a session-title metadata update to the session file. The
 // loader already prefers MetadataRecord.Summary over the first user message
 // when building a display name, so this is the single write path for both

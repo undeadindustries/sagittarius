@@ -16,12 +16,12 @@ func toolkitCommand() Command {
 		SubCommands: []Command{
 			{
 				Name:        "dismiss",
-				Description: "Permanently dismiss the automatic toolkit checklist on startup",
+				Description: "Permanently dismiss the toolkit checklist (it otherwise shows once on first launch)",
 				Handler: func(ctx *Context) Result {
 					if err := ctx.Deps.Hooks.ToolkitDismiss(); err != nil {
 						return ErrorResult(err)
 					}
-					return Result{Handled: true, Scrollback: []ScrollbackEntry{{Text: "Toolkit checklist permanently dismissed.", Role: ScrollInfo}}}
+					return Result{Handled: true, Scrollback: []ScrollbackEntry{{Text: "Toolkit checklist dismissed; it will no longer appear automatically.", Role: ScrollInfo}}}
 				},
 			},
 		},

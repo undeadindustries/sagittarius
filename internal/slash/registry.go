@@ -124,6 +124,7 @@ func (r *Registry) registerBuiltins() {
 		systemPromptCommand(),
 		modesCommand(),
 		memoryCommand(),
+		constraintsCommand(),
 		skillsCommand(),
 		mcpCommand(),
 		toolsCommand(),

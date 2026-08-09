@@ -52,6 +52,10 @@ type mockHooks struct {
 	// stateful in-memory slice, so /memory command tests can assert real
 	// add/list/remove behavior.
 	memoryEntries []slash.MemoryEntry
+	// constraints backs AddConstraint()/ListConstraints()/ClearConstraints()
+	// with a stateful in-memory slice, so /constraints command tests can
+	// assert real add/list/clear behavior.
+	constraints []string
 }
 
 func (m *mockHooks) RebuildRunner(context.Context) (string, string, error) {
@@ -90,6 +94,25 @@ func (m *mockHooks) RemoveMemory(_ context.Context, index int) (string, error) {
 	m.memoryEntries = append(m.memoryEntries[:index-1:index-1], m.memoryEntries[index:]...)
 	m.reloadCalls++ // mirrors appHooks.RemoveMemory reloading the system instruction
 	return removed, nil
+}
+
+func (m *mockHooks) AddConstraint(text string) error {
+	for _, existing := range m.constraints {
+		if strings.EqualFold(existing, text) {
+			return nil
+		}
+	}
+	m.constraints = append(m.constraints, text)
+	return nil
+}
+
+func (m *mockHooks) ListConstraints() []string {
+	return m.constraints
+}
+
+func (m *mockHooks) ClearConstraints() error {
+	m.constraints = nil
+	return nil
 }
 
 func (m *mockHooks) SetProviderAPIKey(_ context.Context, providerID, apiKey string) error {
@@ -719,6 +742,80 @@ func TestMemoryRemoveNonNumericArgument(t *testing.T) {
 	}
 	if len(hooks.memoryEntries) != 1 {
 		t.Fatalf("expected no mutation, got %#v", hooks.memoryEntries)
+	}
+}
+
+func TestConstraintsAddRejectsEmptyText(t *testing.T) {
+	t.Parallel()
+	deps, _, hooks := testDeps(t, nil)
+	p := slash.NewProcessor()
+
+	result := p.Process(context.Background(), "/constraints add", deps)
+
+	if result.Err != nil {
+		t.Fatalf("expected a usage message, not an error result: %v", result.Err)
+	}
+	if len(hooks.constraints) != 0 {
+		t.Fatalf("expected no constraint to be added, got %#v", hooks.constraints)
+	}
+	if len(result.Messages) != 1 || !strings.Contains(result.Messages[0], "Usage:") {
+		t.Errorf("messages = %#v, want a usage hint", result.Messages)
+	}
+}
+
+func TestConstraintsAddAndList(t *testing.T) {
+	t.Parallel()
+	deps, _, hooks := testDeps(t, nil)
+	p := slash.NewProcessor()
+
+	addResult := p.Process(context.Background(), "/constraints add do not touch AGENTS.md yet", deps)
+	if addResult.Err != nil {
+		t.Fatalf("add error: %v", addResult.Err)
+	}
+	if len(hooks.constraints) != 1 || hooks.constraints[0] != "do not touch AGENTS.md yet" {
+		t.Fatalf("constraints = %#v, want 1 entry", hooks.constraints)
+	}
+
+	listResult := p.Process(context.Background(), "/constraints list", deps)
+	if listResult.Err != nil {
+		t.Fatalf("list error: %v", listResult.Err)
+	}
+	if len(listResult.Messages) != 1 || !strings.Contains(listResult.Messages[0], "1. do not touch AGENTS.md yet") {
+		t.Errorf("messages = %#v, want a numbered constraint", listResult.Messages)
+	}
+}
+
+func TestConstraintsListEmpty(t *testing.T) {
+	t.Parallel()
+	deps, _, _ := testDeps(t, nil)
+	p := slash.NewProcessor()
+
+	result := p.Process(context.Background(), "/constraints list", deps)
+
+	if result.Err != nil {
+		t.Fatalf("list error: %v", result.Err)
+	}
+	if len(result.Messages) != 1 || !strings.Contains(result.Messages[0], "No standing constraints") {
+		t.Errorf("messages = %#v, want a no-constraints message", result.Messages)
+	}
+}
+
+func TestConstraintsClear(t *testing.T) {
+	t.Parallel()
+	deps, _, hooks := testDeps(t, nil)
+	hooks.constraints = []string{"do not touch AGENTS.md yet"}
+	p := slash.NewProcessor()
+
+	result := p.Process(context.Background(), "/constraints clear", deps)
+
+	if result.Err != nil {
+		t.Fatalf("clear error: %v", result.Err)
+	}
+	if len(hooks.constraints) != 0 {
+		t.Fatalf("expected constraints cleared, got %#v", hooks.constraints)
+	}
+	if len(result.Messages) != 1 || !strings.Contains(result.Messages[0], "Cleared") {
+		t.Errorf("messages = %#v, want a cleared confirmation", result.Messages)
 	}
 }
 

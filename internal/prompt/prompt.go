@@ -90,18 +90,20 @@ type Identity struct {
 
 // Options drives Build.
 type Options struct {
-	Personality    Personality
-	Variant        Variant
-	Identity       Identity
-	ToolNames      []string
-	Interactive    bool
-	IsGitRepo      bool
-	SandboxEnabled bool
+	Personality Personality
+	Variant     Variant
+	Identity    Identity
+	ToolNames   []string
+	Interactive bool
+	IsGitRepo   bool
+	// OS is the host GOOS; empty means unknown, which suppresses the platform sentence.
+	OS string
 	// SymbolsEnabled reports whether the find_symbol tool is registered, so the
 	// prompt can steer the model toward it for symbol lookups.
 	// EditEnabled reports whether the edit tool is registered.
 	EditEnabled    bool
 	SymbolsEnabled bool
+	MemoryEnabled  bool
 }
 
 // Build returns the system prompt base (without user memory or mode suffix,
@@ -111,27 +113,22 @@ func Build(opts Options) string {
 }
 
 // renderIdentity builds the self-identification block. roleNoun completes the
-// "You are <model>, ... <roleNoun>." sentence and helpClause is the role summary
+// "You are Sagittarius, <roleNoun>." sentence and helpClause is the role summary
 // that follows; the model-honesty sentence is identical across personalities.
 func renderIdentity(id Identity, roleNoun, helpClause string) string {
 	model := strings.TrimSpace(id.Model)
 	known := model != "" && model != "local-model"
 	providerName := strings.TrimSpace(id.ProviderName)
 
-	var who, selfID string
+	who := "You are Sagittarius, " + roleNoun + "."
+	var selfID string
 	if known {
-		served := ""
-		if providerName != "" {
-			served = ", served via " + providerName + ","
-		}
-		who = "You are " + model + served + " " + roleNoun + "."
 		via := ""
 		if providerName != "" {
 			via = " (via " + providerName + ")"
 		}
 		selfID = "If asked which AI model or LLM you are, identify yourself accurately as " + model + via + ". Do not claim to be a different model."
 	} else {
-		who = "You are " + roleNoun + "."
 		selfID = "If asked which AI model or LLM you are, answer honestly based on your own knowledge. Do not claim to be Google Gemini or any specific model unless you genuinely are that model."
 	}
 	return who + " " + helpClause + "\n\n" + selfID
@@ -166,7 +163,7 @@ func liteToolUsage(symbolsEnabled, editEnabled bool) string {
 		"",
 		"**Prefer editing over creating.** Do not create new files when you can update existing ones. Do not create documentation files unless explicitly asked.",
 		"",
-		toolInvocationMandate(),
+		toolInvocationMandate(editEnabled),
 	)
 }
 
@@ -190,7 +187,7 @@ func liteShellSafety(interactive bool) string {
 		"- Never run destructive or irreversible commands (rm -rf, DROP TABLE, force push) without explicit user confirmation.",
 		"- Quote file paths that contain spaces.",
 		"- Avoid interactive commands (e.g. `git rebase -i`); use non-interactive flags when available (`npm init -y`).",
-		"- For long-running servers or watchers, run in the background when appropriate (e.g. `node server.js &`).",
+		"- For a process that only needs to outlive the current turn — a dev server, a watcher, a tail — use `run_shell_command`'s `is_background` parameter instead of detaching. Sagittarius tracks those, captures their output, and can kill them by process group.",
 	}
 	if interactive {
 		lines = append(lines, "- Ask the user before running commands with significant side effects.")
@@ -210,23 +207,29 @@ func liteGit() string {
 	)
 }
 
-func liteSandbox() string {
-	return join(
-		"## Sandbox",
-		"",
-		"Commands run in a sandboxed environment. Some operations may be restricted. If a command fails due to sandbox restrictions, inform the user.",
-	)
-}
-
 // toolInvocationMandate discourages premature stops where the model narrates an
-// intended tool call but ends the turn without invoking it.
-func toolInvocationMandate() string {
+// intended tool call but ends the turn without invoking it. The final bullet is
+// deliberately last (highest recency) because it is a precedence rule over the
+// bullets above it, not an independent behavior of equal weight.
+func toolInvocationMandate(editEnabled bool) string {
+	mutatingTools := "`" + tools.WriteFileToolName + "`"
+	if editEnabled {
+		mutatingTools += ", `" + tools.EditToolName + "`,"
+	}
+	mutatingTools += " and mutating `" + tools.ShellToolName + "`"
 	return join(
 		"**Execute, don't narrate.** When a task requires tools, invoke them in the same response. Never end a turn with only text that promises a future action (e.g. \"Let me write...\", \"I will fix...\", \"I'll update that file\") without actually calling the tool.",
 		"",
-		"**Incomplete turns.** If you know what to change but emit no tool calls, the turn failed: invoke the needed tools now, or ask one specific blocking question. Do not yield while actionable work remains undone.",
+		"**Incomplete turns.** When the user has asked for a change and you know what to change but emit no tool calls, the turn failed: invoke the needed tools now, or ask one specific blocking question. Do not yield while actionable work remains undone.",
 		"",
 		"**Directives require tools.** For fix/implement/update/create requests, research with tools when needed, then mutate with `"+tools.WriteFileToolName+"` or `"+tools.ShellToolName+"` in the same turn when the fix is clear. Do not split \"I'll do it next\" across turns for small, obvious fixes.",
+		"",
+		"**Scope limits outrank this mandate.** When the user restricts the turn — \"just discuss this\", "+
+			"\"don't change anything yet\", \"tell me what you would do\", or a named exclusion like \"do not edit X\" — "+
+			"a text-only answer with no mutating tool calls is the correct and complete turn, not a failed one. "+
+			"Read-only tools stay available for research; "+mutatingTools+" do not. "+
+			"The restriction holds until the user lifts it. If you cannot tell whether a message is a directive or "+
+			"a discussion, ask one short question rather than acting.",
 	)
 }
 

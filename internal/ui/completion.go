@@ -41,3 +41,14 @@ type Completer interface {
 type MentionCompleter interface {
 	CompleteMention(input string, cursor int) Completions
 }
+
+// ToolkitChecklistMarker is the optional App capability that records the first
+// display of the host toolkit checklist. The TUI type-asserts the App to this
+// when the startup report renders; apps that do not implement it (tests, other
+// UIs) simply never persist the shown state and the checklist follows its
+// pre-flag behavior. The write is best-effort and must not block the UI thread.
+type ToolkitChecklistMarker interface {
+	// MarkToolkitChecklistShown records that the checklist report has been
+	// displayed once, so later launches do not auto-run it again.
+	MarkToolkitChecklistShown() error
+}

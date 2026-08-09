@@ -32,10 +32,12 @@ var skipDirs = map[string]bool{
 	".sagittarius": true,
 }
 
-// Index provides "@path" completion candidates from a workspace, caching the
-// file listing for a short interval so per-keystroke completion stays fast.
+// Index provides "@path" and "@skill:name" completion candidates, caching the
+// workspace file listing for a short interval so per-keystroke completion stays
+// fast.
 type Index struct {
-	ws *tools.Workspace
+	ws         *tools.Workspace
+	skillNames func() []string
 
 	mu         sync.Mutex
 	cached     []string
@@ -43,19 +45,23 @@ type Index struct {
 	refreshing bool
 }
 
-// NewIndex builds a completion index over ws. It returns nil when ws is nil so
-// callers can treat "no workspace" as "no completion".
-func NewIndex(ws *tools.Workspace) *Index {
-	if ws == nil {
+// NewIndex builds a completion index over ws, with skillNames supplying the
+// installed skill names for "@skill:" completion. Either source may be nil;
+// NewIndex returns nil only when both are, so callers can treat "nothing to
+// complete against" as "no completion". skillNames is called on the UI thread
+// per keystroke and must not block.
+func NewIndex(ws *tools.Workspace, skillNames func() []string) *Index {
+	if ws == nil && skillNames == nil {
 		return nil
 	}
-	return &Index{ws: ws}
+	return &Index{ws: ws, skillNames: skillNames}
 }
 
-// Complete returns file-path suggestions for an active "@" token ending at the
-// byte offset cursor within input. It returns no items when the cursor is not
-// inside an "@" token. ReplaceFrom is the byte offset just after '@', so
-// accepting a suggestion replaces the partial path with the chosen one.
+// Complete returns file-path and skill suggestions for an active "@" token
+// ending at the byte offset cursor within input. It returns no items when the
+// cursor is not inside an "@" token. ReplaceFrom is the byte offset just after
+// '@' (or just after "@skill:" when completing a skill name), so accepting a
+// suggestion replaces the partial token with the chosen one.
 func (idx *Index) Complete(input string, cursor int) ui.Completions {
 	if idx == nil {
 		return ui.Completions{}
@@ -75,19 +81,96 @@ func (idx *Index) Complete(input string, cursor int) ui.Completions {
 	}
 
 	contentStart := start + 1
-	partial := unescape(string(b[contentStart:cursor]))
-	matches := idx.match(partial)
-	if len(matches) == 0 {
-		return ui.Completions{}
+	// The raw token drives the "skill:" test and the replace offset; unescaping
+	// can change the byte length, which would misplace ReplaceFrom.
+	raw := string(b[contentStart:cursor])
+	if hasSkillPrefix(raw) {
+		return idx.completeSkills(raw[len(skillPrefix):], contentStart+len(skillPrefix))
 	}
 
-	items := make([]ui.Suggestion, 0, len(matches))
-	for _, m := range matches {
+	partial := unescape(raw)
+	items := make([]ui.Suggestion, 0, maxSuggestions+1)
+	// Surface "skill:" while the user is still typing it (and on a bare '@'),
+	// so skill mentions are discoverable without reading the docs.
+	if isSkillPrefixTyped(partial) {
+		items = append(items, ui.Suggestion{Label: skillPrefix, Description: "load a skill for this message", Insert: skillPrefix})
+	}
+	for _, m := range idx.match(partial) {
 		// AppendSpace clears the suggestion list and lets the user keep typing
 		// the rest of the prompt after the path is inserted.
 		items = append(items, ui.Suggestion{Label: m, Insert: escape(m), AppendSpace: true})
 	}
+	if len(items) == 0 {
+		return ui.Completions{}
+	}
 	return ui.Completions{Items: items, ReplaceFrom: contentStart}
+}
+
+// completeSkills matches installed skill names against the text typed after
+// "@skill:". replaceFrom points just past the prefix so only the name is
+// replaced.
+func (idx *Index) completeSkills(partial string, replaceFrom int) ui.Completions {
+	if idx.skillNames == nil {
+		return ui.Completions{}
+	}
+	matches := matchNames(idx.skillNames(), partial)
+	if len(matches) == 0 {
+		return ui.Completions{}
+	}
+	items := make([]ui.Suggestion, 0, len(matches))
+	for _, m := range matches {
+		items = append(items, ui.Suggestion{Label: m, Insert: escape(m), AppendSpace: true})
+	}
+	return ui.Completions{Items: items, ReplaceFrom: replaceFrom}
+}
+
+// hasSkillPrefix reports whether a raw '@' token is a skill reference.
+func hasSkillPrefix(raw string) bool {
+	return len(raw) >= len(skillPrefix) && strings.EqualFold(raw[:len(skillPrefix)], skillPrefix)
+}
+
+// isSkillPrefixTyped reports whether partial is a (possibly empty) prefix of
+// "skill:", i.e. the user could still be typing the skill marker.
+func isSkillPrefixTyped(partial string) bool {
+	return len(partial) < len(skillPrefix) && strings.EqualFold(skillPrefix[:len(partial)], partial)
+}
+
+// matchNames ranks names against partial: prefix matches first, then substring
+// matches, each alphabetically (case-insensitively, so "6502-assembly" sorts
+// before "Bash"), capped at maxSuggestions. The comparison is case-insensitive
+// because the matching is too — a user who typed lowercase expects lowercase
+// results, and byte-order sorting would strand capitalized names at the top.
+func matchNames(names []string, partial string) []string {
+	partial = strings.ToLower(partial)
+	var prefix, contains []string
+	for _, n := range names {
+		ln := strings.ToLower(n)
+		switch {
+		case partial == "" || strings.HasPrefix(ln, partial):
+			prefix = append(prefix, n)
+		case strings.Contains(ln, partial):
+			contains = append(contains, n)
+		}
+	}
+	sortCaseInsensitive(prefix)
+	sortCaseInsensitive(contains)
+	out := append(prefix, contains...)
+	if len(out) > maxSuggestions {
+		out = out[:maxSuggestions]
+	}
+	return out
+}
+
+// sortCaseInsensitive orders strings by lowercase value, breaking ties
+// byte-wise so the result is deterministic for names that differ only in case.
+func sortCaseInsensitive(names []string) {
+	sort.Slice(names, func(i, j int) bool {
+		li, lj := strings.ToLower(names[i]), strings.ToLower(names[j])
+		if li != lj {
+			return li < lj
+		}
+		return names[i] < names[j]
+	})
 }
 
 // match returns workspace-relative file paths matching partial: prefix matches
@@ -128,6 +211,9 @@ func (idx *Index) match(partial string) []string {
 // large tree never freezes input. First call returns nil (one frame of no
 // suggestions) until the initial walk lands.
 func (idx *Index) files() []string {
+	if idx.ws == nil {
+		return nil
+	}
 	idx.mu.Lock()
 	cached := idx.cached
 	stale := cached == nil || time.Since(idx.cachedAt) >= indexTTL

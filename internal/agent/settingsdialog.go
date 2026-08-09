@@ -239,6 +239,20 @@ func (d *settingsDialogDeps) ListSettings(scope config.SettingScope) []settingsd
 
 	sagDefined := scopeSettings.Sagittarius != nil
 
+	modeVal := func(m string) string {
+		if m == "" {
+			return notSet
+		}
+		return m
+	}
+	var scopeDefaultMode, mergedDefaultMode string
+	if sagDefined {
+		scopeDefaultMode = scopeSettings.Sagittarius.DefaultMode
+	}
+	if merged.Sagittarius != nil {
+		mergedDefaultMode = merged.Sagittarius.DefaultMode
+	}
+
 	return []settingsdialog.SettingEntry{
 		{Label: "General", Kind: settingsdialog.KindHeader},
 		{
@@ -249,6 +263,16 @@ func (d *settingsDialogDeps) ListSettings(scope config.SettingScope) []settingsd
 			DefinedHere: sagDefined && scopeSettings.Sagittarius.MaxToolRounds != nil,
 			MergedValue: maxRoundsMerged,
 			Kind:        settingsdialog.KindInt,
+		},
+		{
+			Key:         "sagittarius.defaultMode",
+			Label:       "Default interaction mode",
+			Description: "Interaction mode a new session starts in (compiled-in fallback is agent)",
+			Value:       modeVal(scopeDefaultMode),
+			DefinedHere: sagDefined && scopeDefaultMode != "",
+			MergedValue: modeVal(mergedDefaultMode),
+			Kind:        settingsdialog.KindEnum,
+			Choices:     []string{"agent", "plan", "ask", "debug"},
 		},
 
 		{Label: "UI", Kind: settingsdialog.KindHeader},
@@ -490,6 +514,16 @@ func applySettingValue(s *config.Settings, key, value string) error {
 			s.Sagittarius = &config.SagittariusSettings{}
 		}
 		s.Sagittarius.MaxToolRounds = &n
+	case "sagittarius.defaultMode":
+		switch value {
+		case "agent", "plan", "ask", "debug":
+		default:
+			return fmt.Errorf("defaultMode must be 'agent', 'plan', 'ask', or 'debug'")
+		}
+		if s.Sagittarius == nil {
+			s.Sagittarius = &config.SagittariusSettings{}
+		}
+		s.Sagittarius.DefaultMode = value
 	case "ui.theme":
 		if err := s.SetUITheme(value); err != nil {
 			return err
@@ -726,6 +760,10 @@ func clearSettingValue(s *config.Settings, key string) error {
 	case "sagittarius.maxToolRounds":
 		if s.Sagittarius != nil {
 			s.Sagittarius.MaxToolRounds = nil
+		}
+	case "sagittarius.defaultMode":
+		if s.Sagittarius != nil {
+			s.Sagittarius.DefaultMode = ""
 		}
 	case "ui.theme":
 		if err := s.SetUITheme(""); err != nil {

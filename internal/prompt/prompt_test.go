@@ -71,7 +71,8 @@ func TestFindSymbolGuidanceGatedBySymbolsEnabled(t *testing.T) {
 		}
 	}
 
-	// Stub personalities share liteToolUsage, so they get the same gating.
+	// Stub personalities share liteToolUsage, while sysadmin provides its own implementation.
+	// Both should still get the gating for find_symbol.
 	sysadmin := Build(Options{
 		Personality:    PersonalitySysadmin,
 		Variant:        VariantLite,
@@ -110,15 +111,92 @@ func TestProgrammerLiteAnchors(t *testing.T) {
 	assertNoUnported(t, out)
 }
 
+func TestIdentityFormatAndAbsenceOfBannedPhrases(t *testing.T) {
+	t.Parallel()
+
+	personalities := []Personality{
+		PersonalityProgrammer,
+		PersonalitySysadmin,
+		PersonalityPersonalAssistant,
+		PersonalityCreativeAssistant,
+	}
+
+	for _, p := range personalities {
+		for _, v := range []Variant{VariantFull, VariantLite} {
+			out := Build(Options{
+				Personality: p,
+				Variant:     v,
+				Identity:    Identity{Model: "gpt-4o", ProviderName: "OpenRouter"},
+			})
+
+			if !strings.HasPrefix(strings.TrimSpace(out), "You are Sagittarius,") {
+				t.Errorf("%s %s: prompt must start with 'You are Sagittarius,', got:\n%s", p, v, out[:min(len(out), 50)])
+			}
+
+			if !strings.Contains(out, "decades of deep experience") {
+				t.Errorf("%s %s: prompt must contain 'decades of deep experience', got:\n%s", p, v, out)
+			}
+
+			banned := []string{
+				"You are running as",
+				"You are operating as",
+				"- **Role:**",
+			}
+			for _, b := range banned {
+				if strings.Contains(out, b) {
+					t.Errorf("%s %s: prompt must not contain banned string %q", p, v, b)
+				}
+			}
+		}
+	}
+}
+
+// TestScopeLimitClausePresentInEveryPersona asserts the toolInvocationMandate
+// precedence clause reaches every personality and variant through the shared
+// helper, so a user-stated scope limit ("just discuss this") is licensed to
+// override the act-now mandate everywhere, not just in the persona that
+// prompted the fix.
+func TestScopeLimitClausePresentInEveryPersona(t *testing.T) {
+	t.Parallel()
+
+	personalities := []Personality{
+		PersonalityProgrammer,
+		PersonalitySysadmin,
+		PersonalityPersonalAssistant,
+		PersonalityCreativeAssistant,
+	}
+
+	for _, p := range personalities {
+		for _, v := range []Variant{VariantFull, VariantLite} {
+			out := Build(Options{
+				Personality: p,
+				Variant:     v,
+				Identity:    Identity{Model: "gpt-4o", ProviderName: "OpenRouter"},
+			})
+
+			if !strings.Contains(out, "Scope limits outrank this mandate") {
+				t.Errorf("%s %s: missing scope-limit precedence clause, got:\n%s", p, v, out)
+			}
+			if !strings.Contains(out, "a text-only answer with no mutating tool calls is the correct and complete turn") {
+				t.Errorf("%s %s: missing scope-limit clause body", p, v)
+			}
+		}
+	}
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 func TestIdentityKnownModelNamesProviderAndModel(t *testing.T) {
 	t.Parallel()
 
 	out := Build(Options{Identity: Identity{Model: "gpt-4o", ProviderName: "OpenRouter"}})
-	if !strings.Contains(out, "gpt-4o") {
-		t.Error("known identity should name the model")
-	}
-	if !strings.Contains(out, "OpenRouter") {
-		t.Error("known identity should name the provider")
+	if strings.Contains(out, "gpt-4o, served via OpenRouter") {
+		t.Error("known identity should not interpolate model in who-line anymore")
 	}
 	if !strings.Contains(out, "identify yourself accurately as gpt-4o") {
 		t.Errorf("known identity should pin self-identification, got:\n%s", out)
@@ -144,7 +222,7 @@ func TestStubPersonalitiesAreDistinct(t *testing.T) {
 
 	// Each stub personality produces distinct, role-specific output.
 	stubAnchors := map[Personality]string{
-		PersonalitySysadmin:          "system administration assistant",
+		PersonalitySysadmin:          "systems administrator",
 		PersonalityPersonalAssistant: "personal assistant",
 		PersonalityCreativeAssistant: "creative assistant",
 	}

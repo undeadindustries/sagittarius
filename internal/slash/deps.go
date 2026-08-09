@@ -128,6 +128,12 @@ type Hooks interface {
 	EndGrill(note string) (specPrompt string, err error)
 	ClearGrill(note string) error
 
+	// /constraints standing session-scope-limit hooks (survive compression and
+	// --resume; see internal/agent/constraints.go).
+	AddConstraint(text string) error
+	ListConstraints() []string
+	ClearConstraints() error
+
 	// ToolkitChecklist hooks
 	ToolkitReport() string
 	ToolkitDismiss() error

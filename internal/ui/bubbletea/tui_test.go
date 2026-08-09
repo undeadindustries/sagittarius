@@ -248,6 +248,59 @@ type mentionApp struct {
 	quitApp
 }
 
+// toolkitApp is a quitApp that records MarkToolkitChecklistShown calls, used to
+// assert the first-launch checklist marks itself seen.
+type toolkitApp struct {
+	quitApp
+	marked bool
+	err    error
+}
+
+func (t *toolkitApp) MarkToolkitChecklistShown() error {
+	t.marked = true
+	return t.err
+}
+
+// TestToolkitChecklistMarksItselfShown asserts that the first time the scan
+// report renders, the app is told to persist "shown", so a second launch does
+// not auto-run the checklist. Delivering toolkitScanMsg directly mirrors what
+// Init's tea.Cmd produces, without needing the Bubble Tea program loop.
+func TestToolkitChecklistMarksItselfShown(t *testing.T) {
+	t.Parallel()
+	app := &toolkitApp{}
+	m := newModel(ui.Options{}, app, NewTerminal(ui.Options{}))
+	m.width, m.height = 80, 24
+
+	next, _ := m.Update(toolkitScanMsg{report: "missing: ripgrep"})
+	_ = next.(*model)
+
+	if !app.marked {
+		t.Fatal("MarkToolkitChecklistShown was not called when the report first rendered")
+	}
+}
+
+// TestToolkitChecklistNoMarkerInterface asserts an app that does not implement
+// ToolkitChecklistMarker (tests, alternative UIs) still renders the report and
+// does not panic — the mark is a best-effort capability.
+func TestToolkitChecklistNoMarkerInterface(t *testing.T) {
+	t.Parallel()
+	m := newModel(ui.Options{}, quitApp{}, NewTerminal(ui.Options{}))
+	m.width, m.height = 80, 24
+
+	next, _ := m.Update(toolkitScanMsg{report: "missing: ripgrep"})
+	model := next.(*model)
+
+	found := false
+	for _, b := range model.blocks {
+		if strings.Contains(b.text, "ripgrep") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("expected the toolkit report in the scrollback even without a marker")
+	}
+}
+
 func (mentionApp) CompleteMention(input string, cursor int) ui.Completions {
 	at := strings.LastIndexByte(input[:cursor], '@')
 	if at < 0 {

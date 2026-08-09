@@ -469,8 +469,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleKey(msg)
 	case toolkitScanMsg:
 		if msg.report != "" {
-			m.addBlock(roleInfo, msg.report+"\n\n/toolkit dismiss to never show again · /toolkit to re-run")
+			m.addBlock(roleInfo, msg.report+"\n\n/toolkit to re-run")
 			m.syncViewportContent()
+			// The checklist is first-run-only: record that it has been shown so
+			// later launches skip it. Best-effort — a settings write failure is
+			// not worth interrupting startup over.
+			if marker, ok := m.app.(ui.ToolkitChecklistMarker); ok {
+				_ = marker.MarkToolkitChecklistShown()
+			}
 		}
 		return m, nil
 	case updateCheckMsg:
@@ -1462,6 +1468,7 @@ func isConcurrentSafeSlash(line string) bool {
 	l := strings.ToLower(line)
 	return l == "/goal pause" || l == "/goal status" || l == "/stats" ||
 		l == "/grill pause" || l == "/grill status" ||
+		l == "/constraints list" ||
 		strings.HasPrefix(l, "/stats ")
 }
 

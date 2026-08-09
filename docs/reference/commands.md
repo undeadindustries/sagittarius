@@ -140,7 +140,12 @@ and resets to off on the next launch.
 ### `/toolkit`
 
 - **Description:** Re-run the host toolkit checklist to see missing tools and install hints.
-- **Usage:** `/toolkit` (run the scan), `/toolkit dismiss` (permanently dismiss it on startup).
+- **Usage:** `/toolkit` (run the scan), `/toolkit dismiss` (keep it from ever auto-showing again).
+- **Notes:** The checklist runs automatically **once** — the first launch after
+  install or first upgrade that surfaces it — and is marked as shown as soon as
+  its report renders, so it never reappears on later launches. `/toolkit` is how
+  you bring it back on demand. `/toolkit dismiss` sets the same flag before
+  first launch (e.g. scripted installs) or clears any future auto-show.
 
 ### `/providers`
 
@@ -291,6 +296,36 @@ and resets to off on the next launch.
   - **Description:** Re-read memory files into the system prompt.
   - **Usage:** `/memory reload`
 
+### `/constraints`
+
+- **Description:** Pin a standing scope limit to the end of the system prompt,
+  where it is re-injected every turn. **You should rarely need this.** Saying
+  "just discuss this, don't change anything yet" in an ordinary message is the
+  normal way to restrict a turn, and the system prompt is written so that a
+  text-only reply to such a request is a correct and complete turn. `/constraints`
+  exists for the case where that is not enough: a long session where context
+  compression has summarized away the message you said it in, or a smaller local
+  model that stops honoring a restriction several turns after you gave it.
+  Constraints apply in every mode, outrank the mode suffix and the
+  tool-invocation mandate, and survive `--resume`. They never expire on their
+  own — clear them when the restriction lifts.
+- **See also:** `/memory add --project` for a restriction that should outlive the
+  session (it writes to `AGENTS.md`); `/mode plan` or `/mode ask` for a
+  tool-level read-only gate rather than an instruction.
+
+#### Sub-commands
+
+- **`add <text>`**
+  - **Description:** Add a standing constraint. A repeat of an existing one
+    (case-insensitive) is a no-op.
+  - **Usage:** `/constraints add do not modify AGENTS.md until I say so`
+- **`list`**
+  - **Description:** List active constraints, numbered.
+  - **Usage:** `/constraints list` (runs mid-turn, unlike most slash commands)
+- **`clear`**
+  - **Description:** Remove every standing constraint.
+  - **Usage:** `/constraints clear`
+
 ### `/skills`
 
 - **Description:** Manage agent skills discovered from `SKILL.md` files.
@@ -303,6 +338,9 @@ and resets to off on the next launch.
 - **`reload`**
   - **Description:** Rescan skill directories and refresh the `activate_skill` tool schema.
   - **Usage:** `/skills reload`
+
+To force a specific skill on a single message rather than leaving the choice to
+the model, use an [`@skill:<name>` mention](#skillname).
 
 ### `/mcp`
 
@@ -433,7 +471,46 @@ See also: [MCP server configuration](../tools/mcp-server.md).
 - **Usage:** `/undo` reverts the last change; `/undo <n>` reverts the last `n` (most recent first).
 - **Notes:** Restores prior file content (or removes newly created files). Disabled when `sagittarius.snapshots.enabled` is `false`.
 
+## File and skill mentions (`@`)
+
+An `@` token inside an ordinary message pulls extra context into **that one
+message**. The scrollback and the session transcript keep exactly what you
+typed; only the copy sent to the model carries the expansion, so a mention never
+lingers in the conversation or in `settings.json`.
+
+A mention is recognised only when the `@` starts a token, so `rob@example.com`
+is left alone. Write `\@` to escape one. Both forms autocomplete inline as you
+type, and an unresolvable mention cancels the turn with an error rather than
+quietly dropping the context you asked for.
+
+### `@path/to/file`
+
+- **Description:** Inject a workspace file's contents into the message.
+- **Usage:** `explain @internal/agent/app.go` — or `@"my file.go"` when the path
+  contains spaces.
+- **Notes:** The path must resolve inside the workspace and point at a readable
+  text file; directories and binaries are rejected. Injection is capped at
+  256 KiB per file and 512 KiB per message, with oversized content truncated.
+
+### `@skill:<name>`
+
+- **Description:** Load an installed skill's instructions for this message,
+  instead of waiting for the model to pick it up on its own.
+- **Usage:** `@skill:golang refactor this handler`
+- **Notes:** The name is the skill's `name:` field (see `/skills list`), matched
+  case-insensitively. The skill applies to that message only: the next message
+  starts clean. Skill instructions are placed after any file contents in the
+  same message so a large file cannot bury them, and they draw from the same
+  512 KiB budget (skills are resolved first, so an explicit request is never
+  starved by a big file).
+- **Related:** `activate_skill` is the model's own path to the same content and
+  stays available; a mention is the manual override for when you already know
+  which skill applies.
+
 ## Headless CLI flags
+
+Mentions work in headless runs too, since every entry point shares the same turn
+loop: `sagittarius -p "@skill:golang fix the retry logic"`.
 
 Unified keyboard + CLI quick reference: [README.md § Quick reference](../README.md#quick-reference).
 
@@ -479,7 +556,8 @@ incrementally; track gaps in `AGENTS.md`.
 | `/auth signin` / OAuth dialogs | Deferred auth paths |
 | ACP headless registry | Post-parity |
 
-Implemented: `/about`, `/chat`, `/clear`, `/compress`, `/copy`, `/diff`, `/goal`,
+Implemented: `/about`, `/chat`, `/clear`, `/compress`, `/constraints add|list|clear`,
+`/copy`, `/diff`, `/goal`,
 `/grill`, `/init`, `/memory add|list|remove|reload`, `/mcp` (list, reload, add/edit/remove wizard),
 `/modes` (override, clear headlessly), `/model`, `/models`, `/mouse`, `/reasoning`,
 `/resume`, `/settings` (curated browser), `/skills` (list, reload), `/agents`

@@ -15,24 +15,30 @@ func TestScanMentions(t *testing.T) {
 	tests := []struct {
 		name  string
 		input string
-		want  []string
+		want  []mention
 	}{
 		{"none", "just some text", nil},
-		{"simple", "explain @internal/agent/app.go", []string{"internal/agent/app.go"}},
-		{"at start", "@main.go please", []string{"main.go"}},
-		{"multiple", "diff @a.go and @b.go", []string{"a.go", "b.go"}},
+		{"simple", "explain @internal/agent/app.go", []mention{{kindPath, "internal/agent/app.go"}}},
+		{"at start", "@main.go please", []mention{{kindPath, "main.go"}}},
+		{"multiple", "diff @a.go and @b.go", []mention{{kindPath, "a.go"}, {kindPath, "b.go"}}},
 		{"email not a mention", "mail rob@example.com now", nil},
 		{"escaped at ignored", `literal \@notapath here`, nil},
-		{"trailing dot dropped", "see @a.go.", []string{"a.go"}},
-		{"interior dots kept", "@a.b.c", []string{"a.b.c"}},
-		{"quoted with spaces", `open @"my file.go" done`, []string{"my file.go"}},
-		{"escaped space in path", `open @my\ file.go`, []string{"my file.go"}},
-		{"delimiter stops", "(@a.go)", []string{"a.go"}},
+		{"trailing dot dropped", "see @a.go.", []mention{{kindPath, "a.go"}}},
+		{"interior dots kept", "@a.b.c", []mention{{kindPath, "a.b.c"}}},
+		{"quoted with spaces", `open @"my file.go" done`, []mention{{kindPath, "my file.go"}}},
+		{"escaped space in path", `open @my\ file.go`, []mention{{kindPath, "my file.go"}}},
+		{"delimiter stops", "(@a.go)", []mention{{kindPath, "a.go"}}},
+		{"skill", "use @skill:golang here", []mention{{kindSkill, "golang"}}},
+		{"skill uppercase prefix", "@SKILL:golang", []mention{{kindSkill, "golang"}}},
+		{"skill with hyphen", "@skill:postgres-engineering", []mention{{kindSkill, "postgres-engineering"}}},
+		{"bare skill prefix stays a path", "@skill:", []mention{{kindPath, "skill:"}}},
+		{"skill after email is not a mention", "rob@skill:golang", nil},
+		{"skill and file", "@skill:golang @a.go", []mention{{kindSkill, "golang"}, {kindPath, "a.go"}}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := scanMentions(tt.input)
-			if !equalStrings(got, tt.want) {
+			if !equalMentions(got, tt.want) {
 				t.Fatalf("scanMentions(%q) = %v, want %v", tt.input, got, tt.want)
 			}
 		})
@@ -41,7 +47,7 @@ func TestScanMentions(t *testing.T) {
 
 func TestExpandNoMentions(t *testing.T) {
 	ws := newWorkspace(t, nil)
-	parts, err := Expand(ws, "hello world")
+	parts, err := Expand(ws, "hello world", nil)
 	if err != nil {
 		t.Fatalf("Expand: %v", err)
 	}
@@ -54,7 +60,7 @@ func TestExpandInjectsFile(t *testing.T) {
 	ws := newWorkspace(t, map[string]string{
 		"docs/readme.md": "hello from file",
 	})
-	parts, err := Expand(ws, "summarize @docs/readme.md")
+	parts, err := Expand(ws, "summarize @docs/readme.md", nil)
 	if err != nil {
 		t.Fatalf("Expand: %v", err)
 	}
@@ -78,14 +84,14 @@ func TestExpandInjectsFile(t *testing.T) {
 
 func TestExpandMissingFileErrors(t *testing.T) {
 	ws := newWorkspace(t, nil)
-	if _, err := Expand(ws, "see @nope.txt"); err == nil {
+	if _, err := Expand(ws, "see @nope.txt", nil); err == nil {
 		t.Fatal("expected error for missing file")
 	}
 }
 
 func TestExpandDirectoryErrors(t *testing.T) {
 	ws := newWorkspace(t, map[string]string{"sub/keep.txt": "x"})
-	if _, err := Expand(ws, "look @sub"); err == nil {
+	if _, err := Expand(ws, "look @sub", nil); err == nil {
 		t.Fatal("expected error for directory reference")
 	}
 }
@@ -96,14 +102,14 @@ func TestExpandBinaryErrors(t *testing.T) {
 	if err := os.WriteFile(bin, []byte{0x00, 0x01, 0x02}, 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	if _, err := Expand(ws, "read @data.bin"); err == nil {
+	if _, err := Expand(ws, "read @data.bin", nil); err == nil {
 		t.Fatal("expected error for binary file")
 	}
 }
 
 func TestExpandDeduplicates(t *testing.T) {
 	ws := newWorkspace(t, map[string]string{"a.txt": "AAA"})
-	parts, err := Expand(ws, "@a.txt @a.txt")
+	parts, err := Expand(ws, "@a.txt @a.txt", nil)
 	if err != nil {
 		t.Fatalf("Expand: %v", err)
 	}
@@ -119,7 +125,7 @@ func TestComplete(t *testing.T) {
 		"internal/agent/run.go": "y",
 		"main.go":               "z",
 	})
-	idx := NewIndex(ws)
+	idx := NewIndex(ws, nil)
 
 	// files() now serves the cache immediately and refreshes in the background,
 	// so the first completion may be empty until the initial walk lands. Poll
@@ -153,7 +159,7 @@ func TestComplete(t *testing.T) {
 
 func TestCompleteNoActiveToken(t *testing.T) {
 	ws := newWorkspace(t, map[string]string{"a.go": "x"})
-	idx := NewIndex(ws)
+	idx := NewIndex(ws, nil)
 	input := "no mention here"
 	if comp := idx.Complete(input, len(input)); len(comp.Items) != 0 {
 		t.Fatalf("expected no items, got %+v", comp.Items)
@@ -161,8 +167,8 @@ func TestCompleteNoActiveToken(t *testing.T) {
 }
 
 func TestNewIndexNilWorkspace(t *testing.T) {
-	if NewIndex(nil) != nil {
-		t.Fatal("NewIndex(nil) should be nil")
+	if NewIndex(nil, nil) != nil {
+		t.Fatal("NewIndex(nil, nil) should be nil")
 	}
 	var idx *Index
 	if comp := idx.Complete("@x", 2); len(comp.Items) != 0 {
@@ -189,7 +195,7 @@ func newWorkspace(t *testing.T, files map[string]string) *tools.Workspace {
 	return ws
 }
 
-func equalStrings(a, b []string) bool {
+func equalMentions(a, b []mention) bool {
 	if len(a) != len(b) {
 		return false
 	}

@@ -21,6 +21,8 @@ policy** for destructive tools.
 | **debug** | Extra verbose structured logging via `slog`; optional model override. Full tool access (same as agent). |
 
 When `sagittarius.defaultMode` is unset, new sessions start in **agent** mode.
+Set it via `/settings` (General → "Default interaction mode") or by hand-editing
+`settings.json` as shown below; either scope (global or project) works.
 
 ## Settings (`settings.json`)
 

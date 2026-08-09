@@ -80,6 +80,13 @@ type MetadataRecord struct {
 	SessionGrants []string        `json:"sessionGrants,omitempty"`
 	Goal          *goal.Snapshot  `json:"goal,omitempty"`
 	Grill         *grill.Snapshot `json:"grill,omitempty"`
+	// Constraints is a pointer to distinguish "this $set line did not touch
+	// constraints" (nil pointer, omitted from JSON) from "constraints were
+	// explicitly cleared" (non-nil pointer to an empty slice, marshaled as
+	// "[]"). A plain []string field cannot make that distinction: an empty
+	// slice and an absent key both unmarshal to nil, so a clear would be
+	// silently lost on the next $set-driven merge (see applyMetaUpdate).
+	Constraints *[]string `json:"constraints,omitempty"`
 }
 
 // SetRecord carries a $set metadata update appended mid-session.
@@ -105,7 +112,12 @@ type ConversationRecord struct {
 	SessionGrants []string
 	Goal          *goal.Snapshot
 	Grill         *grill.Snapshot
-	Messages      []MessageRecord
+	// Constraints holds standing session constraints (see internal/agent's
+	// Runner.Constraints), or nil when none were ever set. Unlike
+	// MetadataRecord.Constraints this is a plain slice: the pointer indirection
+	// exists only to make the $set merge correct, not for external consumers.
+	Constraints []string
+	Messages    []MessageRecord
 }
 
 // SessionInfo is the display/selection view of a session (used for listing).

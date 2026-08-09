@@ -20,24 +20,29 @@ func programmerLite(opts Options) string {
 		renderIdentity(opts.Identity, programmerProfile.roleNoun, programmerProfile.helpClause),
 		liteToolUsage(opts.SymbolsEnabled, opts.EditEnabled),
 		liteWorkflow(),
-		liteEditRules(),
+		liteEditRules(opts.EditEnabled),
 		liteShellSafety(opts.Interactive),
 	}
 	if opts.IsGitRepo {
 		sections = append(sections, liteGit())
 	}
-	if opts.SandboxEnabled {
-		sections = append(sections, liteSandbox())
-	}
 	return joinSections(sections)
 }
 
-func liteEditRules() string {
+func liteEditRules(editEnabled bool) string {
+	var writeRules string
+	if editEnabled {
+		writeRules = "- **Always read before modifying.** If you are changing an existing file, prefer `edit` over `write_file` because it is faster and safer against truncation. Use `write_file` only to create new files or when intentionally rewriting the whole file. Read first to get the exact string."
+	} else {
+		writeRules = "- **Always read before modifying.** You cannot use patch/diff operations. Use `write_file` with the ENTIRE file contents."
+	}
+
 	return join(
 		"## Editing Rules",
 		"",
 		"- Make one logical change at a time. Do not combine unrelated changes.",
 		"- Preserve existing code style, indentation, and conventions.",
+		writeRules,
 		"- NEVER use placeholders or elision (like `// ... existing code ...`) in file writes. Tools overwrite files entirely, so you must always provide the COMPLETE file content.",
 		"- NEVER send unified-diff lines (`+` / `-` prefixes) to `write_file` — it is not a patch tool.",
 		"- After a successful write, a green/red diff in the transcript is normal UI feedback, not a mistake to apologize for.",
@@ -53,13 +58,10 @@ func programmerFull(opts Options) string {
 		fullPreamble(opts),
 		fullCoreMandates(),
 		fullPrimaryWorkflow(opts.Interactive, opts.SymbolsEnabled, opts.EditEnabled),
-		fullOperationalGuidelines(),
+		fullOperationalGuidelines(opts.EditEnabled, opts.MemoryEnabled),
 	}
 	if opts.IsGitRepo {
 		sections = append(sections, liteGit())
-	}
-	if opts.SandboxEnabled {
-		sections = append(sections, liteSandbox())
 	}
 	if list := availableTools(opts.ToolNames); list != "" {
 		sections = append(sections, list)
@@ -68,14 +70,10 @@ func programmerFull(opts Options) string {
 }
 
 func fullPreamble(opts Options) string {
-	role := "an interactive CLI agent"
-	if !opts.Interactive {
-		role = "an autonomous CLI agent"
-	}
 	return join(
 		renderIdentity(opts.Identity, programmerProfile.roleNoun, programmerProfile.helpClause),
 		"",
-		"You are "+role+" specializing in software engineering tasks. Your primary goal is to help the user safely, effectively, and with high-quality, idiomatic code.",
+		"Your primary goal is to help the user safely, effectively, and with high-quality, idiomatic code.",
 	)
 }
 
@@ -137,12 +135,27 @@ func fullPrimaryWorkflow(interactive, symbolsEnabled, editEnabled bool) string {
 	)
 }
 
-func fullOperationalGuidelines() string {
+func fullOperationalGuidelines(editEnabled, memoryEnabled bool) string {
+	var writeRules string
+	if editEnabled {
+		writeRules = "- **Read Before Write:** Never modify a file you have not read. Use `" + tools.ReadFileToolName + "` first, then `" + tools.WriteFileToolName + "` or `" + tools.EditToolName + "`.\n" +
+			"- **No Placeholders:** NEVER use placeholders or elision (like `// ... existing code ...`) in file writes. Tools overwrite files entirely, so you must always provide the COMPLETE file content.\n" +
+			"- **No Diff Format:** NEVER send unified-diff lines (`+` / `-` prefixes) or UI diff previews to `write_file`. It is not a patch tool — send the entire file body. After a successful `write_file`, Sagittarius may show a green/red diff in the transcript — that is a summary of what landed on disk, not text you should copy or apologize for."
+	} else {
+		writeRules = "- **Read Before Write:** Never modify a file you have not read. Use `" + tools.ReadFileToolName + "` first, then `" + tools.WriteFileToolName + "`.\n" +
+			"- **No Placeholders:** NEVER use placeholders or elision (like `// ... existing code ...`) in file writes. Tools overwrite files entirely, so you must always provide the COMPLETE file content.\n" +
+			"- **No Diff Format:** NEVER send unified-diff lines (`+` / `-` prefixes) or UI diff previews to `write_file`. It is not a patch tool — send the entire file body. After a successful `write_file`, Sagittarius may show a green/red diff in the transcript — that is a summary of what landed on disk, not text you should copy or apologize for."
+	}
+
+	memory := ""
+	if memoryEnabled {
+		memory = "- **Memory:** Use `" + tools.SaveMemoryToolName + "` to persist durable project facts, architectural decisions, or user preferences to `AGENTS.md`.\n"
+	}
+
 	return join(
 		"# Operational Guidelines",
 		"",
 		"## Tone and Style",
-		"- **Role:** A senior software engineer and collaborative peer programmer.",
 		"- **High-Signal Output:** Focus on intent and technical rationale. Avoid conversational filler, apologies, and mechanical tool-use narration (e.g. \"I will now call...\").",
 		"- **Concise & Direct:** Adopt a professional, direct tone suitable for a CLI environment. Aim for fewer than 3 lines of text output (excluding tool use/code) per response whenever practical.",
 		"- **No Post-Change Summaries:** After completing a change, do not recap what you did unless the user asks.",
@@ -154,17 +167,13 @@ func fullOperationalGuidelines() string {
 		"",
 		"## Tool Usage",
 		"- **Parallelism:** Execute multiple independent tool calls in parallel when feasible (searching, reading files, editing different files). When a tool depends on a previous tool's result in the same turn, sequence them so the dependency is satisfied.",
-		"- **Read Before Write:** Never modify a file you have not read. Use `"+tools.ReadFileToolName+"` first, then `"+tools.WriteFileToolName+"`.",
-		"- **No Placeholders:** NEVER use placeholders or elision (like `// ... existing code ...`) in file writes. Tools overwrite files entirely, so you must always provide the COMPLETE file content.",
-		"- **No Diff Format:** NEVER send unified-diff lines (`+` / `-` prefixes) or UI diff previews to `write_file`. It is not a patch tool — send the entire file body.",
-		"- **UI diff vs file:** After a successful `write_file`, Sagittarius may show a green/red diff in the transcript — that is a summary of what landed on disk, not text you should copy or apologize for.",
-		"- **No Diff Format:** NEVER send unified-diff lines (`+` / `-` prefixes) or copy diff previews from the UI. `write_file` is not a patch tool — send the entire file body.",
+		writeRules,
 		"- **Explain Critical Commands:** Before running commands with `"+tools.ShellToolName+"` that modify the file system or system state, briefly explain the command's purpose and impact.",
 		"- **Interactive Commands:** Avoid shell commands that require user interaction (e.g. `git rebase -i`). Prefer non-interactive forms (`npm init -y` instead of `npm init`) when available.",
-		"- **Background Processes:** For long-running servers or watchers, run in the background (e.g. `node server.js &`) when appropriate.",
+		"- **Background Processes:** For a process that only needs to outlive the current turn — a dev server, a watcher, a tail — use `run_shell_command`'s `is_background` parameter instead of detaching. Sagittarius tracks those, captures their output, and can kill them by process group.",
 		"- **Confirmation Protocol:** If a tool call is declined or cancelled, respect the decision immediately. Do not re-attempt or negotiate unless the user explicitly directs you to.",
-		"",
-		toolInvocationMandate(),
+		memory,
+		toolInvocationMandate(editEnabled),
 	)
 }
 

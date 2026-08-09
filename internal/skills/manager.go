@@ -146,17 +146,19 @@ func (m *Manager) Reset() {
 	m.active = make(map[string]struct{})
 }
 
-// ActivateContent returns XML-wrapped skill instructions for the model.
-func (m *Manager) ActivateContent(name string) (string, error) {
+// maxSuggestions caps how many near matches a not-found error lists. A user
+// can easily have a hundred skills installed, so dumping every name produces an
+// error message no one can read.
+const maxSuggestions = 5
+
+// Content returns XML-wrapped skill instructions for the model without marking
+// the skill active. Callers that want the skill remembered for the session use
+// ActivateContent instead.
+func (m *Manager) Content(name string) (string, error) {
 	skill := m.Get(name)
 	if skill == nil {
-		names := make([]string, 0, len(m.skills))
-		for _, s := range m.Skills() {
-			names = append(names, s.Name)
-		}
-		return "", fmt.Errorf("skill %q not found; available: %s", name, strings.Join(names, ", "))
+		return "", m.notFoundError(name)
 	}
-	m.Activate(name)
 	dir := skillDir(skill.Location)
 	resources, _ := folderListing(dir)
 	return fmt.Sprintf(`<activated_skill name="%s">
@@ -168,6 +170,49 @@ func (m *Manager) ActivateContent(name string) (string, error) {
     %s
   </available_resources>
 </activated_skill>`, skill.Name, skill.Body, resources), nil
+}
+
+// ActivateContent returns XML-wrapped skill instructions for the model and
+// marks the skill active for the session.
+func (m *Manager) ActivateContent(name string) (string, error) {
+	content, err := m.Content(name)
+	if err != nil {
+		return "", err
+	}
+	m.Activate(name)
+	return content, nil
+}
+
+// notFoundError reports an unknown skill name alongside its nearest matches.
+func (m *Manager) notFoundError(name string) error {
+	near := m.nearestNames(name)
+	if len(near) == 0 {
+		return fmt.Errorf("unknown skill %q (see /skills for the installed list)", name)
+	}
+	return fmt.Errorf("unknown skill %q; did you mean: %s (see /skills for the full list)", name, strings.Join(near, ", "))
+}
+
+// nearestNames returns up to maxSuggestions enabled skill names related to
+// name: prefix matches first, then substring matches, each alphabetically.
+func (m *Manager) nearestNames(name string) []string {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	var prefix, contains []string
+	for _, s := range m.Skills() {
+		ls := strings.ToLower(s.Name)
+		switch {
+		case lower == "":
+			prefix = append(prefix, s.Name)
+		case strings.HasPrefix(ls, lower):
+			prefix = append(prefix, s.Name)
+		case strings.Contains(ls, lower):
+			contains = append(contains, s.Name)
+		}
+	}
+	out := append(prefix, contains...)
+	if len(out) > maxSuggestions {
+		out = out[:maxSuggestions]
+	}
+	return out
 }
 
 func skillDir(location string) string {
