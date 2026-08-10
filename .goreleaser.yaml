@@ -34,6 +34,20 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
+brews:
+  - repository:
+      owner: undeadindustries
+      name: homebrew-tap
+      token: "{{ .Env.GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/undeadindustries/sagittarius"
+    description: "Go AI agent CLI for building large projects, adminning systems, or personal assistance"
+    license: "Apache-2.0"
+    install: |
+      bin.install "sagittarius"
+    test: |
+      system "#{bin}/sagittarius --version"
+
 changelog:
   sort: asc
   filters:
@@ -44,4 +58,4 @@ changelog:
       - "merge"
 
 release:
-  draft: true
+  draft: false

@@ -22,6 +22,19 @@ You can set specific models for different modes (agent, plan, ask), choose diffe
 
 ## Installation
 
+### Via Homebrew (macOS & Linux)
+
+```bash
+brew install undeadindustries/tap/sagittarius
+```
+
+Or tap the repository first:
+
+```bash
+brew tap undeadindustries/tap
+brew install sagittarius
+```
+
 ### From GitHub Releases
 
 Pre-compiled binaries for Linux and macOS (amd64 and arm64) are available on the [GitHub Releases](https://github.com/undeadindustries/sagittarius/releases) page.
