@@ -1,3 +1,9 @@
+```
+     · ✦ ·
+  »»»»»»———➤
+  S A G I T T A R I U S
+```
+
 # Sagittarius
 
 Sagittarius started as a 1:1 Go port of gemini-cli. Gemini-cli was discontinued and Antigravity is...not ideal. This project has evolved into a bug-free, safe alternative to Gemini-cli, Agy, and Opencode to build large projects, admin your system, or be your assistant.
