@@ -98,6 +98,8 @@ type RunnerConfig struct {
 	// constraints.go) from a resumed session, so a "do not touch X yet" limit
 	// set before --resume survives across the restart.
 	InitialConstraints []string
+	// InitialReadOnly seeds the standing session read-only posture.
+	InitialReadOnly *bool
 	// VerboseLog, when non-nil, receives a full timestamped transcript of every
 	// request sent to the provider and every response/tool result received
 	// (see --log-verbose). It is opt-in and independent of debug logging; the
@@ -124,6 +126,10 @@ type Runner struct {
 	model                string
 	providerDefaultModel string
 	modelPinned          bool
+	// readOnlyPosture tracks the durable session-wide read-only state.
+	readOnlyPosture      bool
+	// readOnlyConversational tracks the turn-level conversational read-only lock.
+	readOnlyConversational bool
 	// reasoningOverride* implement the ephemeral, per-(provider,model)
 	// /reasoning pin. It replaces a former process-global (provider.
 	// SessionReasoningOverride) that could bleed across Runner instances and
@@ -376,6 +382,9 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 	}
 	if len(cfg.InitialConstraints) > 0 {
 		runner.constraints = append([]string(nil), cfg.InitialConstraints...)
+	}
+	if cfg.InitialReadOnly != nil {
+		runner.readOnlyPosture = *cfg.InitialReadOnly
 	}
 
 	registerGoalTools(runner, registry)
@@ -757,6 +766,21 @@ func (r *Runner) RunTurn(ctx context.Context, userInput string) (<-chan ui.Strea
 	}
 
 	r.verboseLog.LogTurnStart(userInput)
+
+	// Check conversational read-only intent
+	auxGen, _ := r.auxGenerator(ctx)
+	intent := classifyReadOnlyIntent(ctx, userInput, auxGen)
+	if intent != IntentNeutral {
+		r.modelMu.Lock()
+		if intent == IntentLock && !r.readOnlyConversational {
+			r.readOnlyConversational = true
+		} else if intent == IntentUnlock && r.readOnlyConversational {
+			r.readOnlyConversational = false
+		}
+		r.modelMu.Unlock()
+		r.applyModeSystemSuffix()
+	}
+
 	r.setState(StateIdle)
 	r.metrics.recordTurn()
 	r.resetEditLoopStats()
@@ -1155,6 +1179,22 @@ func (r *Runner) applyModeSystemSuffix() {
 			suffix = directive
 		}
 	}
+	
+	// Add read-only gate directive if the posture or lock is active
+	r.modelMu.RLock()
+	roPosture := r.readOnlyPosture
+	roConv := r.readOnlyConversational
+	r.modelMu.RUnlock()
+	
+	if roPosture || roConv {
+		directive := "**CRITICAL:** You are currently in READ-ONLY INSPECTION MODE. Mutating tools (writing files, making configuration changes, running non-inspection shell commands) are disabled and will be rejected. You MUST NOT attempt to use them. A text-only report of your findings is a correct and complete turn."
+		if suffix != "" {
+			suffix = strings.TrimRight(suffix, "\n") + "\n\n" + directive
+		} else {
+			suffix = directive
+		}
+	}
+
 	r.modelMu.Lock()
 	base := r.systemBase
 	if suffix != "" {
@@ -1272,18 +1312,30 @@ func (r *Runner) schedulerOptions() []tools.SchedulerOption {
 				_ = r.sessionRecorder.RecordSessionGrant(toolName)
 			}
 		}),
-		tools.WithReadOnlyGate(r.grillReadOnly),
+		tools.WithReadOnlyPolicy(r.readOnlyPolicy),
 	)
 	return opts
 }
 
-// grillReadOnly reports whether an active grill session should force
-// read-only tool gating (active or paused interrogation). It is lifted once
-// the session moves to summarizing/complete so the final spec write and any
-// cleanup can proceed normally.
-func (r *Runner) grillReadOnly() bool {
+// readOnlyPolicy reports whether the agent should force read-only tool gating.
+// It returns PolicyStrict for grill mode, PolicyInspect if a read-only lock is active,
+// or PolicyNone otherwise.
+func (r *Runner) readOnlyPolicy() tools.ReadOnlyPolicy {
 	g := r.Grill()
-	return g != nil && g.Status != grill.StatusSummarizing && g.Status != grill.StatusComplete
+	if g != nil && g.Status != grill.StatusSummarizing && g.Status != grill.StatusComplete {
+		return tools.PolicyStrict
+	}
+	
+	r.modelMu.RLock()
+	posture := r.readOnlyPosture
+	conv := r.readOnlyConversational
+	r.modelMu.RUnlock()
+	
+	if posture || conv {
+		return tools.PolicyInspect
+	}
+
+	return tools.PolicyNone
 }
 
 // grillDirectiveConfig resolves the interrogation directive tuning from

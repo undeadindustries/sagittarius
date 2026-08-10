@@ -33,11 +33,11 @@ type Scheduler struct {
 	workspace   *Workspace
 	enforce     bool
 	snapshotter Snapshotter
-	// readOnly, when non-nil and returning true, forces read-only tool gating
+	// readOnlyPolicy, when non-nil and returning > PolicyNone, forces read-only tool gating
 	// regardless of the active interaction mode (grill mode while
-	// interrogating). ask_user is always exempt so the interrogation itself
+	// interrogating uses PolicyStrict; inspection gate uses PolicyInspect). ask_user is always exempt so the interrogation itself
 	// can proceed.
-	readOnly func() bool
+	readOnlyPolicy func() ReadOnlyPolicy
 
 	// sessionGrants records tools the user approved "for this session" so later
 	// invocations of the same tool skip confirmation. Guarded by mu.
@@ -79,10 +79,10 @@ func WithSnapshotter(snap Snapshotter) SchedulerOption {
 	return func(s *Scheduler) { s.snapshotter = snap }
 }
 
-// WithReadOnlyGate installs a signal that, while true, forces read-only tool
-// gating regardless of the active interaction mode (used by grill mode).
-func WithReadOnlyGate(fn func() bool) SchedulerOption {
-	return func(s *Scheduler) { s.readOnly = fn }
+// WithReadOnlyPolicy installs a signal that, while greater than PolicyNone, forces read-only tool
+// gating regardless of the active interaction mode (used by grill mode and inspection gate).
+func WithReadOnlyPolicy(fn func() ReadOnlyPolicy) SchedulerOption {
+	return func(s *Scheduler) { s.readOnlyPolicy = fn }
 }
 
 // NewScheduler constructs a scheduler for the given registry and policy.
@@ -218,8 +218,29 @@ func (s *Scheduler) executeOne(
 		}
 	}
 
-	if s.policy.NeedsConfirmation(tool) && !s.sessionGranted(tool.Name()) {
-		approved, err := s.requestApproval(ctx, tool.Name(), id, args, emit)
+	needsConfirm := s.policy.NeedsConfirmation(tool)
+	grantKey := tool.Name()
+	isEscalation := false
+	if s.readOnlyPolicy != nil && s.readOnlyPolicy() == PolicyInspect && canonicalToolName(name) == ShellToolName {
+		if cmd, err := stringArg(args, ShellParamCommand); err == nil {
+			verdict, _ := ClassifyShellReadOnly(cmd)
+			if verdict == VerdictUnknown {
+				needsConfirm = true
+				isEscalation = true
+				tokens := strings.Fields(cmd)
+				if len(tokens) > 0 {
+					base := commandBase(tokens[0])
+					if base == "sudo" && len(tokens) > 1 {
+						base = "sudo " + commandBase(tokens[1])
+					}
+					grantKey = "escalation:" + base
+				}
+			}
+		}
+	}
+
+	if needsConfirm && !s.sessionGranted(grantKey) {
+		approved, err := s.requestApproval(ctx, tool.Name(), grantKey, id, args, emit, isEscalation)
 		if err != nil {
 			return nil, err
 		}
@@ -312,9 +333,11 @@ func (s *Scheduler) snapshotTarget(name string, args map[string]any) string {
 func (s *Scheduler) requestApproval(
 	ctx context.Context,
 	toolName string,
+	grantKey string,
 	callID string,
 	args map[string]any,
 	emit func(ui.StreamEvent),
+	isEscalation bool,
 ) (bool, error) {
 	tool, ok := s.registry.Lookup(toolName)
 	if !ok {
@@ -322,6 +345,9 @@ func (s *Scheduler) requestApproval(
 	}
 
 	if !s.interactive {
+		if isEscalation {
+			return false, nil // deny without prompting when headless
+		}
 		return s.policy.HeadlessApprove(tool), nil
 	}
 
@@ -341,7 +367,7 @@ func (s *Scheduler) requestApproval(
 	case decision := <-replyCh:
 		switch decision {
 		case ui.ConfirmSession:
-			s.grantSession(toolName)
+			s.grantSession(grantKey)
 			return true, nil
 		case ui.ConfirmOnce:
 			return true, nil
@@ -454,9 +480,16 @@ func errorResponse(call provider.ToolCall, message string) *provider.FunctionRes
 }
 
 func (s *Scheduler) interactionModeAllow(toolName string, args map[string]any) (bool, string) {
-	if s.readOnly != nil && s.readOnly() {
-		if allowed, reason := grillModeAllow(canonicalToolName(toolName), args); !allowed {
-			return false, reason
+	if s.readOnlyPolicy != nil {
+		switch s.readOnlyPolicy() {
+		case PolicyStrict:
+			if allowed, reason := grillModeAllow(canonicalToolName(toolName), args); !allowed {
+				return false, reason
+			}
+		case PolicyInspect:
+			if allowed, reason := inspectModeAllow(canonicalToolName(toolName), args); !allowed {
+				return false, reason
+			}
 		}
 	}
 	if s.mode == nil {

@@ -79,6 +79,7 @@ func run(args []string) int {
 	outputFmt := fs.String("output-format", "text", "headless output format: text|json|stream-json")
 	worktreeFlag := fs.String("worktree", "", "start in an isolated git worktree (experimental; requires experimental.worktrees: true in settings)")
 	worktreeShort := fs.String("w", "", "shorthand for --worktree")
+	readOnlyFlag := fs.Bool("read-only", false, "force the agent into a read-only inspection posture")
 
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -186,6 +187,7 @@ func run(args []string) int {
 		approvalMode:  approvalMode,
 		modeOverride:  modeOverride,
 		logVerbose:    *logVerbose,
+		readOnly:      readOnlyFlag,
 	}
 
 	if *selfUpdate {
@@ -677,6 +679,7 @@ type runnerOptions struct {
 	// logVerbose enables --log-verbose: a full request/response/tool-result
 	// transcript written to disk for bug reports (see openVerboseChatLog).
 	logVerbose bool
+	readOnly   *bool
 }
 
 // buildRunner constructs a Runner, optionally loading a resumed session.
@@ -787,6 +790,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 	var initialGoal *goal.Snapshot
 	var initialGrill *grill.Snapshot
 	var initialConstraints []string
+	var initialReadOnly *bool
 
 	projectRoot := wd
 	if projectRoot == "" {
@@ -820,6 +824,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		initialGoal = result.Record.Goal
 		initialGrill = result.Record.Grill
 		initialConstraints = result.Record.Constraints
+		initialReadOnly = result.Record.ReadOnly
 		mgr, mgrErr := session.NewManagerForResume(projectRoot, sessID, result)
 		if mgrErr != nil {
 			slog.Warn("session recording disabled: cannot open recorder for resumed session", "err", mgrErr)
@@ -838,6 +843,21 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 
 	// Resolve project-boundary + snapshot policy from the already-merged settings.
 	boundary, snapMgr := resolveBoundaryAndSnapshots(settings, projectRoot, sessID)
+
+	// Resolve read-only posture overrides (CLI flag beats config setting beats resume)
+	if opts.readOnly != nil && *opts.readOnly {
+		ro := true
+		initialReadOnly = &ro
+	} else if initialReadOnly == nil {
+		ro := config.ResolveReadOnly(settings, false)
+		if ro {
+			initialReadOnly = &ro
+		}
+	}
+
+	if sessRecorder != nil && initialReadOnly != nil {
+		_ = sessRecorder.SetReadOnly(*initialReadOnly)
+	}
 
 	// Acquire the session liveness lock so a later launch can tell this running
 	// process apart from an abandoned session. Best-effort: a nil release means
@@ -872,6 +892,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		InitialGoal:          initialGoal,
 		InitialGrill:         initialGrill,
 		InitialConstraints:   initialConstraints,
+		InitialReadOnly:      initialReadOnly,
 		Settings:             settings,
 		InitialMode:          initialMode,
 		ModelPinned:          modelPinned,

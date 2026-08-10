@@ -134,6 +134,10 @@ type Hooks interface {
 	ListConstraints() []string
 	ClearConstraints() error
 
+	// /readonly durable session-wide posture hooks.
+	SetReadOnly(enabled bool) error
+	ReadOnlyActive() bool
+
 	// ToolkitChecklist hooks
 	ToolkitReport() string
 	ToolkitDismiss() error

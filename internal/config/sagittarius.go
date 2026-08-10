@@ -98,6 +98,8 @@ type SagittariusSettings struct {
 	Goal *SagittariusGoalConfig `json:"goal,omitempty"`
 	// Grill configures the /grill interrogation mode parameters.
 	Grill *SagittariusGrillConfig `json:"grill,omitempty"`
+	// ReadOnly forces the agent into a read-only inspection mode.
+	ReadOnly *bool `json:"readOnly,omitempty"`
 	// Sessions configures conversation metadata (auto-titling).
 	Sessions *SagittariusSessionsConfig `json:"sessions,omitempty"`
 	// MaxToolRounds caps how many tool-call/response cycles the agent may

@@ -87,6 +87,9 @@ type MetadataRecord struct {
 	// slice and an absent key both unmarshal to nil, so a clear would be
 	// silently lost on the next $set-driven merge (see applyMetaUpdate).
 	Constraints *[]string `json:"constraints,omitempty"`
+	// ReadOnly follows the Constraints pointer pattern: nil = no change,
+	// non-nil = explicitly set to on or off.
+	ReadOnly *bool `json:"readOnly,omitempty"`
 }
 
 // SetRecord carries a $set metadata update appended mid-session.
@@ -117,6 +120,8 @@ type ConversationRecord struct {
 	// MetadataRecord.Constraints this is a plain slice: the pointer indirection
 	// exists only to make the $set merge correct, not for external consumers.
 	Constraints []string
+	// ReadOnly holds the durable read-only posture setting.
+	ReadOnly *bool
 	Messages    []MessageRecord
 }
 

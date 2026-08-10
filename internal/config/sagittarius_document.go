@@ -840,6 +840,12 @@ func unmarshalSagittarius(raw json.RawMessage) (*SagittariusSettings, error) {
 				return nil, fmt.Errorf("decode sagittarius.grill: %w", err)
 			}
 			s.Grill = g
+		case "readOnly":
+			var b bool
+			if err := json.Unmarshal(val, &b); err != nil {
+				return nil, fmt.Errorf("decode sagittarius.readOnly: %w", err)
+			}
+			s.ReadOnly = &b
 		case "update":
 			u, err := unmarshalUpdateConfig(val)
 			if err != nil {
@@ -981,6 +987,9 @@ func marshalSagittarius(s *SagittariusSettings) (json.RawMessage, error) {
 			return nil, err
 		}
 		obj["grill"] = b
+	}
+	if err := add("readOnly", s.ReadOnly); err != nil {
+		return nil, err
 	}
 	if s.Update != nil {
 		b, err := marshalUpdateConfig(s.Update)

@@ -55,6 +55,7 @@ func LoadSession(filePath string) (*ConversationRecord, error) {
 		Goal:          meta.Goal,
 		Grill:         meta.Grill,
 		Constraints:   derefConstraints(meta.Constraints),
+		ReadOnly:      meta.ReadOnly,
 		Messages:      messages,
 	}, nil
 }
@@ -364,6 +365,9 @@ func applyMetaUpdate(dst, src *MetadataRecord) {
 	}
 	if src.Constraints != nil {
 		dst.Constraints = src.Constraints
+	}
+	if src.ReadOnly != nil {
+		dst.ReadOnly = src.ReadOnly
 	}
 	if len(src.SessionGrants) > 0 {
 		for _, g := range src.SessionGrants {

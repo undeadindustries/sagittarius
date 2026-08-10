@@ -72,3 +72,59 @@ func handleConstraintsClear(ctx *Context) Result {
 	}
 	return InfoResult("Cleared all standing constraints.")
 }
+
+func readOnlyCommand() Command {
+	return Command{
+		Name:        "readonly",
+		Description: "Manage the durable read-only inspection posture (on/off/status)",
+		SubCommands: []Command{
+			{
+				Name:        "on",
+				Description: "Enable the read-only inspection posture",
+				Handler:     handleReadOnlyOn,
+			},
+			{
+				Name:        "off",
+				Description: "Disable the read-only inspection posture",
+				Handler:     handleReadOnlyOff,
+			},
+			{
+				Name:        "status",
+				Description: "Show the current read-only posture",
+				Handler:     handleReadOnlyStatus,
+			},
+		},
+		Handler: handleReadOnlyStatus,
+	}
+}
+
+func handleReadOnlyOn(ctx *Context) Result {
+	if ctx.Deps.Hooks == nil {
+		return InfoResult("ReadOnly posture unavailable.")
+	}
+	if err := ctx.Deps.Hooks.SetReadOnly(true); err != nil {
+		return ErrorResult(fmt.Errorf("set read-only: %w", err))
+	}
+	return InfoResult("Read-only inspection posture enabled.")
+}
+
+func handleReadOnlyOff(ctx *Context) Result {
+	if ctx.Deps.Hooks == nil {
+		return InfoResult("ReadOnly posture unavailable.")
+	}
+	if err := ctx.Deps.Hooks.SetReadOnly(false); err != nil {
+		return ErrorResult(fmt.Errorf("set read-only: %w", err))
+	}
+	return InfoResult("Read-only inspection posture disabled.")
+}
+
+func handleReadOnlyStatus(ctx *Context) Result {
+	if ctx.Deps.Hooks == nil {
+		return InfoResult("ReadOnly posture unavailable.")
+	}
+	active := ctx.Deps.Hooks.ReadOnlyActive()
+	if active {
+		return InfoResult("Read-only inspection posture is currently ENABLED.")
+	}
+	return InfoResult("Read-only inspection posture is currently DISABLED.")
+}

@@ -67,6 +67,32 @@ func (r *Runner) ClearConstraints() error {
 	return nil
 }
 
+// SetReadOnly enables or disables the durable read-only inspection posture for the session.
+func (r *Runner) SetReadOnly(enabled bool) error {
+	r.modelMu.Lock()
+	if r.readOnlyPosture == enabled {
+		r.modelMu.Unlock()
+		return nil
+	}
+	r.readOnlyPosture = enabled
+	r.modelMu.Unlock()
+
+	if r.sessionRecorder != nil {
+		if err := r.sessionRecorder.SetReadOnly(enabled); err != nil {
+			return err
+		}
+	}
+	r.applyModeSystemSuffix()
+	return nil
+}
+
+// ReadOnlyActive returns whether the read-only inspection posture is enabled.
+func (r *Runner) ReadOnlyActive() bool {
+	r.modelMu.RLock()
+	defer r.modelMu.RUnlock()
+	return r.readOnlyPosture
+}
+
 // renderConstraintsDirective builds the system-prompt suffix for standing
 // constraints. It is deliberately blunt about precedence: constraints exist
 // specifically to survive a request that would otherwise trigger the

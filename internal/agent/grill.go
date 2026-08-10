@@ -27,7 +27,7 @@ func (r *Runner) Grill() *grill.Session {
 // change to the session recorder, and recomposes the system instruction so the
 // interrogation directive reflects the new state. A clone is stored so the
 // caller cannot mutate runner state through the passed pointer afterwards. The
-// scheduler's read-only gate (tools.WithReadOnlyGate) reads the session live
+// scheduler's read-only gate (tools.WithReadOnlyPolicy) reads the session live
 // via Grill(), so it does not need rebuilding here.
 func (r *Runner) SetGrill(g *grill.Session) {
 	clone := g.Clone()

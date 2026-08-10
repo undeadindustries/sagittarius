@@ -113,7 +113,13 @@ func (m *model) statusRowParts() (left, right string) {
 	cs, ok := m.composerStatus()
 	hints := scrollShortcutHints()
 	if ok {
-		left = approvalHint(cs.ApprovalMode)
+		if cs.ReadOnlyPosture {
+			left = "Tools: read-only (session)"
+		} else if cs.ReadOnlyConversational {
+			left = "Tools: read-only - say go ahead to lift"
+		} else {
+			left = approvalHint(cs.ApprovalMode)
+		}
 	}
 	if left != "" {
 		left = left + "  ·  " + hints

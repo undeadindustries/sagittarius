@@ -7,6 +7,14 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/modes"
 )
 
+type ReadOnlyPolicy int
+
+const (
+	PolicyNone ReadOnlyPolicy = iota
+	PolicyStrict
+	PolicyInspect
+)
+
 var readOnlyBuiltinTools = map[string]bool{
 	ReadFileToolName:        true,
 	ListDirectoryToolName:   true,
@@ -92,6 +100,42 @@ func grillModeAllow(name string, args map[string]any) (bool, string) {
 		return false, "grill mode: " + strings.TrimPrefix(reason, "ask mode: ")
 	}
 	return true, ""
+}
+
+func inspectModeAllow(name string, args map[string]any) (bool, string) {
+	if name == AskUserToolName {
+		return true, ""
+	}
+	if name == ProjectChecksToolName && projectChecksFixRequested(args) {
+		return false, "inspect mode: run_project_checks fix mode rewrites files and is not allowed; run check-only (fix=false) instead"
+	}
+	if readOnlyBuiltinTools[name] {
+		return true, ""
+	}
+
+	switch name {
+	case WriteFileToolName, EditToolName:
+		return false, "inspect mode: modifying files is not allowed; session is in read-only inspection mode"
+	case SaveMemoryToolName:
+		return false, "inspect mode: modifying memory is not allowed in inspection mode"
+	case ShellToolName:
+		cmd, err := stringArg(args, ShellParamCommand)
+		if err != nil {
+			return false, "invalid command"
+		}
+		verdict, reason := ClassifyShellReadOnly(cmd)
+		if verdict == VerdictMutating {
+			return false, "inspect mode: mutating shell command denied (" + reason + ")"
+		}
+		// VerdictReadOnly and VerdictUnknown pass the hard-deny gate.
+		// Unknown will trigger an interactive confirmation downstream in requestApproval.
+		return true, ""
+	default:
+		if strings.HasPrefix(name, "mcp_") {
+			return false, "inspect mode: MCP tools are not available because they cannot be verified as read-only"
+		}
+		return false, fmt.Sprintf("inspect mode: tool %q is not allowed", name)
+	}
 }
 
 func planModeAllow(name string, args map[string]any, ws *Workspace) (bool, string) {

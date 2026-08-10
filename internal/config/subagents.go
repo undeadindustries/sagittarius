@@ -1,5 +1,13 @@
 package config
 
+// ResolveReadOnly returns whether the durable read-only inspection mode is enabled.
+func ResolveReadOnly(cfg *Settings, fallback bool) bool {
+	if cfg == nil || cfg.Sagittarius == nil || cfg.Sagittarius.ReadOnly == nil {
+		return fallback
+	}
+	return *cfg.Sagittarius.ReadOnly
+}
+
 // SubagentsEnabled reports whether read-only research subagents are enabled.
 // Project settings win over global; the default is false.
 func SubagentsEnabled(global, project *Settings) bool {

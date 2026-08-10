@@ -136,10 +136,9 @@ The shell heuristic inspects the command string for output redirections
 `sed -i`) whose path arguments resolve outside the root (absolute paths, `../`
 escapes, or `~` home references).
 
-### Heuristic limitations
+### Heuristic and token-scanning limitations
 
-The scan is conservative and operates on the literal command string. It **cannot**
-catch every escape, including:
+The scan is conservative and operates on the literal command string. This applies to both the project boundary out-of-root checks and the **Read-Only Inspection Gate** shell classifier. It **cannot** catch every escape, including:
 
 - Obfuscation: `eval`, base64-decoded commands, or variable indirection
   (`f=/etc/x; rm "$f"`).

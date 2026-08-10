@@ -47,6 +47,55 @@ func modeCommand() Command {
 	}
 }
 
+// agentCommand, planCommand, askCommand, and debugCommand are top-level
+// shortcuts for "/mode <name>" — the primary, high-frequency action (switch
+// now) gets a one-word command; "/mode" remains for discovery/compat and
+// "/modes" remains the per-mode override editor. They take no arguments and
+// no subcommands: the mode name is the entire command.
+func agentCommand() Command {
+	return Command{
+		Name:        "agent",
+		Description: "Switch to agent mode (shortcut for /mode agent)",
+		Handler:     noArgsModeHandler("agent", handleModeSetAgent),
+	}
+}
+
+func planCommand() Command {
+	return Command{
+		Name:        "plan",
+		Description: "Switch to plan mode (shortcut for /mode plan)",
+		Handler:     noArgsModeHandler("plan", handleModeSetPlan),
+	}
+}
+
+func askCommand() Command {
+	return Command{
+		Name:        "ask",
+		Description: "Switch to ask mode (shortcut for /mode ask)",
+		Handler:     noArgsModeHandler("ask", handleModeSetAsk),
+	}
+}
+
+func debugCommand() Command {
+	return Command{
+		Name:        "debug",
+		Description: "Switch to debug mode (shortcut for /mode debug)",
+		Handler:     noArgsModeHandler("debug", handleModeSetDebug),
+	}
+}
+
+// noArgsModeHandler wraps a mode-switch handler so the top-level shortcuts
+// reject trailing arguments instead of silently ignoring them (e.g.
+// "/agent reload" must not switch mode and drop "reload").
+func noArgsModeHandler(name string, h func(*Context) Result) func(*Context) Result {
+	return func(ctx *Context) Result {
+		if strings.TrimSpace(ctx.Args) != "" {
+			return InfoResult("Usage: /" + name)
+		}
+		return h(ctx)
+	}
+}
+
 func handleModeShow(ctx *Context) Result {
 	if ctx.Deps.Hooks == nil {
 		return InfoResult("Mode commands unavailable.")

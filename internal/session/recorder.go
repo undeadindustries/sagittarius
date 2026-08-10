@@ -345,6 +345,21 @@ func (r *Recorder) SetConstraints(constraints []string) error {
 	return r.appendLineLocked(set)
 }
 
+// SetReadOnly records a change to the durable read-only posture.
+func (r *Recorder) SetReadOnly(enabled bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.disabled {
+		return nil
+	}
+	set := SetRecord{
+		Set: &MetadataRecord{
+			ReadOnly: &enabled,
+		},
+	}
+	return r.appendLineLocked(set)
+}
+
 // SetSummary appends a session-title metadata update to the session file. The
 // loader already prefers MetadataRecord.Summary over the first user message
 // when building a display name, so this is the single write path for both
