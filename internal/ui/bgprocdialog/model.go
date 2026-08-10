@@ -10,6 +10,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/undeadindustries/sagittarius/internal/bgproc"
+	"github.com/undeadindustries/sagittarius/internal/ui/overlay"
 	"github.com/undeadindustries/sagittarius/internal/ui/theme"
 )
 
@@ -183,11 +184,11 @@ func (m *Model) View() string {
 	var content string
 	if m.showOutput {
 		title := m.th.Accent.Bold(true).Render(fmt.Sprintf("Output for PID %d", m.activePid))
-		hint := m.th.Dim.Render("Esc/Left to go back • Up/Down to scroll")
+		hint := overlay.Hints(m.th, "Esc/Left to go back • Up/Down to scroll")
 		content = title + "\n\n" + m.outputVP.View() + "\n\n" + hint
 	} else {
 		content = m.list.View()
-		hint := m.th.Dim.Render("Enter/Right: view output • d/Delete: kill • Esc: close")
+		hint := overlay.Hints(m.th, "Enter/Right: view output • d/Delete: kill • Esc: close")
 		content += "\n" + hint
 	}
 

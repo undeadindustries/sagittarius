@@ -56,6 +56,10 @@ type mockHooks struct {
 	// with a stateful in-memory slice, so /constraints command tests can
 	// assert real add/list/clear behavior.
 	constraints []string
+	// setModeCalls records every mode passed to SetInteractionMode, so tests
+	// can assert the top-level /agent, /plan, /ask, /debug shortcuts invoke
+	// the same hook as their "/mode <name>" equivalents.
+	setModeCalls []modes.Mode
 }
 
 func (m *mockHooks) RebuildRunner(context.Context) (string, string, error) {
@@ -163,7 +167,8 @@ func (m *mockHooks) ClearHistory() error { return nil }
 func (m *mockHooks) SetModeOverride(_ context.Context, _, _, _ string, _ config.SettingScope) error {
 	return nil
 }
-func (m *mockHooks) SetInteractionMode(context.Context, modes.Mode) (string, error) {
+func (m *mockHooks) SetInteractionMode(_ context.Context, mode modes.Mode) (string, error) {
+	m.setModeCalls = append(m.setModeCalls, mode)
 	return "gpt-4o-mini", nil
 }
 
@@ -406,6 +411,77 @@ func TestMCPOpensDialog(t *testing.T) {
 	}
 	if result.OpenDialog != slash.DialogMCP {
 		t.Fatalf("OpenDialog = %q, want %q", result.OpenDialog, slash.DialogMCP)
+	}
+}
+
+// TestTopLevelModeShortcuts asserts /agent, /plan, /ask, /debug are direct,
+// argument-free shortcuts for "/mode <name>": same hook call, same success
+// message, no subcommand parsing.
+func TestTopLevelModeShortcuts(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		cmd  string
+		mode modes.Mode
+	}{
+		{"/agent", modes.ModeAgent},
+		{"/plan", modes.ModePlan},
+		{"/ask", modes.ModeAsk},
+		{"/debug", modes.ModeDebug},
+	}
+	for _, tc := range cases {
+		t.Run(tc.cmd, func(t *testing.T) {
+			deps, _, hooks := testDeps(t, nil)
+			p := slash.NewProcessor()
+
+			shortcutResult := p.Process(context.Background(), tc.cmd, deps)
+			if !shortcutResult.Handled {
+				t.Fatalf("%s: expected handled", tc.cmd)
+			}
+			if len(hooks.setModeCalls) != 1 || hooks.setModeCalls[0] != tc.mode {
+				t.Fatalf("%s: setModeCalls = %v, want [%v]", tc.cmd, hooks.setModeCalls, tc.mode)
+			}
+
+			longFormDeps, _, longFormHooks := testDeps(t, nil)
+			longFormResult := p.Process(context.Background(), "/mode "+tc.mode.String(), longFormDeps)
+			if len(shortcutResult.Messages) != len(longFormResult.Messages) {
+				t.Fatalf("%s: messages = %v, want to match /mode long form %v", tc.cmd, shortcutResult.Messages, longFormResult.Messages)
+			}
+			for i := range shortcutResult.Messages {
+				if shortcutResult.Messages[i] != longFormResult.Messages[i] {
+					t.Fatalf("%s message = %q, want %q (parity with /mode long form)", tc.cmd, shortcutResult.Messages[i], longFormResult.Messages[i])
+				}
+			}
+			if len(longFormHooks.setModeCalls) != 1 || longFormHooks.setModeCalls[0] != tc.mode {
+				t.Fatalf("/mode %s: setModeCalls = %v, want [%v]", tc.mode.String(), longFormHooks.setModeCalls, tc.mode)
+			}
+		})
+	}
+}
+
+// TestTopLevelModeShortcutsRejectArgs asserts /agent, /plan, /ask, /debug
+// reject trailing arguments with a usage message instead of silently
+// switching mode and dropping the extra token (e.g. "/agent reload" must not
+// switch to agent mode).
+func TestTopLevelModeShortcutsRejectArgs(t *testing.T) {
+	t.Parallel()
+	cases := []string{"/agent", "/plan", "/ask", "/debug"}
+	for _, cmd := range cases {
+		t.Run(cmd, func(t *testing.T) {
+			deps, _, hooks := testDeps(t, nil)
+			p := slash.NewProcessor()
+
+			result := p.Process(context.Background(), cmd+" extra", deps)
+			if !result.Handled {
+				t.Fatalf("%s extra: expected handled", cmd)
+			}
+			if len(hooks.setModeCalls) != 0 {
+				t.Fatalf("%s extra: setModeCalls = %v, want none (mode must not switch)", cmd, hooks.setModeCalls)
+			}
+			wantMsg := "Usage: " + cmd
+			if len(result.Messages) != 1 || result.Messages[0] != wantMsg {
+				t.Fatalf("%s extra: messages = %v, want [%q]", cmd, result.Messages, wantMsg)
+			}
+		})
 	}
 }
 

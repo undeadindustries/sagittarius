@@ -13,7 +13,7 @@ import (
 func (m Model) View() string {
 	dim := m.th.Dim
 	var b strings.Builder
-	b.WriteString(m.th.Title.Render("Providers") + "\n\n")
+	b.WriteString(overlay.Title(m.th, "Providers") + "\n\n")
 	b.WriteString(m.screenBody())
 
 	if m.info != "" {
@@ -26,7 +26,7 @@ func (m Model) View() string {
 	if m.errMsg != "" {
 		b.WriteString("\n\n" + m.th.Error.Render(m.wrap("✗ "+m.errMsg)))
 	}
-	b.WriteString("\n\n" + dim.Render(m.footerHint()))
+	b.WriteString("\n\n" + overlay.Hints(m.th, m.footerHint()))
 
 	// Width is inner content only; border + padding add 4 cols (see overlay.ContentWidth).
 	return overlay.Frame(m.th, m.width, overlay.DefaultMinWidth, b.String())
@@ -261,7 +261,7 @@ func (m Model) renderModels(title string, pickable bool) string {
 	if len(m.models) == 0 {
 		b.WriteString(dim.Render("No models returned by the endpoint."))
 		if pickable {
-			b.WriteString("\n" + dim.Render("Press a to type a model name, or Esc to set one later from the /providers edit sheet."))
+			b.WriteString("\n" + overlay.Hints(m.th, "Press a to type a model name, or Esc to set one later from the /providers edit sheet."))
 		}
 		return b.String()
 	}
@@ -280,9 +280,9 @@ func (m Model) renderActivation(title string) string {
 	if m.modelsErr != "" {
 		b.WriteString(m.th.Error.Render(m.wrap("✗ "+m.modelsErr)) + "\n\n")
 		if len(m.models) > 0 {
-			b.WriteString(dim.Render("Showing saved models — edit below or press a to add more.") + "\n\n")
+			b.WriteString(overlay.Hints(m.th, "Showing saved models — edit below or press a to add more.") + "\n\n")
 		} else {
-			b.WriteString(dim.Render("Press a to add a model name manually, or Esc to go back.") + "\n")
+			b.WriteString(overlay.Hints(m.th, "Press a to add a model name manually, or Esc to go back.") + "\n")
 			return b.String()
 		}
 	}
@@ -290,7 +290,7 @@ func (m Model) renderActivation(title string) string {
 		b.WriteString(dim.Render("No models yet. Press a to add a model name.") + "\n")
 		return b.String()
 	}
-	b.WriteString(dim.Render("Checked models are active. Space toggles, A all/none, a adds, Enter saves.") + "\n\n")
+	b.WriteString(overlay.Hints(m.th, "Checked models are active. Space toggles, A all/none, a adds, Enter saves.") + "\n\n")
 	b.WriteString(m.renderScrollableRows(m.models, m.checked))
 	return strings.TrimRight(b.String(), "\n")
 }

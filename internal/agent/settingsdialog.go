@@ -41,6 +41,13 @@ func (d *settingsDialogDeps) ListSettings(scope config.SettingScope) []settingsd
 		}
 		return "false"
 	}
+
+	pruneToolSchemas := func(s *config.Settings) *bool {
+		if s != nil && s.Sagittarius != nil && s.Sagittarius.MCP != nil {
+			return s.Sagittarius.MCP.PruneToolSchemas
+		}
+		return nil
+	}
 	intVal := func(p *int) string {
 		if p == nil {
 			return notSet
@@ -239,6 +246,13 @@ func (d *settingsDialogDeps) ListSettings(scope config.SettingScope) []settingsd
 
 	sagDefined := scopeSettings.Sagittarius != nil
 
+	contextLimitPreferDiscovered := func(s *config.Settings) *bool {
+		if s != nil && s.Sagittarius != nil {
+			return s.Sagittarius.ContextLimitPreferDiscovered
+		}
+		return nil
+	}
+
 	modeVal := func(m string) string {
 		if m == "" {
 			return notSet
@@ -263,6 +277,15 @@ func (d *settingsDialogDeps) ListSettings(scope config.SettingScope) []settingsd
 			DefinedHere: sagDefined && scopeSettings.Sagittarius.MaxToolRounds != nil,
 			MergedValue: maxRoundsMerged,
 			Kind:        settingsdialog.KindInt,
+		},
+		{
+			Key:         "sagittarius.contextLimitPreferDiscovered",
+			Label:       "Prefer discovered context limits",
+			Description: "Ignore manual pins and use API-reported limits (context_length)",
+			Value:       boolVal(contextLimitPreferDiscovered(scopeSettings)),
+			DefinedHere: sagDefined && scopeSettings.Sagittarius.ContextLimitPreferDiscovered != nil,
+			MergedValue: boolVal(contextLimitPreferDiscovered(merged)),
+			Kind:        settingsdialog.KindBool,
 		},
 		{
 			Key:         "sagittarius.defaultMode",
@@ -461,6 +484,16 @@ func (d *settingsDialogDeps) ListSettings(scope config.SettingScope) []settingsd
 			MergedValue: symGoplsMerged,
 			Kind:        settingsdialog.KindBool,
 		},
+		{Label: "MCP", Kind: settingsdialog.KindHeader},
+		{
+			Key:         "sagittarius.mcp.pruneToolSchemas",
+			Label:       "Prune tool schemas",
+			Description: "Truncate descriptions of MCP tools sent to the model to save tokens",
+			Value:       boolVal(pruneToolSchemas(scopeSettings)),
+			DefinedHere: sagDefined && scopeSettings.Sagittarius.MCP != nil && scopeSettings.Sagittarius.MCP.PruneToolSchemas != nil,
+			MergedValue: boolVal(pruneToolSchemas(merged)),
+			Kind:        settingsdialog.KindBool,
+		},
 	}
 }
 
@@ -514,6 +547,15 @@ func applySettingValue(s *config.Settings, key, value string) error {
 			s.Sagittarius = &config.SagittariusSettings{}
 		}
 		s.Sagittarius.MaxToolRounds = &n
+	case "sagittarius.contextLimitPreferDiscovered":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("must be true/false: %w", err)
+		}
+		if s.Sagittarius == nil {
+			s.Sagittarius = &config.SagittariusSettings{}
+		}
+		s.Sagittarius.ContextLimitPreferDiscovered = &b
 	case "sagittarius.defaultMode":
 		switch value {
 		case "agent", "plan", "ask", "debug":
@@ -726,6 +768,18 @@ func applySettingValue(s *config.Settings, key, value string) error {
 			s.Sagittarius.Symbols = &config.SagittariusSymbolsConfig{}
 		}
 		s.Sagittarius.Symbols.PreferGopls = &b
+	case "sagittarius.mcp.pruneToolSchemas":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("pruneToolSchemas must be true/false: %w", err)
+		}
+		if s.Sagittarius == nil {
+			s.Sagittarius = &config.SagittariusSettings{}
+		}
+		if s.Sagittarius.MCP == nil {
+			s.Sagittarius.MCP = &config.SagittariusMCPConfig{}
+		}
+		s.Sagittarius.MCP.PruneToolSchemas = &b
 	default:
 		return fmt.Errorf("unknown setting key %q", key)
 	}
@@ -760,6 +814,10 @@ func clearSettingValue(s *config.Settings, key string) error {
 	case "sagittarius.maxToolRounds":
 		if s.Sagittarius != nil {
 			s.Sagittarius.MaxToolRounds = nil
+		}
+	case "sagittarius.contextLimitPreferDiscovered":
+		if s.Sagittarius != nil {
+			s.Sagittarius.ContextLimitPreferDiscovered = nil
 		}
 	case "sagittarius.defaultMode":
 		if s.Sagittarius != nil {
@@ -836,6 +894,10 @@ func clearSettingValue(s *config.Settings, key string) error {
 	case "sagittarius.symbols.preferGopls":
 		if s.Sagittarius != nil && s.Sagittarius.Symbols != nil {
 			s.Sagittarius.Symbols.PreferGopls = nil
+		}
+	case "sagittarius.mcp.pruneToolSchemas":
+		if s.Sagittarius != nil && s.Sagittarius.MCP != nil {
+			s.Sagittarius.MCP.PruneToolSchemas = nil
 		}
 	default:
 		return fmt.Errorf("unknown setting key %q", key)

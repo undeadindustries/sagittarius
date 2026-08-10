@@ -48,6 +48,7 @@ type CatalogConfig struct {
 	AllowFix         bool
 	SubagentsEnabled bool
 	EditEnabled      bool
+	PruneToolSchemas bool
 	// SymbolsEnabled toggles registration of the find_symbol tool (default true).
 	SymbolsEnabled bool
 	// SymbolsPreferGopls tweaks find_symbol's description on Go modules.
@@ -65,8 +66,9 @@ func NewCatalog(cfg CatalogConfig) (*Catalog, error) {
 	}
 	if cfg.MCP == nil {
 		cfg.MCP = mcp.NewManager(mcp.ManagerConfig{
-			ClientName:    cfg.ClientName,
-			ClientVersion: cfg.Version,
+			ClientName:       cfg.ClientName,
+			ClientVersion:    cfg.Version,
+			PruneToolSchemas: cfg.PruneToolSchemas,
 		})
 	}
 	if cfg.Skills == nil {
@@ -234,7 +236,7 @@ func (c *Catalog) Reload(ctx context.Context) (*tools.Registry, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := c.mcp.Reload(ctx, servers); err != nil {
+	if err := c.mcp.Reload(ctx, servers, config.PruneToolSchemasEnabled(c.settings, nil)); err != nil {
 		return nil, fmt.Errorf("reload mcp: %w", err)
 	}
 	if err := c.skills.Discover(ctx, c.extensions.ActiveSkills()); err != nil {

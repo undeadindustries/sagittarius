@@ -774,6 +774,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		AllowFix:           allowFix,
 		EditEnabled:        config.EditEnabled(settings, nil),
 		SubagentsEnabled:   config.SubagentsEnabled(settings, nil),
+		PruneToolSchemas:   config.PruneToolSchemasEnabled(settings, nil),
 		SymbolsEnabled:     symbolsEnabled,
 		SymbolsPreferGopls: symbolsPreferGopls,
 		WebSearchEnabled:   webSearchEnabled,

@@ -47,7 +47,7 @@ func TestMCPListToolsMock(t *testing.T) {
 
 	err := manager.Reload(context.Background(), map[string]config.MCPServerConfig{
 		"demo": {Command: "mock"},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("Reload() error = %v", err)
 	}
@@ -87,7 +87,7 @@ func TestToolInventoryEnabledFlags(t *testing.T) {
 
 	err := manager.Reload(context.Background(), map[string]config.MCPServerConfig{
 		"demo": {Command: "mock", ExcludeTools: []string{"danger"}},
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("Reload() error = %v", err)
 	}
@@ -134,7 +134,7 @@ func TestToolInventoryIncludeAllowlist(t *testing.T) {
 	manager := NewManager(ManagerConfig{Connector: &mockConnector{session: session}})
 	if err := manager.Reload(context.Background(), map[string]config.MCPServerConfig{
 		"demo": {Command: "mock", IncludeTools: []string{"echo"}},
-	}); err != nil {
+	}, false); err != nil {
 		t.Fatalf("Reload() error = %v", err)
 	}
 

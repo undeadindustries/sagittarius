@@ -12,7 +12,10 @@ import (
 // inputContentLines counts how many display rows the current input value occupies
 // when soft-wrapped at the textarea's active text width.
 func inputContentLines(input textarea.Model) int {
-	w := input.Width()
+	// Bubbles textarea adds a trailing space to every line during its word-wrap
+	// pass (to make cursor navigation consistent at line ends), so its effective
+	// text width before wrapping is actually Width() - 1.
+	w := input.Width() - 1
 	if w <= 0 {
 		return 1
 	}

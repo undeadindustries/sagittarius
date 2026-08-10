@@ -42,7 +42,8 @@ exit 0
 		prompt := "Add the header 'X-Test-Header: 1' to " + filepath.Join(r.workDir, "etc", "nginx", "nginx.conf") + " and make sure the config is valid."
 		
 		// We use sysadmin mode for Task S
-		r.env = append(r.env, "SAGITTARIUS_MODE=sysadmin")
+		os.MkdirAll(filepath.Join(r.workDir, ".sagittarius"), 0755)
+		os.WriteFile(filepath.Join(r.workDir, ".sagittarius", "settings.json"), []byte(`{"sagittarius":{"systemPrompt":{"personality":"sysadmin"}}}`), 0644)
 
 		r.runTurn(prompt)
 

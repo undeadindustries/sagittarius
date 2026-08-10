@@ -12,7 +12,7 @@ import (
 func (m Model) View() string {
 	dim := m.th.Dim
 	var b strings.Builder
-	b.WriteString(m.th.Title.Render("Select Model") + "\n\n")
+	b.WriteString(overlay.Title(m.th, "Select Model") + "\n\n")
 	b.WriteString(m.body())
 
 	if m.info != "" {
@@ -32,7 +32,7 @@ func (m Model) View() string {
 	if !m.scopeSel.Disabled {
 		footerHint += " • Tab · scope"
 	}
-	b.WriteString("\n\n" + dim.Render(footerHint))
+	b.WriteString("\n\n" + overlay.Hints(m.th, footerHint))
 
 	return overlay.Frame(m.th, m.width, overlay.DefaultMinWidth, b.String())
 }

@@ -38,6 +38,8 @@ type RuntimeConfig struct {
 	EditEnabled bool
 	// SubagentsEnabled toggles subagent registration (default false).
 	SubagentsEnabled bool
+	// PruneToolSchemas truncates MCP schemas to save tokens.
+	PruneToolSchemas bool
 	// SymbolsEnabled toggles registration of the find_symbol tool (default true).
 	SymbolsEnabled bool
 	// SymbolsPreferGopls tweaks find_symbol's description on Go modules.
@@ -77,6 +79,7 @@ func NewRuntime(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 		AllowFix:           cfg.AllowFix,
 		SubagentsEnabled:   cfg.SubagentsEnabled,
 		EditEnabled:        cfg.EditEnabled,
+		PruneToolSchemas:   cfg.PruneToolSchemas,
 		SymbolsEnabled:     cfg.SymbolsEnabled,
 		SymbolsPreferGopls: cfg.SymbolsPreferGopls,
 		WebSearchEnabled:   cfg.WebSearchEnabled,

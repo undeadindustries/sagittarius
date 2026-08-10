@@ -20,7 +20,7 @@ func programmerLite(opts Options) string {
 		renderIdentity(opts.Identity, programmerProfile.roleNoun, programmerProfile.helpClause),
 		liteToolUsage(opts.SymbolsEnabled, opts.EditEnabled),
 		liteWorkflow(),
-		liteEditRules(opts.EditEnabled),
+		liteEditRules(),
 		liteShellSafety(opts.Interactive),
 	}
 	if opts.IsGitRepo {
@@ -29,22 +29,16 @@ func programmerLite(opts Options) string {
 	return joinSections(sections)
 }
 
-func liteEditRules(editEnabled bool) string {
-	var writeRules string
-	if editEnabled {
-		writeRules = "- **Always read before modifying.** If you are changing an existing file, prefer `edit` over `write_file` because it is faster and safer against truncation. Use `write_file` only to create new files or when intentionally rewriting the whole file. Read first to get the exact string."
-	} else {
-		writeRules = "- **Always read before modifying.** You cannot use patch/diff operations. Use `write_file` with the ENTIRE file contents."
-	}
-
+// liteEditRules covers editing conventions not already stated by
+// liteToolUsage (which owns tool selection and the write-format rules — read
+// before modifying, no placeholders, no diff format — so they are not
+// repeated here).
+func liteEditRules() string {
 	return join(
 		"## Editing Rules",
 		"",
 		"- Make one logical change at a time. Do not combine unrelated changes.",
 		"- Preserve existing code style, indentation, and conventions.",
-		writeRules,
-		"- NEVER use placeholders or elision (like `// ... existing code ...`) in file writes. Tools overwrite files entirely, so you must always provide the COMPLETE file content.",
-		"- NEVER send unified-diff lines (`+` / `-` prefixes) to `write_file` — it is not a patch tool.",
 		"- After a successful write, a green/red diff in the transcript is normal UI feedback, not a mistake to apologize for.",
 		"- Add comments sparingly: explain *why*, not *what*. Never use comments to talk to the user or describe your changes.",
 		"- Do not edit comments that are separate from the code you are changing.",

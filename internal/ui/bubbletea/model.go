@@ -2039,6 +2039,10 @@ func (m *model) syncInputPrompt(mode string) {
 		}
 		return ""
 	})
+	// Mode change alters the prompt width, so we must recompute textarea width.
+	if m.width > 0 {
+		m.syncInputLayout()
+	}
 }
 
 func inputPromptForMode(mode string) string {

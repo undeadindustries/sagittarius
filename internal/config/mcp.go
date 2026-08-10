@@ -189,3 +189,14 @@ func isInlineSecretHeader(key, value string) bool {
 		strings.Contains(lk, "key") ||
 		strings.Contains(lk, "secret")
 }
+
+// PruneToolSchemasEnabled returns whether MCP tool schemas should be pruned to
+// save tokens (e.g. description truncation). Defaults to true if not specified.
+func PruneToolSchemasEnabled(global, project *Settings) bool {
+	merged := mergeSettings(global, project)
+	if merged != nil && merged.Sagittarius != nil && merged.Sagittarius.MCP != nil && merged.Sagittarius.MCP.PruneToolSchemas != nil {
+		return *merged.Sagittarius.MCP.PruneToolSchemas
+	}
+	// Default to true for significant token savings.
+	return true
+}

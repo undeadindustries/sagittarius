@@ -12,8 +12,15 @@ type ParsedLog struct {
 }
 
 type Turn struct {
-	UserMessage string
-	ToolCalls   []ToolCall
+	UserMessage   string
+	ModelResponse string
+	ToolCalls     []ToolCall
+	ToolResults   []ToolResult
+}
+
+type ToolResult struct {
+	ID         string
+	ResultText string
 }
 
 type ToolCall struct {
@@ -29,7 +36,12 @@ func ParseVerboseLog(r io.Reader) (*ParsedLog, error) {
 	var log ParsedLog
 	var currentTurn *Turn
 	inUserMessage := false
+	inToolResult := false
+	inModelResponse := false
 	var userMsgBuilder strings.Builder
+	var toolResultBuilder strings.Builder
+	var modelResponseBuilder strings.Builder
+	var currentToolResultID string
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -39,28 +51,61 @@ func ParseVerboseLog(r io.Reader) (*ParsedLog, error) {
 			parts := strings.SplitN(line, " | ", 2)
 			if len(parts) == 2 {
 				kind := strings.TrimSuffix(parts[1], " =====")
+				
+				// End previous sections
+				if inUserMessage && currentTurn != nil {
+					currentTurn.UserMessage = strings.TrimSpace(userMsgBuilder.String())
+					inUserMessage = false
+				}
+				if inModelResponse && currentTurn != nil {
+					currentTurn.ModelResponse = strings.TrimSpace(modelResponseBuilder.String())
+					inModelResponse = false
+				}
+				if inToolResult && currentTurn != nil {
+					currentTurn.ToolResults = append(currentTurn.ToolResults, ToolResult{
+						ID:         currentToolResultID,
+						ResultText: strings.TrimSpace(toolResultBuilder.String()),
+					})
+					inToolResult = false
+				}
+
 				if kind == "IN  user message" {
 					if currentTurn != nil {
-						if inUserMessage {
-							currentTurn.UserMessage = strings.TrimSpace(userMsgBuilder.String())
-						}
 						log.Turns = append(log.Turns, *currentTurn)
 					}
 					currentTurn = &Turn{}
 					inUserMessage = true
 					userMsgBuilder.Reset()
 					continue
-				} else {
-					if inUserMessage && currentTurn != nil {
-						currentTurn.UserMessage = strings.TrimSpace(userMsgBuilder.String())
-						inUserMessage = false
+				} else if strings.HasPrefix(kind, "IN  model response ") || kind == "IN  model response" {
+					if currentTurn == nil {
+						currentTurn = &Turn{}
 					}
+					inModelResponse = true
+					modelResponseBuilder.Reset()
+					continue
+				} else if strings.HasPrefix(kind, "OUT tool_result ") {
+					if currentTurn == nil {
+						currentTurn = &Turn{}
+					}
+					inToolResult = true
+					currentToolResultID = strings.TrimPrefix(kind, "OUT tool_result ")
+					toolResultBuilder.Reset()
+					continue
 				}
 			}
 		}
 
 		if inUserMessage {
 			userMsgBuilder.WriteString(line + "\n")
+			continue
+		}
+		if inModelResponse {
+			modelResponseBuilder.WriteString(line + "\n")
+			// We don't continue here because we want to parse tool calls inside the model response
+		}
+		if inToolResult {
+			toolResultBuilder.WriteString(line + "\n")
 			continue
 		}
 
@@ -95,6 +140,15 @@ func ParseVerboseLog(r io.Reader) (*ParsedLog, error) {
 	if currentTurn != nil {
 		if inUserMessage {
 			currentTurn.UserMessage = strings.TrimSpace(userMsgBuilder.String())
+		}
+		if inModelResponse {
+			currentTurn.ModelResponse = strings.TrimSpace(modelResponseBuilder.String())
+		}
+		if inToolResult {
+			currentTurn.ToolResults = append(currentTurn.ToolResults, ToolResult{
+				ID:         currentToolResultID,
+				ResultText: strings.TrimSpace(toolResultBuilder.String()),
+			})
 		}
 		log.Turns = append(log.Turns, *currentTurn)
 	}

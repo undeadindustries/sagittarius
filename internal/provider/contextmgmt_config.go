@@ -94,13 +94,15 @@ func ResolveContextManagement(settings *config.Settings, liveModel string) Conte
 func resolveContextLimit(settings *config.Settings, providerID, model string, fallback int) int {
 	inst := providerInstance(settings, providerID)
 	if inst != nil {
-		// Per-model override wins (set via /models settings editor). Use the
-		// caller-supplied model (live, mode-resolved) rather than re-resolving
-		// the endpoint's persisted default, which may differ when a mode
-		// override is active.
-		if model != "" {
-			if mc, ok := config.LookupModelConfig(inst, model); ok && mc.ContextLimit != nil && *mc.ContextLimit > 0 {
-				return *mc.ContextLimit
+		if !config.ResolveContextLimitPreferDiscovered(settings) {
+			// Per-model override wins (set via /models settings editor). Use the
+			// caller-supplied model (live, mode-resolved) rather than re-resolving
+			// the endpoint's persisted default, which may differ when a mode
+			// override is active.
+			if model != "" {
+				if mc, ok := config.LookupModelConfig(inst, model); ok && mc.ContextLimit != nil && *mc.ContextLimit > 0 {
+					return *mc.ContextLimit
+				}
 			}
 		}
 		if inst.ContextLimit != nil && *inst.ContextLimit > 0 {

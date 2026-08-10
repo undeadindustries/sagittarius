@@ -12,7 +12,7 @@ import (
 func (m Model) View() string {
 	dim := m.th.Dim
 	var b strings.Builder
-	b.WriteString(m.th.Title.Render("Model Settings") + "\n\n")
+	b.WriteString(overlay.Title(m.th, "Model Settings") + "\n\n")
 	b.WriteString(m.body())
 
 	if m.info != "" {
@@ -21,7 +21,7 @@ func (m Model) View() string {
 	if m.errMsg != "" {
 		b.WriteString("\n\n" + m.th.Error.Render(m.wrap("✗ "+m.errMsg)))
 	}
-	b.WriteString("\n\n" + dim.Render(m.footerHint()))
+	b.WriteString("\n\n" + overlay.Hints(m.th, m.footerHint()))
 
 	return overlay.Frame(m.th, m.width, overlay.DefaultMinWidth, b.String())
 }

@@ -54,14 +54,14 @@ func (m Model) viewSaving() string {
 	if !m.adding {
 		title = "Edit MCP Server: " + m.originalName
 	}
-	b.WriteString(m.th.Title.Render(title) + "\n\n")
+	b.WriteString(overlay.Title(m.th, title) + "\n\n")
 	b.WriteString(m.spin.View() + " " + m.th.Dim.Render("Saving and reconnecting MCP servers…"))
 	return b.String()
 }
 
 func (m Model) viewReloading() string {
 	var b strings.Builder
-	b.WriteString(m.th.Title.Render("MCP Servers") + "\n\n")
+	b.WriteString(overlay.Title(m.th, "MCP Servers") + "\n\n")
 	b.WriteString(m.spin.View() + " " + m.th.Dim.Render("Reconnecting MCP servers…"))
 	return b.String()
 }
@@ -69,7 +69,7 @@ func (m Model) viewReloading() string {
 func (m Model) viewList() string {
 	dim := m.th.Dim
 	var b strings.Builder
-	b.WriteString(m.th.Title.Render("MCP Servers") + "\n\n")
+	b.WriteString(overlay.Title(m.th, "MCP Servers") + "\n\n")
 	if len(m.servers) == 0 {
 		b.WriteString(dim.Render("No MCP servers configured.") + "\n")
 	}
@@ -95,18 +95,17 @@ func (m Model) viewList() string {
 		}
 		b.WriteString(m.renderRow(label, i == m.listCursor) + "\n")
 	}
-	b.WriteString("\n" + dim.Render("↑/↓ move • Enter edit • a add • x remove • d disable • r reload • t tools • Esc close"))
+	b.WriteString("\n" + overlay.Hints(m.th, "↑/↓ move • Enter edit • a add • x remove • d disable • r reload • t tools • Esc close"))
 	return strings.TrimRight(b.String(), "\n")
 }
 
 func (m Model) viewForm() string {
-	dim := m.th.Dim
 	var b strings.Builder
 	title := "Add MCP Server"
 	if !m.adding {
 		title = "Edit MCP Server: " + m.originalName
 	}
-	b.WriteString(m.th.Title.Render(title) + "\n\n")
+	b.WriteString(overlay.Title(m.th, title) + "\n\n")
 
 	for i, id := range m.fields {
 		b.WriteString(m.renderRow(m.fieldLabel(id), i == m.fieldCursor) + "\n")
@@ -118,7 +117,7 @@ func (m Model) viewForm() string {
 	if !m.scopeSel.Disabled {
 		footerHint += " • Tab · scope"
 	}
-	b.WriteString("\n" + dim.Render(footerHint))
+	b.WriteString("\n" + overlay.Hints(m.th, footerHint))
 	return strings.TrimRight(b.String(), "\n")
 }
 
@@ -177,10 +176,10 @@ func boolLabel(v bool) string {
 
 func (m Model) viewField() string {
 	var b strings.Builder
-	b.WriteString(m.th.Title.Render("Edit field") + "\n\n")
+	b.WriteString(overlay.Title(m.th, "Edit field") + "\n\n")
 	b.WriteString(m.fieldEditLabel() + "\n\n")
 	b.WriteString(m.input.View())
-	b.WriteString("\n\n" + m.th.Dim.Render("Enter save • Esc cancel"))
+	b.WriteString("\n\n" + overlay.Hints(m.th, "Enter save • Esc cancel"))
 	return b.String()
 }
 
@@ -199,9 +198,9 @@ func (m Model) fieldEditLabel() string {
 
 func (m Model) viewDelete() string {
 	var b strings.Builder
-	b.WriteString(m.th.Title.Render("Remove MCP Server") + "\n\n")
+	b.WriteString(overlay.Title(m.th, "Remove MCP Server") + "\n\n")
 	b.WriteString(m.wrap(fmt.Sprintf("Remove %q? This deletes its settings entry and stored bearer token.", m.deleteName)))
-	b.WriteString("\n\n" + m.th.Dim.Render("y/Enter confirm • n/Esc cancel"))
+	b.WriteString("\n\n" + overlay.Hints(m.th, "y/Enter confirm • n/Esc cancel"))
 	return b.String()
 }
 

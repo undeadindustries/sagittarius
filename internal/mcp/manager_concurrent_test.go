@@ -70,7 +70,7 @@ func TestReloadConnectsConcurrently(t *testing.T) {
 	m := NewManager(ManagerConfig{Connector: conn})
 
 	start := time.Now()
-	if err := m.Reload(context.Background(), mockServers(n)); err != nil {
+	if err := m.Reload(context.Background(), mockServers(n), false); err != nil {
 		t.Fatalf("Reload() error = %v", err)
 	}
 	elapsed := time.Since(start)
@@ -103,7 +103,7 @@ func TestReloadDeterministicOrder(t *testing.T) {
 	}}
 	m := NewManager(ManagerConfig{Connector: conn})
 
-	if err := m.Reload(context.Background(), mockServers(5)); err != nil {
+	if err := m.Reload(context.Background(), mockServers(5), false); err != nil {
 		t.Fatalf("Reload() error = %v", err)
 	}
 
@@ -131,7 +131,7 @@ func TestReloadFailingServerDoesNotBlockSiblings(t *testing.T) {
 	}
 	m := NewManager(ManagerConfig{Connector: conn})
 
-	if err := m.Reload(context.Background(), mockServers(5)); err != nil {
+	if err := m.Reload(context.Background(), mockServers(5), false); err != nil {
 		t.Fatalf("Reload() error = %v", err)
 	}
 
@@ -176,7 +176,7 @@ func TestApplyToolFiltersNoReconnect(t *testing.T) {
 	servers := map[string]config.MCPServerConfig{
 		"demo": {Command: "mock"},
 	}
-	if err := m.Reload(context.Background(), servers); err != nil {
+	if err := m.Reload(context.Background(), servers, false); err != nil {
 		t.Fatalf("Reload() error = %v", err)
 	}
 	if got := len(m.Tools()); got != 2 {
@@ -213,7 +213,7 @@ func TestReloadVsToolInventoryNoUseAfterClose(t *testing.T) {
 	conn := &latencyConnector{defaultDelay: time.Millisecond}
 	m := NewManager(ManagerConfig{Connector: conn})
 	servers := mockServers(4)
-	if err := m.Reload(context.Background(), servers); err != nil {
+	if err := m.Reload(context.Background(), servers, false); err != nil {
 		t.Fatalf("initial Reload() error = %v", err)
 	}
 
@@ -248,7 +248,7 @@ func TestReloadVsToolInventoryNoUseAfterClose(t *testing.T) {
 				return
 			default:
 			}
-			if err := m.Reload(context.Background(), servers); err != nil {
+			if err := m.Reload(context.Background(), servers, false); err != nil {
 				t.Errorf("Reload() error = %v", err)
 				return
 			}

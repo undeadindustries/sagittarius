@@ -34,7 +34,7 @@ LDFLAGS := -ldflags "-X $(MODULE)/internal/version.Version=$(VERSION) \
 # coverage matches what ships.
 BUILD_TAGS := grammar_set_core
 
-.PHONY: build test vet lint race clean tools vulncheck e2e e2e-mock release-snapshot
+.PHONY: build test vet lint race clean tools vulncheck e2e e2e-mock prompt-eval release-snapshot
 
 build: $(BINARY)
 
@@ -53,6 +53,10 @@ e2e: $(BINARY)
 # e2e-mock runs the same scenario table against an in-process mock; no keys.
 e2e-mock: $(BINARY)
 	SAGITTARIUS_E2E_MOCK=1 SAGITTARIUS_BIN=$(abspath $(BINARY)) $(GO) test -count=1 ./tests/e2e/...
+
+# prompt-eval runs the graded prompt A/B testing harness.
+prompt-eval: $(BINARY)
+	SAGITTARIUS_PROMPT_EVAL=1 SAGITTARIUS_BIN=$(abspath $(BINARY)) $(GO) test -count=1 ./tests/prompteval/...
 
 vet:
 	$(GO) vet -tags '$(BUILD_TAGS)' ./...

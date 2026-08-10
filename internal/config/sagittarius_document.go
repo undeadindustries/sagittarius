@@ -11,6 +11,7 @@ var reservedSagittariusKeys = map[string]struct{}{
 	"defaultMode":   {},
 	"modes":         {},
 	"subagents":     {},
+	"mcp":           {},
 	"compression":   {},
 	"tools":         {},
 	"systemPrompt":  {},
@@ -339,6 +340,55 @@ func marshalUtilityConfig(cfg *SagittariusUtilityConfig) (json.RawMessage, error
 	}
 	for key, val := range cfg.Extra {
 		obj[key] = val
+	}
+	if len(obj) == 0 {
+		return json.RawMessage("{}"), nil
+	}
+	return json.Marshal(obj)
+}
+
+func unmarshalMCPConfig(raw json.RawMessage) (*SagittariusMCPConfig, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, fmt.Errorf("decode sagittarius.mcp: %w", err)
+	}
+	s := &SagittariusMCPConfig{
+		Extra: make(map[string]json.RawMessage),
+	}
+	for key, val := range obj {
+		if key == "pruneToolSchemas" {
+			var b bool
+			if err := json.Unmarshal(val, &b); err != nil {
+				return nil, fmt.Errorf("decode sagittarius.mcp.pruneToolSchemas: %w", err)
+			}
+			s.PruneToolSchemas = &b
+			continue
+		}
+		s.Extra[key] = val
+	}
+	if len(s.Extra) == 0 {
+		s.Extra = nil
+	}
+	return s, nil
+}
+
+func marshalMCPConfig(cfg *SagittariusMCPConfig) (json.RawMessage, error) {
+	if cfg == nil {
+		return nil, nil
+	}
+	obj := make(map[string]json.RawMessage)
+	if cfg.PruneToolSchemas != nil {
+		b, err := json.Marshal(cfg.PruneToolSchemas)
+		if err != nil {
+			return nil, fmt.Errorf("encode sagittarius.mcp.pruneToolSchemas: %w", err)
+		}
+		obj["pruneToolSchemas"] = b
+	}
+	for k, v := range cfg.Extra {
+		obj[k] = v
 	}
 	if len(obj) == 0 {
 		return json.RawMessage("{}"), nil
@@ -780,6 +830,12 @@ func unmarshalSagittarius(raw json.RawMessage) (*SagittariusSettings, error) {
 				return nil, err
 			}
 			s.Subagents = sub
+		case "mcp":
+			m, err := unmarshalMCPConfig(val)
+			if err != nil {
+				return nil, err
+			}
+			s.MCP = m
 		case "compression":
 			u, err := unmarshalUtilityConfig(val)
 			if err != nil {
@@ -864,6 +920,12 @@ func unmarshalSagittarius(raw json.RawMessage) (*SagittariusSettings, error) {
 				return nil, fmt.Errorf("decode sagittarius.maxToolRounds: %w", err)
 			}
 			s.MaxToolRounds = &n
+		case "contextLimitPreferDiscovered":
+			var b bool
+			if err := json.Unmarshal(val, &b); err != nil {
+				return nil, fmt.Errorf("decode sagittarius.contextLimitPreferDiscovered: %w", err)
+			}
+			s.ContextLimitPreferDiscovered = &b
 		default:
 			if _, reserved := reservedSagittariusKeys[key]; reserved {
 				continue
@@ -924,6 +986,13 @@ func marshalSagittarius(s *SagittariusSettings) (json.RawMessage, error) {
 			return nil, err
 		}
 		obj["subagents"] = b
+	}
+	if s.MCP != nil {
+		b, err := marshalMCPConfig(s.MCP)
+		if err != nil {
+			return nil, err
+		}
+		obj["mcp"] = b
 	}
 	if s.Compression != nil {
 		b, err := marshalUtilityConfig(s.Compression)
@@ -1006,6 +1075,9 @@ func marshalSagittarius(s *SagittariusSettings) (json.RawMessage, error) {
 		obj["sessions"] = b
 	}
 	if err := add("maxToolRounds", s.MaxToolRounds); err != nil {
+		return nil, err
+	}
+	if err := add("contextLimitPreferDiscovered", s.ContextLimitPreferDiscovered); err != nil {
 		return nil, err
 	}
 	for key, val := range s.Extra {

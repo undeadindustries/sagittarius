@@ -18,6 +18,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/undeadindustries/sagittarius/internal/config"
+	"github.com/undeadindustries/sagittarius/internal/ui/overlay"
 	"github.com/undeadindustries/sagittarius/internal/ui/theme"
 )
 
@@ -155,7 +156,7 @@ func ScopeHint(hint string, th theme.Theme) string {
 	if hint == "" {
 		return ""
 	}
-	return th.Dim.Render(hint)
+	return overlay.Hints(th, hint)
 }
 
 // ─── SaveToLabel ─────────────────────────────────────────────────────────────

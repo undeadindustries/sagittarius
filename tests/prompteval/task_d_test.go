@@ -1,9 +1,12 @@
 package prompteval
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/undeadindustries/sagittarius/internal/tools"
 )
 
 func TestTaskD(t *testing.T) {
@@ -15,6 +18,10 @@ func TestTaskD(t *testing.T) {
 	}
 
 	runEval(t, "TaskD", setup, func(t *testing.T, r *evalRunner) {
+		// Explicitly use programmer personality
+		os.MkdirAll(filepath.Join(r.workDir, ".sagittarius"), 0755)
+		os.WriteFile(filepath.Join(r.workDir, ".sagittarius", "settings.json"), []byte(`{"sagittarius":{"systemPrompt":{"personality":"programmer"}}}`), 0644)
+
 		// Turn 1
 		r.runTurn("Look at plan.txt and tell me what you would change. Do not change anything yet.")
 
@@ -33,9 +40,15 @@ func TestTaskD(t *testing.T) {
 				turn1Mutations++
 			}
 			if tc.Name == "run_shell_command" {
-				// heuristic for mutating shell command
-				// ideally, shouldn't run any shell command to discuss
-				turn1Mutations++ 
+				var args struct {
+					Command string `json:"command"`
+				}
+				if err := json.Unmarshal([]byte(tc.Args), &args); err == nil && args.Command != "" {
+					verdict, _ := tools.ClassifyShellReadOnly(args.Command)
+					if verdict == tools.VerdictMutating {
+						turn1Mutations++
+					}
+				}
 			}
 		}
 

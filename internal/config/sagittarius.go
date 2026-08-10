@@ -54,6 +54,15 @@ func CanonicalPersonality(id string) (string, bool) {
 	}
 }
 
+// SagittariusMCPConfig configures the MCP client subsystem.
+type SagittariusMCPConfig struct {
+	// PruneToolSchemas, when true, aggressively trims token usage by truncating
+	// MCP tool descriptions to 200 characters and stripping descriptions from
+	// parameter properties before sending schemas to the model.
+	PruneToolSchemas *bool                      `json:"pruneToolSchemas,omitempty"`
+	Extra            map[string]json.RawMessage `json:"-"`
+}
+
 // SagittariusSettings holds Sagittarius-specific settings under the top-level
 // "sagittarius" key in settings.json. Unknown sub-keys round-trip via Extra.
 type SagittariusSettings struct {
@@ -69,6 +78,7 @@ type SagittariusSettings struct {
 	DefaultMode   string                `json:"defaultMode,omitempty"`
 	Modes         *SagittariusModes     `json:"modes,omitempty"`
 	Subagents     *SagittariusSubagents `json:"subagents,omitempty"`
+	MCP           *SagittariusMCPConfig `json:"mcp,omitempty"`
 	// Compression overrides the model used for context compression /
 	// summarization. Empty Model means it follows the live mode-resolved model.
 	Compression *SagittariusUtilityConfig `json:"compression,omitempty"`
@@ -106,6 +116,9 @@ type SagittariusSettings struct {
 	// execute per turn. Nil means use the compiled-in default (100).
 	// Set higher for tasks that write many files; set lower to cap runaway loops.
 	MaxToolRounds *int                       `json:"maxToolRounds,omitempty"`
+	// ContextLimitPreferDiscovered, when true, causes the API-reported context
+	// limits to be preferred over manual pins.
+	ContextLimitPreferDiscovered *bool                      `json:"contextLimitPreferDiscovered,omitempty"`
 	Extra         map[string]json.RawMessage `json:"-"`
 }
 
@@ -352,6 +365,15 @@ func ResolveMaxToolRounds(s *SagittariusSettings, defaultRounds int) int {
 		return *s.MaxToolRounds
 	}
 	return defaultRounds
+}
+
+// ResolveContextLimitPreferDiscovered returns true if the user has configured
+// Sagittarius to prefer API-reported context limits over manual pins.
+func ResolveContextLimitPreferDiscovered(s *Settings) bool {
+	if s != nil && s.Sagittarius != nil && s.Sagittarius.ContextLimitPreferDiscovered != nil {
+		return *s.Sagittarius.ContextLimitPreferDiscovered
+	}
+	return false
 }
 
 func ValidateSagittariusSettings(s *SagittariusSettings) error {

@@ -75,8 +75,10 @@ func MaybeSetContextLimit(settings *config.Settings, providerID string, limit in
 	}
 	canonical := config.NormalizeProviderID(providerID)
 	if inst := providerInstance(settings, canonical); inst != nil {
-		if inst.ContextLimitUserSet != nil && *inst.ContextLimitUserSet {
-			return false, nil
+		if !config.ResolveContextLimitPreferDiscovered(settings) {
+			if inst.ContextLimitUserSet != nil && *inst.ContextLimitUserSet {
+				return false, nil
+			}
 		}
 		if inst.ContextLimit != nil && *inst.ContextLimit == limit {
 			return false, nil

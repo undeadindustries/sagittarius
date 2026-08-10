@@ -33,9 +33,17 @@ func TestEditGuidanceGatedByEditEnabled(t *testing.T) {
 				t.Errorf("liteToolUsage() missing phrase %q", tt.wantPhrase)
 			}
 
-			gotLiteEdit := liteEditRules(opts.EditEnabled)
-			if !strings.Contains(gotLiteEdit, tt.wantPhrase) {
-				t.Errorf("liteEditRules() missing phrase %q", tt.wantPhrase)
+			// liteEditRules used to restate this phrase itself (and the
+			// placeholder/diff-format rules); liteToolUsage is now the sole
+			// owner of tool selection and write-format rules, so the
+			// composed lite prompt must contain each exactly once.
+			composed := programmerLite(Options{EditEnabled: tt.editEnabled, IsGitRepo: true})
+			if got := strings.Count(composed, tt.wantPhrase); got != 1 {
+				t.Errorf("programmerLite(): phrase %q appears %d times, want exactly 1", tt.wantPhrase, got)
+			}
+			const placeholderPhrase = "NEVER use placeholders or elision"
+			if got := strings.Count(composed, placeholderPhrase); got != 1 {
+				t.Errorf("programmerLite(): phrase %q appears %d times, want exactly 1", placeholderPhrase, got)
 			}
 
 			gotFull := fullPrimaryWorkflow(false, false, opts.EditEnabled)

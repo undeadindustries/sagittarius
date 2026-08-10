@@ -23,6 +23,8 @@ type Manager struct {
 	mu        sync.Mutex
 	connector Connector
 	clients   map[string]*Client
+	// pruneToolSchemas when true truncates tool descriptions to save tokens.
+	pruneToolSchemas bool
 	// allTools is the unfiltered discovery cache (every tool every connected
 	// server exposed at the last Reload). tools is the active subset after
 	// applying each server's include/exclude filter. Caching the unfiltered set
@@ -34,9 +36,10 @@ type Manager struct {
 
 // ManagerConfig configures MCP discovery.
 type ManagerConfig struct {
-	ClientName    string
-	ClientVersion string
-	Connector     Connector
+	ClientName       string
+	ClientVersion    string
+	Connector        Connector
+	PruneToolSchemas bool
 }
 
 // NewManager constructs an MCP manager with the default SDK connector.
@@ -49,8 +52,9 @@ func NewManager(cfg ManagerConfig) *Manager {
 		}
 	}
 	return &Manager{
-		connector: connector,
-		clients:   make(map[string]*Client),
+		connector:        connector,
+		clients:          make(map[string]*Client),
+		pruneToolSchemas: cfg.PruneToolSchemas,
 	}
 }
 
@@ -66,7 +70,8 @@ type serverResult struct {
 // and tool discovery run concurrently (bounded) off-lock; the manager mutex is
 // held only to tear down the old clients and to publish the new maps, so
 // Tools/States/tool-execution callers never block for the full reload duration.
-func (m *Manager) Reload(ctx context.Context, servers map[string]config.MCPServerConfig) error {
+func (m *Manager) Reload(ctx context.Context, servers map[string]config.MCPServerConfig, pruneToolSchemas bool) error {
+	m.pruneToolSchemas = pruneToolSchemas
 	// 1. Tear down existing connections under the lock, then release it.
 	m.mu.Lock()
 	_ = m.closeLocked()
@@ -86,7 +91,7 @@ func (m *Manager) Reload(ctx context.Context, servers map[string]config.MCPServe
 	for name, raw := range servers {
 		name, raw := name, raw
 		g.Go(func() error {
-			res := connectOne(gctx, name, FromSettings(name, raw), m.connector)
+			res := connectOne(gctx, name, FromSettings(name, raw), m.connector, m.pruneToolSchemas)
 			resultsMu.Lock()
 			results = append(results, res)
 			resultsMu.Unlock()
@@ -123,7 +128,7 @@ func (m *Manager) Reload(ctx context.Context, servers map[string]config.MCPServe
 // returned in serverResult so the caller can publish results without holding a
 // lock during network I/O. Include/exclude filtering is applied later, off this
 // path, so a filter toggle never requires a reconnect.
-func connectOne(ctx context.Context, name string, cfg ServerConfig, connector Connector) serverResult {
+func connectOne(ctx context.Context, name string, cfg ServerConfig, connector Connector, prune bool) serverResult {
 	if cfg.Disabled {
 		return serverResult{name: name, state: ServerState{Name: name, Status: ServerDisabled, Config: cfg}}
 	}
@@ -147,7 +152,7 @@ func connectOne(ctx context.Context, name string, cfg ServerConfig, connector Co
 	}
 	discovered := make([]*DiscoveredTool, 0, len(mcpTools))
 	for _, tool := range mcpTools {
-		discovered = append(discovered, newDiscoveredTool(client, tool))
+		discovered = append(discovered, newDiscoveredTool(client, tool, prune))
 	}
 	// ToolCount is set by applyToolFiltersLocked once the filter is known.
 	return serverResult{name: name, client: client, state: client.State(0), tools: discovered}

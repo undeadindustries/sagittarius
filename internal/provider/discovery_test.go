@@ -192,3 +192,29 @@ func TestMaybeSetContextLimitRespectsPin(t *testing.T) {
 		t.Fatalf("pinned contextLimit changed: %d", *s2.Providers.OpenAI.ContextLimit)
 	}
 }
+func TestMaybeSetContextLimitPreferDiscovered(t *testing.T) {
+	t.Parallel()
+	pinned := true
+	pin := 4096
+	prefer := true
+	s := &config.Settings{
+		Sagittarius: &config.SagittariusSettings{ContextLimitPreferDiscovered: &prefer},
+		Providers: &config.ProvidersSettings{
+			Active: string(config.BuiltInOpenAI),
+			OpenAI: &config.ProviderInstanceConfig{ContextLimit: &pin, ContextLimitUserSet: &pinned},
+		},
+	}
+	changed, err := MaybeSetContextLimit(s, string(config.BuiltInOpenAI), 128000)
+	if err != nil {
+		t.Fatalf("MaybeSetContextLimit error: %v", err)
+	}
+	if !changed {
+		t.Fatalf("expected limit to change when preferDiscovered is true")
+	}
+	if *s.Providers.OpenAI.ContextLimit != 128000 {
+		t.Fatalf("pinned contextLimit was not updated: %d", *s.Providers.OpenAI.ContextLimit)
+	}
+	if s.Providers.OpenAI.ContextLimitUserSet != nil {
+		t.Fatalf("expected ContextLimitUserSet to be cleared, got %v", *s.Providers.OpenAI.ContextLimitUserSet)
+	}
+}

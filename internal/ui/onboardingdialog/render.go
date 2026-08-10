@@ -7,12 +7,13 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/undeadindustries/sagittarius/internal/ui"
+	"github.com/undeadindustries/sagittarius/internal/ui/overlay"
 )
 
 func (m Model) View() string {
 	dim := m.th.Dim
 	var b strings.Builder
-	b.WriteString(m.th.Title.Render("Welcome to Sagittarius") + "\n\n")
+	b.WriteString(overlay.Title(m.th, "Welcome to Sagittarius") + "\n\n")
 	b.WriteString(m.screenBody())
 
 	if m.info != "" {
@@ -21,7 +22,7 @@ func (m Model) View() string {
 	if m.errMsg != "" {
 		b.WriteString("\n\n" + m.th.Error.Render(m.wrap("✗ "+m.errMsg)))
 	}
-	b.WriteString("\n\n" + dim.Render(m.footerHint()))
+	b.WriteString("\n\n" + overlay.Hints(m.th, m.footerHint()))
 
 	box := lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).Padding(0, 1)
 	if m.th.Colored {

@@ -26,7 +26,7 @@ func TestCompleteTopLevelShowsAllCommands(t *testing.T) {
 	reg := NewRegistry()
 	got := reg.Complete("/", Deps{})
 
-	for _, want := range []string{"help", "quit", "providers", "model", "models", "system-prompt", "modes", "mode", "mcp"} {
+	for _, want := range []string{"help", "quit", "providers", "model", "models", "system-prompt", "modes", "mode", "mcp", "agent", "plan", "ask", "debug"} {
 		if !contains(got.Items, want) {
 			t.Errorf("top-level completion missing %q (got %v)", want, labels(got.Items))
 		}

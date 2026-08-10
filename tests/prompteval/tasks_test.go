@@ -15,14 +15,24 @@ type evalRunner struct {
 	env       []string
 	sessionID string
 	logFile   string
+	model     string
+	turnCount int
 }
 
-func (r *evalRunner) runTurn(prompt string) {
+func (r *evalRunner) runTurn(prompt string, extraArgs ...string) {
 	r.t.Helper()
-	res := invoke(r.t, r.bin, r.workDir, r.env, "--yolo", "--output-format", "text", "--log-verbose", "-p", prompt)
+	args := []string{"--yolo", "--output-format", "text", "--log-verbose", "--model", r.model}
+	if r.turnCount > 0 {
+		args = append(args, "--resume", "latest")
+	}
+	args = append(args, extraArgs...)
+	args = append(args, "-p", prompt)
+	
+	res := invoke(r.t, r.bin, r.workDir, r.env, args...)
 	if res.exitCode != 0 {
 		r.t.Fatalf("invoke failed (exit %d)\nstdout: %s\nstderr: %s", res.exitCode, res.stdout, res.stderr)
 	}
+	r.turnCount++
 }
 
 func (r *evalRunner) parseLog() *ParsedLog {
@@ -84,6 +94,7 @@ func runEval(t *testing.T, taskName string, setup func(t *testing.T, workDir str
 				env:       env,
 				sessionID: sessionID,
 				logFile:   logFile,
+				model:     model,
 			}
 
 			testFunc(t, runner)

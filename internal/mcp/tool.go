@@ -19,6 +19,7 @@ type DiscoveredTool struct {
 	serverName string
 	toolName   string
 	trust      bool
+	prune      bool
 }
 
 // Name returns the qualified wire tool name.
@@ -35,9 +36,21 @@ func (t *DiscoveredTool) Declaration() provider.ToolDeclaration {
 			params = m
 		}
 	}
+	if t.prune {
+		if props, ok := params["properties"].(map[string]any); ok {
+			for _, v := range props {
+				if prop, ok := v.(map[string]any); ok {
+					delete(prop, "description")
+				}
+			}
+		}
+	}
 	desc := t.tool.Description
 	if desc == "" {
 		desc = fmt.Sprintf("MCP tool %s from server %s", t.toolName, t.serverName)
+	}
+	if t.prune && len(desc) > 200 {
+		desc = desc[:197] + "..."
 	}
 	return provider.ToolDeclaration{
 		Name:        t.wireName,
@@ -55,7 +68,7 @@ func (t *DiscoveredTool) Execute(ctx context.Context, args map[string]any) (map[
 	return formatCallResult(result), nil
 }
 
-func newDiscoveredTool(client *Client, tool *sdkmcp.Tool) *DiscoveredTool {
+func newDiscoveredTool(client *Client, tool *sdkmcp.Tool, prune bool) *DiscoveredTool {
 	return &DiscoveredTool{
 		client:     client,
 		tool:       tool,
@@ -63,6 +76,7 @@ func newDiscoveredTool(client *Client, tool *sdkmcp.Tool) *DiscoveredTool {
 		serverName: client.cfg.Name,
 		toolName:   tool.Name,
 		trust:      client.cfg.Trust,
+		prune:      prune,
 	}
 }
 

@@ -151,8 +151,6 @@ func liteToolUsage(symbolsEnabled, editEnabled bool) string {
 	return join(
 		"## Tool Usage",
 		"",
-		"You have tools to read, search, and create or update files, and to run shell commands.",
-		"",
 		search,
 		"",
 		write,
@@ -174,8 +172,8 @@ func liteWorkflow() string {
 		"For each request:",
 		"1. **Understand**: Clarify ambiguous requirements before acting. Ask the user if unsure.",
 		"2. **Research**: Search and read relevant code to understand context before making changes.",
-		"3. **Implement**: Make targeted changes. Prefer small, incremental edits over large rewrites. Invoke `"+tools.WriteFileToolName+"` or `"+tools.ShellToolName+"` in the same turn once you know the fix — do not stop after narrating intent.",
-		"4. **Verify**: CRITICAL: After EVERY write — including edits to files you already wrote earlier in this session — you MUST re-run the project's checks (lint, format check, type check, build, and tests) on the final version of every changed file. Use `"+tools.ProjectChecksToolName+"` when available, or `"+tools.ShellToolName+"` to run the project's own scripts (`make lint`, `npm test`). Discover the right checker from the project (scripts and config files) before falling back to language defaults. If the expected checker is not installed, tell the user once how to install it (e.g. \"run `pip install ruff` and I can lint\") rather than skipping the check. A passing check from an earlier turn does NOT cover later edits. Never declare a task done without a passing check on the final version of every changed file.",
+		"3. **Implement**: Make targeted changes. Prefer small, incremental edits over large rewrites.",
+		"4. **Verify**: after EVERY write, re-run the project's checks (lint, format, typecheck, build, tests) on the final version of each changed file — `"+tools.ProjectChecksToolName+"`, or the project's own scripts (`make lint`, `npm test`). Discover the checker from the project's config before falling back to language defaults; if it is not installed, say so once with the install command rather than skipping. An earlier passing check does not cover later edits.",
 	)
 }
 
@@ -187,7 +185,7 @@ func liteShellSafety(interactive bool) string {
 		"- Never run destructive or irreversible commands (rm -rf, DROP TABLE, force push) without explicit user confirmation.",
 		"- Quote file paths that contain spaces.",
 		"- Avoid interactive commands (e.g. `git rebase -i`); use non-interactive flags when available (`npm init -y`).",
-		"- For a process that only needs to outlive the current turn — a dev server, a watcher, a tail — use `run_shell_command`'s `is_background` parameter instead of detaching. Sagittarius tracks those, captures their output, and can kill them by process group.",
+		"- For a process that must outlive the turn — dev server, watcher, tail — use `run_shell_command`'s `is_background` parameter rather than detaching; Sagittarius tracks and can kill those.",
 	}
 	if interactive {
 		lines = append(lines, "- Ask the user before running commands with significant side effects.")

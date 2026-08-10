@@ -11,8 +11,8 @@ import (
 func (m Model) View() string {
 	dim := m.th.Dim
 	var b strings.Builder
-	b.WriteString(m.th.Title.Render("System Prompt") + "\n\n")
-	b.WriteString(dim.Render("Project-wide personality for this workspace (.sagittarius/settings.json)") + "\n\n")
+	b.WriteString(overlay.Title(m.th, "System Prompt") + "\n\n")
+	b.WriteString(overlay.Hints(m.th, "Project-wide personality for this workspace (.sagittarius/settings.json)") + "\n\n")
 	for i, p := range m.options {
 		b.WriteString(overlay.Row(m.th, p.label, i == m.cursor) + "\n")
 	}
@@ -26,7 +26,7 @@ func (m Model) View() string {
 	if m.errMsg != "" {
 		b.WriteString("\n" + m.th.Error.Render(m.wrap("✗ "+m.errMsg)))
 	}
-	b.WriteString("\n\n" + dim.Render("↑/↓ move • Enter apply • Esc close"))
+	b.WriteString("\n\n" + overlay.Hints(m.th, "↑/↓ move • Enter apply • Esc close"))
 
 	return overlay.Frame(m.th, m.width, overlay.DefaultMinWidth, b.String())
 }

@@ -6,6 +6,8 @@
 package overlay
 
 import (
+	"strings"
+
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/undeadindustries/sagittarius/internal/ui/theme"
@@ -46,4 +48,30 @@ func Row(th theme.Theme, label string, selected bool) string {
 		return th.Accent.Render("> " + label)
 	}
 	return "  " + label
+}
+
+// Hints renders a dialog hint line — a header instruction or footer key-hint
+// string — using the theme's title gradient over Secondary. This replaces
+// th.Dim (ANSI 240 + italic), which measures 2.7:1 against a typical terminal
+// background and fails WCAG AA even for large text; TitleGradient's three
+// stops all clear 5:1. Multi-line input is gradiented one line at a time so
+// each line spans the full ramp instead of the ramp splitting across lines.
+// Greyscale/NO_COLOR themes carry no TitleGradient, so GradientText falls
+// back to a plain Secondary render — visually equivalent to the old Dim
+// (both faint, no color).
+func Hints(th theme.Theme, s string) string {
+	if !strings.Contains(s, "\n") {
+		return th.GradientText(s, th.Secondary, th.TitleGradient)
+	}
+	lines := strings.Split(s, "\n")
+	for i, line := range lines {
+		lines[i] = th.GradientText(line, th.Secondary, th.TitleGradient)
+	}
+	return strings.Join(lines, "\n")
+}
+
+// Title renders a dialog title with the same gradient over th.Title (bold),
+// matching the treatment already used on the exit-summary title.
+func Title(th theme.Theme, s string) string {
+	return th.GradientText(s, th.Title, th.TitleGradient)
 }

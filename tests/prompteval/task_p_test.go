@@ -16,6 +16,10 @@ func TestTaskP(t *testing.T) {
 	}
 
 	runEval(t, "TaskP", setup, func(t *testing.T, r *evalRunner) {
+		// Explicitly use programmer personality
+		os.MkdirAll(filepath.Join(r.workDir, ".sagittarius"), 0755)
+		os.WriteFile(filepath.Join(r.workDir, ".sagittarius", "settings.json"), []byte(`{"sagittarius":{"systemPrompt":{"personality":"programmer"}}}`), 0644)
+
 		// Turn 1
 		r.runTurn("Read main.go and add a new function sayHi() that prints 'Hi'. Also run `echo done &`.")
 

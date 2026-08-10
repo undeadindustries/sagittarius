@@ -12,7 +12,7 @@ import (
 func (m Model) View() string {
 	dim := m.th.Dim
 	var b strings.Builder
-	b.WriteString(m.th.Title.Render("Settings") + "\n\n")
+	b.WriteString(overlay.Title(m.th, "Settings") + "\n\n")
 
 	if m.editing {
 		b.WriteString(m.viewEdit())
@@ -30,7 +30,7 @@ func (m Model) View() string {
 		if !m.scopeSel.Disabled {
 			b.WriteString("\n\n" + m.scopeSel.View(m.th))
 		}
-		b.WriteString("\n\n" + dim.Render(m.footerHint()))
+		b.WriteString("\n\n" + overlay.Hints(m.th, m.footerHint()))
 	}
 
 	return overlay.Frame(m.th, m.width, overlay.DefaultMinWidth, b.String())
@@ -38,7 +38,7 @@ func (m Model) View() string {
 
 func (m Model) viewList() string {
 	var b strings.Builder
-	b.WriteString(m.th.Dim.Render("* = overridden in this scope  •  Ctrl+L clear  •  Enter edit/toggle") + "\n\n")
+	b.WriteString(overlay.Hints(m.th, "* = overridden in this scope  •  Ctrl+L clear  •  Enter edit/toggle") + "\n\n")
 	for i, e := range m.entries {
 		b.WriteString(m.renderEntry(e, i == m.cursor) + "\n")
 	}
@@ -77,7 +77,7 @@ func (m Model) viewEdit() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Edit: %s\n\n", e.Label)
 	b.WriteString(m.input.View())
-	b.WriteString("\n\n" + m.th.Dim.Render("Enter save • Esc cancel"))
+	b.WriteString("\n\n" + overlay.Hints(m.th, "Enter save • Esc cancel"))
 	return b.String()
 }
 

@@ -221,6 +221,10 @@ func (a *App) ComposerStatus() ui.ComposerStatus {
 			cs.GrillActive = g.Status != grill.StatusComplete
 			cs.GrillStatusText = fmt.Sprintf("Grill %d — %s", g.QuestionCount, g.Status)
 		}
+		a.runner.modelMu.RLock()
+		cs.ReadOnlyPosture = a.runner.readOnlyPosture
+		cs.ReadOnlyConversational = a.runner.readOnlyConversational
+		a.runner.modelMu.RUnlock()
 		// Surface the pending auto-title announcement (prompt mode). Peek — the
 		// TUI latches it locally and owns the shown-once lifecycle; the composer
 		// never blocks.
@@ -1207,6 +1211,20 @@ func (h *appHooks) ClearConstraints() error {
 		return fmt.Errorf("runner not available")
 	}
 	return h.app.runner.ClearConstraints()
+}
+
+func (h *appHooks) SetReadOnly(enabled bool) error {
+	if h.app == nil || h.app.runner == nil {
+		return fmt.Errorf("runner not available")
+	}
+	return h.app.runner.SetReadOnly(enabled)
+}
+
+func (h *appHooks) ReadOnlyActive() bool {
+	if h.app == nil || h.app.runner == nil {
+		return false
+	}
+	return h.app.runner.ReadOnlyActive()
 }
 
 // completeGrillAfterSpec flips a summarizing grill session to StatusComplete

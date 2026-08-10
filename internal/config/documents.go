@@ -471,7 +471,10 @@ func mergeSagittarius(global, project *SagittariusSettings) *SagittariusSettings
 	}
 	merged.DefaultMode = overlayStr(global.DefaultMode, project.DefaultMode)
 	merged.MaxToolRounds = overlayPtr(global.MaxToolRounds, project.MaxToolRounds)
+	merged.ContextLimitPreferDiscovered = overlayPtr(global.ContextLimitPreferDiscovered, project.ContextLimitPreferDiscovered)
 	merged.Modes = mergeModes(global.Modes, project.Modes)
+	merged.Subagents = mergeSubagents(global.Subagents, project.Subagents)
+	merged.MCP = mergeMCPConfig(global.MCP, project.MCP)
 	merged.SystemPrompt = mergeSystemPromptConfig(global.SystemPrompt, project.SystemPrompt)
 	merged.Snapshots = mergeSnapshotConfig(global.Snapshots, project.Snapshots)
 	merged.Verify = mergeVerifyConfig(global.Verify, project.Verify)
@@ -480,6 +483,36 @@ func mergeSagittarius(global, project *SagittariusSettings) *SagittariusSettings
 	merged.Update = mergeUpdateConfig(global.Update, project.Update)
 	merged.Sessions = mergeSessionsConfig(global.Sessions, project.Sessions)
 	// Web, Tools, Compression, Subagents: global-only in Phase 1.
+	return &merged
+}
+
+func mergeSubagents(global, project *SagittariusSubagents) *SagittariusSubagents {
+	if project == nil {
+		return global
+	}
+	if global == nil {
+		return project
+	}
+	merged := *global
+	merged.Enabled = overlayPtr(global.Enabled, project.Enabled)
+	if project.Default.Model != "" {
+		merged.Default = project.Default
+	}
+	if len(project.Named) > 0 {
+		merged.Named = project.Named
+	}
+	return &merged
+}
+
+func mergeMCPConfig(global, project *SagittariusMCPConfig) *SagittariusMCPConfig {
+	if project == nil {
+		return global
+	}
+	if global == nil {
+		return project
+	}
+	merged := *global
+	merged.PruneToolSchemas = overlayPtr(global.PruneToolSchemas, project.PruneToolSchemas)
 	return &merged
 }
 

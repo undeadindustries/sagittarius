@@ -224,6 +224,20 @@ and resets to off on the next launch.
   `sagittarius.systemPrompt` and merged over the global default for the current
   workspace. Use `/providers` to set a per-provider override instead.
 
+### `/mode`
+
+- **Description:** Show the active interaction mode and its resolved model, or
+  switch modes.
+- **Usage:** `/mode` or `/mode show` (display only); `/mode agent`, `/mode plan`,
+  `/mode ask`, `/mode debug` (switch); `/mode set <name>` (equivalent, explicit
+  form).
+- **Shortcuts:** `/agent`, `/plan`, `/ask`, `/debug` are top-level, argument-free
+  aliases for `/mode <name>` — the same switch, one word instead of two. Prefer
+  them when you already know which mode you want; `/mode` remains for checking
+  the current mode or scripting the explicit `set` form.
+- **See also:** `/modes` to assign a `{Provider}/{Model}` override per mode
+  rather than switch which mode is active.
+
 ### `/modes`
 
 - **Description:** Edit **mode overrides** — assign a `{Provider}/{Model}` to any
@@ -556,10 +570,11 @@ incrementally; track gaps in `AGENTS.md`.
 | `/auth signin` / OAuth dialogs | Deferred auth paths |
 | ACP headless registry | Post-parity |
 
-Implemented: `/about`, `/chat`, `/clear`, `/compress`, `/constraints add|list|clear`,
-`/copy`, `/diff`, `/goal`,
+Implemented: `/about`, `/agent`, `/ask`, `/chat`, `/clear`, `/compress`,
+`/constraints add|list|clear`,
+`/copy`, `/debug`, `/diff`, `/goal`,
 `/grill`, `/init`, `/memory add|list|remove|reload`, `/mcp` (list, reload, add/edit/remove wizard),
-`/modes` (override, clear headlessly), `/model`, `/models`, `/mouse`, `/reasoning`,
+`/mode` (show, switch), `/modes` (override, clear headlessly), `/model`, `/models`, `/mouse`, `/plan`, `/reasoning`,
 `/resume`, `/settings` (curated browser), `/skills` (list, reload), `/agents`
 (list, reload), `/stats`, `/system-prompt`, `/theme`, `/tools` (list, desc,
 enable/disable), `/undo`, `activate_skill` tool, `ask_user` tool, `save_memory` tool.
