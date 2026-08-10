@@ -108,27 +108,13 @@ make race    # race detector
 
 ## Terminal UI and rendering
 
-The interactive session is built with **[Bubble Tea](https://github.com/charmbracelet/bubbletea)** (Charm Bracelet), styled with **lipgloss**, and composed from **bubbles** widgets (textarea input, viewport scrollback, spinner). Sagittarius runs in the terminal's **alternate screen** (`tea.WithAltScreen()`), keeps conversation history in an in-app viewport, and redraws only what the model changes each frame through Bubble Tea's Elm-style update loop. That keeps streaming output smooth and avoids the full-screen erase/redraw flicker common in naive terminal UIs.
-
-Structured log output goes to `~/.sagittarius/logs/sagittarius.log` during interactive sessions, not stderr, so late cancel messages cannot corrupt the bottom row of the alt-screen.
-
-**How this differs from gemini-cli and OpenCode:**
-
-| | **Sagittarius** | **gemini-cli** | **OpenCode** |
-|---|---|---|---|
-| Language | Go | TypeScript (Node.js) | TypeScript |
-| UI stack | Bubble Tea + lipgloss | React + [Ink](https://github.com/vadimdemedes/ink) | React/Solid on [OpenTUI](https://opentui.com) (Zig core) |
-| Rendering model | Alt-screen + viewport; frame updates via Bubble Tea messages | Ink reconciler on alt-screen; later added TerminalBuffer / incremental modes to reduce flicker | Native Zig diff renderer with flexbox (Yoga) layout |
-| Scrollback | In-app viewport (`PgUp`/`PgDn`); native terminal scrollback hidden while running | Similar alt-screen tradeoffs; mouse/scroll modes evolved over time | OpenTUI-managed buffers |
-| Mouse default | Off (native text selection works) | Configurable; flicker fixes added mouse toggles | Framework-dependent |
-
-Sagittarius is a single native Go binary with no Node runtime. The UI layer is swappable behind an internal interface, but today everything interactive goes through Bubble Tea.
+Sagittarius is a single native Go binary with no Node runtime. The UI layer is swappable behind an internal interface, but today everything interactive goes through [Bubble Tea](https://github.com/charmbracelet/bubbletea).
 
 ## Configuration & Rules
 
 Sagittarius reads its settings from `~/.sagittarius/settings.json`. Project overrides live in `<repo>/.sagittarius/settings.json` (project wins on merge). API keys belong in environment variables or OS keychain, not in settings files. See [docs/home-directory.md](docs/home-directory.md) for the dual-scope merge rules.
 
-### Rules (`AGENTS.md`)
+### Rules
 
 You can define custom rules and instructions that the agent must follow. These are placed in `AGENTS.md` files:
 
@@ -258,7 +244,7 @@ Per-repo routing defaults save to **project** scope (`.sagittarius/settings.json
 
 On first launch (or by running **`/toolkit`**), Sagittarius scans your `PATH` for recommended tools (linters, language stacks, sysadmin utilities) and prints install hints for anything missing. You can permanently dismiss the startup scan with **`/toolkit dismiss`**.
 
-### Skills (`SKILL.md`)
+### Skills
 
 You can extend the agent's domain knowledge and capabilities by creating skills. Skills are Markdown files named `SKILL.md` (or ending in `.md` inside a skill directory).
 
