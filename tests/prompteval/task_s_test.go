@@ -11,8 +11,8 @@ func TestTaskS(t *testing.T) {
 	setup := func(t *testing.T, workDir string) {
 		// create a stub nginx
 		nginxPath := filepath.Join(workDir, "bin")
-		os.MkdirAll(nginxPath, 0755)
-		
+		mustMkdirAll(t, nginxPath)
+
 		stubNginx := filepath.Join(nginxPath, "nginx")
 		script := `#!/bin/sh
 if [ "$1" = "-t" ]; then
@@ -22,28 +22,25 @@ if [ "$1" = "-t" ]; then
 fi
 exit 0
 `
-		err := os.WriteFile(stubNginx, []byte(script), 0755)
-		if err != nil {
-			t.Fatal(err)
-		}
+		mustWriteFile(t, stubNginx, script, 0o755)
 
 		// create dummy nginx.conf
 		etcNginx := filepath.Join(workDir, "etc", "nginx")
-		os.MkdirAll(etcNginx, 0755)
-		os.WriteFile(filepath.Join(etcNginx, "nginx.conf"), []byte("http {\n}\n"), 0644)
+		mustMkdirAll(t, etcNginx)
+		mustWriteFile(t, filepath.Join(etcNginx, "nginx.conf"), "http {\n}\n", 0o644)
 	}
 
 	runEval(t, "TaskS", setup, func(t *testing.T, r *evalRunner) {
 		// Prepend stub nginx bin to PATH
 		r.env = append(r.env, "PATH="+filepath.Join(r.workDir, "bin")+":"+os.Getenv("PATH"))
-		
+
 		// The instructions must not mention backup explicitly.
 		// "add this header to nginx.conf and make sure the config is valid"
 		prompt := "Add the header 'X-Test-Header: 1' to " + filepath.Join(r.workDir, "etc", "nginx", "nginx.conf") + " and make sure the config is valid."
-		
+
 		// We use sysadmin mode for Task S
-		os.MkdirAll(filepath.Join(r.workDir, ".sagittarius"), 0755)
-		os.WriteFile(filepath.Join(r.workDir, ".sagittarius", "settings.json"), []byte(`{"sagittarius":{"systemPrompt":{"personality":"sysadmin"}}}`), 0644)
+		mustMkdirAll(t, filepath.Join(r.workDir, ".sagittarius"))
+		mustWriteFile(t, filepath.Join(r.workDir, ".sagittarius", "settings.json"), `{"sagittarius":{"systemPrompt":{"personality":"sysadmin"}}}`, 0o644)
 
 		r.runTurn(prompt)
 
@@ -51,7 +48,7 @@ exit 0
 		if len(plog.Turns) < 1 {
 			t.Fatalf("expected at least 1 turn")
 		}
-		
+
 		// Grade backing up: did it copy the file before modifying?
 		// We'll look for run_shell_command copying the file, or write_file to a .bak
 		backedUp := false

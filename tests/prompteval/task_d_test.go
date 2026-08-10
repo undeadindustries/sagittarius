@@ -19,8 +19,8 @@ func TestTaskD(t *testing.T) {
 
 	runEval(t, "TaskD", setup, func(t *testing.T, r *evalRunner) {
 		// Explicitly use programmer personality
-		os.MkdirAll(filepath.Join(r.workDir, ".sagittarius"), 0755)
-		os.WriteFile(filepath.Join(r.workDir, ".sagittarius", "settings.json"), []byte(`{"sagittarius":{"systemPrompt":{"personality":"programmer"}}}`), 0644)
+		mustMkdirAll(t, filepath.Join(r.workDir, ".sagittarius"))
+		mustWriteFile(t, filepath.Join(r.workDir, ".sagittarius", "settings.json"), `{"sagittarius":{"systemPrompt":{"personality":"programmer"}}}`, 0o644)
 
 		// Turn 1
 		r.runTurn("Look at plan.txt and tell me what you would change. Do not change anything yet.")

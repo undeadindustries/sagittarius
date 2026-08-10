@@ -81,7 +81,7 @@ func TestSubmitResetsFollowBottom(t *testing.T) {
 	if m.followBottom {
 		t.Fatal("setup: should be unpinned")
 	}
-	m.handleSubmit("hello")
+	m.handleSubmit(submitMsg{line: "hello", display: "hello"})
 	if !m.followBottom {
 		t.Fatal("submitting a new turn should re-pin to the bottom")
 	}

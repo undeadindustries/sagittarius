@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
@@ -100,6 +101,10 @@ type RunnerConfig struct {
 	InitialConstraints []string
 	// InitialReadOnly seeds the standing session read-only posture.
 	InitialReadOnly *bool
+	// InitialReadOnlyConversational restores the turn-level conversational lock
+	// from a resumed session. Without it a "don't change anything yet" said
+	// before --resume would silently lift on restart.
+	InitialReadOnlyConversational *bool
 	// VerboseLog, when non-nil, receives a full timestamped transcript of every
 	// request sent to the provider and every response/tool result received
 	// (see --log-verbose). It is opt-in and independent of debug logging; the
@@ -127,7 +132,7 @@ type Runner struct {
 	providerDefaultModel string
 	modelPinned          bool
 	// readOnlyPosture tracks the durable session-wide read-only state.
-	readOnlyPosture      bool
+	readOnlyPosture bool
 	// readOnlyConversational tracks the turn-level conversational read-only lock.
 	readOnlyConversational bool
 	// reasoningOverride* implement the ephemeral, per-(provider,model)
@@ -385,6 +390,9 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 	}
 	if cfg.InitialReadOnly != nil {
 		runner.readOnlyPosture = *cfg.InitialReadOnly
+	}
+	if cfg.InitialReadOnlyConversational != nil {
+		runner.readOnlyConversational = *cfg.InitialReadOnlyConversational
 	}
 
 	registerGoalTools(runner, registry)
@@ -646,11 +654,7 @@ func (r *Runner) generator() (provider.ContentGenerator, error) {
 // pre-existing behavior.
 func (r *Runner) auxGenerator(ctx context.Context) (provider.ContentGenerator, error) {
 	settings := r.settingsSnapshot()
-	var evalProvider, evalModel string
-	if settings != nil && settings.Sagittarius != nil && settings.Sagittarius.Goal != nil {
-		evalProvider = settings.Sagittarius.Goal.EvaluatorProvider
-		evalModel = settings.Sagittarius.Goal.EvaluatorModel
-	}
+	evalProvider, evalModel := auxEvaluatorTarget(settings)
 	if evalProvider == "" && evalModel == "" {
 		return r.generator()
 	}
@@ -678,6 +682,33 @@ func (r *Runner) auxGenerator(ctx context.Context) (provider.ContentGenerator, e
 		return nil, fmt.Errorf("aux generator: %w", err)
 	}
 	return gen, nil
+}
+
+// auxEvaluatorTarget reports the configured off-band evaluator provider/model,
+// both empty when the user has not configured one.
+func auxEvaluatorTarget(settings *config.Settings) (providerID, model string) {
+	if settings == nil || settings.Sagittarius == nil || settings.Sagittarius.Goal == nil {
+		return "", ""
+	}
+	return settings.Sagittarius.Goal.EvaluatorProvider, settings.Sagittarius.Goal.EvaluatorModel
+}
+
+// dedicatedAuxGenerator returns the configured off-band evaluator generator, or
+// nil when none is configured. Unlike auxGenerator it never falls back to the
+// primary generator: callers that run on every turn must not silently double
+// the user's spend on the main model, and on openai-responses an extra call
+// would advance the server-side response chain the real turn depends on.
+func (r *Runner) dedicatedAuxGenerator(ctx context.Context) provider.ContentGenerator {
+	p, m := auxEvaluatorTarget(r.settingsSnapshot())
+	if p == "" && m == "" {
+		return nil
+	}
+	gen, err := r.auxGenerator(ctx)
+	if err != nil {
+		slog.Debug("aux generator unavailable", "error", err)
+		return nil
+	}
+	return gen
 }
 
 // setProviderInstanceModel forces Model on the instance block for providerID so
@@ -767,18 +798,29 @@ func (r *Runner) RunTurn(ctx context.Context, userInput string) (<-chan ui.Strea
 
 	r.verboseLog.LogTurnStart(userInput)
 
-	// Check conversational read-only intent
-	auxGen, _ := r.auxGenerator(ctx)
-	intent := classifyReadOnlyIntent(ctx, userInput, auxGen)
+	// Check conversational read-only intent. The classifier runs on every turn,
+	// so it only gets a generator when the user configured a dedicated one.
+	intent := classifyReadOnlyIntent(ctx, userInput, r.dedicatedAuxGenerator(ctx))
 	if intent != IntentNeutral {
+		changed := false
 		r.modelMu.Lock()
 		if intent == IntentLock && !r.readOnlyConversational {
 			r.readOnlyConversational = true
+			changed = true
 		} else if intent == IntentUnlock && r.readOnlyConversational {
 			r.readOnlyConversational = false
+			changed = true
 		}
+		locked := r.readOnlyConversational
 		r.modelMu.Unlock()
-		r.applyModeSystemSuffix()
+		if changed {
+			if r.sessionRecorder != nil {
+				if err := r.sessionRecorder.SetReadOnlyConversational(locked); err != nil {
+					slog.Warn("record conversational read-only lock", "error", err)
+				}
+			}
+			r.applyModeSystemSuffix()
+		}
 	}
 
 	r.setState(StateIdle)
@@ -1179,13 +1221,13 @@ func (r *Runner) applyModeSystemSuffix() {
 			suffix = directive
 		}
 	}
-	
+
 	// Add read-only gate directive if the posture or lock is active
 	r.modelMu.RLock()
 	roPosture := r.readOnlyPosture
 	roConv := r.readOnlyConversational
 	r.modelMu.RUnlock()
-	
+
 	if roPosture || roConv {
 		directive := "**CRITICAL:** You are currently in READ-ONLY INSPECTION MODE. Mutating tools (writing files, making configuration changes, running non-inspection shell commands) are disabled and will be rejected. You MUST NOT attempt to use them. A text-only report of your findings is a correct and complete turn."
 		if suffix != "" {
@@ -1325,12 +1367,12 @@ func (r *Runner) readOnlyPolicy() tools.ReadOnlyPolicy {
 	if g != nil && g.Status != grill.StatusSummarizing && g.Status != grill.StatusComplete {
 		return tools.PolicyStrict
 	}
-	
+
 	r.modelMu.RLock()
 	posture := r.readOnlyPosture
 	conv := r.readOnlyConversational
 	r.modelMu.RUnlock()
-	
+
 	if posture || conv {
 		return tools.PolicyInspect
 	}

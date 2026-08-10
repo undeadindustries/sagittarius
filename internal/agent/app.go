@@ -752,6 +752,11 @@ func (a *App) refreshBuiltinToolToggles(s *config.Settings) {
 		return
 	}
 	a.runtime.SetSettings(s)
+	// MCP schema pruning applies to the already-discovered tools, so a toggle
+	// takes effect on the next request without a reconnect or a registry swap.
+	if mgr := a.runtime.Catalog.MCPManager(); mgr != nil {
+		mgr.SetPruneToolSchemas(config.PruneToolSchemasEnabled(s, nil))
+	}
 	if !a.runtime.Catalog.RefreshBuiltinToggles(s) {
 		return
 	}

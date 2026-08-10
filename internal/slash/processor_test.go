@@ -60,12 +60,20 @@ type mockHooks struct {
 	// can assert the top-level /agent, /plan, /ask, /debug shortcuts invoke
 	// the same hook as their "/mode <name>" equivalents.
 	setModeCalls []modes.Mode
+	readOnly     bool
 }
 
 func (m *mockHooks) RebuildRunner(context.Context) (string, string, error) {
 	m.rebuildCalls++
 	return m.rebuildLabel, m.rebuildModel, nil
 }
+
+func (m *mockHooks) SetReadOnly(enabled bool) error {
+	m.readOnly = enabled
+	return nil
+}
+
+func (m *mockHooks) ReadOnlyActive() bool { return m.readOnly }
 
 func (m *mockHooks) ReloadSystemInstruction(context.Context) error {
 	m.reloadCalls++

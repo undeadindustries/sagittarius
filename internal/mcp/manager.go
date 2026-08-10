@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	sdkmcp "github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/sync/errgroup"
@@ -24,7 +25,9 @@ type Manager struct {
 	connector Connector
 	clients   map[string]*Client
 	// pruneToolSchemas when true truncates tool descriptions to save tokens.
-	pruneToolSchemas bool
+	// Every DiscoveredTool holds this same pointer so toggling the setting
+	// re-derives the schemas the model sees without reconnecting any server.
+	pruneToolSchemas *atomic.Bool
 	// allTools is the unfiltered discovery cache (every tool every connected
 	// server exposed at the last Reload). tools is the active subset after
 	// applying each server's include/exclude filter. Caching the unfiltered set
@@ -51,11 +54,20 @@ func NewManager(cfg ManagerConfig) *Manager {
 			ClientVersion: cfg.ClientVersion,
 		}
 	}
+	prune := &atomic.Bool{}
+	prune.Store(cfg.PruneToolSchemas)
 	return &Manager{
 		connector:        connector,
 		clients:          make(map[string]*Client),
-		pruneToolSchemas: cfg.PruneToolSchemas,
+		pruneToolSchemas: prune,
 	}
+}
+
+// SetPruneToolSchemas updates the schema-pruning flag in place and reports
+// whether it changed. Discovered tools share the flag, so the next request the
+// model sees carries the new schemas with no reconnect and no rediscovery.
+func (m *Manager) SetPruneToolSchemas(enabled bool) bool {
+	return m.pruneToolSchemas.Swap(enabled) != enabled
 }
 
 // serverResult is one server's reload outcome, computed off-lock by connectOne.
@@ -71,7 +83,7 @@ type serverResult struct {
 // held only to tear down the old clients and to publish the new maps, so
 // Tools/States/tool-execution callers never block for the full reload duration.
 func (m *Manager) Reload(ctx context.Context, servers map[string]config.MCPServerConfig, pruneToolSchemas bool) error {
-	m.pruneToolSchemas = pruneToolSchemas
+	m.pruneToolSchemas.Store(pruneToolSchemas)
 	// 1. Tear down existing connections under the lock, then release it.
 	m.mu.Lock()
 	_ = m.closeLocked()
@@ -128,7 +140,7 @@ func (m *Manager) Reload(ctx context.Context, servers map[string]config.MCPServe
 // returned in serverResult so the caller can publish results without holding a
 // lock during network I/O. Include/exclude filtering is applied later, off this
 // path, so a filter toggle never requires a reconnect.
-func connectOne(ctx context.Context, name string, cfg ServerConfig, connector Connector, prune bool) serverResult {
+func connectOne(ctx context.Context, name string, cfg ServerConfig, connector Connector, prune *atomic.Bool) serverResult {
 	if cfg.Disabled {
 		return serverResult{name: name, state: ServerState{Name: name, Status: ServerDisabled, Config: cfg}}
 	}

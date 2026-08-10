@@ -51,7 +51,7 @@ func ParseVerboseLog(r io.Reader) (*ParsedLog, error) {
 			parts := strings.SplitN(line, " | ", 2)
 			if len(parts) == 2 {
 				kind := strings.TrimSuffix(parts[1], " =====")
-				
+
 				// End previous sections
 				if inUserMessage && currentTurn != nil {
 					currentTurn.UserMessage = strings.TrimSpace(userMsgBuilder.String())

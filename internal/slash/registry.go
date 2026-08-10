@@ -73,6 +73,7 @@ func (r *Registry) RenderHelp() string {
 	fmt.Fprintf(&b, "  %-28s %s\n", "Alt+T (or ⌥+T)", "Cycle color theme (default ↔ greyscale)")
 	fmt.Fprintf(&b, "  %-28s %s\n", "Alt+M (or ⌥+M)", "Toggle mouse-wheel scrolling")
 	fmt.Fprintf(&b, "  %-28s %s\n", "Ctrl+T", "Toggle thinking box")
+	fmt.Fprintf(&b, "  %-28s %s\n", "Ctrl+O", "Expand/collapse pasted text in place")
 	fmt.Fprintf(&b, "  %-28s %s\n", "Ctrl+B", "Open background process viewer")
 	fmt.Fprintf(&b, "  %-28s %s\n", "PgUp/PgDn, Shift+Up/Down", "Scroll conversation")
 	fmt.Fprintf(&b, "  %-28s %s\n", "Esc / Ctrl+C", "Cancel turn / Quit")

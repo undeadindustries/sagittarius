@@ -49,7 +49,7 @@ func TestSubmitBlockedWhileTurnInFlight(t *testing.T) {
 	m := newTestModel()
 	m.turnInFlight = true
 
-	_, cmd := m.handleSubmit("hello")
+	_, cmd := m.handleSubmit(submitMsg{line: "hello", display: "hello"})
 	if cmd != nil {
 		t.Fatal("submit should be blocked while turnInFlight")
 	}

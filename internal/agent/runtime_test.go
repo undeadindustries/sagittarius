@@ -22,7 +22,7 @@ func TestNewRuntimeRegistersEditToolDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRuntime: %v", err)
 	}
-	defer rt.Close()
+	defer func() { _ = rt.Close() }()
 
 	if _, ok := rt.Catalog.BuildRegistry().Lookup(tools.EditToolName); !ok {
 		t.Errorf("%s should be registered at startup with default settings", tools.EditToolName)

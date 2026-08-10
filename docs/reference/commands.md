@@ -87,6 +87,7 @@ These work in the interactive TUI in addition to the slash commands above.
 | `Ctrl+Shift+P` | Cycle backward through active models |
 | `Alt+T` | Cycle the color theme (default ↔ greyscale) |
 | `Ctrl+T` | Toggle the thinking ("reasoning") box |
+| `Ctrl+O` | Expand or collapse a pasted text placeholder in place |
 | `Alt+M` | Toggle mouse-wheel scrolling (see below) |
 | `Ctrl+B` | Open the background process viewer |
 | `PgUp` / `PgDn` / `Shift+Up` / `Shift+Down` | Scroll the conversation |

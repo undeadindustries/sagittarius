@@ -115,11 +115,11 @@ type SagittariusSettings struct {
 	// MaxToolRounds caps how many tool-call/response cycles the agent may
 	// execute per turn. Nil means use the compiled-in default (100).
 	// Set higher for tasks that write many files; set lower to cap runaway loops.
-	MaxToolRounds *int                       `json:"maxToolRounds,omitempty"`
+	MaxToolRounds *int `json:"maxToolRounds,omitempty"`
 	// ContextLimitPreferDiscovered, when true, causes the API-reported context
 	// limits to be preferred over manual pins.
 	ContextLimitPreferDiscovered *bool                      `json:"contextLimitPreferDiscovered,omitempty"`
-	Extra         map[string]json.RawMessage `json:"-"`
+	Extra                        map[string]json.RawMessage `json:"-"`
 }
 
 // SagittariusUpdateConfig configures the self-update feature.

@@ -107,7 +107,8 @@ type statusMsg struct {
 }
 
 type submitMsg struct {
-	line string
+	line    string // The fully expanded string sent to the model and JSONL
+	display string // The string with placeholders displayed in the scrollback
 }
 
 type toolkitScanMsg struct {
@@ -182,6 +183,7 @@ type model struct {
 
 	viewport   viewport.Model
 	input      textarea.Model
+	pastes     pasteStore
 	status     ui.StatusBar
 	idleStatus ui.StatusBar
 
@@ -377,6 +379,7 @@ func newModel(opts ui.Options, app ui.App, term *Terminal) *model {
 		history:         newInputHistory(),
 		followBottom:    true,
 		showThinking:    opts.ShowThinking,
+		pastes:          newPasteStore(),
 	}
 	m.syncInputPrompt(idleStatus.Mode)
 
@@ -486,7 +489,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case submitMsg:
-		return m.handleSubmit(msg.line)
+		return m.handleSubmit(msg)
 	case concurrentStreamEventMsg:
 		if msg.gen != m.activeStreamGen {
 			return m, nil
@@ -997,11 +1000,13 @@ func (m *model) handleAskKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.askOtherMode {
 		switch msg.String() {
 		case "enter":
-			text := strings.TrimSpace(m.input.Value())
-			if text == "" {
+			display := strings.TrimSpace(m.input.Value())
+			text := m.pastes.expand(display)
+			if display == "" {
 				return m, nil
 			}
 			m.input.SetValue("")
+			m.pastes = newPasteStore()
 			m.syncInputLayout()
 			m.sendAskAnswer(ui.AskAnswer{Index: -1, Text: text})
 			return m, nil
@@ -1014,9 +1019,7 @@ func (m *model) handleAskKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "ctrl+c":
 			return m, m.beginQuit()
 		}
-		var cmd tea.Cmd
-		m.input, cmd = m.input.Update(msg)
-		m.syncInputLayout()
+		cmd := m.applyInputKey(msg)
 		return m, cmd
 	}
 
@@ -1299,10 +1302,7 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		// Otherwise keep the input editable while the turn runs so the user can
 		// compose the next message; the cursor and typing stay responsive.
-		var cmd tea.Cmd
-		m.input, cmd = m.input.Update(msg)
-		m.syncInputLayout()
-		m.refreshSuggestions()
+		cmd := m.applyInputKey(msg)
 		return m, cmd
 	}
 
@@ -1406,16 +1406,87 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleEnter()
 	}
 
-	var cmd tea.Cmd
-	m.input, cmd = m.input.Update(msg)
-	m.syncInputLayout()
-	m.refreshSuggestions()
+	cmd := m.applyInputKey(msg)
 	return m, cmd
 }
 
 // handleEnter accepts a highlighted suggestion (completing it, and submitting
 // when it is a terminal command) or submits the typed line when nothing is
 // highlighted.
+func (m *model) setTextAndCursor(text string, byteOffset int) {
+	m.input.SetValue(text)
+	suffixRunes := len([]rune(text[byteOffset:]))
+	for i := 0; i < suffixRunes; i++ {
+		m.input, _ = m.input.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	}
+}
+
+// applyInputKey intercepts keystrokes bound for the composer textarea to handle
+// paste collapse/expand and atomic deletion of placeholders. It replaces
+// m.input.Update(msg).
+func (m *model) applyInputKey(msg tea.KeyMsg) tea.Cmd {
+	if msg.Paste {
+		placeholder := m.pastes.capture(string(msg.Runes))
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(placeholder)})
+		m.syncInputLayout()
+		m.refreshSuggestions()
+		return cmd
+	}
+
+	val := m.input.Value()
+	cur := m.inputByteCursor()
+
+	if msg.Type == tea.KeyBackspace && cur > 0 {
+		if _, start, end, ok := placeholderAt(val, cur-1); ok && end == cur {
+			m.setTextAndCursor(val[:start]+val[end:], start)
+			m.syncInputLayout()
+			m.refreshSuggestions()
+			return nil
+		}
+	} else if msg.Type == tea.KeyDelete && cur < len(val) {
+		if _, start, end, ok := placeholderAt(val, cur); ok && start == cur {
+			m.setTextAndCursor(val[:start]+val[end:], start)
+			m.syncInputLayout()
+			m.refreshSuggestions()
+			return nil
+		}
+	}
+
+	if msg.Type == tea.KeyCtrlO {
+		if m.pastes.expanded != nil {
+			id := m.pastes.expanded.id
+			content := m.pastes.content[id]
+			if start := strings.Index(val, content); start >= 0 {
+				end := start + len(content)
+				m.pastes.expanded = nil
+				m.setTextAndCursor(val[:start]+id+val[end:], start+len(id))
+				m.syncInputLayout()
+				m.refreshSuggestions()
+				return nil
+			}
+		}
+
+		if id, start, end, ok := placeholderAt(val, cur); ok {
+			if content, ok := m.pastes.content[id]; ok {
+				m.pastes.expanded = &expandedPaste{id: id}
+				m.setTextAndCursor(val[:start]+content+val[end:], start+len(content))
+				m.syncInputLayout()
+				m.refreshSuggestions()
+				return nil
+			}
+		}
+		return nil
+	}
+
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	m.pastes.prune(m.input.Value())
+	m.syncInputLayout()
+	m.refreshSuggestions()
+	return cmd
+}
+
 func (m *model) handleEnter() (tea.Model, tea.Cmd) {
 	if m.suggestionIdx >= 0 && m.suggestionIdx < len(m.suggestions) {
 		s := m.suggestions[m.suggestionIdx]
@@ -1426,15 +1497,17 @@ func (m *model) handleEnter() (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
-	line := strings.TrimSpace(m.input.Value())
-	if line != "" {
+	display := strings.TrimSpace(m.input.Value())
+	line := m.pastes.expand(display)
+	if display != "" {
 		// The user moved on to the next message; the title announcement has
 		// served its purpose and must not linger as a stale status line.
 		m.titleDismissed = true
 	}
 	m.input.SetValue("")
+	m.pastes = newPasteStore() // reset paste store on submit
 	m.clearSuggestions()
-	return m, func() tea.Msg { return submitMsg{line: line} }
+	return m, func() tea.Msg { return submitMsg{line: line, display: display} }
 }
 
 // handleBusyEnter queues the current input for submission after the in-flight
@@ -1442,14 +1515,16 @@ func (m *model) handleEnter() (tea.Model, tea.Cmd) {
 // session state), so they are rejected with a brief notice. However, specific
 // safe slash commands (like /goal pause) can be executed concurrently.
 func (m *model) handleBusyEnter() (tea.Model, tea.Cmd) {
-	line := strings.TrimSpace(m.input.Value())
-	if line == "" {
+	display := strings.TrimSpace(m.input.Value())
+	line := m.pastes.expand(display)
+	if display == "" {
 		return m, nil
 	}
-	if strings.HasPrefix(line, "/") {
+	if strings.HasPrefix(display, "/") {
 		// Allow safe read-only or goal-pausing commands to run concurrently.
-		if isConcurrentSafeSlash(line) {
+		if isConcurrentSafeSlash(display) {
 			m.input.SetValue("")
+			m.pastes = newPasteStore()
 			m.clearSuggestions()
 			m.syncInputLayout()
 			return m, m.runConcurrentSlash(line)
@@ -1457,7 +1532,7 @@ func (m *model) handleBusyEnter() (tea.Model, tea.Cmd) {
 		m.addBlock(roleInfo, "Slash commands cannot be queued; wait for the current turn to finish.")
 		return m, nil
 	}
-	m.enqueueMessage(line)
+	m.enqueueMessage(display)
 	m.input.SetValue("")
 	m.clearSuggestions()
 	m.syncInputLayout()
@@ -1494,12 +1569,14 @@ func (m *model) runConcurrentSlash(line string) tea.Cmd {
 // handleBusyTab queues the current (non-slash) input while a turn runs, matching
 // gemini-cli's explicit Tab-to-queue. With no buffered text it is a no-op.
 func (m *model) handleBusyTab() (tea.Model, tea.Cmd) {
-	line := strings.TrimSpace(m.input.Value())
-	if line == "" || strings.HasPrefix(line, "/") {
+	display := strings.TrimSpace(m.input.Value())
+	if display == "" || strings.HasPrefix(display, "/") {
 		return m, nil
 	}
-	m.enqueueMessage(line)
+	m.enqueueMessage(display)
 	m.input.SetValue("")
+	// We don't reset m.pastes here because the queued message is just staged;
+	// it will be flushed or popped later.
 	m.clearSuggestions()
 	m.syncInputLayout()
 	return m, nil
@@ -1507,9 +1584,9 @@ func (m *model) handleBusyTab() (tea.Model, tea.Cmd) {
 
 // enqueueMessage appends a message to the pending queue and records it in the
 // prompt history so Up recalls it like a submitted prompt.
-func (m *model) enqueueMessage(line string) {
-	m.queue = append(m.queue, line)
-	m.history.record(line)
+func (m *model) enqueueMessage(display string) {
+	m.queue = append(m.queue, display)
+	m.history.record(m.pastes.expand(display))
 	m.addBlock(roleInfo, fmt.Sprintf("Queued message (%d pending).", len(m.queue)))
 }
 
@@ -1536,8 +1613,10 @@ func (m *model) flushQueue() tea.Cmd {
 		return nil
 	}
 	combined := strings.Join(m.queue, "\n\n")
+	line := m.pastes.expand(combined)
 	m.queue = nil
-	return func() tea.Msg { return submitMsg{line: combined} }
+	m.pastes = newPasteStore() // reset paste store on submit
+	return func() tea.Msg { return submitMsg{line: line, display: combined} }
 }
 
 // cursorPos selects where the cursor lands after a history entry is loaded.
@@ -1810,8 +1889,8 @@ func (m *model) workingDisplayLabel() string {
 	return fmt.Sprintf("%s (%ds · %s)", m.workingLabel, secs, hint)
 }
 
-func (m *model) handleSubmit(line string) (tea.Model, tea.Cmd) {
-	if line == "" {
+func (m *model) handleSubmit(msg submitMsg) (tea.Model, tea.Cmd) {
+	if msg.line == "" {
 		return m, nil
 	}
 	if m.turnInFlight {
@@ -1819,9 +1898,9 @@ func (m *model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	m.history.record(line)
+	m.history.record(msg.line)
 	m.followBottom = true
-	m.addBlock(roleUser, line)
+	m.addBlock(roleUser, msg.display)
 	m.busy = true
 	m.turnInFlight = true
 	m.streamGen++
@@ -1836,7 +1915,7 @@ func (m *model) handleSubmit(line string) (tea.Model, tea.Cmd) {
 	m.turnCancel = cancel
 	m.turnStart = time.Now()
 
-	events, err := m.app.HandleInput(ctx, line)
+	events, err := m.app.HandleInput(ctx, msg.line)
 	if err != nil {
 		m.clearTurn()
 		m.busy = false

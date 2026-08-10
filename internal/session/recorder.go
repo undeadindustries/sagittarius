@@ -360,6 +360,22 @@ func (r *Recorder) SetReadOnly(enabled bool) error {
 	return r.appendLineLocked(set)
 }
 
+// SetReadOnlyConversational records a change to the turn-level conversational
+// read-only lock so a resume restores the gate the user last saw.
+func (r *Recorder) SetReadOnlyConversational(enabled bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.disabled {
+		return nil
+	}
+	set := SetRecord{
+		Set: &MetadataRecord{
+			ReadOnlyConversational: &enabled,
+		},
+	}
+	return r.appendLineLocked(set)
+}
+
 // SetSummary appends a session-title metadata update to the session file. The
 // loader already prefers MetadataRecord.Summary over the first user message
 // when building a display name, so this is the single write path for both

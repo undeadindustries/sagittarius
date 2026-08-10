@@ -17,8 +17,8 @@ func TestTaskP(t *testing.T) {
 
 	runEval(t, "TaskP", setup, func(t *testing.T, r *evalRunner) {
 		// Explicitly use programmer personality
-		os.MkdirAll(filepath.Join(r.workDir, ".sagittarius"), 0755)
-		os.WriteFile(filepath.Join(r.workDir, ".sagittarius", "settings.json"), []byte(`{"sagittarius":{"systemPrompt":{"personality":"programmer"}}}`), 0644)
+		mustMkdirAll(t, filepath.Join(r.workDir, ".sagittarius"))
+		mustWriteFile(t, filepath.Join(r.workDir, ".sagittarius", "settings.json"), `{"sagittarius":{"systemPrompt":{"personality":"programmer"}}}`, 0o644)
 
 		// Turn 1
 		r.runTurn("Read main.go and add a new function sayHi() that prints 'Hi'. Also run `echo done &`.")
@@ -72,7 +72,7 @@ func TestTaskP(t *testing.T) {
 		if readBeforeWriteViolations > 0 {
 			t.Errorf("read_before_write violated %d times (wrote without reading first)", readBeforeWriteViolations)
 		}
-		
+
 		if !isBackgroundUsed {
 			t.Log("is_background not used (recorded finding, not a failure)")
 		}

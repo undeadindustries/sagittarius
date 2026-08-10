@@ -324,7 +324,7 @@ func classifySQL(args []string) (ShellVerdict, string) {
 		// Just interactive shell or unknown usage
 		return VerdictUnknown, "No inline SQL query found to verify"
 	}
-	
+
 	// Strip quotes
 	query = strings.TrimSpace(query)
 	query = strings.Trim(query, `"'`)
@@ -332,7 +332,7 @@ func classifySQL(args []string) (ShellVerdict, string) {
 
 	upperQuery := strings.ToUpper(query)
 	// Must begin with SELECT, SHOW, or EXPLAIN
-	if !(strings.HasPrefix(upperQuery, "SELECT") || strings.HasPrefix(upperQuery, "SHOW") || strings.HasPrefix(upperQuery, "EXPLAIN")) {
+	if !strings.HasPrefix(upperQuery, "SELECT") && !strings.HasPrefix(upperQuery, "SHOW") && !strings.HasPrefix(upperQuery, "EXPLAIN") {
 		return VerdictUnknown, "SQL query does not start with SELECT, SHOW, or EXPLAIN"
 	}
 

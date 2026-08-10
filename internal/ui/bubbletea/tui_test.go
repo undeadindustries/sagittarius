@@ -91,7 +91,7 @@ func TestModelViewNonEmpty(t *testing.T) {
 func TestModelQuitCommand(t *testing.T) {
 	t.Parallel()
 	m := newModel(ui.Options{}, quitApp{}, NewTerminal(ui.Options{}))
-	_, cmd := m.handleSubmit("/quit")
+	_, cmd := m.handleSubmit(submitMsg{line: "/quit", display: "/quit"})
 	if cmd == nil {
 		t.Fatal("expected stream cmd for /quit")
 	}

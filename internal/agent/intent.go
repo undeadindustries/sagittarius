@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"strings"
+	"unicode"
 
 	"github.com/undeadindustries/sagittarius/internal/provider"
 )
@@ -29,13 +30,13 @@ func classifyReadOnlyIntent(ctx context.Context, input string, aux provider.Cont
 	unlocks := []string{
 		"go ahead", "do it", "apply it", "make the change", "yes, proceed", "proceed",
 	}
-	for _, phrase := range unlocks {
-		if strings.Contains(stripped, phrase) {
-			// Basic negation guard: "don't go ahead" -> Neutral
-			if strings.Contains(stripped, "don't "+phrase) || strings.Contains(stripped, "do not "+phrase) {
-				continue
+	// A question is never a grant ("should I proceed?"), so let it fall through
+	// to the lock table and the aux classifier rather than lifting the gate.
+	if !strings.HasSuffix(stripped, "?") {
+		for _, phrase := range unlocks {
+			if containsUnnegated(stripped, phrase) {
+				return IntentUnlock
 			}
-			return IntentUnlock
 		}
 	}
 
@@ -106,15 +107,63 @@ func classifyReadOnlyIntent(ctx context.Context, input string, aux provider.Cont
 		b.WriteString(chunk.TextDelta)
 	}
 
-	result := strings.TrimSpace(b.String())
-	if strings.Contains(result, "LOCK") {
-		return IntentLock
-	}
+	// UNLOCK contains LOCK as a substring, so it must be tested first.
+	result := strings.ToUpper(strings.TrimSpace(b.String()))
 	if strings.Contains(result, "UNLOCK") {
 		return IntentUnlock
 	}
+	if strings.Contains(result, "LOCK") {
+		return IntentLock
+	}
 
 	return IntentNeutral
+}
+
+// negations are the markers that flip an unlock phrase into a refusal or a
+// deferral ("let's not proceed", "we cannot proceed yet", "don't go ahead").
+var negations = map[string]bool{
+	"not": true, "no": true, "never": true, "nor": true, "without": true,
+	"don't": true, "dont": true, "doesn't": true, "didn't": true,
+	"can't": true, "cannot": true, "cant": true, "won't": true, "wont": true,
+	"shouldn't": true, "wouldn't": true, "couldn't": true, "stop": true,
+}
+
+// negationWindow is how many words before a phrase are scanned for a negation
+// marker. Three covers "do not yet proceed" without reaching into an earlier
+// clause that has nothing to do with the phrase.
+const negationWindow = 3
+
+// containsUnnegated reports whether phrase occurs in s at least once without a
+// negation marker in the few words immediately preceding it.
+func containsUnnegated(s, phrase string) bool {
+	for offset := 0; ; {
+		idx := strings.Index(s[offset:], phrase)
+		if idx < 0 {
+			return false
+		}
+		if !negatedBefore(s[:offset+idx]) {
+			return true
+		}
+		offset += idx + len(phrase)
+	}
+}
+
+func negatedBefore(prefix string) bool {
+	// A negation only binds inside its own sentence: in "don't proceed.
+	// Actually, go ahead" the refusal is retracted, not restated.
+	if cut := strings.LastIndexAny(prefix, ".!?;"); cut >= 0 {
+		prefix = prefix[cut+1:]
+	}
+	words := strings.Fields(prefix)
+	if len(words) > negationWindow {
+		words = words[len(words)-negationWindow:]
+	}
+	for _, w := range words {
+		if negations[strings.Trim(w, ".,;:!?")] {
+			return true
+		}
+	}
+	return false
 }
 
 func stripQuotes(s string) string {
@@ -123,7 +172,8 @@ func stripQuotes(s string) string {
 	inSingle := false
 	inBacktick := false
 
-	for _, c := range s {
+	runes := []rune(s)
+	for i, c := range runes {
 		switch c {
 		case '"':
 			if !inSingle && !inBacktick {
@@ -131,7 +181,10 @@ func stripQuotes(s string) string {
 				continue
 			}
 		case '\'':
-			if !inDouble && !inBacktick {
+			// An apostrophe inside a word ("don't", "let's") is not a quote.
+			// Treating it as one used to swallow the whole rest of the message,
+			// hiding every phrase after the first contraction.
+			if !inDouble && !inBacktick && isQuoteBoundary(runes, i, inSingle) {
 				inSingle = !inSingle
 				continue
 			}
@@ -146,4 +199,18 @@ func stripQuotes(s string) string {
 		}
 	}
 	return b.String()
+}
+
+// isQuoteBoundary reports whether the apostrophe at index i opens or closes a
+// quotation rather than sitting inside a word. An opener has no word character
+// before it; a closer has none after it.
+func isQuoteBoundary(runes []rune, i int, closing bool) bool {
+	if closing {
+		return i+1 >= len(runes) || !isWordRune(runes[i+1])
+	}
+	return i == 0 || !isWordRune(runes[i-1])
+}
+
+func isWordRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsDigit(r)
 }
