@@ -25,10 +25,11 @@ You can set specific models for different modes (agent, plan, ask), choose diffe
 ### Via Homebrew (macOS & Linux)
 
 ```bash
+brew trust undeadindustries/tap
 brew install undeadindustries/tap/sagittarius
 ```
 
-Or tap the repository first:
+Or tap and install explicitly:
 
 ```bash
 brew tap undeadindustries/tap
