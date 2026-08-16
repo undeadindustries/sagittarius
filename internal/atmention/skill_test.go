@@ -300,3 +300,21 @@ func TestCompleteSkillNamesCaseInsensitiveOrder(t *testing.T) {
 		}
 	}
 }
+
+// TestCompleteSkillNamesUncapped asserts that all installed skills (e.g. dozens/hundreds)
+// are returned for @skill: completion without artificial truncation, so the user
+// can scroll through the entire catalog in the TUI.
+func TestCompleteSkillNamesUncapped(t *testing.T) {
+	skillList := make([]string, 60)
+	for i := 0; i < 60; i++ {
+		skillList[i] = fmt.Sprintf("skill-%02d", i)
+	}
+	names := func() []string { return skillList }
+	idx := NewIndex(nil, names)
+
+	input := "@skill:"
+	comp := idx.Complete(input, len(input))
+	if len(comp.Items) != 60 {
+		t.Fatalf("expected all 60 skills to be returned for completion, got %d", len(comp.Items))
+	}
+}

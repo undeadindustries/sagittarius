@@ -137,9 +137,11 @@ func isSkillPrefixTyped(partial string) bool {
 
 // matchNames ranks names against partial: prefix matches first, then substring
 // matches, each alphabetically (case-insensitively, so "6502-assembly" sorts
-// before "Bash"), capped at maxSuggestions. The comparison is case-insensitive
+// before "Bash"). The comparison is case-insensitive
 // because the matching is too — a user who typed lowercase expects lowercase
 // results, and byte-order sorting would strand capitalized names at the top.
+// All matching skills are returned so the user can scroll through the entire
+// installed skill catalog in the TUI.
 func matchNames(names []string, partial string) []string {
 	partial = strings.ToLower(partial)
 	var prefix, contains []string
@@ -154,11 +156,7 @@ func matchNames(names []string, partial string) []string {
 	}
 	sortCaseInsensitive(prefix)
 	sortCaseInsensitive(contains)
-	out := append(prefix, contains...)
-	if len(out) > maxSuggestions {
-		out = out[:maxSuggestions]
-	}
-	return out
+	return append(prefix, contains...)
 }
 
 // sortCaseInsensitive orders strings by lowercase value, breaking ties
