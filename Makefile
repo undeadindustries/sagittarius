@@ -1,7 +1,7 @@
 # Sagittarius — build and quality targets
 
 GO ?= go
-GO_VERSION := 1.26.5
+GO_VERSION := 1.26.6
 # Pin the toolchain to match go.mod for reproducible builds (local + CI).
 # go(1) auto-downloads this version if the system Go is older.
 export GOTOOLCHAIN := go$(GO_VERSION)
