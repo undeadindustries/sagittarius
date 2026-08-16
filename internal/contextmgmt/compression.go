@@ -106,16 +106,24 @@ type CompressOptions struct {
 	HasFailedAttempt bool
 }
 
+// WillCompress returns true if history will actually be compressed given the options.
+func WillCompress(opts CompressOptions) bool {
+	if len(opts.History) == 0 {
+		return false
+	}
+	if !opts.Force && belowThreshold(opts.OriginalTokenCount, opts.Threshold, opts.EffectiveLimit) {
+		return false
+	}
+	return true
+}
+
 // Compress compresses history per the fork algorithm. It returns a result whose
 // NewHistory is nil unless history actually changed.
 func (c *Compressor) Compress(ctx context.Context, opts CompressOptions) (CompressionResult, error) {
 	estimate := c.estimator()
 	original := opts.OriginalTokenCount
 
-	if len(opts.History) == 0 {
-		return noopResult(0), nil
-	}
-	if !opts.Force && belowThreshold(original, opts.Threshold, opts.EffectiveLimit) {
+	if !WillCompress(opts) {
 		return noopResult(original), nil
 	}
 

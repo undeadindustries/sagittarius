@@ -61,6 +61,9 @@ type ManagerConfig struct {
 	// ShellToolName enables shell-aware masking previews.
 	ShellToolName string
 
+	// OnWillCompress callback is invoked right before history is compressed.
+	OnWillCompress func(ctx context.Context, trigger string)
+
 	// Summarize performs compression summarization. Nil disables compression
 	// (masking and ejection still run).
 	Summarize Summarizer
@@ -155,13 +158,17 @@ func (m *Manager) ForceCompress(ctx context.Context, history []Message) ([]Messa
 		preserveFraction = DefaultLocalPreserveFraction
 	}
 	original := EstimateTokens(flattenParts(history))
-	res, err := m.compressor.Compress(ctx, CompressOptions{
+	opts := CompressOptions{
 		History:            history,
 		Force:              true,
 		OriginalTokenCount: original,
 		EffectiveLimit:     m.cfg.ContextLimit,
 		PreserveFraction:   preserveFraction,
-	})
+	}
+	if WillCompress(opts) && m.cfg.OnWillCompress != nil {
+		m.cfg.OnWillCompress(ctx, "manual")
+	}
+	res, err := m.compressor.Compress(ctx, opts)
 	if err != nil {
 		return history, res.Info, fmt.Errorf("manual compression failed: %w", err)
 	}
@@ -277,7 +284,7 @@ func (m *Manager) applyBudgetCompression(ctx context.Context, history []Message,
 		preserveFraction = DefaultLocalPreserveFraction
 	}
 	threshold := m.effectiveThreshold(turnIndex)
-	res, err := m.compressor.Compress(ctx, CompressOptions{
+	opts := CompressOptions{
 		History:            history,
 		Force:              budgetTriggered,
 		OriginalTokenCount: historyTokens,
@@ -285,7 +292,11 @@ func (m *Manager) applyBudgetCompression(ctx context.Context, history []Message,
 		EffectiveLimit:     m.cfg.ContextLimit,
 		PreserveFraction:   preserveFraction,
 		HasFailedAttempt:   m.hasFailedCompression,
-	})
+	}
+	if WillCompress(opts) && m.cfg.OnWillCompress != nil {
+		m.cfg.OnWillCompress(ctx, "auto")
+	}
+	res, err := m.compressor.Compress(ctx, opts)
 	if err != nil {
 		m.logger.Warn("context: compression failed", "error", err)
 		return history, err

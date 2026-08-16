@@ -22,6 +22,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/credentials"
 	"github.com/undeadindustries/sagittarius/internal/goal"
 	"github.com/undeadindustries/sagittarius/internal/grill"
+	"github.com/undeadindustries/sagittarius/internal/hooks"
 	"github.com/undeadindustries/sagittarius/internal/mcp"
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
@@ -607,7 +608,8 @@ func (h *appHooks) RebuildRunner(ctx context.Context) (string, string, error) {
 			h.app.runner.ActiveProviderID,
 			func() string { return h.app.runner.InteractionMode().String() },
 			h.app.sessionID,
-			h.app.runner.RecordUsage),
+			h.app.runner.RecordUsage,
+			h.app.runner.OnWillCompress),
 	)
 
 	// Footer uses the provider display id (e.g. "openrouter", "gemini") to match
@@ -823,6 +825,77 @@ func formatCompressionResult(info contextmgmt.CompressionInfo) string {
 	default:
 		return "Nothing to compress yet — the conversation is already small."
 	}
+}
+
+func (h *appHooks) HooksList() []hooks.HookInfo {
+	if h.app == nil || h.app.runner == nil || h.app.runner.HooksRegistry() == nil {
+		return nil
+	}
+	return h.app.runner.HooksRegistry().ListHooks()
+}
+
+func (h *appHooks) SetHooksGlobalEnabled(enabled bool) {
+	if h.app != nil && h.app.runner != nil && h.app.runner.HooksRegistry() != nil {
+		h.app.runner.HooksRegistry().SetEnabled(enabled)
+	}
+}
+
+func (h *appHooks) SetHookEnabled(name string, enabled bool) {
+	if h.app != nil && h.app.runner != nil && h.app.runner.HooksRegistry() != nil {
+		reg := h.app.runner.HooksRegistry()
+		if enabled {
+			reg.EnableHook(name)
+		} else {
+			reg.DisableHook(name)
+		}
+	}
+}
+
+func (h *appHooks) ReloadHooks(ctx context.Context) (string, error) {
+	if h.app == nil || h.app.runner == nil {
+		return "", fmt.Errorf("runner not active")
+	}
+	wd := h.app.runner.WorkDir()
+	docs, err := config.LoadDocuments(wd)
+	if err != nil {
+		return "", fmt.Errorf("load settings documents: %w", err)
+	}
+	var globalHooks, projectHooks *config.HooksConfig
+	if docs.Global != nil {
+		globalHooks = docs.Global.GetHooks()
+	}
+	if docs.Project != nil {
+		projectHooks = docs.Project.GetHooks()
+	}
+	reg := h.app.runner.HooksRegistry()
+	if reg == nil {
+		return "", fmt.Errorf("hooks registry not active")
+	}
+	reg.LoadConfig(globalHooks, projectHooks)
+	return "Lifecycle hooks reloaded from settings.", nil
+}
+
+func (h *appHooks) TestHook(ctx context.Context, name string) (string, error) {
+	if h.app == nil || h.app.runner == nil {
+		return "", fmt.Errorf("runner not active")
+	}
+	reg := h.app.runner.HooksRegistry()
+	if reg == nil {
+		return "", fmt.Errorf("hooks registry not active")
+	}
+	wd := h.app.runner.WorkDir()
+	sessID := h.app.runner.CurrentSessionID()
+	transcriptPath := h.app.runner.SessionFilePath()
+	turnIndex := h.app.runner.TurnCounter()
+	input := hooks.NewHookInput(sessID, transcriptPath, wd, hooks.EventBeforeAgent, turnIndex)
+	res, err := reg.ExecuteTestHook(ctx, name, input)
+	if err != nil {
+		return "", err
+	}
+	if !res.Success {
+		return fmt.Sprintf("Hook %q failed (exit code %d):\nStderr: %s\nStdout: %s", res.HookConfig.Key(), res.ExitCode, res.Stderr, res.Stdout), nil
+	}
+	return fmt.Sprintf("Hook %q succeeded (exit code 0):\nStdout: %s", res.HookConfig.Key(), res.Stdout), nil
 }
 
 func (h *appHooks) ReloadSkills(ctx context.Context) (string, error) {

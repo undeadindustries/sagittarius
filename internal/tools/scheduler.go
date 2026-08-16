@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,6 +45,23 @@ type Scheduler struct {
 	mu            sync.Mutex
 	sessionGrants map[string]bool
 	grantRecorder func(string)
+
+	beforeHook BeforeToolHookFunc
+	afterHook  AfterToolHookFunc
+}
+
+// BeforeToolHookFunc is called before executing a tool.
+type BeforeToolHookFunc func(ctx context.Context, toolName string, args map[string]any) (modifiedArgs map[string]any, deny bool, reason string, err error)
+
+// AfterToolHookFunc is called after executing a tool.
+type AfterToolHookFunc func(ctx context.Context, toolName string, args map[string]any, result map[string]any)
+
+// WithHooks installs lifecycle hook callbacks for BeforeTool and AfterTool.
+func WithHooks(before BeforeToolHookFunc, after AfterToolHookFunc) SchedulerOption {
+	return func(s *Scheduler) {
+		s.beforeHook = before
+		s.afterHook = after
+	}
 }
 
 // SchedulerOption configures optional Scheduler behavior.
@@ -218,6 +236,40 @@ func (s *Scheduler) executeOne(
 		}
 	}
 
+	if s.beforeHook != nil {
+		modArgs, deny, reason, hookErr := s.beforeHook(ctx, name, args)
+		if hookErr != nil {
+			slog.Warn("before tool hook error", "tool", name, "error", hookErr)
+		}
+		if deny {
+			if reason == "" {
+				reason = "tool execution denied by hook"
+			}
+			emitErr(reason)
+			return errorResponse(call, reason), nil
+		}
+		if len(modArgs) > 0 {
+			// Merge rather than replace: a hook that returns only the keys it
+			// cares about must not silently drop the rest of the call.
+			merged := make(map[string]any, len(args)+len(modArgs))
+			for k, v := range args {
+				merged[k] = v
+			}
+			for k, v := range modArgs {
+				merged[k] = v
+			}
+			args = merged
+			call.Args = merged
+
+			// The gates above ran against the pre-hook arguments, so a rewritten
+			// path or content has not been checked yet. Re-run them.
+			if reason, allowed := s.validateHookRewrite(name, args); !allowed {
+				emitErr(reason)
+				return errorResponse(call, reason), nil
+			}
+		}
+	}
+
 	needsConfirm := s.policy.NeedsConfirmation(tool)
 	grantKey := tool.Name()
 	isEscalation := false
@@ -306,6 +358,9 @@ func (s *Scheduler) executeOne(
 		ExitCode:   exitCode,
 		IsError:    isErr,
 	})
+	if s.afterHook != nil {
+		s.afterHook(ctx, name, args, result)
+	}
 	return &provider.FunctionResponse{Name: name, CallID: call.ID, Response: result}, nil
 }
 
@@ -477,6 +532,25 @@ func errorResponse(call provider.ToolCall, message string) *provider.FunctionRes
 			"error": message,
 		},
 	}
+}
+
+// validateHookRewrite re-applies the pre-execution gates to arguments a
+// BeforeTool hook rewrote. Without this a hook could redirect a write outside
+// the workspace, or past the read-only gate, since the original checks saw only
+// the model's arguments.
+func (s *Scheduler) validateHookRewrite(name string, args map[string]any) (string, bool) {
+	if allowed, reason := ProjectBoundaryAllow(s.enforce, name, args, s.workspace); !allowed {
+		return reason, false
+	}
+	if allowed, reason := s.interactionModeAllow(name, args); !allowed {
+		return reason, false
+	}
+	if canonicalToolName(name) == WriteFileToolName {
+		if err := validateWriteFileArgs(args); err != nil {
+			return err.Error(), false
+		}
+	}
+	return "", true
 }
 
 func (s *Scheduler) interactionModeAllow(toolName string, args map[string]any) (bool, string) {

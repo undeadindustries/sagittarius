@@ -8,6 +8,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/goal"
 	"github.com/undeadindustries/sagittarius/internal/grill"
+	"github.com/undeadindustries/sagittarius/internal/hooks"
 	"github.com/undeadindustries/sagittarius/internal/mcp"
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
@@ -98,6 +99,12 @@ type Hooks interface {
 	// SessionStatsText returns session telemetry formatted as plain text for the
 	// /stats command. section is "" or "session" (full summary), "model", or "tools".
 	SessionStatsText(section string) string
+	// Hooks management (/hooks).
+	HooksList() []hooks.HookInfo
+	SetHooksGlobalEnabled(enabled bool)
+	SetHookEnabled(name string, enabled bool)
+	ReloadHooks(ctx context.Context) (string, error)
+	TestHook(ctx context.Context, name string) (string, error)
 	// SetUITheme persists the chosen TUI theme ("default" or "greyscale") to
 	// settings. Used by /theme; the live switch is driven separately via the UI.
 	SetUITheme(name string) error

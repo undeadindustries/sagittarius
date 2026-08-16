@@ -1,6 +1,7 @@
 package slash
 
 import (
+	"errors"
 	"fmt"
 	"runtime"
 	"strconv"
@@ -693,4 +694,136 @@ func handleAgentsList(ctx *Context) Result {
 		lines = append(lines, fmt.Sprintf("  %s — %s (%s)", def.Name, def.Description, def.Kind))
 	}
 	return InfoResult(strings.Join(lines, "\n"))
+}
+
+func hooksCommand() Command {
+	return Command{
+		Name:        "hooks",
+		Description: "Manage lifecycle hooks (list, enable, disable, enable-all, disable-all, reload, test)",
+		SubCommands: []Command{
+			{
+				Name:        "list",
+				Description: "List configured lifecycle hooks and status",
+				Handler:     handleHooksList,
+			},
+			{
+				Name:        "enable",
+				Description: "Enable a specific hook by name or key",
+				Handler:     handleHooksEnable,
+			},
+			{
+				Name:        "disable",
+				Description: "Disable a specific hook by name or key",
+				Handler:     handleHooksDisable,
+			},
+			{
+				Name:        "enable-all",
+				Description: "Globally enable all lifecycle hooks",
+				Handler:     handleHooksEnableAll,
+			},
+			{
+				Name:        "disable-all",
+				Description: "Globally disable all lifecycle hooks",
+				Handler:     handleHooksDisableAll,
+			},
+			{
+				Name:        "reload",
+				Description: "Reload lifecycle hooks from settings files",
+				Handler:     handleHooksReload,
+			},
+			{
+				Name:        "test",
+				Description: "Test-run a hook by name or key",
+				Handler:     handleHooksTest,
+			},
+		},
+		Handler: handleHooksList,
+	}
+}
+
+var handleHooksReload = reloadHandler("Hooks reload unavailable.", "reload hooks",
+	func(ctx *Context) (string, error) {
+		return ctx.Deps.Hooks.ReloadHooks(ctx.Ctx)
+	})
+
+func handleHooksList(ctx *Context) Result {
+	if ctx.Deps.Hooks == nil {
+		return InfoResult("Hooks unavailable.")
+	}
+	list := ctx.Deps.Hooks.HooksList()
+	if len(list) == 0 {
+		return InfoResult("No lifecycle hooks configured.")
+	}
+	lines := []string{"Configured lifecycle hooks:"}
+	for _, h := range list {
+		status := "enabled"
+		if !h.Enabled {
+			status = "disabled"
+		}
+		trust := "trusted"
+		if !h.Trusted {
+			trust = "untrusted"
+		}
+		name := h.Name
+		if name == "" {
+			name = h.Command
+		}
+		lines = append(lines, fmt.Sprintf("  [%s, %s] %s (%s) — %s (%s)", status, trust, h.Event, h.Matcher, name, h.Source))
+	}
+	return InfoResult(strings.Join(lines, "\n"))
+}
+
+func handleHooksEnable(ctx *Context) Result {
+	if ctx.Deps.Hooks == nil {
+		return InfoResult("Hooks unavailable.")
+	}
+	name := strings.TrimSpace(ctx.Args)
+	if name == "" {
+		return ErrorResult(errors.New("usage: /hooks enable <name>"))
+	}
+	ctx.Deps.Hooks.SetHookEnabled(name, true)
+	return InfoResult(fmt.Sprintf("Enabled hook %q.", name))
+}
+
+func handleHooksDisable(ctx *Context) Result {
+	if ctx.Deps.Hooks == nil {
+		return InfoResult("Hooks unavailable.")
+	}
+	name := strings.TrimSpace(ctx.Args)
+	if name == "" {
+		return ErrorResult(errors.New("usage: /hooks disable <name>"))
+	}
+	ctx.Deps.Hooks.SetHookEnabled(name, false)
+	return InfoResult(fmt.Sprintf("Disabled hook %q.", name))
+}
+
+func handleHooksEnableAll(ctx *Context) Result {
+	if ctx.Deps.Hooks == nil {
+		return InfoResult("Hooks unavailable.")
+	}
+	ctx.Deps.Hooks.SetHooksGlobalEnabled(true)
+	return InfoResult("Globally enabled all hooks.")
+}
+
+func handleHooksDisableAll(ctx *Context) Result {
+	if ctx.Deps.Hooks == nil {
+		return InfoResult("Hooks unavailable.")
+	}
+	ctx.Deps.Hooks.SetHooksGlobalEnabled(false)
+	return InfoResult("Globally disabled all hooks.")
+}
+
+func handleHooksTest(ctx *Context) Result {
+	if ctx.Deps.Hooks == nil {
+		return InfoResult("Hooks unavailable.")
+	}
+	name := strings.TrimSpace(ctx.Args)
+	if name == "" {
+		return ErrorResult(errors.New("usage: /hooks test <name>"))
+	}
+	res, err := ctx.Deps.Hooks.TestHook(ctx.Ctx, name)
+	if err != nil {
+		return ErrorResult(err)
+	}
+	return InfoResult(res)
 }

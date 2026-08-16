@@ -68,6 +68,7 @@ SAGITTARIUS_PARITY_FORK=1 go test -v ./tests/parity/
 | `/agents` | ✅ Implemented | |
 | `/agents list` | ✅ Implemented | |
 | `/agents reload` | ✅ Implemented | |
+| `/hooks` | ✅ Implemented | Lifecycle hooks management (`list`, `enable`, `disable`, `enable-all`, `disable-all`, `reload`, `test`) (AD-100) |
 | `/reasoning` | ✅ Implemented | Sagittarius-only (reasoning effort management) |
 | `/reasoning show/clear/save/<level>` | ✅ Implemented | |
 

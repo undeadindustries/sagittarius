@@ -357,6 +357,34 @@ and resets to off on the next launch.
 To force a specific skill on a single message rather than leaving the choice to
 the model, use an [`@skill:<name>` mention](#skillname).
 
+### `/hooks`
+
+- **Description:** Manage lifecycle hooks configured in `settings.json` (`hooks`).
+
+#### Sub-commands
+
+- **`list`**
+  - **Description:** List configured lifecycle hooks, matching patterns, and status.
+  - **Usage:** `/hooks list` or `/hooks`
+- **`enable <name>`**
+  - **Description:** Enable a specific hook by name or command key.
+  - **Usage:** `/hooks enable mempalace-auto-save`
+- **`disable <name>`**
+  - **Description:** Disable a specific hook by name or command key.
+  - **Usage:** `/hooks disable mempalace-auto-save`
+- **`enable-all`**
+  - **Description:** Globally enable execution of all lifecycle hooks.
+  - **Usage:** `/hooks enable-all`
+- **`disable-all`**
+  - **Description:** Globally disable execution of all lifecycle hooks.
+  - **Usage:** `/hooks disable-all`
+- **`reload`**
+  - **Description:** Reload lifecycle hook definitions from settings files.
+  - **Usage:** `/hooks reload`
+- **`test <name>`**
+  - **Description:** Execute a dry-run test of a hook by name or command key.
+  - **Usage:** `/hooks test mempalace-auto-save`
+
 ### `/mcp`
 
 - **Description:** Manage MCP servers configured in `settings.json` (`mcpServers`).

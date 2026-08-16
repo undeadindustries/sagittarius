@@ -345,9 +345,12 @@ func mergeRaw(global, project map[string]json.RawMessage) map[string]json.RawMes
 		merged[k] = v
 	}
 	for k, v := range project {
-		if k == "mcpServers" {
+		switch k {
+		case "mcpServers":
 			merged[k] = mergeMCPServersRaw(global[k], v)
-		} else {
+		case "hooks":
+			merged[k] = mergeHooksRaw(global[k], v)
+		default:
 			merged[k] = v
 		}
 	}
@@ -375,6 +378,36 @@ func mergeMCPServersRaw(globalRaw, projectRaw json.RawMessage) json.RawMessage {
 		m[k] = v
 	}
 	for k, v := range pServers {
+		m[k] = v
+	}
+	out, err := json.Marshal(m)
+	if err != nil {
+		return globalRaw
+	}
+	return out
+}
+
+// mergeHooksRaw shallow-merges two hooks JSON objects. Global is the base;
+// project entries add or replace individual event or control keys by name.
+func mergeHooksRaw(globalRaw, projectRaw json.RawMessage) json.RawMessage {
+	if len(projectRaw) == 0 {
+		return globalRaw
+	}
+	if len(globalRaw) == 0 {
+		return projectRaw
+	}
+	var gObj, pObj map[string]json.RawMessage
+	if err := json.Unmarshal(globalRaw, &gObj); err != nil {
+		return globalRaw
+	}
+	if err := json.Unmarshal(projectRaw, &pObj); err != nil {
+		return globalRaw
+	}
+	m := make(map[string]json.RawMessage, len(gObj)+len(pObj))
+	for k, v := range gObj {
+		m[k] = v
+	}
+	for k, v := range pObj {
 		m[k] = v
 	}
 	out, err := json.Marshal(m)

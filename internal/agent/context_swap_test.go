@@ -144,7 +144,7 @@ func TestNewContextManagerDoesNotEjectWriteFileContent(t *testing.T) {
 		Active: string(config.BuiltInOpenAI),
 		OpenAI: &config.ProviderInstanceConfig{ContextLimit: &smallLimit},
 	}}
-	mgr := NewContextManager(settings, nil, func() string { return "gpt-4o" }, nil, nil, "sess-test", nil)
+	mgr := NewContextManager(settings, nil, func() string { return "gpt-4o" }, nil, nil, "sess-test", nil, nil)
 	if mgr == nil {
 		t.Fatal("expected a context manager for the openai-chat provider")
 	}

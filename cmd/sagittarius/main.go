@@ -22,6 +22,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/credentials"
 	"github.com/undeadindustries/sagittarius/internal/goal"
 	"github.com/undeadindustries/sagittarius/internal/grill"
+	"github.com/undeadindustries/sagittarius/internal/hooks"
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 	"github.com/undeadindustries/sagittarius/internal/selfupdate"
@@ -883,6 +884,18 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		}
 	}
 
+	globalHome, _ := storage.EnsureGlobalHome()
+	plansDir := filepath.Join(wd, "docs", "plans")
+	hooksReg := hooks.NewRegistry(globalHome, wd, plansDir)
+	var globalHooks, projectHooks *config.HooksConfig
+	if docs.Global != nil {
+		globalHooks = docs.Global.GetHooks()
+	}
+	if docs.Project != nil {
+		projectHooks = docs.Project.GetHooks()
+	}
+	hooksReg.LoadConfig(globalHooks, projectHooks)
+
 	runnerCfg := agent.RunnerConfig{
 		Runtime:              runtime,
 		Generator:            gen,
@@ -905,6 +918,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		Snapshotter:                   snapMgr,
 		AllowFix:                      allowFix,
 		LivenessRelease:               livenessRelease,
+		HooksRegistry:                 hooksReg,
 	}
 	// Assign only when non-nil: a nil *os.File stored in the io.WriteCloser
 	// field would be a non-nil interface wrapping a nil pointer, breaking the
@@ -927,13 +941,23 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		runner.ActiveProviderID,
 		func() string { return runner.InteractionMode().String() },
 		sessID,
-		runner.RecordUsage))
+		runner.RecordUsage,
+		runner.OnWillCompress))
 	if reg := runtime.Registry(); reg != nil {
 		runner.SetRegistry(reg)
 	}
 	if genErr != nil {
 		runner.SetGeneratorError(genErr)
 	}
+
+	startSource := "startup"
+	if resume != "" {
+		startSource = "resume"
+	}
+	_, _ = runner.FireHookEvent(ctx, hooks.EventSessionStart, startSource, func(inp *hooks.HookInput) {
+		inp.SessionStartSource = startSource
+	}, nil)
+
 	return runner, docs, runtime, sessID, baseProviderID, nil
 }
 

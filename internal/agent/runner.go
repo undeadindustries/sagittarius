@@ -14,12 +14,14 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/undeadindustries/sagittarius/internal/atmention"
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/contextmgmt"
 	"github.com/undeadindustries/sagittarius/internal/goal"
 	"github.com/undeadindustries/sagittarius/internal/grill"
+	"github.com/undeadindustries/sagittarius/internal/hooks"
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/prompt"
 	"github.com/undeadindustries/sagittarius/internal/provider"
@@ -115,6 +117,8 @@ type RunnerConfig struct {
 	// lets the kernel release it instead, which is exactly the unclean-exit
 	// signal the resume banner relies on. Nil-safe. Best-effort and idempotent.
 	LivenessRelease func()
+	// HooksRegistry holds the lifecycle hooks registry.
+	HooksRegistry *hooks.Registry
 }
 
 // Runner orchestrates conversation history and provider streaming for the agent loop.
@@ -152,21 +156,26 @@ type Runner struct {
 	// systemBase + mode suffix. systemBase is the personality prompt + memory.
 	// memory is the AGENTS.md content alone (re-composed on rebuild). All three
 	// are guarded by modelMu (read alongside model in buildGenerateRequest).
-	system          string
-	systemBase      string
-	memory          string
-	approval        ApprovalMode
-	interactive     bool
-	workDir         string
-	workspace       *tools.Workspace
-	regMu           sync.RWMutex
-	registry        *tools.Registry
-	scheduler       *tools.Scheduler
-	historyMu       sync.RWMutex // guards history + turnCounter
-	history         []provider.Message
-	ctxMgrMu        sync.RWMutex
-	ctxMgr          *contextmgmt.Manager
-	turnCounter     int
+	system      string
+	systemBase  string
+	memory      string
+	approval    ApprovalMode
+	interactive bool
+	workDir     string
+	workspace   *tools.Workspace
+	regMu       sync.RWMutex
+	registry    *tools.Registry
+	scheduler   *tools.Scheduler
+	historyMu   sync.RWMutex // guards history + turnCounter + hookTurnIndex
+	history     []provider.Message
+	ctxMgrMu    sync.RWMutex
+	ctxMgr      *contextmgmt.Manager
+	turnCounter int
+	// hookTurnIndex is the user-turn count reported to hooks as turn_index. It is
+	// deliberately separate from turnCounter, which drives the context-management
+	// cadence and resets whenever history is replaced: a hook script gating on
+	// "every Nth turn" needs a count that survives --resume and /chat resume.
+	hookTurnIndex   int
 	state           State
 	stateMu         sync.RWMutex
 	lastRequest     *provider.GenerateRequest
@@ -224,6 +233,8 @@ type Runner struct {
 	// livenessRelease drops the session liveness lock on Close(); nil when the
 	// lock was not acquired (best-effort acquisition) or recording is disabled.
 	livenessRelease func()
+	hooksRegistry   *hooks.Registry
+	firstTurnOnce   sync.Once
 }
 
 // LoadedMemoryFiles returns the AGENTS.md paths that contributed to the system
@@ -280,6 +291,13 @@ func (r *Runner) Close() error {
 	if r == nil {
 		return nil
 	}
+	// Fire SessionEnd hook synchronously with a bounded 5s timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, _ = r.FireHookEvent(ctx, hooks.EventSessionEnd, "exit", func(inp *hooks.HookInput) {
+		inp.SessionEndReason = "exit"
+	}, nil)
+
 	// Record a clean exit before tearing anything down. The marker is the only
 	// way a later launch can tell a normal shutdown apart from a dropped
 	// connection or crash, both of which skip this defer. Best-effort: a
@@ -372,6 +390,14 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		initialSessionGrants: cfg.InitialSessionGrants,
 		verboseLog:           newVerboseLog(cfg.VerboseLog),
 		livenessRelease:      cfg.LivenessRelease,
+		hooksRegistry:        cfg.HooksRegistry,
+	}
+
+	// A resumed session has already had its first turn, so turn_index continues
+	// from the restored history and FirstTurn must not fire again.
+	if n := countUserTurns(history); n > 0 {
+		runner.hookTurnIndex = n
+		runner.firstTurnOnce.Do(func() {})
 	}
 
 	if cfg.InitialGoal != nil {
@@ -823,6 +849,28 @@ func (r *Runner) RunTurn(ctx context.Context, userInput string) (<-chan ui.Strea
 		}
 	}
 
+	// Fire BeforeAgent hook before adding user prompt to history.
+	hookResults, _ := r.FireHookEvent(ctx, hooks.EventBeforeAgent, "", func(inp *hooks.HookInput) {
+		inp.Prompt = userInput
+	}, nil)
+
+	for _, res := range hookResults {
+		if res.Output != nil {
+			if res.Output.IsBlocking() || res.Output.ShouldStop() {
+				r.turnActive.Store(false)
+				reason := res.Output.EffectiveReason("Request denied by hook")
+				ch := make(chan ui.StreamEvent, 2)
+				ch <- ui.StreamEvent{Type: ui.StreamError, Err: errors.New(reason)}
+				ch <- ui.StreamEvent{Type: ui.StreamDone}
+				close(ch)
+				return ch, nil
+			}
+			if addCtx := res.Output.AdditionalContext(); addCtx != "" {
+				parts = append(parts, provider.Part{Text: "\n\n" + addCtx})
+			}
+		}
+	}
+
 	r.setState(StateIdle)
 	r.metrics.recordTurn()
 	r.resetEditLoopStats()
@@ -832,13 +880,14 @@ func (r *Runner) RunTurn(ctx context.Context, userInput string) (<-chan ui.Strea
 		Role:  provider.RoleUser,
 		Parts: parts,
 	})
+	r.hookTurnIndex++
 	r.historyMu.Unlock()
 	if r.sessionRecorder != nil {
 		r.sessionRecorder.RecordUserMessage(userInput)
 	}
 
 	out := make(chan ui.StreamEvent, 8)
-	go r.runAgentLoop(ctx, out)
+	go r.runAgentLoop(ctx, userInput, out)
 	return out, nil
 }
 
@@ -881,7 +930,10 @@ func (r *Runner) RunHeadless(ctx context.Context, prompt string, out io.Writer) 
 	return nil
 }
 
-func (r *Runner) runAgentLoop(ctx context.Context, out chan<- ui.StreamEvent) {
+// runAgentLoop drives one turn to completion. userInput is this turn's prompt,
+// carried through so the AfterAgent/FirstTurn hook payloads describe the exchange
+// that just finished rather than the first one in the session.
+func (r *Runner) runAgentLoop(ctx context.Context, userInput string, out chan<- ui.StreamEvent) {
 	defer func() {
 		r.turnActive.Store(false)
 		close(out)
@@ -976,6 +1028,7 @@ outerLoop:
 					continue outerLoop
 				}
 				r.maybeAutoTitle(ctx, r.firstUserText(), turnReply.String())
+				r.fireAfterAgentHooks(ctx, userInput, turnReply.String(), out)
 				r.setState(StateDone)
 				out <- ui.StreamEvent{Type: ui.StreamDone}
 				return
@@ -1023,6 +1076,7 @@ outerLoop:
 		// User approved another batch — loop again with the same limit.
 	}
 
+	r.fireAfterAgentHooks(ctx, userInput, turnReply.String(), out)
 	r.setState(StateDone)
 	r.verboseLog.LogInfo("max tool rounds exceeded")
 	out <- ui.StreamEvent{Type: ui.StreamError, Text: "max tool rounds exceeded"}
@@ -1355,6 +1409,7 @@ func (r *Runner) schedulerOptions() []tools.SchedulerOption {
 			}
 		}),
 		tools.WithReadOnlyPolicy(r.readOnlyPolicy),
+		tools.WithHooks(r.beforeToolHook, r.afterToolHook),
 	)
 	return opts
 }
@@ -1608,6 +1663,7 @@ func (r *Runner) ClearHistory() {
 	defer r.historyMu.Unlock()
 	r.history = r.history[:0]
 	r.turnCounter = 0
+	r.hookTurnIndex = 0
 }
 
 // History returns a defensive copy of the current conversation history. The
@@ -1681,11 +1737,17 @@ func (r *Runner) firstUserText() string {
 
 // ReplaceHistory swaps the in-memory conversation history for a copy of h,
 // resets the context turn counter, and optionally sets the session grants.
+// Between-turns contract, like ClearHistory.
 func (r *Runner) ReplaceHistory(h []provider.Message, grants []string) {
 	r.historyMu.Lock()
 	r.history = append([]provider.Message(nil), h...)
 	r.turnCounter = 0
+	turns := countUserTurns(r.history)
+	r.hookTurnIndex = turns
 	r.historyMu.Unlock()
+	if turns > 0 {
+		r.firstTurnOnce.Do(func() {})
+	}
 	r.regMu.Lock()
 	r.initialSessionGrants = append([]string(nil), grants...)
 	r.regMu.Unlock()
@@ -1959,6 +2021,7 @@ func (r *Runner) Stats() ui.SessionStats {
 // fresh session instead of being appended to the cleared conversation. No-op
 // when session recording is disabled.
 func (r *Runner) RotateSession() {
+	r.firstTurnOnce = sync.Once{}
 	if r.sessionRecorder != nil {
 		r.sessionRecorder.Rotate()
 
@@ -1966,6 +2029,12 @@ func (r *Runner) RotateSession() {
 		r.autoTitleDone = false
 		r.titleAnnouncement = ""
 		r.autoTitleMu.Unlock()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_, _ = r.FireHookEvent(ctx, hooks.EventSessionStart, "clear", func(inp *hooks.HookInput) {
+			inp.SessionStartSource = "clear"
+		}, nil)
 	}
 }
 
@@ -1978,6 +2047,47 @@ func (r *Runner) CurrentSessionID() string {
 		return r.sessionRecorder.SessionID()
 	}
 	return ""
+}
+
+// SessionFilePath returns the JSONL file path of the current session, or "".
+func (r *Runner) SessionFilePath() string {
+	if r == nil {
+		return ""
+	}
+	if r.sessionRecorder != nil {
+		return r.sessionRecorder.FilePath()
+	}
+	return ""
+}
+
+// TurnCounter returns the number of user turns in this conversation, reported to
+// hooks as turn_index. It continues across --resume and /chat resume.
+func (r *Runner) TurnCounter() int {
+	if r == nil {
+		return 0
+	}
+	r.historyMu.RLock()
+	defer r.historyMu.RUnlock()
+	return r.hookTurnIndex
+}
+
+// countUserTurns counts genuine user prompts in history. Tool results are also
+// recorded with the user role, so a message whose parts are all function
+// responses is not a turn.
+func countUserTurns(h []provider.Message) int {
+	n := 0
+	for _, m := range h {
+		if m.Role != provider.RoleUser {
+			continue
+		}
+		for _, p := range m.Parts {
+			if p.FunctionResponse == nil {
+				n++
+				break
+			}
+		}
+	}
+	return n
 }
 
 // SessionSummary returns the current session title ("" when untitled), used by

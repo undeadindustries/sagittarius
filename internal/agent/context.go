@@ -55,6 +55,7 @@ func NewContextManager(
 	modeFn func() string,
 	sessionID string,
 	recordFn func(prov, model, mode string, inTok, outTok int, costUSD float64, costKnown bool),
+	onWillCompressFn func(ctx context.Context, trigger string),
 ) *contextmgmt.Manager {
 	liveModel := ""
 	if modelFn != nil {
@@ -74,6 +75,7 @@ func NewContextManager(
 		Enabled:                   true,
 		ContextLimit:              cm.ContextLimit,
 		SessionID:                 sessionID,
+		OnWillCompress:            onWillCompressFn,
 		MaskingEnabled:            cm.MaskingEnabled,
 		MaskingProtectionFraction: cm.MaskingProtectionFraction,
 		MaskingPrunableFraction:   cm.MaskingPrunableFraction,

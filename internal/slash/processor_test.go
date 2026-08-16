@@ -13,6 +13,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/goal"
 	"github.com/undeadindustries/sagittarius/internal/grill"
+	"github.com/undeadindustries/sagittarius/internal/hooks"
 	"github.com/undeadindustries/sagittarius/internal/mcp"
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
@@ -339,6 +340,16 @@ func (m *mockHooks) CheckForUpdate(ctx context.Context, force bool) (*selfupdate
 
 func (m *mockHooks) InstallUpdate(ctx context.Context) (*selfupdate.InstallResult, error) {
 	return &selfupdate.InstallResult{Version: "v1.0.0"}, nil
+}
+
+func (m *mockHooks) HooksList() []hooks.HookInfo              { return nil }
+func (m *mockHooks) SetHooksGlobalEnabled(enabled bool)       {}
+func (m *mockHooks) SetHookEnabled(name string, enabled bool) {}
+func (m *mockHooks) ReloadHooks(ctx context.Context) (string, error) {
+	return "Lifecycle hooks reloaded from settings.", nil
+}
+func (m *mockHooks) TestHook(ctx context.Context, name string) (string, error) {
+	return "Hook test succeeded", nil
 }
 
 func testDeps(t *testing.T, settings *config.Settings) (slash.Deps, *config.Loader, *mockHooks) {
