@@ -1,8 +1,11 @@
 package bgproc
 
 import (
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
+	"strconv"
 	"syscall"
 	"testing"
 	"time"
@@ -96,5 +99,153 @@ func TestReaperIsSingleGoroutineAndStops(t *testing.T) {
 			t.Fatalf("reaper goroutine did not stop after Close (delta %d)", runtime.NumGoroutine()-baseline)
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+func TestCloseRemovesExitedLogsKeepsRunning(t *testing.T) {
+	mgr := NewManager()
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	running := exec.Command("sleep", "8")
+	if err := running.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = running.Process.Kill()
+		_ = running.Wait()
+	})
+
+	dir := t.TempDir()
+	runningLog := filepath.Join(dir, "running.log")
+	exitedLog := filepath.Join(dir, "exited.log")
+	for _, p := range []string{runningLog, exitedLog} {
+		if err := os.WriteFile(p, []byte("log"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	dead := exec.Command("true")
+	if err := dead.Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr.Register(running.Process.Pid, running.Process.Pid, "sleep 8", runningLog)
+	mgr.Register(dead.Process.Pid, 0, "true", exitedLog)
+	mgr.reapOnce()
+
+	if err := mgr.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(exitedLog); !os.IsNotExist(err) {
+		t.Fatalf("exited log still present: %v", err)
+	}
+	if _, err := os.Stat(runningLog); err != nil {
+		t.Fatalf("running log was removed: %v", err)
+	}
+	p, ok := mgr.Get(dead.Process.Pid)
+	if !ok {
+		t.Fatal("exited process row missing from List")
+	}
+	if p.LogPath != "" {
+		t.Fatalf("exited LogPath = %q, want empty after Close", p.LogPath)
+	}
+}
+
+// TestSharedLogSurvivesParentExit covers the `&`-child case: captureJobs
+// registers the child with the parent shell's log path, so the parent exiting
+// must not unlink a log the live child is still writing to.
+func TestSharedLogSurvivesParentExit(t *testing.T) {
+	mgr := NewManager()
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	child := exec.Command("sleep", "8")
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = child.Process.Kill()
+		_ = child.Wait()
+	})
+
+	sharedLog := filepath.Join(t.TempDir(), "shared.log")
+	if err := os.WriteFile(sharedLog, []byte("log"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	parent := exec.Command("true")
+	if err := parent.Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr.Register(parent.Process.Pid, parent.Process.Pid, "sleep 8 &", sharedLog)
+	mgr.Register(child.Process.Pid, 0, "sleep 8 & (& child)", sharedLog)
+	mgr.reapOnce()
+
+	if _, err := os.Stat(sharedLog); err != nil {
+		t.Fatalf("shared log removed while the child is running: %v", err)
+	}
+	if err := mgr.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(sharedLog); err != nil {
+		t.Fatalf("Close removed a log the running child still writes to: %v", err)
+	}
+	live, ok := mgr.Get(child.Process.Pid)
+	if !ok {
+		t.Fatal("child process row missing")
+	}
+	if live.LogPath != sharedLog {
+		t.Fatalf("child LogPath = %q, want %q", live.LogPath, sharedLog)
+	}
+}
+
+func TestRetainedLogsEvictOldest(t *testing.T) {
+	mgr := NewManager()
+	t.Cleanup(func() { _ = mgr.Close() })
+
+	dir := t.TempDir()
+	n := maxRetainedLogs + 1
+	pids := make([]int, n)
+	logs := make([]string, n)
+	seen := map[int]bool{}
+	for i := 0; i < n; i++ {
+		cmd := exec.Command("true")
+		if err := cmd.Run(); err != nil {
+			t.Fatal(err)
+		}
+		pids[i] = cmd.Process.Pid
+		if seen[pids[i]] {
+			t.Fatalf("PID %d reused; cannot test eviction", pids[i])
+		}
+		seen[pids[i]] = true
+		logs[i] = filepath.Join(dir, "log-"+strconv.Itoa(i)+".log")
+		if err := os.WriteFile(logs[i], []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		mgr.Register(pids[i], 0, "true", logs[i])
+	}
+	mgr.reapOnce()
+
+	if _, err := os.Stat(logs[0]); !os.IsNotExist(err) {
+		t.Fatalf("oldest log still present: %v", err)
+	}
+	oldest, ok := mgr.Get(pids[0])
+	if !ok {
+		t.Fatal("oldest process missing from List")
+	}
+	if oldest.LogPath != "" {
+		t.Fatalf("evicted LogPath = %q, want empty", oldest.LogPath)
+	}
+	if oldest.Status != StatusExited {
+		t.Fatalf("status = %s, want exited", oldest.Status)
+	}
+	for i := 1; i < n; i++ {
+		if _, err := os.Stat(logs[i]); err != nil {
+			t.Fatalf("retained log %d missing: %v", i, err)
+		}
+		p, ok := mgr.Get(pids[i])
+		if !ok || p.LogPath != logs[i] {
+			t.Fatalf("pid %d LogPath = %q, want %q", pids[i], p.LogPath, logs[i])
+		}
 	}
 }

@@ -175,8 +175,14 @@ type Model struct {
 	modelsFrom screen
 
 	// modelsAddReturn records the screen that opened the manual model-name entry
-	// (screenModels activation vs screenAddModels add flow) so commit returns there.
+	// (screenModels activation vs screenAddModels add flow) so commit and Esc
+	// return there.
 	modelsAddReturn screen
+
+	// typedModels are names the user added with `a` during this discovery
+	// session (not the catalog). The add-flow completion curates these plus
+	// the chosen default so /model lists them without dumping the catalog.
+	typedModels []string
 }
 
 // New constructs the wizard at the menu screen with the current provider list.
@@ -279,6 +285,7 @@ func (m Model) handleModelsLoaded(msg modelsLoadedMsg) Model {
 		m.modelsErr = ""
 	}
 	m.models = msg.models
+	m.typedModels = nil
 	if len(m.models) == 0 {
 		m.models = m.seedModels(msg.id)
 	}
@@ -952,7 +959,11 @@ func (m Model) handleTextEntryKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		case screenSetKey:
 			m.screen = screenEdit
 		case screenModelsAdd:
-			m.screen = screenModels
+			// Return to whichever screen opened the entry (add-flow vs activate).
+			m.screen = m.modelsAddReturn
+			if m.screen != screenAddModels && m.screen != screenModels {
+				m.screen = screenModels
+			}
 		default:
 			m.screen = screenEdit
 		}
@@ -1019,7 +1030,7 @@ func (m Model) enterAddTemplate() Model {
 	for _, p := range config.ProviderPresets {
 		opts = append(opts, pickerOption{id: p.ID, label: p.DisplayName})
 	}
-	opts = append(opts, pickerOption{id: "", label: "Custom (blank) — enter a URL manually"})
+	opts = append(opts, pickerOption{id: "", label: "Custom Local (blank) — enter a URL manually"})
 	m.pickerOptions = opts
 	m.cursor = 0
 	m.listOffset = 0
@@ -1298,6 +1309,19 @@ func (m Model) selectAddModel() (Model, tea.Cmd) {
 		return m, nil
 	}
 	model := m.models[m.cursor]
+	// Curate the chosen default plus any names typed with `a`. Do not dump
+	// the discovered catalog — that was an earlier, intentional change.
+	active := make([]string, 0, 1+len(m.typedModels))
+	active = append(active, model)
+	for _, extra := range m.typedModels {
+		if extra != model {
+			active = append(active, extra)
+		}
+	}
+	if err := m.deps.SetActiveModels(m.ctx, m.targetID, active); err != nil {
+		m.errMsg = err.Error()
+		return m, nil
+	}
 	if err := m.deps.SetModel(m.ctx, m.targetID, model); err != nil {
 		m.errMsg = err.Error()
 		return m, nil
@@ -1328,6 +1352,7 @@ func (m Model) commitModelsAdd(name string) (Model, tea.Cmd) {
 		}
 	}
 	m.models = append(m.models, name)
+	m.typedModels = append(m.typedModels, name)
 	m.cursor = len(m.models) - 1
 	m.modelsErr = ""
 	// The add flow (screenAddModels) picks a single default; the activation

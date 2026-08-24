@@ -51,15 +51,18 @@ func renderMarkdown(text string, width int, th theme.Theme) []string {
 	return out
 }
 
-// renderCodeLine renders a verbatim code line with a left bar, truncated (not
-// wrapped) so indentation is preserved.
+// renderCodeLine renders a verbatim code line, truncated (not wrapped) so
+// indentation is preserved. There is no left-bar prefix: a copyable "│ "
+// gutter made mouse-select paste unusable for commands the model asked the
+// user to run. Theme.Code still distinguishes the block from prose.
 func renderCodeLine(line string, width int, th theme.Theme) []string {
-	const bar = "│ "
-	avail := max(width-lipgloss.Width(bar), 1)
-	if lipgloss.Width(line) > avail {
-		line = truncateVisible(line, avail)
+	if width < 1 {
+		width = 1
 	}
-	return []string{th.Code.Render(bar + line)}
+	if lipgloss.Width(line) > width {
+		line = truncateVisible(line, width)
+	}
+	return []string{th.Code.Render(line)}
 }
 
 // renderProseLine handles headings, bullets, and paragraphs with inline styling.

@@ -187,7 +187,7 @@ func TestBackgroundedResultMarkerNamesLogFile(t *testing.T) {
 	if err := os.WriteFile(logPath, []byte(strings.Repeat("x", maxModelOutputBytes+128)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got := backgroundedResult(42, logPath, true, 0)
+	got := backgroundedResult(42, logPath, true, 0, nil)
 	out, _ := got["output"].(string)
 	if strings.Contains(out, "full output in spill file") {
 		t.Fatalf("backgrounded marker claimed a spill file: %q", out)

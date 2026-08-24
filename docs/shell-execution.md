@@ -34,6 +34,19 @@ Sagittarius implements a robust, feature-complete shell execution system designe
    than a spill file. The same spill pattern applies to large `grep_search` and `find_symbol`
    result text.
 
+6. **Capped background logs (AD-110)**
+   Each command's PTY log in `/tmp/sagittarius-shell-*.log` is rotated in place at 8 MiB
+   (most recent bytes kept, with a marker naming the cap). A TTY-aware child such as
+   `lsblk -f` can emit unbounded column padding through a PTY; without the cap that
+   filled a disk (479 GB observed). Write errors (including ENOSPC / disk full) are
+   logged once and further output is discarded while the PTY is still drained so the
+   child does not block; the tool result then carries that error instead of a silent
+   `(empty)` (AD-111). At most 16
+   exited-process logs are retained (`/bgproc` still lists the row with an empty path);
+   `Close` deletes exited logs and a startup sweep removes `/tmp` artifacts older than
+   24 hours. Unlinking an open log does not free space — only the writer stopping
+   (or a process exit that closes the fd) does.
+
 ## Safety & Process Groups
 
 Commands are spawned in their own Process Group (`Setpgid: true` implicitly via `pty.Start`). When a command is canceled (via `Esc`), a `SIGKILL` is dispatched to the entire process group (`-pid`), ensuring that no orphaned children or zombie processes are left behind.

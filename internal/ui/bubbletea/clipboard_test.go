@@ -41,7 +41,7 @@ func TestHandleClipboardResult(t *testing.T) {
 		wantText  string
 		wantCmd   bool
 	}{
-		{"local", nil, roleInfo, "Copied last response to the clipboard.", false},
+		{"local", nil, roleInfo, "Copied to the clipboard.", false},
 		{"osc52", clipboard.ErrUnavailable, roleInfo, "OSC 52", true},
 		{"failure", errors.New("boom"), roleError, "Clipboard copy failed: boom", false},
 	}

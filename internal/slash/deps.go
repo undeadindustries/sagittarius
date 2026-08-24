@@ -94,7 +94,7 @@ type Hooks interface {
 	// summary and returns a human-readable result message.
 	ForceCompressHistory(ctx context.Context) (string, error)
 	// LastAssistantText returns the most recent assistant response text, or ""
-	// when there is none. Used by /copy.
+	// when there is none. Used by /copy and /copy code.
 	LastAssistantText() string
 	// SessionStatsText returns session telemetry formatted as plain text for the
 	// /stats command. section is "" or "session" (full summary), "model", or "tools".

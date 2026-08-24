@@ -33,8 +33,11 @@ func TestMarkdownFencedCode(t *testing.T) {
 	if strings.Contains(joined, "```") {
 		t.Errorf("code fences should be hidden:\n%s", joined)
 	}
-	if !strings.Contains(joined, "│ code_line()") {
-		t.Errorf("code line missing left bar:\n%s", joined)
+	if !strings.Contains(joined, "code_line()") {
+		t.Errorf("code line missing:\n%s", joined)
+	}
+	if strings.Contains(joined, "│") {
+		t.Errorf("fenced code must not paint a copyable gutter:\n%s", joined)
 	}
 	if !strings.Contains(joined, "before") || !strings.Contains(joined, "after") {
 		t.Errorf("prose around code missing:\n%s", joined)

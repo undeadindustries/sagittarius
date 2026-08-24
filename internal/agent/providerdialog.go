@@ -162,13 +162,12 @@ func (d *providerDialogDeps) SetAPIKey(ctx context.Context, id, key string) erro
 }
 
 func (d *providerDialogDeps) AddCustomProvider(ctx context.Context, id string, def config.CustomProviderDefinition, apiKey string) error {
-	if d.loader() == nil || d.settings() == nil {
+	if d.app == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	if err := provider.AddCustomProvider(d.settings(), id, def); err != nil {
-		return err
-	}
-	if err := d.loader().Save(d.settings()); err != nil {
+	if err := d.app.persistGlobal(func(s *config.Settings) error {
+		return provider.AddCustomProvider(s, id, def)
+	}); err != nil {
 		return err
 	}
 	if apiKey != "" {
@@ -180,29 +179,32 @@ func (d *providerDialogDeps) AddCustomProvider(ctx context.Context, id string, d
 }
 
 func (d *providerDialogDeps) RemoveCustomProvider(ctx context.Context, id string) error {
-	if d.loader() == nil || d.settings() == nil {
+	if d.app == nil {
 		return fmt.Errorf("settings not loaded")
 	}
 	wasActive := d.ActiveProviderID() == config.NormalizeProviderID(id)
-	if err := provider.RemoveCustomProvider(d.settings(), id); err != nil {
+	if err := d.app.persistGlobal(func(s *config.Settings) error {
+		return provider.RemoveCustomProvider(s, id)
+	}); err != nil {
 		return err
 	}
 	// Best-effort credential cleanup; ignore errors (key may not be stored).
 	_ = credentials.DeleteProviderAPIKey(ctx, id)
 
 	if !wasActive {
-		return d.loader().Save(d.settings())
+		return nil
 	}
 
 	// RemoveCustomProvider blanked providers.active. Promote another activated
 	// model so the rebuilt runner targets a valid provider instead of failing
 	// with "no active provider configured" (leaving the live generator pointed
 	// at the deleted provider). SelectCurrentModel persists settings itself.
-	fallback, ok := firstActivatedModel(d.settings())
+	fallback, ok := firstActivatedModel(d.app.effectiveSettings())
 	if !ok {
-		// No provider left to fall back to; persist the cleared active state.
-		// The stale generator is unavoidable until a new provider is added.
-		return d.loader().Save(d.settings())
+		// No provider left to fall back to; persistGlobal already saved the
+		// cleared active state. The stale generator is unavoidable until a
+		// new provider is added.
+		return nil
 	}
 	if err := provider.SelectCurrentModel(d.loader(), d.settings(), fallback.ProviderID, fallback.Model); err != nil {
 		return fmt.Errorf("removed provider but selecting a fallback model failed: %w", err)

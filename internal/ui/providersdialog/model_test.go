@@ -327,6 +327,39 @@ func TestAddFlowDiscoversAndPicksModel(t *testing.T) {
 	if deps.switched != "auto-id" {
 		t.Fatalf("switched = %q, want auto-id", deps.switched)
 	}
+	if got := deps.activeModels["auto-id"]; len(got) != 1 || got[0] != "qwen3" {
+		t.Fatalf("activeModels = %v, want [qwen3]", got)
+	}
+}
+
+func TestSelectAddModelPersistsTypedExtras(t *testing.T) {
+	deps := newFakeDeps()
+	m := New(context.Background(), deps)
+	m.targetID = "auto-id"
+	m.models = []string{"qwen3", "llama3", "typed-extra"}
+	m.typedModels = []string{"typed-extra"}
+	m.cursor = 0
+	m, _ = m.selectAddModel()
+	got := deps.activeModels["auto-id"]
+	if len(got) != 2 || got[0] != "qwen3" || got[1] != "typed-extra" {
+		t.Fatalf("activeModels = %v, want [qwen3 typed-extra] (chosen default + typed extras, not the catalog)", got)
+	}
+}
+
+func TestEscFromModelsAddReturnsToAddFlow(t *testing.T) {
+	deps := newFakeDeps()
+	m := New(context.Background(), deps)
+	m.screen = screenAddModels
+	m.models = []string{"qwen3"}
+	m.targetID = "auto-id"
+	m, _ = send(m, key("a"))
+	if m.screen != screenModelsAdd {
+		t.Fatalf("screen = %d, want screenModelsAdd", m.screen)
+	}
+	m, _ = send(m, key("esc"))
+	if m.screen != screenAddModels {
+		t.Fatalf("esc screen = %d, want screenAddModels (not the activation list)", m.screen)
+	}
 }
 
 func TestToggleAllChecked(t *testing.T) {
@@ -969,6 +1002,9 @@ func TestAddOpensTemplatePicker(t *testing.T) {
 	// Blank entry is last and has an empty id.
 	if last := m.pickerOptions[len(m.pickerOptions)-1]; last.id != "" {
 		t.Fatalf("last option id = %q, want empty (Blank)", last.id)
+	}
+	if last := m.pickerOptions[len(m.pickerOptions)-1]; !strings.Contains(last.label, "Custom Local") {
+		t.Fatalf("last option label = %q, want Custom Local", last.label)
 	}
 }
 

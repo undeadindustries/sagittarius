@@ -143,6 +143,26 @@ func TestSetActiveModelsPersistsCuratedSet(t *testing.T) {
 	}
 }
 
+func TestSetModelConfigReasoningEffortDefaultClears(t *testing.T) {
+	t.Parallel()
+	s := openAISettings()
+	s.Providers.OpenAI.Models = map[string]config.ProviderModelConfig{
+		"gpt-4o": {ReasoningEffort: "high"},
+	}
+
+	for _, value := range []string{"", "default", "adaptive", "DEFAULT"} {
+		if err := SetModelConfig(s, "openai", "gpt-4o", "reasoningEffort", value); err != nil {
+			t.Fatalf("SetModelConfig(%q): %v", value, err)
+		}
+		got := s.Providers.OpenAI.Models["gpt-4o"].ReasoningEffort
+		if got != "" {
+			t.Fatalf("SetModelConfig(%q) left reasoningEffort = %q, want empty (inherit)", value, got)
+		}
+		// Restore a pin so the next iteration actually clears something.
+		s.Providers.OpenAI.Models["gpt-4o"] = config.ProviderModelConfig{ReasoningEffort: "high"}
+	}
+}
+
 func TestActiveModelsForReturnsCuratedSet(t *testing.T) {
 	t.Parallel()
 	s := openAISettings()

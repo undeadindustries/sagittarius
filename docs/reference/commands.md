@@ -167,6 +167,22 @@ and resets to off on the next launch.
   you bring it back on demand. `/toolkit dismiss` sets the same flag before
   first launch (e.g. scripted installs) or clears any future auto-show.
 
+### `/copy`
+
+- **Description:** Copy the last assistant reply to the clipboard, without the
+  TUI's scrollback chrome (no `✦` prefix, no fenced-code gutter).
+- **Usage:**
+  - `/copy`: the full last reply, including markdown fences and prose.
+  - `/copy code`: only the bodies of fenced code blocks in that reply (language
+    tags and ` ``` ` markers stripped). Multiple blocks are joined with a blank
+    line. Use this when the model asked you to paste commands into a shell or
+    another prompt.
+- **Notes:** Mouse-select in the TUI still copies whatever is on screen. Fenced
+  code is styled but no longer prefixed with a copyable `│ ` bar, so a drag
+  selection of a command is pasteable. Tool-card borders (write_file diffs) are
+  unchanged; `/copy` never includes those. If the last reply has no fenced
+  code, `/copy code` says so and copies nothing.
+
 ### `/providers`
 
 - **Description:** Manage provider connections — edit definitions, API keys, and
@@ -180,14 +196,14 @@ and resets to off on the next launch.
   that create ordinary custom providers you can edit or remove.
 - **Adding a provider (`a`) — template picker:** pressing `a` first shows a list
   of provider **templates** (OpenAI, OpenAI-Responses, OpenRouter, Anthropic,
-  DeepSeek, xAI, z.ai, Groq, Together, Mistral, Fireworks) plus a **Custom (blank)**
+  DeepSeek, xAI, z.ai, Groq, Together, Mistral, Fireworks) plus a **Custom Local (blank)**
   entry.
   - **Choosing a template** pre-fills the base URL, wire format, and API-key
     environment variable, then jumps straight to the **API key** step. The
     suggested provider id defaults to the template id (de-duplicated with a
     numeric suffix if it already exists). Any caveat (e.g. Anthropic's OpenAI-compat
     layer, z.ai's unavailable model discovery) is shown as a note.
-  - **Custom (blank)** starts the field-by-field flow:
+  - **Custom Local (blank)** starts the field-by-field flow:
     1. **Provider name** — display name (required).
     2. **URL or host** — full URL (`http://127.0.0.1:8000`) or bare host (`127.0.0.1`).
     3. **Port** — shown only when the URL above has no port; defaults to `8000`.
@@ -654,7 +670,7 @@ incrementally; track gaps in `AGENTS.md`.
 
 Implemented: `/about`, `/agent`, `/ask`, `/chat`, `/clear`, `/compress`,
 `/constraints add|list|clear`,
-`/copy`, `/debug`, `/diff`, `/goal`,
+`/copy` (`code`), `/debug`, `/diff`, `/goal`,
 `/grill`, `/init`, `/memory add|list|remove|reload`, `/mcp` (list, reload, add/edit/remove wizard),
 `/mode` (show, switch), `/modes` (override, clear headlessly), `/model`, `/models`, `/mouse`, `/plan`, `/reasoning`,
 `/resume`, `/settings` (curated browser), `/skills` (list, reload), `/agents`

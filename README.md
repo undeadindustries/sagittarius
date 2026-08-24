@@ -200,7 +200,7 @@ Sagittarius uses the terminal **alternate screen**, which takes over the full wi
 
 1. **Default (recommended):** Leave mouse scrolling off. Click and drag in the terminal to select text, then copy with your terminal's usual shortcut (`Ctrl+Shift+C` in many Linux terminals, `Cmd+C` on macOS after selection, or right-click → Copy).
 2. **If you enabled mouse scrolling** (`Alt+M` or `/mouse on`): hold **`Shift`** while dragging to select text (standard xterm-style behavior when the app captures mouse events).
-3. **Last assistant reply:** run **`/copy`** to copy the most recent assistant message to the clipboard.
+3. **Last assistant reply:** run **`/copy`** to copy the most recent assistant message to the clipboard (raw markdown, no TUI chrome). Run **`/copy code`** to copy only fenced command/code blocks from that reply, so you can paste them into a shell without `│` bars or markdown fences.
 
 **To scroll:** use **`PgUp` / `PgDn`** or **`Shift+Up` / `Shift+Down`**, or enable wheel scrolling with **`Alt+M`** or **`/mouse on`**. Wheel scrolling is per-session and resets to off on the next launch.
 
@@ -232,7 +232,7 @@ If you prefer the mouse wheel, press **`Alt+M`** (or **`Option+M`** on macOS) or
 
 ### Why doesn't my terminal scrollback show the conversation after I quit?
 
-The alt-screen is cleared when Sagittarius exits. The exit summary (session stats, resume hint) is printed to normal scrollback after teardown. For a durable transcript, use **`/chat save`**, session JSONL under `~/.sagittarius/tmp/`, or copy passages with the mouse (or `/copy` for the last reply) before quitting.
+The alt-screen is cleared when Sagittarius exits. The exit summary (session stats, resume hint) is printed to normal scrollback after teardown. For a durable transcript, use **`/chat save`**, session JSONL under `~/.sagittarius/tmp/`, or copy passages with the mouse (or `/copy` / `/copy code` for the last reply) before quitting.
 
 ### How do I change mode or model quickly?
 

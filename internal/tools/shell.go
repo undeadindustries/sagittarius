@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"strings"
@@ -40,6 +42,12 @@ type shellTool struct {
 	autoBackgroundAfter time.Duration
 	bgMgr               *bgproc.Manager
 	spillDir            string
+	// maxLogBytes caps the per-command log file. Zero means maxShellLogBytes.
+	// Tests set a smaller value to assert rotation without writing megabytes.
+	maxLogBytes int64
+	// wrapLog, if set, wraps the PTY log writer. Tests inject a failing
+	// writer; production leaves it nil.
+	wrapLog func(io.Writer) io.Writer
 }
 
 func newShellTool(ws *Workspace, bgMgr *bgproc.Manager, spillDir string) Tool {
@@ -130,19 +138,26 @@ func (t *shellTool) ExecuteStream(ctx context.Context, args map[string]any, sink
 // The process is started under context.Background, not ctx, so a backgrounded
 // process outlives the agent turn; cancellation is handled explicitly below.
 func (t *shellTool) run(ctx context.Context, command string, explicitBackground bool, grace time.Duration, sink ToolOutputSink) (map[string]any, error) {
-	logFile, err := os.CreateTemp("", "sagittarius-shell-*.log")
+	logFile, err := os.CreateTemp("", shellLogPattern)
 	if err != nil {
 		return nil, fmt.Errorf("shell: create log file: %w", err)
 	}
 	logPath := logFile.Name()
 
-	jobsFile, err := os.CreateTemp("", "sagittarius-jobs-*.pid")
+	jobsFile, err := os.CreateTemp("", jobsPidPattern)
 	if err != nil {
+		_ = logFile.Close()
+		_ = os.Remove(logPath)
 		return nil, fmt.Errorf("shell: create jobs file: %w", err)
 	}
 	jobsPath := jobsFile.Name()
 	_ = jobsFile.Close()
-	defer func() { _ = os.Remove(jobsPath) }()
+	var backgrounded atomic.Bool
+	defer func() {
+		if !backgrounded.Load() {
+			_ = os.Remove(jobsPath)
+		}
+	}()
 
 	wrappedCommand := fmt.Sprintf(`trap 'jobs -p > %q' EXIT; %s`, jobsPath, command)
 
@@ -163,14 +178,37 @@ func (t *shellTool) run(ctx context.Context, command string, explicitBackground 
 	var isDone atomic.Bool
 
 	ioDone := make(chan struct{})
-	// Copy output from PTY to logFile and emulator
+	var logWriteErr atomic.Value
+	// Copy output from PTY to the capped log and emulator. The loop keeps
+	// draining after a write error so a full PTY buffer cannot freeze the
+	// child; it stops on a spinning zero-byte read, on Read error (including
+	// the master being closed after Wait), or after maxZeroReads.
 	go func() {
 		defer close(ioDone)
-		buf := make([]byte, 1024)
+		defer func() { _ = logFile.Close() }()
+		buf := make([]byte, ptyReadBufSize)
+		writer := t.newLogWriter(logFile)
+		var zeroReads int
+		var writeFailed bool
 		for {
 			n, err := f.Read(buf)
+			if n == 0 && err == nil {
+				zeroReads++
+				if zeroReads >= maxZeroReads {
+					slog.Warn("shell: PTY read spun on zero-byte reads; stopping drain", "path", logPath)
+					break
+				}
+				continue
+			}
+			zeroReads = 0
 			if n > 0 {
-				_, _ = logFile.Write(buf[:n])
+				if !writeFailed {
+					if _, werr := writer.Write(buf[:n]); werr != nil {
+						slog.Warn("shell: log write failed; discarding further output", "path", logPath, "err", werr)
+						writeFailed = true
+						logWriteErr.Store(werr)
+					}
+				}
 				if !isDone.Load() {
 					_, _ = term.Write(buf[:n])
 				}
@@ -179,7 +217,6 @@ func (t *shellTool) run(ctx context.Context, command string, explicitBackground 
 				break
 			}
 		}
-		_ = logFile.Close()
 	}()
 
 	waitErr := make(chan error, 1)
@@ -190,6 +227,10 @@ func (t *shellTool) run(ctx context.Context, command string, explicitBackground 
 		time.Sleep(50 * time.Millisecond)
 		_ = f.Close() // Close PTY after wait to unblock Read
 		waitErr <- err
+		if backgrounded.Load() {
+			t.captureJobs(jobsPath, command, logPath)
+			_ = os.Remove(jobsPath)
+		}
 	}()
 
 	var tailCancel context.CancelFunc
@@ -227,13 +268,15 @@ func (t *shellTool) run(ctx context.Context, command string, explicitBackground 
 		// Capture background jobs started by '&'
 		t.captureJobs(jobsPath, command, logPath)
 
-		return t.completedResult(logPath, err)
+		return t.completedResult(logPath, err, storedErr(&logWriteErr))
 	case <-ctx.Done():
 		isDone.Store(true)
 		if tailCancel != nil {
 			tailCancel()
 		}
 		_ = syscall.Kill(-pid, syscall.SIGKILL)
+		_ = f.Close()
+		<-ioDone
 		_ = os.Remove(logPath)
 		return nil, ctx.Err()
 	case <-timer.C:
@@ -249,8 +292,9 @@ func (t *shellTool) run(ctx context.Context, command string, explicitBackground 
 				sink(renderEmulator(term))
 			}
 			t.captureJobs(jobsPath, command, logPath)
-			return t.completedResult(logPath, err)
+			return t.completedResult(logPath, err, storedErr(&logWriteErr))
 		default:
+			backgrounded.Store(true)
 			isDone.Store(true)
 			if tailCancel != nil {
 				tailCancel()
@@ -258,7 +302,7 @@ func (t *shellTool) run(ctx context.Context, command string, explicitBackground 
 			if t.bgMgr != nil {
 				t.bgMgr.Register(pid, pid, command, logPath)
 			}
-			return backgroundedResult(pid, logPath, explicitBackground, grace), nil
+			return backgroundedResult(pid, logPath, explicitBackground, grace, storedErr(&logWriteErr)), nil
 		}
 	}
 }
@@ -285,18 +329,20 @@ func (t *shellTool) captureJobs(jobsPath, command, logPath string) {
 
 // completedResult builds the tool result for a command that ran to completion,
 // reading its captured output from the log file and mapping any non-zero exit.
-func (t *shellTool) completedResult(logPath string, waitErr error) (map[string]any, error) {
-	output := readLogSnapshot(logPath)
+// writeErr is the first PTY-log Write failure (nil if the drain wrote cleanly).
+func (t *shellTool) completedResult(logPath string, waitErr, writeErr error) (map[string]any, error) {
+	snapshot := readLogSnapshot(logPath)
 	_ = os.Remove(logPath)
-	if output == "" {
-		output = "(empty)"
-	}
+	output, errKey := applyLogWriteStatus(snapshot, writeErr)
 	spill := maybeSpillOutput(output, t.spillDir)
 	result := map[string]any{
 		"output":     spill.output,
 		"background": false,
 	}
 	applySpillMeta(result, spill)
+	if errKey != "" {
+		result["error"] = errKey
+	}
 	if waitErr != nil {
 		if exitErr, ok := waitErr.(*exec.ExitError); ok {
 			result["exit_code"] = exitErr.ExitCode()
@@ -310,7 +356,7 @@ func (t *shellTool) completedResult(logPath string, waitErr error) (map[string]a
 // backgroundedResult builds the tool result for a still-running process,
 // distinguishing an explicitly-requested background start from a foreground
 // command that was auto-backgrounded because it exceeded the threshold.
-func backgroundedResult(pid int, logPath string, explicit bool, after time.Duration) map[string]any {
+func backgroundedResult(pid int, logPath string, explicit bool, after time.Duration, writeErr error) map[string]any {
 	var msg string
 	if explicit {
 		msg = fmt.Sprintf("Started in background (pid %d). Output is being written to %s.", pid, logPath)
@@ -321,7 +367,8 @@ func backgroundedResult(pid int, logPath string, explicit bool, after time.Durat
 			after, pid, logPath,
 		)
 	}
-	if startup := readLogSnapshot(logPath); startup != "" {
+	startup := readLogSnapshot(logPath)
+	if startup != "" {
 		// The live log_file already holds the full stream; cap only what we
 		// echo back so a huge startup banner does not bloat the next turn.
 		head, tail, omitted := splitHeadTail(startup, maxModelOutputBytes)
@@ -332,12 +379,19 @@ func backgroundedResult(pid int, logPath string, explicit bool, after time.Durat
 			msg += "\nOutput so far:\n" + assemble(head, tail, marker)
 		}
 	}
-	return map[string]any{
+	if writeErr != nil {
+		msg += "\n" + logWriteErrorMessage(writeErr)
+	}
+	result := map[string]any{
 		"output":     msg,
 		"background": true,
 		"pid":        pid,
 		"log_file":   logPath,
 	}
+	if writeErr != nil && startup == "" {
+		result["error"] = logWriteErrorMessage(writeErr)
+	}
+	return result
 }
 
 // readLogSnapshot reads the current contents of a command's log file, returning
@@ -348,4 +402,12 @@ func readLogSnapshot(path string) string {
 		return ""
 	}
 	return strings.TrimSpace(ansi.Strip(string(data)))
+}
+
+func storedErr(v *atomic.Value) error {
+	if v == nil {
+		return nil
+	}
+	e, _ := v.Load().(error)
+	return e
 }

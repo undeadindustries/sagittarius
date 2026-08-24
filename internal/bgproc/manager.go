@@ -15,6 +15,11 @@ import (
 // chunk is interesting and reading a multi-MiB log inline would stall the UI.
 const tailBytes = 64 << 10
 
+// maxRetainedLogs is how many exited-process logs we keep. Past this, the
+// oldest log is unlinked so a long session cannot accumulate unbounded dead
+// logs. The Process row stays in List() with an empty LogPath.
+const maxRetainedLogs = 16
+
 // ProcessStatus represents the state of a background process.
 type ProcessStatus string
 
@@ -42,6 +47,8 @@ type Manager struct {
 	mu        sync.RWMutex
 	processes map[int]*Process
 	ordered   []int
+	// exitedWithLog is a FIFO of PIDs whose logs we still hold after exit.
+	exitedWithLog []int
 
 	// One reaper goroutine watches every tracked PID, started lazily on the
 	// first Register and cancelled by Close — replacing the previous
@@ -107,8 +114,8 @@ func (m *Manager) reapLoop() {
 
 // reapOnce marks any running process whose PID has disappeared as exited.
 func (m *Manager) reapOnce() {
+	var evict []string
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	for _, pid := range m.ordered {
 		p, ok := m.processes[pid]
 		if !ok || p.Status != StatusRunning {
@@ -116,7 +123,59 @@ func (m *Manager) reapOnce() {
 		}
 		if syscall.Kill(pid, 0) != nil {
 			p.markExited()
+			if p.LogPath != "" {
+				m.exitedWithLog = append(m.exitedWithLog, pid)
+			}
 		}
+	}
+	evict = m.evictExcessLogsLocked()
+	m.mu.Unlock()
+	removeLogs(evict)
+}
+
+func (m *Manager) evictExcessLogsLocked() []string {
+	var evict []string
+	for len(m.exitedWithLog) > maxRetainedLogs {
+		oldPID := m.exitedWithLog[0]
+		m.exitedWithLog = m.exitedWithLog[1:]
+		p, ok := m.processes[oldPID]
+		if !ok || p.LogPath == "" {
+			continue
+		}
+		if m.logPathInUseLocked(p.LogPath, oldPID) {
+			continue
+		}
+		evict = append(evict, p.LogPath)
+		p.LogPath = ""
+	}
+	return evict
+}
+
+// logPathInUseLocked reports whether a still-running tracked process other
+// than excludePID writes to path. A `&` child registered by the shell tool's
+// captureJobs shares its parent shell's log file, so the parent exiting must
+// not unlink a log the live child is still writing to.
+func (m *Manager) logPathInUseLocked(path string, excludePID int) bool {
+	if path == "" {
+		return false
+	}
+	for pid, p := range m.processes {
+		if pid == excludePID {
+			continue
+		}
+		if p.Status == StatusRunning && p.LogPath == path {
+			return true
+		}
+	}
+	return false
+}
+
+func removeLogs(paths []string) {
+	for _, path := range paths {
+		if path == "" {
+			continue
+		}
+		_ = os.Remove(path)
 	}
 }
 
@@ -127,12 +186,30 @@ func (p *Process) markExited() {
 	p.ExitCode = -1
 }
 
-// Close stops the reaper goroutine. Safe to call multiple times; tracked
-// process records remain readable after close.
+// Close stops the reaper goroutine and removes logs of processes already
+// marked exited, skipping any log a still-running process shares. Running
+// processes keep their logs — the startup sweep reclaims them after
+// staleArtifactAge. Safe to call multiple times; tracked process records
+// remain readable after close.
 func (m *Manager) Close() error {
 	if m.stop != nil {
 		m.stop()
 	}
+	var paths []string
+	m.mu.Lock()
+	for pid, p := range m.processes {
+		if p.Status != StatusExited || p.LogPath == "" {
+			continue
+		}
+		if m.logPathInUseLocked(p.LogPath, pid) {
+			continue
+		}
+		paths = append(paths, p.LogPath)
+		p.LogPath = ""
+	}
+	m.exitedWithLog = nil
+	m.mu.Unlock()
+	removeLogs(paths)
 	return nil
 }
 

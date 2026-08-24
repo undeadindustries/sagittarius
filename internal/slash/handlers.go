@@ -71,28 +71,6 @@ func handleCompress(ctx *Context) Result {
 	return InfoResult(msg)
 }
 
-func copyCommand() Command {
-	return Command{
-		Name:        "copy",
-		Description: "Copy the last assistant response to the clipboard",
-		Handler:     handleCopy,
-	}
-}
-
-// handleCopy copies the most recent assistant response to the clipboard. The
-// actual copy is performed by the UI layer via Result.Clipboard so the slash
-// layer stays free of terminal I/O.
-func handleCopy(ctx *Context) Result {
-	if ctx.Deps.Hooks == nil {
-		return InfoResult("Clipboard unavailable.")
-	}
-	text := ctx.Deps.Hooks.LastAssistantText()
-	if text == "" {
-		return InfoResult("No assistant response to copy yet.")
-	}
-	return Result{Handled: true, Clipboard: text}
-}
-
 func quitCommand() Command {
 	return Command{
 		Name:        "quit",

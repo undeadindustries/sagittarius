@@ -2163,10 +2163,10 @@ func (m *model) copyToClipboard(text string) tea.Cmd {
 func (m *model) handleClipboardResult(msg clipboardResultMsg) tea.Cmd {
 	switch {
 	case msg.err == nil:
-		m.addBlock(roleInfo, "Copied last response to the clipboard.")
+		m.addBlock(roleInfo, "Copied to the clipboard.")
 		return nil
 	case errors.Is(msg.err, clipboard.ErrUnavailable):
-		m.addBlock(roleInfo, "Copied last response via terminal clipboard (OSC 52).")
+		m.addBlock(roleInfo, "Copied via terminal clipboard (OSC 52).")
 		return tea.Printf("%s", clipboard.OSC52Sequence(msg.text))
 	default:
 		m.addBlock(roleError, "Clipboard copy failed: "+msg.err.Error())

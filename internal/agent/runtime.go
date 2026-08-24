@@ -71,6 +71,7 @@ func NewRuntime(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 	extLoader := extensions.NewLoader()
 	skillMgr := skills.NewManager(ws.Root(), cfg.Trusted)
 	bgMgr := bgproc.NewManager()
+	_ = tools.SweepStaleShellArtifacts("", 0)
 	catalog, err := NewCatalog(CatalogConfig{
 		Workspace:          ws,
 		MCP:                mcp.NewManager(mcp.ManagerConfig{ClientName: cfg.ClientName, ClientVersion: cfg.ClientVersion}),
