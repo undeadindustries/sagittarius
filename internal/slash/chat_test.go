@@ -97,6 +97,74 @@ func TestChatSave(t *testing.T) {
 	}
 }
 
+// TestChatSaveArgParsing covers the tag/force split. A multi-word name used to
+// be truncated to its first word and the rest dropped in silence, so
+// "/chat save sglang testing" saved a checkpoint called "sglang".
+func TestChatSaveArgParsing(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		args      string
+		wantTag   string
+		wantForce bool
+	}{
+		{args: "sglang", wantTag: "sglang", wantForce: false},
+		{args: "sglang testing", wantTag: "sglang-testing", wantForce: false},
+		{args: "sglang testing force", wantTag: "sglang-testing", wantForce: true},
+		{args: "sglang   testing", wantTag: "sglang-testing", wantForce: false},
+		{args: "sglang --force", wantTag: "sglang", wantForce: true},
+		{args: "sglang -f", wantTag: "sglang", wantForce: true},
+		// Only a trailing token is the flag, so "force" mid-name is part of it.
+		{args: "my force checkpoint", wantTag: "my-force-checkpoint", wantForce: false},
+		// A lone "force" has to be the tag: there is nothing else to name.
+		{args: "force", wantTag: "force", wantForce: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.args, func(t *testing.T) {
+			deps, _, hooks := testDeps(t, nil)
+			p := slash.NewProcessor()
+
+			res := p.Process(context.Background(), "/chat save "+tc.args, deps)
+			if res.Err != nil {
+				t.Fatalf("unexpected error: %v", res.Err)
+			}
+			if hooks.savedTag != tc.wantTag {
+				t.Errorf("tag = %q, want %q", hooks.savedTag, tc.wantTag)
+			}
+			if hooks.savedForce != tc.wantForce {
+				t.Errorf("force = %v, want %v", hooks.savedForce, tc.wantForce)
+			}
+			if !strings.Contains(strings.Join(res.Messages, "\n"), tc.wantTag) {
+				t.Errorf("output must echo the resolved tag %q: %v", tc.wantTag, res.Messages)
+			}
+		})
+	}
+}
+
+// TestChatCheckpointTagRoundTrip asserts resume and delete normalize a
+// multi-word name the same way save does, so a name saved in two words is
+// reachable by typing it the same way.
+func TestChatCheckpointTagRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	for _, cmd := range []string{"/chat resume", "/chat load", "/chat delete"} {
+		t.Run(cmd, func(t *testing.T) {
+			deps, _, _ := testDeps(t, nil)
+			p := slash.NewProcessor()
+
+			res := p.Process(context.Background(), cmd+" sglang testing", deps)
+			if res.Err != nil {
+				t.Fatalf("unexpected error: %v", res.Err)
+			}
+			joined := strings.Join(res.Messages, "\n")
+			if !strings.Contains(joined, "sglang-testing") {
+				t.Fatalf("%s must normalize the tag to sglang-testing: %q", cmd, joined)
+			}
+		})
+	}
+}
+
 func TestChatShareMarkdown(t *testing.T) {
 	t.Parallel()
 	deps, _, hooks := testDeps(t, nil)

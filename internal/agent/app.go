@@ -224,7 +224,6 @@ func (a *App) ComposerStatus() ui.ComposerStatus {
 		}
 		a.runner.modelMu.RLock()
 		cs.ReadOnlyPosture = a.runner.readOnlyPosture
-		cs.ReadOnlyConversational = a.runner.readOnlyConversational
 		a.runner.modelMu.RUnlock()
 		// Surface the pending auto-title announcement (prompt mode). Peek — the
 		// TUI latches it locally and owns the shown-once lifecycle; the composer

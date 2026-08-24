@@ -145,8 +145,8 @@ and resets to off on the next launch.
   export the chat, and debug the last request.
 - **Usage:**
   - `/chat list`: List saved checkpoints and recent sessions.
-  - `/chat save <tag> [force]`: Save the current conversation as a named checkpoint (`force` overwrites).
-  - `/chat resume <tag>` (alias `/chat load`): Restore a checkpoint into the live session.
+  - `/chat save <tag> [force]`: Save the current conversation as a named checkpoint (a trailing `force` overwrites an existing one). A tag becomes a filename, so it is limited to letters, digits, `.`, `_` and `-`; a multi-word name is joined with dashes (`/chat save sglang testing` saves `sglang-testing`) and the resolved tag is echoed back.
+  - `/chat resume <tag>` (alias `/chat load`): Restore a checkpoint into the live session. Tags are normalized as in `save`, so a two-word name resumes what it saved.
   - `/chat delete <tag>`: Delete a saved checkpoint.
   - `/chat rename <title>`: Set the current session's title (shown in session lists). Titles are trimmed, capped at 80 characters, and have control characters stripped.
   - `/chat fork`: Copy the current conversation into a **new** session and switch recording to it. The forked session inherits the title with a `" (fork)"` suffix and the recorded git branch. End-of-conversation only; fork-from-a-message is not yet supported.
@@ -359,6 +359,39 @@ and resets to off on the next launch.
 - **`clear`**
   - **Description:** Remove every standing constraint.
   - **Usage:** `/constraints clear`
+
+### `/readonly`
+
+- **Description:** Set a durable, session-wide read-only inspection posture.
+  While it is on, file writes, `edit`, `save_memory`, MCP tools, and any shell
+  command the read-only classifier scores as mutating are denied by the
+  scheduler, whatever the interaction mode says. Read-only shell commands
+  (`systemctl status`, `journalctl`, `nginx -t`, SQL `SELECT`) still run;
+  unrecognized ones prompt for confirmation. The posture survives `--resume`
+  and never expires on its own.
+- **Only two things gate tools:** the interaction mode (`/plan` and `/ask` are
+  read-only) and this posture. Nothing is inferred from what you say — saying
+  "don't change anything yet" is honored by the model through the system
+  prompt, not by a hidden tool ban (see AD-107; before it, a phrase like that
+  set a lock that `/readonly off` could not clear).
+- **Getting out:** `/readonly off`, or switch to agent or debug mode, which
+  lifts the posture and says so. Switching to plan or ask leaves it set, so a
+  round trip through them does not silently drop it.
+- **See also:** `--read-only` sets the posture at startup. `/constraints` is an
+  instruction to the model rather than a tool gate.
+
+#### Sub-commands
+
+- **`on`**
+  - **Description:** Enable the read-only inspection posture.
+  - **Usage:** `/readonly on`
+- **`off`**
+  - **Description:** Disable it and allow changes again.
+  - **Usage:** `/readonly off`
+- **`status`**
+  - **Description:** Report whether the posture is currently enabled. Bare
+    `/readonly` does the same.
+  - **Usage:** `/readonly status`
 
 ### `/skills`
 
@@ -586,6 +619,7 @@ exercise it. See [agent-testing.md](../agent-testing.md) for end-to-end recipes.
 | `--approval-mode <default\|autoEdit\|yolo>` | Tool approval policy. `default` denies destructive tools headlessly; `yolo` runs all tools (path validation still applies). The fork alias `auto_edit` maps to `autoEdit`. |
 | `-y`, `--yolo` | Shorthand for `--approval-mode=yolo`. Cannot be combined with `--approval-mode`. |
 | `--mode <agent\|plan\|ask\|debug>` | Interaction mode for this run, overriding `sagittarius.defaultMode`. `ask` and `plan` enforce read-only tool policy. The fork's `--approval-mode plan` is not accepted; use `--mode plan` (AD-022). |
+| `--read-only` | Start with the durable read-only inspection posture set (see [`/readonly`](#readonly)). Independent of `--mode`; lift it in-session with `/readonly off` or by switching to agent or debug. |
 | `--slash <command>` | Run a single slash command headlessly (e.g. `--slash "/mode show"`, `--slash "/diff"`, `--slash "/undo"`) and exit. Mutually exclusive with `-p`. Commands that open an interactive dialog (bare `/providers`, `/models`) print a message and exit 2. |
 | `-d`, `--debug` | Raise `slog`'s level to debug for operational log lines (interactive: `~/.sagittarius/logs/sagittarius.log`; headless: stderr). Independent of `--log-verbose` below. |
 | `--log-verbose` | Write a full, human-readable transcript of every request sent to the model, every response, and every tool result to `~/.sagittarius/logs/chat-verbose-<session>.log`. Works with or without `--debug`, in interactive, headless (`-p`), and `--slash` runs. Intended for attaching to bug reports; rarely needed otherwise. Appends across `--resume` of the same session; a failure to open the file is a non-fatal warning, not a startup error. |

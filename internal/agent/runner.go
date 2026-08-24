@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
@@ -103,10 +102,6 @@ type RunnerConfig struct {
 	InitialConstraints []string
 	// InitialReadOnly seeds the standing session read-only posture.
 	InitialReadOnly *bool
-	// InitialReadOnlyConversational restores the turn-level conversational lock
-	// from a resumed session. Without it a "don't change anything yet" said
-	// before --resume would silently lift on restart.
-	InitialReadOnlyConversational *bool
 	// VerboseLog, when non-nil, receives a full timestamped transcript of every
 	// request sent to the provider and every response/tool result received
 	// (see --log-verbose). It is opt-in and independent of debug logging; the
@@ -151,10 +146,10 @@ type Runner struct {
 	model                string
 	providerDefaultModel string
 	modelPinned          bool
-	// readOnlyPosture tracks the durable session-wide read-only state.
+	// readOnlyPosture tracks the durable session-wide read-only state. It is
+	// the only source of the inspection gate: it is set deliberately, by
+	// /readonly on or --read-only, never inferred from what the user said.
 	readOnlyPosture bool
-	// readOnlyConversational tracks the turn-level conversational read-only lock.
-	readOnlyConversational bool
 	// reasoningOverride* implement the ephemeral, per-(provider,model)
 	// /reasoning pin. It replaces a former process-global (provider.
 	// SessionReasoningOverride) that could bleed across Runner instances and
@@ -444,9 +439,6 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 	}
 	if cfg.InitialReadOnly != nil {
 		runner.readOnlyPosture = *cfg.InitialReadOnly
-	}
-	if cfg.InitialReadOnlyConversational != nil {
-		runner.readOnlyConversational = *cfg.InitialReadOnlyConversational
 	}
 
 	if !cfg.OmitSessionTools {
@@ -748,24 +740,6 @@ func auxEvaluatorTarget(settings *config.Settings) (providerID, model string) {
 	return settings.Sagittarius.Goal.EvaluatorProvider, settings.Sagittarius.Goal.EvaluatorModel
 }
 
-// dedicatedAuxGenerator returns the configured off-band evaluator generator, or
-// nil when none is configured. Unlike auxGenerator it never falls back to the
-// primary generator: callers that run on every turn must not silently double
-// the user's spend on the main model, and on openai-responses an extra call
-// would advance the server-side response chain the real turn depends on.
-func (r *Runner) dedicatedAuxGenerator(ctx context.Context) provider.ContentGenerator {
-	p, m := auxEvaluatorTarget(r.settingsSnapshot())
-	if p == "" && m == "" {
-		return nil
-	}
-	gen, err := r.auxGenerator(ctx)
-	if err != nil {
-		slog.Debug("aux generator unavailable", "error", err)
-		return nil
-	}
-	return gen
-}
-
 // setProviderInstanceModel forces Model on the instance block for providerID so
 // ResolveEndpointConfig picks it up, mutating prov in place. It handles the
 // built-in named fields, the typed custom map, and the raw Extra passthrough
@@ -852,31 +826,6 @@ func (r *Runner) RunTurn(ctx context.Context, userInput string) (<-chan ui.Strea
 	}
 
 	r.verboseLog.LogTurnStart(userInput)
-
-	// Check conversational read-only intent. The classifier runs on every turn,
-	// so it only gets a generator when the user configured a dedicated one.
-	intent := classifyReadOnlyIntent(ctx, userInput, r.dedicatedAuxGenerator(ctx))
-	if intent != IntentNeutral {
-		changed := false
-		r.modelMu.Lock()
-		if intent == IntentLock && !r.readOnlyConversational {
-			r.readOnlyConversational = true
-			changed = true
-		} else if intent == IntentUnlock && r.readOnlyConversational {
-			r.readOnlyConversational = false
-			changed = true
-		}
-		locked := r.readOnlyConversational
-		r.modelMu.Unlock()
-		if changed {
-			if r.sessionRecorder != nil {
-				if err := r.sessionRecorder.SetReadOnlyConversational(locked); err != nil {
-					slog.Warn("record conversational read-only lock", "error", err)
-				}
-			}
-			r.applyModeSystemSuffix()
-		}
-	}
 
 	// Fire BeforeAgent hook before adding user prompt to history.
 	hookResults, _ := r.FireHookEvent(ctx, hooks.EventBeforeAgent, "", func(inp *hooks.HookInput) {
@@ -1326,14 +1275,13 @@ func (r *Runner) applyModeSystemSuffix() {
 		}
 	}
 
-	// Add read-only gate directive if the posture or lock is active
+	// Add the read-only gate directive if the durable posture is active.
 	r.modelMu.RLock()
 	roPosture := r.readOnlyPosture
-	roConv := r.readOnlyConversational
 	r.modelMu.RUnlock()
 
-	if roPosture || roConv {
-		directive := "**CRITICAL:** You are currently in READ-ONLY INSPECTION MODE. Mutating tools (writing files, making configuration changes, running non-inspection shell commands) are disabled and will be rejected. You MUST NOT attempt to use them. A text-only report of your findings is a correct and complete turn."
+	if roPosture {
+		directive := "**CRITICAL:** You are currently in READ-ONLY INSPECTION MODE. Mutating tools (writing files, making configuration changes, running non-inspection shell commands) are disabled and will be rejected. You MUST NOT attempt to use them. A text-only report of your findings is a correct and complete turn. If the user asks for a change, tell them to run `/readonly off` (or switch to agent mode, which lifts it) — this posture is set deliberately and does not clear on its own. Never tell them to restart."
 		if suffix != "" {
 			suffix = strings.TrimRight(suffix, "\n") + "\n\n" + directive
 		} else {
@@ -1465,8 +1413,10 @@ func (r *Runner) schedulerOptions() []tools.SchedulerOption {
 }
 
 // readOnlyPolicy reports whether the agent should force read-only tool gating.
-// It returns PolicyStrict for grill mode, PolicyInspect if a read-only lock is active,
-// or PolicyNone otherwise.
+// It returns PolicyStrict for grill mode, PolicyInspect while the durable
+// /readonly posture is set, or PolicyNone otherwise. Nothing else may gate
+// tools: the interaction mode owns its own gate, and a posture the user never
+// asked for has no way out (see AD-107).
 func (r *Runner) readOnlyPolicy() tools.ReadOnlyPolicy {
 	g := r.Grill()
 	if g != nil && g.Status != grill.StatusSummarizing && g.Status != grill.StatusComplete {
@@ -1475,10 +1425,9 @@ func (r *Runner) readOnlyPolicy() tools.ReadOnlyPolicy {
 
 	r.modelMu.RLock()
 	posture := r.readOnlyPosture
-	conv := r.readOnlyConversational
 	r.modelMu.RUnlock()
 
-	if posture || conv {
+	if posture {
 		return tools.PolicyInspect
 	}
 

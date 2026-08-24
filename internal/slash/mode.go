@@ -160,5 +160,34 @@ func setInteractionMode(ctx *Context, mode modes.Mode) Result {
 	if err != nil {
 		return ErrorResult(err)
 	}
-	return InfoResult(fmt.Sprintf("Switched to %s. %s", mode.String(), modes.DescribeMode(mode, model)))
+	msg := fmt.Sprintf("Switched to %s. %s", mode.String(), modes.DescribeMode(mode, model))
+	lifted, err := liftReadOnlyForMode(ctx, mode)
+	if err != nil {
+		return ErrorResult(err)
+	}
+	if lifted {
+		msg += " Read-only posture lifted."
+	}
+	return InfoResult(msg)
+}
+
+// liftReadOnlyForMode clears the durable read-only posture when the user
+// explicitly switches into a mutating mode. Asking for agent or debug is a
+// request to make changes, and leaving the posture set would deny every write
+// with no hint that a second, separate gate is responsible. Plan and ask are
+// read-only regardless, so the posture is left untouched there and survives a
+// round trip through them. This lives on the slash path deliberately: the
+// provider dialog re-applies the current mode through Hooks.SetInteractionMode
+// after a rebuild, and that is not a user asking for anything.
+func liftReadOnlyForMode(ctx *Context, mode modes.Mode) (bool, error) {
+	if mode != modes.ModeAgent && mode != modes.ModeDebug {
+		return false, nil
+	}
+	if !ctx.Deps.Hooks.ReadOnlyActive() {
+		return false, nil
+	}
+	if err := ctx.Deps.Hooks.SetReadOnly(false); err != nil {
+		return false, fmt.Errorf("lift read-only posture: %w", err)
+	}
+	return true, nil
 }

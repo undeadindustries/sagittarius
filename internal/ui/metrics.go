@@ -111,8 +111,6 @@ type ComposerStatus struct {
 	GrillStatusText string
 	// ReadOnlyPosture is true if the durable session-wide read-only posture is set.
 	ReadOnlyPosture bool
-	// ReadOnlyConversational is true if a conversational lock is active.
-	ReadOnlyConversational bool
 	// TitleAnnouncementText announces an auto-generated session title in prompt
 	// mode (e.g. `Named "Fix LSP pool race" — Ctrl+E rename`). It is rendered as
 	// a passive status-row line that never blocks the composer; the TUI owns the

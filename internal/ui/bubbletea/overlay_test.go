@@ -62,7 +62,9 @@ func (stubModelsDeps) SetModelSetting(context.Context, string, string, string, s
 }
 func (stubModelsDeps) ClearModelSetting(context.Context, string, string, string) error { return nil }
 func (stubModelsDeps) ReasoningCapabilityHint(string, string) string                   { return "" }
-func (stubModelsDeps) ReasoningOptions(string, string) ([]string, string, bool)        { return nil, "", false }
+func (stubModelsDeps) ReasoningOptions(string, string) ([]string, string, bool) {
+	return nil, "", false
+}
 
 type stubDialogDeps struct{}
 

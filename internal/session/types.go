@@ -90,11 +90,6 @@ type MetadataRecord struct {
 	// ReadOnly follows the Constraints pointer pattern: nil = no change,
 	// non-nil = explicitly set to on or off.
 	ReadOnly *bool `json:"readOnly,omitempty"`
-	// ReadOnlyConversational is the turn-level lock inferred from what the user
-	// said ("don't change anything yet"). It is persisted separately from
-	// ReadOnly so a resume restores the same gate the user last saw rather than
-	// silently lifting it.
-	ReadOnlyConversational *bool `json:"readOnlyConversational,omitempty"`
 }
 
 // SetRecord carries a $set metadata update appended mid-session.
@@ -125,11 +120,11 @@ type ConversationRecord struct {
 	// MetadataRecord.Constraints this is a plain slice: the pointer indirection
 	// exists only to make the $set merge correct, not for external consumers.
 	Constraints []string
-	// ReadOnly holds the durable read-only posture setting.
+	// ReadOnly holds the durable read-only posture setting. Sessions written
+	// before AD-107 may also carry a readOnlyConversational key; it is ignored
+	// on load, so an inferred lock never survives a resume.
 	ReadOnly *bool
-	// ReadOnlyConversational holds the last inferred conversational lock state.
-	ReadOnlyConversational *bool
-	Messages               []MessageRecord
+	Messages []MessageRecord
 }
 
 // SessionInfo is the display/selection view of a session (used for listing).

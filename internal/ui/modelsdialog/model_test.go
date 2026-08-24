@@ -225,7 +225,7 @@ func TestReasoningPickerSelectLevelSets(t *testing.T) {
 	m := openReasoningPicker(t, deps)
 	m, _ = m.Update(keyMsg(tea.KeyDown)) // skip inherit
 	m, _ = m.Update(keyMsg(tea.KeyDown)) // skip low → medium
-	m, _ = m.Update(keyMsg(tea.KeyEnter))
+	_, _ = m.Update(keyMsg(tea.KeyEnter))
 	if got := deps.settings["openrouter/anthropic/claude-4/reasoningEffort"]; got != "medium" {
 		t.Fatalf("reasoningEffort = %q, want medium", got)
 	}

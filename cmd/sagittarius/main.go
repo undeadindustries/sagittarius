@@ -800,7 +800,6 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 	var initialGrill *grill.Snapshot
 	var initialConstraints []string
 	var initialReadOnly *bool
-	var initialReadOnlyConversational *bool
 
 	projectRoot := wd
 	if projectRoot == "" {
@@ -835,7 +834,6 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		initialGrill = result.Record.Grill
 		initialConstraints = result.Record.Constraints
 		initialReadOnly = result.Record.ReadOnly
-		initialReadOnlyConversational = result.Record.ReadOnlyConversational
 		mgr, mgrErr := session.NewManagerForResume(projectRoot, sessID, result)
 		if mgrErr != nil {
 			slog.Warn("session recording disabled: cannot open recorder for resumed session", "err", mgrErr)
@@ -916,18 +914,16 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		InitialGrill:         initialGrill,
 		InitialConstraints:   initialConstraints,
 		InitialReadOnly:      initialReadOnly,
-
-		InitialReadOnlyConversational: initialReadOnlyConversational,
-		Settings:                      settings,
-		InitialMode:                   initialMode,
-		ModelPinned:                   modelPinned,
-		ProjectBoundary:               boundary,
-		Snapshotter:                   snapMgr,
-		AllowFix:                      allowFix,
-		LivenessRelease:               livenessRelease,
-		HooksRegistry:                 hooksReg,
-		SpillDir:                      spillDir,
-		ScriptToolEnabled:             config.ScriptToolEnabled(settings, nil),
+		Settings:             settings,
+		InitialMode:          initialMode,
+		ModelPinned:          modelPinned,
+		ProjectBoundary:      boundary,
+		Snapshotter:          snapMgr,
+		AllowFix:             allowFix,
+		LivenessRelease:      livenessRelease,
+		HooksRegistry:        hooksReg,
+		SpillDir:             spillDir,
+		ScriptToolEnabled:    config.ScriptToolEnabled(settings, nil),
 	}
 	// Assign only when non-nil: a nil *os.File stored in the io.WriteCloser
 	// field would be a non-nil interface wrapping a nil pointer, breaking the

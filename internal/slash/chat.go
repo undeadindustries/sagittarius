@@ -127,8 +127,29 @@ func handleChatList(ctx *Context) Result {
 	return InfoResult(strings.TrimRight(b.String(), "\n"))
 }
 
+// normalizeCheckpointTag joins a multi-word name with dashes so "sglang
+// testing" becomes the tag "sglang-testing". Checkpoint tags are filenames
+// ("checkpoint-<tag>.jsonl") and are validated against [A-Za-z0-9._-], so a
+// space can never be part of one; naming a checkpoint in two words is still a
+// reasonable thing to type. Only whitespace is rewritten — any other illegal
+// character is left alone so validation reports it instead of silently
+// mangling the name into something the user did not ask for.
+func normalizeCheckpointTag(args string) string {
+	return strings.Join(strings.Fields(args), "-")
+}
+
+// isForceToken reports whether s is the overwrite flag.
+func isForceToken(s string) bool {
+	switch strings.ToLower(s) {
+	case "force", "--force", "-f":
+		return true
+	}
+	return false
+}
+
 // handleChatSave saves the current conversation as a named checkpoint. A
-// trailing "force" (or "--force"/"-f") token overwrites an existing checkpoint.
+// trailing "force" (or "--force"/"-f") token overwrites an existing checkpoint;
+// everything before it is the tag, joined with dashes.
 func handleChatSave(ctx *Context) Result {
 	if ctx.Deps.Hooks == nil {
 		return InfoResult("Chat commands unavailable.")
@@ -137,14 +158,14 @@ func handleChatSave(ctx *Context) Result {
 	if len(fields) == 0 {
 		return InfoResult("Usage: /chat save <tag> [force]")
 	}
-	tag := fields[0]
-	overwrite := false
-	for _, f := range fields[1:] {
-		switch strings.ToLower(f) {
-		case "force", "--force", "-f":
-			overwrite = true
-		}
+	// Only a trailing token is the flag. Scanning every token would eat the
+	// word from a name like "my force checkpoint", and dropping the tokens it
+	// did not recognize is what made "/chat save sglang testing" save "sglang".
+	overwrite := len(fields) > 1 && isForceToken(fields[len(fields)-1])
+	if overwrite {
+		fields = fields[:len(fields)-1]
 	}
+	tag := normalizeCheckpointTag(strings.Join(fields, " "))
 	path, err := ctx.Deps.Hooks.SaveCheckpoint(tag, overwrite)
 	if err != nil {
 		return ErrorResult(err)
@@ -158,7 +179,9 @@ func handleChatResume(ctx *Context) Result {
 	if ctx.Deps.Hooks == nil {
 		return InfoResult("Chat commands unavailable.")
 	}
-	tag := strings.TrimSpace(ctx.Args)
+	// Normalize the same way save does, so a name typed in two words resumes
+	// the checkpoint it created.
+	tag := normalizeCheckpointTag(ctx.Args)
 	if tag == "" {
 		return InfoResult("Usage: /chat resume <tag>")
 	}
@@ -208,7 +231,7 @@ func handleChatDelete(ctx *Context) Result {
 	if ctx.Deps.Hooks == nil {
 		return InfoResult("Chat commands unavailable.")
 	}
-	tag := strings.TrimSpace(ctx.Args)
+	tag := normalizeCheckpointTag(ctx.Args)
 	if tag == "" {
 		return InfoResult("Usage: /chat delete <tag>")
 	}

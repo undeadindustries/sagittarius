@@ -620,9 +620,6 @@ type modelsDialogDeps struct {
 	app *App
 }
 
-func (d *modelsDialogDeps) settings() *config.Settings { return d.app.deps.Settings }
-func (d *modelsDialogDeps) loader() *config.Loader     { return d.app.deps.Loader }
-
 func (d *modelsDialogDeps) ListAllActiveModels() []modelsdialog.ModelEntry {
 	s := d.app.effectiveSettings()
 	if s == nil {

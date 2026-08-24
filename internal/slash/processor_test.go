@@ -60,7 +60,11 @@ type mockHooks struct {
 	// setModeCalls records every mode passed to SetInteractionMode, so tests
 	// can assert the top-level /agent, /plan, /ask, /debug shortcuts invoke
 	// the same hook as their "/mode <name>" equivalents.
-	setModeCalls   []modes.Mode
+	setModeCalls []modes.Mode
+	// savedTag and savedForce record the last SaveCheckpoint call so /chat save
+	// argument parsing can be asserted directly.
+	savedTag       string
+	savedForce     bool
 	readOnly       bool
 	goal           *goal.Goal
 	evaluatorLabel string
@@ -223,7 +227,9 @@ func (m *mockHooks) CurrentHistory() ([]provider.Message, error) {
 
 func (m *mockHooks) WorkDir() string { return m.workDir }
 
-func (m *mockHooks) SaveCheckpoint(tag string, _ bool) (string, error) {
+func (m *mockHooks) SaveCheckpoint(tag string, overwrite bool) (string, error) {
+	m.savedTag = tag
+	m.savedForce = overwrite
 	return "/tmp/checkpoint-" + tag + ".jsonl", nil
 }
 

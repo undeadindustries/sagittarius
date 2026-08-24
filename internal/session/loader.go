@@ -56,9 +56,7 @@ func LoadSession(filePath string) (*ConversationRecord, error) {
 		Grill:         meta.Grill,
 		Constraints:   derefConstraints(meta.Constraints),
 		ReadOnly:      meta.ReadOnly,
-
-		ReadOnlyConversational: meta.ReadOnlyConversational,
-		Messages:               messages,
+		Messages:      messages,
 	}, nil
 }
 
@@ -370,9 +368,6 @@ func applyMetaUpdate(dst, src *MetadataRecord) {
 	}
 	if src.ReadOnly != nil {
 		dst.ReadOnly = src.ReadOnly
-	}
-	if src.ReadOnlyConversational != nil {
-		dst.ReadOnlyConversational = src.ReadOnlyConversational
 	}
 	if len(src.SessionGrants) > 0 {
 		for _, g := range src.SessionGrants {

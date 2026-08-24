@@ -103,12 +103,18 @@ func grillModeAllow(name string, args map[string]any) (bool, string) {
 	return true, ""
 }
 
+// readOnlyExit names the way out of the inspection posture. Every deny that
+// the posture causes carries it: without a remediation hint the model has no
+// way to tell the user what to do, and has been observed inventing worse
+// advice (restart the process, switch modes) that does not work.
+const readOnlyExit = " — run /readonly off to allow changes"
+
 func inspectModeAllow(name string, args map[string]any) (bool, string) {
 	if name == AskUserToolName {
 		return true, ""
 	}
 	if name == ProjectChecksToolName && projectChecksFixRequested(args) {
-		return false, "inspect mode: run_project_checks fix mode rewrites files and is not allowed; run check-only (fix=false) instead"
+		return false, "inspect mode: run_project_checks fix mode rewrites files and is not allowed; run check-only (fix=false) instead" + readOnlyExit
 	}
 	if readOnlyBuiltinTools[name] {
 		return true, ""
@@ -116,9 +122,9 @@ func inspectModeAllow(name string, args map[string]any) (bool, string) {
 
 	switch name {
 	case WriteFileToolName, EditToolName:
-		return false, "inspect mode: modifying files is not allowed; session is in read-only inspection mode"
+		return false, "inspect mode: modifying files is not allowed; session is in read-only inspection mode" + readOnlyExit
 	case SaveMemoryToolName:
-		return false, "inspect mode: modifying memory is not allowed in inspection mode"
+		return false, "inspect mode: modifying memory is not allowed in inspection mode" + readOnlyExit
 	case ShellToolName:
 		cmd, err := stringArg(args, ShellParamCommand)
 		if err != nil {
@@ -126,16 +132,16 @@ func inspectModeAllow(name string, args map[string]any) (bool, string) {
 		}
 		verdict, reason := ClassifyShellReadOnly(cmd)
 		if verdict == VerdictMutating {
-			return false, "inspect mode: mutating shell command denied (" + reason + ")"
+			return false, "inspect mode: mutating shell command denied (" + reason + ")" + readOnlyExit
 		}
 		// VerdictReadOnly and VerdictUnknown pass the hard-deny gate.
 		// Unknown will trigger an interactive confirmation downstream in requestApproval.
 		return true, ""
 	default:
 		if strings.HasPrefix(name, "mcp_") {
-			return false, "inspect mode: MCP tools are not available because they cannot be verified as read-only"
+			return false, "inspect mode: MCP tools are not available because they cannot be verified as read-only" + readOnlyExit
 		}
-		return false, fmt.Sprintf("inspect mode: tool %q is not allowed", name)
+		return false, fmt.Sprintf("inspect mode: tool %q is not allowed", name) + readOnlyExit
 	}
 }
 

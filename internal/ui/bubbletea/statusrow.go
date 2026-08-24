@@ -114,9 +114,7 @@ func (m *model) statusRowParts() (left, right string) {
 	hints := scrollShortcutHints()
 	if ok {
 		if cs.ReadOnlyPosture {
-			left = "Tools: read-only (session)"
-		} else if cs.ReadOnlyConversational {
-			left = "Tools: read-only - say go ahead to lift"
+			left = "Tools: read-only · /readonly off to lift"
 		} else {
 			left = approvalHint(cs.ApprovalMode)
 		}
