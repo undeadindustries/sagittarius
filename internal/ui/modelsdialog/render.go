@@ -30,6 +30,8 @@ func (m Model) footerHint() string {
 	switch m.screen {
 	case screenSetting:
 		return "↑/↓ move • Enter select • r clear • Esc back"
+	case screenPickValue:
+		return "↑/↓ move • Enter select • Esc back"
 	case screenEditField:
 		return "Enter save • Esc cancel"
 	default:
@@ -49,6 +51,8 @@ func (m Model) body() string {
 		return m.renderSettings()
 	case screenEditField:
 		return m.editTitle + "\n\n" + m.input.View()
+	case screenPickValue:
+		return m.renderPicker()
 	}
 	return ""
 }
@@ -84,6 +88,15 @@ func (m Model) renderSettings() string {
 			}
 		}
 		b.WriteString(m.renderRow(label, i == m.cursor) + "\n")
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+func (m Model) renderPicker() string {
+	var b strings.Builder
+	b.WriteString(m.pickTitle + "\n\n")
+	for i, opt := range m.pickOptions {
+		b.WriteString(m.renderRow(opt.label, i == m.cursor) + "\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

@@ -35,7 +35,7 @@ func reasoningCommand() Command {
 			},
 			{
 				Name:        "save",
-				Description: "Persist <level> to providers.<active>.reasoningEffort",
+				Description: "Persist <level> to providers.<active>.models.<model>.reasoningEffort",
 				Handler:     handleReasoningSave,
 			},
 		}, levels...),
@@ -100,7 +100,17 @@ func handleReasoningShow(ctx *Context) Result {
 	if override != "" && persisted != "" && override != persisted {
 		lines = append(lines, fmt.Sprintf("  Persisted value: %s (clear session override with /reasoning clear)", persisted))
 	}
-	if matched && len(profile.ValidEfforts) > 0 {
+	efforts, defaultEffort, mandatory, known := config.ModelReasoningOptions(ctx.Deps.Settings, eff.ProviderID, model)
+	if known && len(efforts) > 0 {
+		extra := "Valid levels: " + strings.Join(efforts, ", ")
+		if defaultEffort != "" {
+			extra += " (model default: " + defaultEffort + ")"
+		}
+		if mandatory {
+			extra += " (mandatory — cannot be disabled)"
+		}
+		lines = append(lines, extra)
+	} else if matched && len(profile.ValidEfforts) > 0 {
 		extra := "Valid levels: " + strings.Join(profile.ValidEfforts, ", ")
 		if profile.Mandatory {
 			extra += " (mandatory — cannot be disabled)"
@@ -146,10 +156,10 @@ func handleReasoningSave(ctx *Context) Result {
 	if level == "" {
 		return InfoResult("Usage: /reasoning save <level>  (see /reasoning show for valid levels)")
 	}
-	if verr := validateReasoningLevel(eff.WireFormat, model, level); verr != nil {
+	if verr := validateReasoningLevel(ctx.Deps.Settings, eff.WireFormat, eff.ProviderID, model, level); verr != nil {
 		return InfoResult(verr.Error())
 	}
-	if err := provider.SetProviderReasoningEffort(ctx.Deps.Settings, eff.ProviderID, level); err != nil {
+	if err := provider.SetModelReasoningEffort(ctx.Deps.Settings, eff.ProviderID, model, level); err != nil {
 		return ErrorResult(err)
 	}
 	if err := ctx.Deps.Loader.Save(ctx.Deps.Settings); err != nil {
@@ -160,8 +170,9 @@ func handleReasoningSave(ctx *Context) Result {
 		return ErrorResult(fmt.Errorf("rebuild runner after reasoning save: %w", err))
 	}
 	return InfoResult(fmt.Sprintf(
-		"Saved providers.%s.reasoningEffort = %s. Live on the next request — no restart needed.",
+		"Saved providers.%s.models.%s.reasoningEffort = %s. Live on the next request — no restart needed.",
 		eff.ProviderID,
+		model,
 		level,
 	))
 }
@@ -174,7 +185,7 @@ func handleReasoningSetLevel(ctx *Context, level string) Result {
 	if err != nil {
 		return ErrorResult(err)
 	}
-	if verr := validateReasoningLevel(eff.WireFormat, model, level); verr != nil {
+	if verr := validateReasoningLevel(ctx.Deps.Settings, eff.WireFormat, eff.ProviderID, model, level); verr != nil {
 		return InfoResult(verr.Error())
 	}
 	ctx.Deps.Hooks.SetReasoningOverride(level)
@@ -209,13 +220,24 @@ func handleReasoningRoot(ctx *Context) Result {
 	}
 }
 
-// validateReasoningLevel rejects a level against the model's known profile
-// when one exists (ModelReasoningRule matched), including a Mandatory
-// rejection of "none"/"off"; otherwise it falls back to the generic
-// cross-family level set (provider.IsValidReasoningLevel) since no per-model
-// capability is known.
-func validateReasoningLevel(wireFormat config.WireFormat, model, level string) error {
+// validateReasoningLevel rejects a level against the model's known options
+// when ModelReasoningOptions reports known=true with a non-empty list;
+// otherwise it falls back to the generic cross-family level set.
+func validateReasoningLevel(settings *config.Settings, wireFormat config.WireFormat, providerID, model, level string) error {
 	level = strings.TrimSpace(level)
+	efforts, _, mandatory, known := config.ModelReasoningOptions(settings, providerID, model)
+	if known {
+		if mandatory && (level == "none" || level == "off") {
+			return fmt.Errorf("reasoning is mandatory for %s and cannot be disabled", model)
+		}
+		if len(efforts) > 0 && !slices.Contains(efforts, level) {
+			return fmt.Errorf("unknown reasoning level %q for %s. Expected one of: %s", level, model, strings.Join(efforts, ", "))
+		}
+		if len(efforts) > 0 || mandatory {
+			return nil
+		}
+	}
+	// Fall back to static family rule when options were unknown or empty.
 	if profile, matched := config.ModelReasoningRule(wireFormat, model); matched {
 		if profile.Mandatory && (level == "none" || level == "off") {
 			return fmt.Errorf("reasoning is mandatory for %s and cannot be disabled", model)

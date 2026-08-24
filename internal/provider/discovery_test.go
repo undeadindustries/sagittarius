@@ -101,7 +101,12 @@ func TestMaybeSetReasoningCapability(t *testing.T) {
 	t.Run("caches discovered capability", func(t *testing.T) {
 		t.Parallel()
 		s := &config.Settings{Providers: &config.ProvidersSettings{Active: string(config.BuiltInOpenAI), OpenAI: &config.ProviderInstanceConfig{}}}
-		info := &ModelReasoningInfo{DefaultEnabled: true, Mandatory: false, DefaultEffort: "medium"}
+		info := &ModelReasoningInfo{
+			DefaultEnabled:   true,
+			Mandatory:        false,
+			DefaultEffort:    "medium",
+			SupportedEfforts: []string{"low", "medium", "high"},
+		}
 		changed, err := MaybeSetReasoningCapability(s, string(config.BuiltInOpenAI), "some/model", info)
 		if err != nil || !changed {
 			t.Fatalf("expected change, got changed=%v err=%v", changed, err)
@@ -112,6 +117,12 @@ func TestMaybeSetReasoningCapability(t *testing.T) {
 		}
 		if mc.ReasoningMandatory == nil || *mc.ReasoningMandatory {
 			t.Fatalf("ReasoningMandatory not cached correctly: %+v", mc)
+		}
+		if len(mc.ReasoningEfforts) != 3 || mc.ReasoningEfforts[0] != "low" {
+			t.Fatalf("ReasoningEfforts not cached: %+v", mc.ReasoningEfforts)
+		}
+		if mc.ReasoningDefaultEffort != "medium" {
+			t.Fatalf("ReasoningDefaultEffort = %q, want medium", mc.ReasoningDefaultEffort)
 		}
 	})
 
@@ -166,6 +177,64 @@ func TestReasoningCapabilityKnown(t *testing.T) {
 	if !ReasoningCapabilityKnown(s, string(config.BuiltInOpenAI), "some/model") {
 		t.Fatal("expected known after discovery caches it")
 	}
+}
+
+func TestMarkReasoningProbed(t *testing.T) {
+	t.Parallel()
+
+	t.Run("sets probe flag and makes capability known", func(t *testing.T) {
+		t.Parallel()
+		s := &config.Settings{Providers: &config.ProvidersSettings{Active: string(config.BuiltInOpenAI), OpenAI: &config.ProviderInstanceConfig{}}}
+		changed, err := MarkReasoningProbed(s, string(config.BuiltInOpenAI), "local/qwen")
+		if err != nil || !changed {
+			t.Fatalf("expected change, got changed=%v err=%v", changed, err)
+		}
+		mc, ok := config.LookupModelConfig(s.Providers.OpenAI, "local/qwen")
+		if !ok || !mc.ReasoningProbed {
+			t.Fatalf("ReasoningProbed not set: %+v", mc)
+		}
+		if mc.ReasoningSupported != nil {
+			t.Fatalf("ReasoningSupported should stay nil for probed-only: %+v", mc)
+		}
+		if !ReasoningCapabilityKnown(s, string(config.BuiltInOpenAI), "local/qwen") {
+			t.Fatal("probed model should suppress re-discovery")
+		}
+	})
+
+	t.Run("no-ops when user pinned reasoningEffort", func(t *testing.T) {
+		t.Parallel()
+		s := &config.Settings{Providers: &config.ProvidersSettings{Active: string(config.BuiltInOpenAI), OpenAI: &config.ProviderInstanceConfig{
+			Models: map[string]config.ProviderModelConfig{"local/qwen": {ReasoningEffort: "high"}},
+		}}}
+		changed, err := MarkReasoningProbed(s, string(config.BuiltInOpenAI), "local/qwen")
+		if err != nil || changed {
+			t.Fatalf("expected no change when pinned, got changed=%v err=%v", changed, err)
+		}
+	})
+
+	t.Run("no-ops when ReasoningSupported already set", func(t *testing.T) {
+		t.Parallel()
+		tru := true
+		s := &config.Settings{Providers: &config.ProvidersSettings{Active: string(config.BuiltInOpenAI), OpenAI: &config.ProviderInstanceConfig{
+			Models: map[string]config.ProviderModelConfig{"some/model": {ReasoningSupported: &tru}},
+		}}}
+		changed, err := MarkReasoningProbed(s, string(config.BuiltInOpenAI), "some/model")
+		if err != nil || changed {
+			t.Fatalf("expected no change when supported cached, got changed=%v err=%v", changed, err)
+		}
+	})
+
+	t.Run("idempotent on repeat", func(t *testing.T) {
+		t.Parallel()
+		s := &config.Settings{Providers: &config.ProvidersSettings{Active: string(config.BuiltInOpenAI), OpenAI: &config.ProviderInstanceConfig{}}}
+		if _, err := MarkReasoningProbed(s, string(config.BuiltInOpenAI), "local/qwen"); err != nil {
+			t.Fatalf("first: %v", err)
+		}
+		changed, err := MarkReasoningProbed(s, string(config.BuiltInOpenAI), "local/qwen")
+		if err != nil || changed {
+			t.Fatalf("expected no change on repeat, got changed=%v err=%v", changed, err)
+		}
+	})
 }
 
 func TestMaybeSetContextLimitRespectsPin(t *testing.T) {

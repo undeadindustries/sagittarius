@@ -33,4 +33,9 @@ type Deps interface {
 	// high (default: none)", "Not supported for this model."), sourced from
 	// the same resolver /reasoning show uses. Empty means no hint to display.
 	ReasoningCapabilityHint(providerID, model string) string
+	// ReasoningOptions returns the effort levels this model is known to accept,
+	// its advertised default, and whether capability is known. When known is
+	// false the picker offers only "default (inherit)" plus an unverified
+	// custom entry.
+	ReasoningOptions(providerID, model string) (efforts []string, defaultEffort string, known bool)
 }

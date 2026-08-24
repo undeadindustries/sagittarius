@@ -99,9 +99,23 @@ type ProviderModelConfig struct {
 	// both are nil until discovery runs at least once for this model. Neither
 	// field pins an effort itself — ReasoningEffort above remains the explicit
 	// user pin, which always wins over the discovered default.
-	ReasoningSupported *bool                      `json:"reasoningSupported,omitempty"`
-	ReasoningMandatory *bool                      `json:"reasoningMandatory,omitempty"`
-	Extra              map[string]json.RawMessage `json:"-"`
+	ReasoningSupported *bool `json:"reasoningSupported,omitempty"`
+	ReasoningMandatory *bool `json:"reasoningMandatory,omitempty"`
+	// ReasoningEfforts is the provider-advertised list of valid effort levels
+	// for this model (e.g. OpenRouter supported_efforts). Empty until discovery
+	// caches it at activation time. Used by the /models picker and validation.
+	ReasoningEfforts []string `json:"reasoningEfforts,omitempty"`
+	// ReasoningDefaultEffort is the provider-advertised default effort for this
+	// model (e.g. OpenRouter default_effort). Empty when unknown.
+	ReasoningDefaultEffort string `json:"reasoningDefaultEffort,omitempty"`
+	// ReasoningProbed is true when activation-time discovery queried the
+	// provider catalog for this model and found no reasoning block. Distinct
+	// from ReasoningSupported=false (explicitly not capable): a probed-only
+	// model keeps ModelReasoningOptions known=false so the picker still offers
+	// an unverified custom entry, while ReasoningCapabilityKnown becomes true
+	// so we do not re-fetch the catalog on every save.
+	ReasoningProbed bool                       `json:"reasoningProbed,omitempty"`
+	Extra           map[string]json.RawMessage `json:"-"`
 }
 
 // UnmarshalJSON decodes the known per-model fields and preserves unknown keys.
@@ -147,6 +161,18 @@ func (c *ProviderModelConfig) UnmarshalJSON(data []byte) error {
 			}
 		case "reasoningMandatory":
 			if err := json.Unmarshal(val, &c.ReasoningMandatory); err != nil {
+				return err
+			}
+		case "reasoningEfforts":
+			if err := json.Unmarshal(val, &c.ReasoningEfforts); err != nil {
+				return err
+			}
+		case "reasoningDefaultEffort":
+			if err := json.Unmarshal(val, &c.ReasoningDefaultEffort); err != nil {
+				return err
+			}
+		case "reasoningProbed":
+			if err := json.Unmarshal(val, &c.ReasoningProbed); err != nil {
 				return err
 			}
 		default:
@@ -217,6 +243,27 @@ func (c ProviderModelConfig) MarshalJSON() ([]byte, error) {
 			return nil, err
 		}
 		obj["reasoningMandatory"] = b
+	}
+	if len(c.ReasoningEfforts) > 0 {
+		b, err := json.Marshal(c.ReasoningEfforts)
+		if err != nil {
+			return nil, err
+		}
+		obj["reasoningEfforts"] = b
+	}
+	if c.ReasoningDefaultEffort != "" {
+		b, err := json.Marshal(c.ReasoningDefaultEffort)
+		if err != nil {
+			return nil, err
+		}
+		obj["reasoningDefaultEffort"] = b
+	}
+	if c.ReasoningProbed {
+		b, err := json.Marshal(c.ReasoningProbed)
+		if err != nil {
+			return nil, err
+		}
+		obj["reasoningProbed"] = b
 	}
 	for key, val := range c.Extra {
 		obj[key] = val

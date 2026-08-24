@@ -2,6 +2,8 @@ package provider
 
 import (
 	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/undeadindustries/sagittarius/internal/config"
 )
@@ -102,7 +104,7 @@ func ReasoningCapabilityKnown(settings *config.Settings, providerID, model strin
 		return false
 	}
 	mc, ok := config.LookupModelConfig(inst, model)
-	return ok && mc.ReasoningSupported != nil
+	return ok && (mc.ReasoningSupported != nil || mc.ReasoningProbed)
 }
 
 // MaybeSetReasoningCapability caches a discovered per-model reasoning
@@ -110,6 +112,10 @@ func ReasoningCapabilityKnown(settings *config.Settings, providerID, model strin
 // already pinned an explicit reasoningEffort for this model — pinning is a
 // stronger, explicit signal that should never be overwritten by discovery. A
 // nil info is a no-op (nothing discovered). Mirrors MaybeSetContextLimit.
+//
+// Persists SupportedEfforts and DefaultEffort alongside the bool flags so the
+// /models picker and /reasoning validation can offer only the levels this
+// model actually advertises.
 func MaybeSetReasoningCapability(settings *config.Settings, providerID, model string, info *ModelReasoningInfo) (bool, error) {
 	if settings == nil {
 		return false, fmt.Errorf("set reasoning capability: settings are required")
@@ -133,12 +139,56 @@ func MaybeSetReasoningCapability(settings *config.Settings, providerID, model st
 	mc := cfg.Models[model]
 	supported := info.DefaultEnabled
 	mandatory := info.Mandatory
+	efforts := append([]string(nil), info.SupportedEfforts...)
+	defaultEffort := strings.TrimSpace(info.DefaultEffort)
 	if mc.ReasoningSupported != nil && *mc.ReasoningSupported == supported &&
-		mc.ReasoningMandatory != nil && *mc.ReasoningMandatory == mandatory {
+		mc.ReasoningMandatory != nil && *mc.ReasoningMandatory == mandatory &&
+		slices.Equal(mc.ReasoningEfforts, efforts) &&
+		mc.ReasoningDefaultEffort == defaultEffort {
 		return false, nil
 	}
 	mc.ReasoningSupported = &supported
 	mc.ReasoningMandatory = &mandatory
+	mc.ReasoningEfforts = efforts
+	mc.ReasoningDefaultEffort = defaultEffort
+	mc.ReasoningProbed = false // real capability supersedes a silent probe
+	cfg.Models[model] = mc
+	return true, setProviderInstance(settings, canonical, cfg)
+}
+
+// MarkReasoningProbed records that activation-time discovery queried the
+// provider catalog for this model and found no reasoning block. Suppresses
+// re-fetches via ReasoningCapabilityKnown while leaving ModelReasoningOptions
+// known=false (so the picker still offers an unverified custom entry).
+// No-ops when ReasoningSupported is already set or the user has pinned an
+// explicit reasoningEffort. Returns true when settings were mutated.
+func MarkReasoningProbed(settings *config.Settings, providerID, model string) (bool, error) {
+	if settings == nil {
+		return false, fmt.Errorf("mark reasoning probed: settings are required")
+	}
+	if model == "" {
+		return false, nil
+	}
+	canonical := config.NormalizeProviderID(providerID)
+	if inst := providerInstance(settings, canonical); inst != nil {
+		if mc, ok := config.LookupModelConfig(inst, model); ok {
+			if mc.ReasoningEffort != "" || mc.ReasoningSupported != nil {
+				return false, nil
+			}
+			if mc.ReasoningProbed {
+				return false, nil
+			}
+		}
+	}
+	cfg, err := ensureProviderInstance(settings, canonical)
+	if err != nil {
+		return false, err
+	}
+	if cfg.Models == nil {
+		cfg.Models = make(map[string]config.ProviderModelConfig)
+	}
+	mc := cfg.Models[model]
+	mc.ReasoningProbed = true
 	cfg.Models[model] = mc
 	return true, setProviderInstance(settings, canonical, cfg)
 }

@@ -202,13 +202,53 @@ func ResolveReasoningRequest(settings *Settings, providerID, model, sessionOverr
 	return nil
 }
 
+// ModelReasoningOptions returns the effort levels a model is known to accept,
+// plus its advertised default and whether reasoning is mandatory. known is
+// false when neither the static family table nor a discovery cache has an
+// opinion — callers should then offer only "default (inherit)" (and optionally
+// an unverified custom entry).
+//
+// Resolution order:
+//  1. static ModelReasoningRule (Gemini / OpenAI Responses families)
+//  2. cached ReasoningEfforts from activation-time discovery
+//  3. known=false
+//
+// When discovery ran and reported the model as not reasoning-capable,
+// known=true with an empty efforts slice (callers should not offer levels).
+func ModelReasoningOptions(settings *Settings, providerID, model string) (efforts []string, defaultEffort string, mandatory, known bool) {
+	wireFormat := resolveWireFormat(settings, providerID)
+	if profile, matched := ModelReasoningRule(wireFormat, model); matched {
+		return append([]string(nil), profile.ValidEfforts...), profile.DefaultEffort, profile.Mandatory, true
+	}
+	if settings == nil {
+		return nil, "", false, false
+	}
+	inst := settings.ProviderInstance(providerID)
+	if inst == nil {
+		return nil, "", false, false
+	}
+	mc, ok := lookupModelConfig(inst, model)
+	if !ok || mc.ReasoningSupported == nil {
+		return nil, "", false, false
+	}
+	mandatory = mc.ReasoningMandatory != nil && *mc.ReasoningMandatory
+	if !*mc.ReasoningSupported {
+		return nil, "", mandatory, true
+	}
+	return append([]string(nil), mc.ReasoningEfforts...), mc.ReasoningDefaultEffort, mandatory, true
+}
+
 // DescribeReasoningCapability renders a short, human-readable, one-line
 // description of a model's resolved reasoning capability for read-only
 // display in settings UIs (the /models dialog capability hint, /reasoning
 // show's summary line). It never pins or persists anything — purely
-// descriptive, sourced from the same ModelReasoningRule / discovered-cache
-// data ResolveReasoningRequest uses.
+// descriptive, sourced from ModelReasoningOptions.
 func DescribeReasoningCapability(settings *Settings, providerID, model string) string {
+	efforts, defaultEffort, mandatory, known := ModelReasoningOptions(settings, providerID, model)
+	if !known {
+		return "not supported / unknown for this model"
+	}
+
 	wireFormat := resolveWireFormat(settings, providerID)
 	if profile, matched := ModelReasoningRule(wireFormat, model); matched {
 		switch profile.Mechanism {
@@ -223,16 +263,28 @@ func DescribeReasoningCapability(settings *Settings, providerID, model string) s
 		}
 	}
 
-	if wireFormat == WireFormatOpenAIChat {
-		if inst := settings.ProviderInstance(providerID); inst != nil {
-			if mc, ok := lookupModelConfig(inst, model); ok && mc.ReasoningSupported != nil {
-				if *mc.ReasoningSupported {
-					return "adaptive by default — enabled (discovered reasoning-capable model)"
-				}
+	if len(efforts) == 0 && !mandatory {
+		// Discovery ran and either reported unsupported or enabled-with-no-list.
+		inst := settings.ProviderInstance(providerID)
+		if inst != nil {
+			if mc, ok := lookupModelConfig(inst, model); ok && mc.ReasoningSupported != nil && !*mc.ReasoningSupported {
 				return "not offered for this model (discovered)"
 			}
 		}
+		return "adaptive by default — enabled (discovered reasoning-capable model)"
 	}
-
-	return "not supported / unknown for this model"
+	if len(efforts) > 0 {
+		levels := strings.Join(efforts, ", ")
+		if mandatory {
+			return fmt.Sprintf("discovered reasoning, mandatory — %s", levels)
+		}
+		if defaultEffort != "" {
+			return fmt.Sprintf("discovered reasoning — %s (default: %s)", levels, defaultEffort)
+		}
+		return fmt.Sprintf("discovered reasoning — %s", levels)
+	}
+	if mandatory {
+		return "discovered reasoning-capable model (mandatory)"
+	}
+	return "adaptive by default — enabled (discovered reasoning-capable model)"
 }

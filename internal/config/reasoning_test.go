@@ -240,7 +240,13 @@ func TestProviderModelConfigReasoningCapabilityRoundTrip(t *testing.T) {
 	t.Parallel()
 	tru := true
 	fls := false
-	mc := ProviderModelConfig{ReasoningSupported: &tru, ReasoningMandatory: &fls}
+	mc := ProviderModelConfig{
+		ReasoningSupported:     &tru,
+		ReasoningMandatory:     &fls,
+		ReasoningEfforts:       []string{"low", "medium", "high"},
+		ReasoningDefaultEffort: "medium",
+		ReasoningProbed:        true,
+	}
 	b, err := json.Marshal(mc)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -254,5 +260,34 @@ func TestProviderModelConfigReasoningCapabilityRoundTrip(t *testing.T) {
 	}
 	if got.ReasoningMandatory == nil || *got.ReasoningMandatory {
 		t.Fatalf("ReasoningMandatory did not round-trip: %#v", got.ReasoningMandatory)
+	}
+	if len(got.ReasoningEfforts) != 3 || got.ReasoningEfforts[1] != "medium" {
+		t.Fatalf("ReasoningEfforts did not round-trip: %#v", got.ReasoningEfforts)
+	}
+	if got.ReasoningDefaultEffort != "medium" {
+		t.Fatalf("ReasoningDefaultEffort = %q, want medium", got.ReasoningDefaultEffort)
+	}
+	if !got.ReasoningProbed {
+		t.Fatal("ReasoningProbed did not round-trip")
+	}
+}
+
+func TestModelReasoningOptionsProbedOnly(t *testing.T) {
+	t.Parallel()
+	s := &Settings{Providers: &ProvidersSettings{
+		Active: "openrouter",
+		Custom: map[string]CustomProviderDefinition{
+			"openrouter": {WireFormat: WireFormatOpenAIChat, BaseURL: "https://openrouter.ai/api/v1"},
+		},
+		Extra: map[string]json.RawMessage{
+			"openrouter": json.RawMessage(`{"models":{"local/qwen":{"reasoningProbed":true}}}`),
+		},
+	}}
+	efforts, defaultEffort, mandatory, known := ModelReasoningOptions(s, "openrouter", "local/qwen")
+	if known {
+		t.Fatal("probed-only must keep known=false so the picker offers custom")
+	}
+	if len(efforts) != 0 || defaultEffort != "" || mandatory {
+		t.Fatalf("unexpected options for probed-only: efforts=%v default=%q mandatory=%v", efforts, defaultEffort, mandatory)
 	}
 }

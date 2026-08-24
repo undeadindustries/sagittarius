@@ -100,12 +100,14 @@ func (d *onboardingDeps) CompleteSetup(ctx context.Context, providerID, model st
 	if providerID == "" || model == "" {
 		return fmt.Errorf("provider and model are required")
 	}
+	infos, discovered := discoverReasoningInfosIfNeeded(ctx, d.settings(), providerID, []string{model})
 	if err := provider.SetProviderModel(d.settings(), providerID, model); err != nil {
 		return err
 	}
 	if err := provider.SetActiveModels(d.settings(), providerID, []string{model}); err != nil {
 		return err
 	}
+	applyReasoningInfos(d.settings(), providerID, []string{model}, infos, discovered)
 	if err := d.loader().Save(d.settings()); err != nil {
 		return err
 	}

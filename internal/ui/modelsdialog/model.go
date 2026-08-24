@@ -17,12 +17,24 @@ const (
 	screenList      screen = iota // global {Provider}/{Model} list
 	screenSetting                 // per-model settings submenu
 	screenEditField               // text input for a setting value
+	screenPickValue               // discrete picker (reasoningEffort)
 )
 
 type settingItem struct {
 	label string
 	key   string
 }
+
+// pickOption is one row in screenPickValue.
+type pickOption struct {
+	label string // displayed
+	value string // "" means clear/inherit; "custom" opens text field
+}
+
+const (
+	pickInheritValue = ""
+	pickCustomValue  = "__custom__"
+)
 
 // Model is the per-model settings editor overlay.
 type Model struct {
@@ -53,6 +65,11 @@ type Model struct {
 	editKey   string
 	editTitle string
 	input     textinput.Model
+
+	// for screenPickValue
+	pickKey     string
+	pickTitle   string
+	pickOptions []pickOption
 
 	errMsg string
 	info   string
@@ -150,6 +167,9 @@ func (m Model) back() (Model, tea.Cmd) {
 		m.screen = screenSetting
 		m.cursor = 0
 		m.input.Blur()
+	case screenPickValue:
+		m.screen = screenSetting
+		m.cursor = 0
 	}
 	return m, nil
 }
@@ -160,6 +180,8 @@ func (m Model) selectCurrent() (Model, tea.Cmd) {
 		return m.openSettingsFor(m.cursor)
 	case screenSetting:
 		return m.selectSetting()
+	case screenPickValue:
+		return m.selectPickOption()
 	}
 	return m, nil
 }
@@ -191,8 +213,64 @@ func (m Model) selectSetting() (Model, tea.Cmd) {
 	switch item.key {
 	case "back":
 		return m.back()
+	case "reasoningEffort":
+		return m.openReasoningPicker()
 	default:
 		return m.openEditField(item)
+	}
+}
+
+func (m Model) openReasoningPicker() (Model, tea.Cmd) {
+	efforts, defaultEffort, known := m.deps.ReasoningOptions(m.targetProvider, m.targetModel)
+	opts := []pickOption{{label: "default (inherit)", value: pickInheritValue}}
+	for _, e := range efforts {
+		label := e
+		if e == defaultEffort && defaultEffort != "" {
+			label += " (model default)"
+		}
+		opts = append(opts, pickOption{label: label, value: e})
+	}
+	if !known {
+		opts = append(opts, pickOption{label: "custom… (unverified)", value: pickCustomValue})
+	}
+	m.pickKey = "reasoningEffort"
+	m.pickTitle = fmt.Sprintf("Reasoning effort for %s", m.targetModel)
+	m.pickOptions = opts
+	m.cursor = 0
+	m.screen = screenPickValue
+	return m, nil
+}
+
+func (m Model) selectPickOption() (Model, tea.Cmd) {
+	if m.cursor < 0 || m.cursor >= len(m.pickOptions) {
+		return m, nil
+	}
+	opt := m.pickOptions[m.cursor]
+	switch opt.value {
+	case pickInheritValue:
+		if err := m.deps.ClearModelSetting(m.ctx, m.targetProvider, m.targetModel, m.pickKey); err != nil {
+			m.errMsg = err.Error()
+			return m, nil
+		}
+		m.settingValues = m.deps.GetModelSettings(m.targetProvider, m.targetModel)
+		m.info = fmt.Sprintf("%s → default (inherit)", m.pickKey)
+		m.status = m.info
+		m.screen = screenSetting
+		m.cursor = 0
+		return m, nil
+	case pickCustomValue:
+		return m.openEditField(settingItem{label: "reasoningEffort (unverified)", key: "reasoningEffort"})
+	default:
+		if err := m.deps.SetModelSetting(m.ctx, m.targetProvider, m.targetModel, m.pickKey, opt.value); err != nil {
+			m.errMsg = err.Error()
+			return m, nil
+		}
+		m.settingValues = m.deps.GetModelSettings(m.targetProvider, m.targetModel)
+		m.info = fmt.Sprintf("%s → %s", m.pickKey, opt.value)
+		m.status = m.info
+		m.screen = screenSetting
+		m.cursor = 0
+		return m, nil
 	}
 }
 
@@ -270,8 +348,14 @@ func (m Model) listLen() int {
 		return len(m.entries)
 	case screenSetting:
 		return len(m.settingItems)
+	case screenPickValue:
+		return len(m.pickOptions)
 	}
 	return 0
+}
+
+func (m Model) contentWidth() int {
+	return overlay.ContentWidth(m.width, overlay.DefaultMinWidth)
 }
 
 func wrapInc(i, n int) int {
@@ -286,8 +370,4 @@ func wrapDec(i, n int) int {
 		return 0
 	}
 	return (i - 1 + n) % n
-}
-
-func (m Model) contentWidth() int {
-	return overlay.ContentWidth(m.width, overlay.DefaultMinWidth)
 }

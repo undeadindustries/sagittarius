@@ -3,6 +3,7 @@ package provider
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -799,8 +800,13 @@ func SetModelConfig(settings *config.Settings, providerID, model, key, value str
 		}
 		mc.ContextLimit = n
 	case "reasoningEffort":
-		if !IsValidReasoningLevel(value) {
-			return fmt.Errorf("reasoningEffort %q is not a valid level", value)
+		normalized := strings.ToLower(value)
+		if normalized == "" || normalized == "default" || normalized == "adaptive" {
+			mc.ReasoningEffort = ""
+			break
+		}
+		if err := validateModelReasoningEffort(settings, providerID, model, value); err != nil {
+			return err
 		}
 		mc.ReasoningEffort = value
 	case "showThinking":
@@ -814,6 +820,36 @@ func SetModelConfig(settings *config.Settings, providerID, model, key, value str
 	}
 	cfg.Models[model] = mc
 	return setProviderInstance(settings, providerID, cfg)
+}
+
+// validateModelReasoningEffort rejects a level outside the model's known
+// options when discovery/static rules provide them; otherwise falls back to
+// the generic cross-family allowlist.
+func validateModelReasoningEffort(settings *config.Settings, providerID, model, level string) error {
+	efforts, _, mandatory, known := config.ModelReasoningOptions(settings, providerID, model)
+	if mandatory && (level == "none" || level == "off") {
+		return fmt.Errorf("reasoningEffort %q is not allowed: reasoning is mandatory for %s", level, model)
+	}
+	if known && len(efforts) > 0 {
+		if !slices.Contains(efforts, level) {
+			return fmt.Errorf("reasoningEffort %q is not valid for %s; expected one of: %s",
+				level, model, strings.Join(efforts, ", "))
+		}
+		return nil
+	}
+	if !IsValidReasoningLevel(level) {
+		return fmt.Errorf("reasoningEffort %q is not a valid level", level)
+	}
+	return nil
+}
+
+// SetModelReasoningEffort persists providers.<id>.models.<model>.reasoningEffort.
+func SetModelReasoningEffort(settings *config.Settings, providerID, model, level string) error {
+	level = strings.TrimSpace(level)
+	if level == "" {
+		return fmt.Errorf("set model reasoning effort: level is required")
+	}
+	return SetModelConfig(settings, providerID, model, "reasoningEffort", level)
 }
 
 // ClearModelConfig removes a per-model override for the given key. The model
@@ -849,7 +885,8 @@ func ClearModelConfig(settings *config.Settings, providerID, model, key string) 
 	}
 	if mc.Temperature == nil && mc.ContextLimit == nil && mc.ReasoningEffort == "" &&
 		mc.ShowThinking == nil && mc.Personality == "" && mc.PromptMode == "" && mc.Extra == nil &&
-		mc.ReasoningSupported == nil && mc.ReasoningMandatory == nil {
+		mc.ReasoningSupported == nil && mc.ReasoningMandatory == nil &&
+		len(mc.ReasoningEfforts) == 0 && mc.ReasoningDefaultEffort == "" && !mc.ReasoningProbed {
 		delete(cfg.Models, model)
 	} else {
 		cfg.Models[model] = mc

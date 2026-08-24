@@ -278,32 +278,61 @@ func discoverModelInfos(ctx context.Context, settings *config.Settings, id strin
 	return provider.DiscoverModels(ctx, endpoint.BaseURL, resolveBearer(), nil), nil
 }
 
-// applyDiscoveredContextLimit best-effort sets a provider's contextLimit to the
-// model's reported window when the user has not pinned it, and (AD-077) caches
-// the model's discovered reasoning capability (OpenRouter only) so adaptive
-// reasoning defaults apply without a dedicated round-trip. It does not
-// persist; the caller's Save flushes the mutation. Failures are ignored so a
-// switch never blocks on discovery, and the network call is skipped whenever
-// both facts are already known (static context limit + cached reasoning
-// capability) to avoid a redundant request on every model switch.
-func applyDiscoveredContextLimit(ctx context.Context, settings *config.Settings, providerID, model string) {
-	if settings == nil || strings.TrimSpace(model) == "" {
+// reasoningDiscoveryApplies reports whether activation-time catalog discovery
+// is used to learn reasoning capability for this provider. Gemini and
+// openai-responses use the static ModelReasoningRule table instead.
+func reasoningDiscoveryApplies(settings *config.Settings, providerID string) bool {
+	endpoint, err := provider.ResolveEndpointForProvider(settings, providerID)
+	if err != nil {
+		return false
+	}
+	switch endpoint.WireFormat {
+	case config.WireFormatGemini, config.WireFormatOpenAIResponses:
+		return false
+	}
+	return true
+}
+
+// discoverReasoningInfosIfNeeded fetches the provider's model catalog once when
+// any of the selected models lack a cached reasoning capability and the wire
+// format has no static family table (openai-chat). Returns infos and
+// discovered=true only when the catalog call succeeded with a non-empty list.
+// Network I/O only — does not mutate settings.
+func discoverReasoningInfosIfNeeded(ctx context.Context, settings *config.Settings, providerID string, models []string) (infos []provider.ModelInfo, discovered bool) {
+	if settings == nil || len(models) == 0 {
+		return nil, false
+	}
+	if !reasoningDiscoveryApplies(settings, providerID) {
+		return nil, false
+	}
+	for _, m := range models {
+		if !provider.ReasoningCapabilityKnown(settings, providerID, m) {
+			infos, err := discoverModelInfos(ctx, settings, providerID)
+			if err != nil || len(infos) == 0 {
+				return nil, false
+			}
+			return infos, true
+		}
+	}
+	return nil, false
+}
+
+// applyReasoningInfos caches discovered reasoning capability for the selected
+// models only. When discovered is true and a model has no reasoning block in
+// infos, writes ReasoningProbed so we do not re-fetch on every save while still
+// leaving ModelReasoningOptions known=false. Does not persist.
+func applyReasoningInfos(settings *config.Settings, providerID string, models []string, infos []provider.ModelInfo, discovered bool) {
+	if settings == nil || len(models) == 0 {
 		return
 	}
-	limit := provider.StaticContextLimit(model)
-	needReasoning := !provider.ReasoningCapabilityKnown(settings, providerID, model)
-	var infos []provider.ModelInfo
-	if limit == 0 || needReasoning {
-		infos, _ = discoverModelInfos(ctx, settings, providerID)
-	}
-	if limit == 0 {
-		limit = provider.ContextLimitForModel(infos, model)
-	}
-	if limit > 0 {
-		_, _ = provider.MaybeSetContextLimit(settings, providerID, limit)
-	}
-	if reasoning := provider.ReasoningInfoForModel(infos, model); reasoning != nil {
-		_, _ = provider.MaybeSetReasoningCapability(settings, providerID, model, reasoning)
+	for _, m := range models {
+		if reasoning := provider.ReasoningInfoForModel(infos, m); reasoning != nil {
+			_, _ = provider.MaybeSetReasoningCapability(settings, providerID, m, reasoning)
+			continue
+		}
+		if discovered {
+			_, _ = provider.MarkReasoningProbed(settings, providerID, m)
+		}
 	}
 }
 
@@ -317,14 +346,30 @@ func modelIDsFromInfos(infos []provider.ModelInfo) []string {
 }
 
 func (d *providerDialogDeps) SetModel(ctx context.Context, id, model string) error {
-	if d.loader() == nil || d.settings() == nil {
+	if d.app == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	if err := provider.SetProviderModel(d.settings(), config.NormalizeProviderID(id), model); err != nil {
-		return err
+	// Prefetch catalog off the Documents write lock (MutateGlobal holds it).
+	limit := provider.StaticContextLimit(model)
+	needReasoning := !provider.ReasoningCapabilityKnown(d.settings(), id, model)
+	var infos []provider.ModelInfo
+	if limit == 0 || needReasoning {
+		infos, _ = discoverModelInfos(ctx, d.settings(), id)
 	}
-	applyDiscoveredContextLimit(ctx, d.settings(), id, model)
-	if err := d.loader().Save(d.settings()); err != nil {
+	if limit == 0 {
+		limit = provider.ContextLimitForModel(infos, model)
+	}
+	discovered := needReasoning && reasoningDiscoveryApplies(d.settings(), id) && len(infos) > 0
+	if err := d.app.persistGlobal(func(s *config.Settings) error {
+		if err := provider.SetProviderModel(s, config.NormalizeProviderID(id), model); err != nil {
+			return err
+		}
+		if limit > 0 {
+			_, _ = provider.MaybeSetContextLimit(s, id, limit)
+		}
+		applyReasoningInfos(s, id, []string{model}, infos, discovered)
+		return nil
+	}); err != nil {
 		return err
 	}
 	return d.rebuildIfActive(ctx, id)
@@ -341,30 +386,31 @@ func (d *providerDialogDeps) CurrentModel(id string) string {
 }
 
 func (d *providerDialogDeps) ApplySetting(ctx context.Context, id, key, value string) error {
-	if d.loader() == nil || d.settings() == nil {
+	if d.app == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	if err := provider.ApplyProviderSetting(d.settings(), id, key, value); err != nil {
-		return err
-	}
-	if err := d.loader().Save(d.settings()); err != nil {
+	if err := d.app.persistGlobal(func(s *config.Settings) error {
+		return provider.ApplyProviderSetting(s, id, key, value)
+	}); err != nil {
 		return err
 	}
 	return d.rebuildIfActive(ctx, id)
 }
 
 func (d *providerDialogDeps) UpdateCustomDefinition(ctx context.Context, id, field, value string) error {
-	if d.loader() == nil || d.settings() == nil {
+	if d.app == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	// Virtual fields: decompose/recompose the stored baseUrl.
-	if field == "hostOrURL" || field == "port" {
-		existing := ""
-		if s := d.settings(); s != nil && s.Providers != nil {
-			if custom, ok := s.Providers.Custom[id]; ok {
-				existing = custom.BaseURL
-			}
+	// Virtual fields: decompose/recompose the stored baseUrl. Read the current
+	// value outside the write lock so Compose doesn't need settings access.
+	existing := ""
+	if s := d.settings(); s != nil && s.Providers != nil {
+		if custom, ok := s.Providers.Custom[id]; ok {
+			existing = custom.BaseURL
 		}
+	}
+	writeField, writeValue := field, value
+	if field == "hostOrURL" || field == "port" {
 		h, p, _ := provider.ParseCustomProviderEndpoint(existing)
 		if field == "hostOrURL" {
 			h = value
@@ -375,12 +421,11 @@ func (d *providerDialogDeps) UpdateCustomDefinition(ctx context.Context, id, fie
 		if err != nil {
 			return fmt.Errorf("compose URL: %w", err)
 		}
-		field, value = "baseUrl", composed
+		writeField, writeValue = "baseUrl", composed
 	}
-	if err := provider.UpdateCustomProviderDefinition(d.settings(), id, field, value); err != nil {
-		return err
-	}
-	if err := d.loader().Save(d.settings()); err != nil {
+	if err := d.app.persistGlobal(func(s *config.Settings) error {
+		return provider.UpdateCustomProviderDefinition(s, id, writeField, writeValue)
+	}); err != nil {
 		return err
 	}
 	return d.rebuildIfActive(ctx, id)
@@ -429,16 +474,22 @@ func (d *providerDialogDeps) ActiveModels(id string) []string {
 	return provider.CuratedActiveModels(d.settings(), id)
 }
 
-// SetActiveModels persists the curated active-model set. Activation does not
-// change the live model, so no runner rebuild is required.
-func (d *providerDialogDeps) SetActiveModels(_ context.Context, id string, models []string) error {
-	if d.loader() == nil || d.settings() == nil {
+// SetActiveModels persists the curated active-model set and caches reasoning
+// capability for the selected models only (one discovery call when needed).
+// Activation does not change the live model, so no runner rebuild is required.
+func (d *providerDialogDeps) SetActiveModels(ctx context.Context, id string, models []string) error {
+	if d.app == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	if err := provider.SetActiveModels(d.settings(), id, models); err != nil {
-		return err
-	}
-	return d.loader().Save(d.settings())
+	// Network discovery off the Documents write lock.
+	infos, discovered := discoverReasoningInfosIfNeeded(ctx, d.settings(), id, models)
+	return d.app.persistGlobal(func(s *config.Settings) error {
+		if err := provider.SetActiveModels(s, id, models); err != nil {
+			return err
+		}
+		applyReasoningInfos(s, id, models, infos, discovered)
+		return nil
+	})
 }
 
 // EffectiveProviderSettings returns resolved display strings (overrides plus
@@ -527,26 +578,24 @@ func formatPresetInfo(res provider.PresetApplyResult) string {
 }
 
 func (d *providerDialogDeps) ClearSetting(ctx context.Context, id, key string) error {
-	if d.loader() == nil || d.settings() == nil {
+	if d.app == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	if err := provider.ClearProviderSetting(d.settings(), id, key); err != nil {
-		return err
-	}
-	if err := d.loader().Save(d.settings()); err != nil {
+	if err := d.app.persistGlobal(func(s *config.Settings) error {
+		return provider.ClearProviderSetting(s, id, key)
+	}); err != nil {
 		return err
 	}
 	return d.rebuildIfActive(ctx, id)
 }
 
 func (d *providerDialogDeps) ResetSettings(ctx context.Context, id string) error {
-	if d.loader() == nil || d.settings() == nil {
+	if d.app == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	if err := provider.ResetProviderInstanceOverrides(d.settings(), id); err != nil {
-		return err
-	}
-	if err := d.loader().Save(d.settings()); err != nil {
+	if err := d.app.persistGlobal(func(s *config.Settings) error {
+		return provider.ResetProviderInstanceOverrides(s, id)
+	}); err != nil {
 		return err
 	}
 	return d.rebuildIfActive(ctx, id)
@@ -575,7 +624,7 @@ func (d *modelsDialogDeps) settings() *config.Settings { return d.app.deps.Setti
 func (d *modelsDialogDeps) loader() *config.Loader     { return d.app.deps.Loader }
 
 func (d *modelsDialogDeps) ListAllActiveModels() []modelsdialog.ModelEntry {
-	s := d.settings()
+	s := d.app.effectiveSettings()
 	if s == nil {
 		return nil
 	}
@@ -592,43 +641,60 @@ func (d *modelsDialogDeps) ListAllActiveModels() []modelsdialog.ModelEntry {
 }
 
 func (d *modelsDialogDeps) GetModelSettings(providerID, model string) map[string]string {
-	if d.settings() == nil {
+	s := d.app.effectiveSettings()
+	if s == nil {
 		return nil
 	}
-	return provider.ModelConfigValues(d.settings(), providerID, model)
+	return provider.ModelConfigValues(s, providerID, model)
 }
 
 func (d *modelsDialogDeps) SetModelSetting(ctx context.Context, providerID, model, key, value string) error {
-	if d.loader() == nil || d.settings() == nil {
+	if d.app == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	if err := provider.SetModelConfig(d.settings(), providerID, model, key, value); err != nil {
-		return err
-	}
-	if err := d.loader().Save(d.settings()); err != nil {
+	if err := d.app.persistGlobal(func(s *config.Settings) error {
+		return provider.SetModelConfig(s, providerID, model, key, value)
+	}); err != nil {
 		return err
 	}
 	return d.rebuildIfActive(ctx, providerID)
 }
 
 func (d *modelsDialogDeps) ReasoningCapabilityHint(providerID, model string) string {
-	if d.settings() == nil {
+	s := d.app.effectiveSettings()
+	if s == nil {
 		return ""
 	}
-	return config.DescribeReasoningCapability(d.settings(), providerID, model)
+	return config.DescribeReasoningCapability(s, providerID, model)
+}
+
+func (d *modelsDialogDeps) ReasoningOptions(providerID, model string) (efforts []string, defaultEffort string, known bool) {
+	s := d.app.effectiveSettings()
+	if s == nil {
+		return nil, "", false
+	}
+	efforts, defaultEffort, _, known = config.ModelReasoningOptions(s, providerID, model)
+	return efforts, defaultEffort, known
 }
 
 func (d *modelsDialogDeps) ClearModelSetting(ctx context.Context, providerID, model, key string) error {
-	if d.loader() == nil || d.settings() == nil {
+	if d.app == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	if err := provider.ClearModelConfig(d.settings(), providerID, model, key); err != nil {
-		return err
-	}
-	if err := d.loader().Save(d.settings()); err != nil {
+	if err := d.app.persistGlobal(func(s *config.Settings) error {
+		return provider.ClearModelConfig(s, providerID, model, key)
+	}); err != nil {
 		return err
 	}
 	return d.rebuildIfActive(ctx, providerID)
+}
+
+func (d *modelsDialogDeps) rebuildIfActive(ctx context.Context, providerID string) error {
+	if d.app.deps.Settings != nil && d.app.deps.Settings.ActiveProvider() == config.NormalizeProviderID(providerID) {
+		_, _, err := d.app.deps.Hooks.RebuildRunner(ctx)
+		return err
+	}
+	return nil
 }
 
 // SystemPromptDialogDeps returns the adapter for the /system-prompt picker.
@@ -656,17 +722,6 @@ func (d *systemPromptDialogDeps) ApplyPreset(ctx context.Context, presetID strin
 		return "", fmt.Errorf("app not available")
 	}
 	return d.app.deps.Hooks.ApplyProjectSystemPromptPreset(ctx, presetID)
-}
-
-func (d *modelsDialogDeps) rebuildIfActive(ctx context.Context, providerID string) error {
-	if d.settings() == nil {
-		return nil
-	}
-	if config.NormalizeProviderID(d.settings().ActiveProvider()) == config.NormalizeProviderID(providerID) {
-		_, _, err := d.app.deps.Hooks.RebuildRunner(ctx)
-		return err
-	}
-	return nil
 }
 
 // ModelPickDialogDeps returns the side-effect adapter the /model global picker uses.
