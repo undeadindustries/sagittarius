@@ -82,6 +82,8 @@ type registryConfig struct {
 	webUtilityClient   *provider.GeminiUtilityClient
 	webDirectFetch     bool
 	webMaxFetchBytes   int
+	spillDir           string
+	scriptToolEnabled  bool
 }
 
 // WithBackgroundManager provides a background process manager to tools.
@@ -114,6 +116,16 @@ func WithSymbols(enabled, preferGopls bool) RegistryOption {
 	}
 }
 
+// WithSpillDir sets the directory used to persist truncated tool outputs.
+func WithSpillDir(dir string) RegistryOption {
+	return func(c *registryConfig) { c.spillDir = dir }
+}
+
+// WithScriptTool toggles registration of the run_script batch tool.
+func WithScriptTool(enabled bool) RegistryOption {
+	return func(c *registryConfig) { c.scriptToolEnabled = enabled }
+}
+
 // WithWebTools toggles registration of google_web_search and web_fetch tools.
 func WithWebTools(searchEnabled, fetchEnabled bool, client *provider.GeminiUtilityClient, directWebFetch bool, maxFetchBytes int) RegistryOption {
 	return func(c *registryConfig) {
@@ -137,11 +149,11 @@ func NewBuiltinRegistry(ws *Workspace, opts ...RegistryOption) *Registry {
 		aliases: copyAliases(),
 	}
 	for _, tool := range []Tool{
-		newReadFileTool(ws),
+		newReadFileTool(ws, cfg.spillDir),
 		newWriteFileTool(ws),
 		newListDirectoryTool(ws),
-		newShellTool(ws, cfg.bgMgr),
-		newGrepTool(ws),
+		newShellTool(ws, cfg.bgMgr, cfg.spillDir),
+		newGrepTool(ws, cfg.spillDir),
 		newProjectChecksTool(ws, cfg.allowFix),
 	} {
 		r.Register(tool)
@@ -150,17 +162,18 @@ func NewBuiltinRegistry(ws *Workspace, opts ...RegistryOption) *Registry {
 		r.Register(newEditTool(ws))
 	}
 	if cfg.symbolsEnabled {
-		r.Register(newFindSymbolTool(ws, cfg.symbolsPreferGopls))
+		r.Register(newFindSymbolTool(ws, cfg.symbolsPreferGopls, cfg.spillDir))
 	}
-	// google_web_search only works through Gemini grounding, so skip it entirely
-	// when no utility client could be built (missing/invalid key) rather than
-	// advertising a tool whose every call fails. web_fetch still registers: its
-	// Go HTTP path needs no key.
-	if cfg.webSearchEnabled && cfg.webUtilityClient != nil {
+	// google_web_search uses Gemini grounding when available, else Brave Search API
+	// or DuckDuckGo fallback. It registers whenever webSearchEnabled is true.
+	if cfg.webSearchEnabled {
 		r.Register(newGoogleWebSearchTool(cfg.webUtilityClient))
 	}
 	if cfg.webFetchEnabled {
 		r.Register(newWebFetchTool(cfg.webUtilityClient, cfg.webDirectFetch, cfg.webMaxFetchBytes))
+	}
+	if cfg.scriptToolEnabled {
+		r.Register(newScriptTool(r))
 	}
 	return r
 }

@@ -116,6 +116,9 @@ type Hooks interface {
 
 	// /goal autonomous mode hooks
 	GoalStatus() *goal.Goal
+	// GoalEvaluatorLabel names the model that judges completion, and states
+	// plainly when the worker is grading its own work.
+	GoalEvaluatorLabel() string
 	SetGoal(objective string, tokenBudget *int) error
 	PauseGoal(note string) error
 	ResumeGoal(note string) error

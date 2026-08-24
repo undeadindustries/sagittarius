@@ -85,7 +85,7 @@ func (r *Recorder) SessionID() string {
 	return r.sessionID
 }
 
-// Kind returns the session kind ("main" or "subagent"). Guarded by r.mu.
+// Kind returns the session kind ("main", "subagent", or "evaluator"). Guarded by r.mu.
 func (r *Recorder) Kind() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()

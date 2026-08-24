@@ -62,7 +62,7 @@ func (r *Registry) RenderHelp() string {
 	fmt.Fprintf(&b, "  %-28s %s\n", "@path/to/file",
 		"reference a file; its contents are sent to the model (tab to autocomplete)")
 	fmt.Fprintf(&b, "  %-28s %s\n", "Web Tools",
-		"google_web_search and web_fetch are available (Gemini API key required)")
+		"google_web_search and web_fetch are available for any model (Gemini, Brave, or DuckDuckGo)")
 
 	b.WriteString("\nKeyboard shortcuts:\n\n")
 	fmt.Fprintf(&b, "  %-28s %s\n", "Alt+1..4 (or ⌥+1..4)", "Switch mode (agent/plan/ask/debug)")

@@ -35,3 +35,13 @@ type InteractiveTool interface {
 	Tool
 	ExecuteInteractive(ctx context.Context, args map[string]any, interactive bool, emit func(ui.StreamEvent)) (map[string]any, error)
 }
+
+// NestedToolRunner executes one nested call under the caller's gates and hooks.
+type NestedToolRunner func(ctx context.Context, name string, args map[string]any) (map[string]any, error)
+
+// BatchTool executes other tools. The scheduler supplies a runner so nested
+// calls pass the same gates and lifecycle hooks as a direct invocation.
+type BatchTool interface {
+	Tool
+	ExecuteBatch(ctx context.Context, args map[string]any, run NestedToolRunner) (map[string]any, error)
+}

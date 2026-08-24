@@ -70,45 +70,31 @@ func useStoredGeminiKey(t *testing.T, key string) {
 	}
 }
 
-// TestResolveWebFlagsSeesStoredGeminiKey is the regression test for the
-// env-var-only probe, which hid google_web_search from the common keychain-only
-// setup even though the utility client would have been built successfully.
-func TestResolveWebFlagsSeesStoredGeminiKey(t *testing.T) {
-	useStoredGeminiKey(t, "stored-gemini-key")
+// TestResolveWebFlagsDefaultsOnWithoutKey asserts web tools default on even without a Gemini key.
+func TestResolveWebFlagsDefaultsOnWithoutKey(t *testing.T) {
+	useStoredGeminiKey(t, "")
 
 	searchEnabled, fetchEnabled := resolveWebFlags(context.Background(), &config.Settings{})
 	if !searchEnabled {
-		t.Error("search should default on when a Gemini key resolves from the credential store")
+		t.Error("search should default on even without a Gemini key")
 	}
 	if !fetchEnabled {
 		t.Error("fetch should default on")
 	}
 }
 
-func TestResolveWebFlagsWithoutAnyKey(t *testing.T) {
-	useStoredGeminiKey(t, "")
-
-	searchEnabled, fetchEnabled := resolveWebFlags(context.Background(), &config.Settings{})
-	if searchEnabled {
-		t.Error("search should default off with no resolvable Gemini key")
-	}
-	if !fetchEnabled {
-		t.Error("fetch should still default on: its Go HTTP fallback needs no key")
-	}
-}
-
 // TestResolveWebFlagsExplicitSettingWins asserts an explicit searchEnabled is
-// honored regardless of key availability.
+// honored.
 func TestResolveWebFlagsExplicitSettingWins(t *testing.T) {
 	useStoredGeminiKey(t, "")
-	on := true
+	off := false
 
 	searchEnabled, _ := resolveWebFlags(context.Background(), &config.Settings{
 		Sagittarius: &config.SagittariusSettings{
-			Web: &config.SagittariusWebConfig{SearchEnabled: &on},
+			Web: &config.SagittariusWebConfig{SearchEnabled: &off},
 		},
 	})
-	if !searchEnabled {
-		t.Error("an explicit searchEnabled=true should win over the key probe")
+	if searchEnabled {
+		t.Error("an explicit searchEnabled=false should be honored")
 	}
 }

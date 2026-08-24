@@ -45,6 +45,7 @@ a folder name, the second one gets a numeric suffix (`my-app-1`).
 | `~/.sagittarius/sagittarius-credentials.json` | You store an API key and no OS keychain is available |
 | `~/.sagittarius/tmp/<slug>/chats/*.jsonl` | First conversation turn (session history) |
 | `~/.sagittarius/tmp/<slug>/snapshots/<sessionId>.jsonl` | First snapshotted `write_file` (powers `/diff` and `/undo`) |
+| `~/.sagittarius/tmp/<slug>/spill/sagittarius-spill-*.log` | First oversized shell/grep/find_symbol result (full output; the model sees a head+tail preview) |
 | `~/.sagittarius/skills/` | You add a user skill |
 | `~/.sagittarius/agents/` | You add a user agent definition |
 | `~/.sagittarius/extensions/<name>/` | You install an extension |

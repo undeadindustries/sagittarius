@@ -2,6 +2,7 @@ package goal
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/undeadindustries/sagittarius/internal/provider"
@@ -33,7 +34,7 @@ func TestParseDecision(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseDecision(tt.raw)
+			got, err := ParseDecision(tt.raw)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("parseDecision() error = %v, wantErr %v", err, tt.wantErr)
 			}
@@ -77,6 +78,36 @@ func (f *fakeGenerator) GenerateContentStream(ctx context.Context, req *provider
 	ch <- provider.StreamResponse{TextDelta: f.text}
 	close(ch)
 	return ch, nil
+}
+
+func TestEvaluatorPromptStance(t *testing.T) {
+	needles := []string{
+		"You did not do this work",
+		"read-only tools",
+		"working tree as it is now",
+		"do not rely on git history",
+		"Do not withhold completion solely because no test covers it",
+		"Do not do the work",
+		`{"done": bool, "reason": "short explanation"}`,
+	}
+	for _, n := range needles {
+		if !strings.Contains(EvaluatorPrompt, n) {
+			t.Errorf("EvaluatorPrompt missing %q", n)
+		}
+	}
+}
+
+func TestEvaluatorUserPromptIncludesChecks(t *testing.T) {
+	got := EvaluatorUserPrompt("fix auth", "Assistant:\nwrote file\n", "go test\nSuccess")
+	if !strings.Contains(got, "Objective: fix auth") {
+		t.Errorf("missing objective:\n%s", got)
+	}
+	if !strings.Contains(got, "wrote file") {
+		t.Errorf("missing transcript:\n%s", got)
+	}
+	if !strings.Contains(got, "Deterministic checks ground truth") || !strings.Contains(got, "go test") {
+		t.Errorf("missing checks:\n%s", got)
+	}
 }
 
 func TestRunModelEvaluator(t *testing.T) {

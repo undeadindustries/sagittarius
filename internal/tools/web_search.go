@@ -3,13 +3,17 @@ package tools
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"os"
+	"strings"
 
 	"github.com/undeadindustries/sagittarius/internal/provider"
 	"github.com/undeadindustries/sagittarius/internal/web"
 )
 
-// newGoogleWebSearchTool implements the google_web_search tool using Gemini's native
-// GoogleSearch grounding feature.
+// newGoogleWebSearchTool implements the google_web_search tool using a cascade:
+// Gemini native grounding first, then Brave Search API if BRAVE_API_KEY is set,
+// falling back to DuckDuckGo HTML search.
 func newGoogleWebSearchTool(client *provider.GeminiUtilityClient) *webSearchTool {
 	return &webSearchTool{utilityClient: client}
 }
@@ -47,27 +51,51 @@ func (w *webSearchTool) Declaration() provider.ToolDeclaration {
 	}
 }
 
+func resolveBraveAPIKey() string {
+	return strings.TrimSpace(os.Getenv("BRAVE_API_KEY"))
+}
+
 func (w *webSearchTool) Execute(ctx context.Context, args map[string]interface{}) (map[string]interface{}, error) {
 	query, ok := args[ParamQuery].(string)
-	if !ok || query == "" {
+	if !ok || strings.TrimSpace(query) == "" {
 		return nil, fmt.Errorf("%s requires a non-empty string parameter %q", w.Name(), ParamQuery)
 	}
-	// Gemini grounding is the only backend for this tool; without a client there
-	// is nothing to fall back to, so report it instead of dereferencing nil.
-	if w.utilityClient == nil {
-		return nil, fmt.Errorf("%s is unavailable: no Gemini API key is configured (add one with /providers)", w.Name())
+	query = strings.TrimSpace(query)
+
+	// 1. Gemini native grounding backend (best quality with citations)
+	if w.utilityClient != nil {
+		text, meta, err := w.utilityClient.Search(ctx, query)
+		if err != nil {
+			return map[string]interface{}{
+				"results": fmt.Sprintf("Error performing web search: %v", err),
+			}, nil
+		}
+		formatted := web.FormatSearchResult(query, text, meta)
+		return map[string]interface{}{
+			"results": formatted,
+		}, nil
 	}
 
-	text, meta, err := w.utilityClient.Search(ctx, query)
+	// 2. Brave Search API (if BRAVE_API_KEY is configured in env)
+	if braveKey := resolveBraveAPIKey(); braveKey != "" {
+		hits, err := web.SearchBrave(ctx, query, braveKey)
+		if err == nil {
+			return map[string]interface{}{
+				"results": web.FormatOrganicResults(query, "Brave Search", hits),
+			}, nil
+		}
+		slog.Debug("web search: brave search failed, falling back to duckduckgo", "error", err)
+	}
+
+	// 3. DuckDuckGo HTML fallback
+	hits, err := web.SearchDuckDuckGo(ctx, query)
 	if err != nil {
-		// Provide a helpful error that the agent can read.
 		return map[string]interface{}{
 			"results": fmt.Sprintf("Error performing web search: %v", err),
 		}, nil
 	}
 
-	formatted := web.FormatSearchResult(query, text, meta)
 	return map[string]interface{}{
-		"results": formatted,
+		"results": web.FormatOrganicResults(query, "DuckDuckGo", hits),
 	}, nil
 }

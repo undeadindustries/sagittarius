@@ -72,7 +72,7 @@ type MetadataRecord struct {
 	LastUpdated string `json:"lastUpdated"`
 	Summary     string `json:"summary,omitempty"`
 	Branch      string `json:"branch,omitempty"` // display-only; never validated on read
-	Kind        string `json:"kind,omitempty"`   // "main" | "subagent"
+	Kind        string `json:"kind,omitempty"`   // "main" | "subagent" | "evaluator"
 	// CleanExit is set by a $set line when the session's Runner.Close() runs on
 	// a normal shutdown. Its absence is the unclean-exit signal (SIGHUP from a
 	// dropped connection, a crash, or kill -9 all skip deferred cleanup).

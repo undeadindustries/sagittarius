@@ -6,25 +6,27 @@ import (
 )
 
 var reservedSagittariusKeys = map[string]struct{}{
-	"defaultModel":  {},
-	"defaultModels": {},
-	"defaultMode":   {},
-	"modes":         {},
-	"subagents":     {},
-	"mcp":           {},
-	"compression":   {},
-	"tools":         {},
-	"systemPrompt":  {},
-	"snapshots":     {},
-	"verify":        {},
-	"web":           {},
-	"edit":          {},
-	"symbols":       {},
-	"update":        {},
-	"goal":          {},
-	"grill":         {},
-	"sessions":      {},
-	"maxToolRounds": {},
+	"defaultModel":                 {},
+	"defaultModels":                {},
+	"defaultMode":                  {},
+	"modes":                        {},
+	"subagents":                    {},
+	"mcp":                          {},
+	"compression":                  {},
+	"tools":                        {},
+	"systemPrompt":                 {},
+	"snapshots":                    {},
+	"verify":                       {},
+	"web":                          {},
+	"edit":                         {},
+	"symbols":                      {},
+	"update":                       {},
+	"goal":                         {},
+	"grill":                        {},
+	"sessions":                     {},
+	"maxToolRounds":                {},
+	"contextLimitPreferDiscovered": {},
+	"scriptToolEnabled":            {},
 }
 
 var reservedSagittariusModeKeys = map[string]struct{}{
@@ -926,6 +928,12 @@ func unmarshalSagittarius(raw json.RawMessage) (*SagittariusSettings, error) {
 				return nil, fmt.Errorf("decode sagittarius.contextLimitPreferDiscovered: %w", err)
 			}
 			s.ContextLimitPreferDiscovered = &b
+		case "scriptToolEnabled":
+			var b bool
+			if err := json.Unmarshal(val, &b); err != nil {
+				return nil, fmt.Errorf("decode sagittarius.scriptToolEnabled: %w", err)
+			}
+			s.ScriptToolEnabled = &b
 		default:
 			if _, reserved := reservedSagittariusKeys[key]; reserved {
 				continue
@@ -1078,6 +1086,9 @@ func marshalSagittarius(s *SagittariusSettings) (json.RawMessage, error) {
 		return nil, err
 	}
 	if err := add("contextLimitPreferDiscovered", s.ContextLimitPreferDiscovered); err != nil {
+		return nil, err
+	}
+	if err := add("scriptToolEnabled", s.ScriptToolEnabled); err != nil {
 		return nil, err
 	}
 	for key, val := range s.Extra {

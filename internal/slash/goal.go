@@ -55,9 +55,14 @@ func handleGoalStart(ctx *Context) Result {
 		return ErrorResult(err)
 	}
 
+	msgs := []string{"Goal created. Starting autonomous loop..."}
+	if label := ctx.Deps.Hooks.GoalEvaluatorLabel(); label != "" {
+		msgs = append(msgs, "Evaluator: "+label)
+	}
+
 	return Result{
 		Handled:      true,
-		Messages:     []string{"Goal created. Starting autonomous loop..."},
+		Messages:     msgs,
 		SubmitPrompt: ctx.Args,
 	}
 }
@@ -70,6 +75,9 @@ func handleGoalStatus(ctx *Context) Result {
 
 	statusStr := string(g.Status)
 	msg := fmt.Sprintf("Goal\nStatus: %s\nObjective: %s\nTurns: %d/%d\n", statusStr, g.Objective, g.TurnCount, g.MaxTurns)
+	if label := ctx.Deps.Hooks.GoalEvaluatorLabel(); label != "" {
+		msg += fmt.Sprintf("Evaluator: %s\n", label)
+	}
 	if g.LastReason != "" {
 		msg += fmt.Sprintf("Last evaluator reason: %s\n", g.LastReason)
 	}

@@ -10,11 +10,12 @@ import (
 )
 
 type readFileTool struct {
-	ws *Workspace
+	ws       *Workspace
+	spillDir string
 }
 
-func newReadFileTool(ws *Workspace) Tool {
-	return &readFileTool{ws: ws}
+func newReadFileTool(ws *Workspace, spillDir string) Tool {
+	return &readFileTool{ws: ws, spillDir: spillDir}
 }
 
 func (t *readFileTool) Name() string { return ReadFileToolName }
@@ -60,7 +61,11 @@ func (t *readFileTool) Execute(ctx context.Context, args map[string]any) (map[st
 	}
 	abs, err := t.ws.ResolvePath(path)
 	if err != nil {
-		return nil, err
+		spillAbs, ok := resolveSpillReadPath(path, t.spillDir)
+		if !ok {
+			return nil, err
+		}
+		abs = spillAbs
 	}
 	data, err := os.ReadFile(abs)
 	if err != nil {

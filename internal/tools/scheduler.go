@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -214,61 +215,35 @@ func (s *Scheduler) executeOne(
 	// blocking is gated on enforce).
 	if allowed, reason := ProjectBoundaryAllow(s.enforce, name, args, s.workspace); !allowed {
 		emitErr(reason)
-		return errorResponse(call, reason), nil
+		return errorResponse(call, ErrCodeProjectBoundary, reason), nil
 	}
 
 	if allowed, reason := s.interactionModeAllow(name, args); !allowed {
 		emitErr(reason)
-		return errorResponse(call, reason), nil
+		return errorResponse(call, ErrCodeModeRestriction, reason), nil
 	}
 
 	tool, ok := s.registry.Lookup(name)
 	if !ok {
 		errText := fmt.Sprintf("unknown tool %q", name)
 		emitErr(errText)
-		return errorResponse(call, errText), nil
+		return errorResponse(call, ErrCodeUnknownTool, errText), nil
 	}
 
 	if canonicalToolName(name) == WriteFileToolName {
 		if err := validateWriteFileArgs(args); err != nil {
 			emitErr(err.Error())
-			return errorResponse(call, err.Error()), nil
+			return errorResponse(call, ErrCodeInvalidArgs, err.Error()), nil
 		}
 	}
 
-	if s.beforeHook != nil {
-		modArgs, deny, reason, hookErr := s.beforeHook(ctx, name, args)
-		if hookErr != nil {
-			slog.Warn("before tool hook error", "tool", name, "error", hookErr)
-		}
-		if deny {
-			if reason == "" {
-				reason = "tool execution denied by hook"
-			}
-			emitErr(reason)
-			return errorResponse(call, reason), nil
-		}
-		if len(modArgs) > 0 {
-			// Merge rather than replace: a hook that returns only the keys it
-			// cares about must not silently drop the rest of the call.
-			merged := make(map[string]any, len(args)+len(modArgs))
-			for k, v := range args {
-				merged[k] = v
-			}
-			for k, v := range modArgs {
-				merged[k] = v
-			}
-			args = merged
-			call.Args = merged
-
-			// The gates above ran against the pre-hook arguments, so a rewritten
-			// path or content has not been checked yet. Re-run them.
-			if reason, allowed := s.validateHookRewrite(name, args); !allowed {
-				emitErr(reason)
-				return errorResponse(call, reason), nil
-			}
-		}
+	next, code, reason, allowed := s.applyBeforeToolHook(ctx, name, args)
+	if !allowed {
+		emitErr(reason)
+		return errorResponse(call, code, reason), nil
 	}
+	args = next
+	call.Args = next
 
 	needsConfirm := s.policy.NeedsConfirmation(tool)
 	grantKey := tool.Name()
@@ -299,7 +274,7 @@ func (s *Scheduler) executeOne(
 		if !approved {
 			errText := "user denied tool execution"
 			emitErr(errText)
-			return errorResponse(call, errText), nil
+			return errorResponse(call, ErrCodeUserDenied, errText), nil
 		}
 	}
 
@@ -320,6 +295,8 @@ func (s *Scheduler) executeOne(
 	var err error
 
 	switch t := tool.(type) {
+	case BatchTool:
+		result, err = t.ExecuteBatch(ctx, args, s.runNested)
 	case InteractiveTool:
 		wrappedEmit := func(se ui.StreamEvent) {
 			if se.ToolCallID == "" {
@@ -342,7 +319,7 @@ func (s *Scheduler) executeOne(
 
 	if err != nil {
 		emitErr(err.Error())
-		return errorResponse(call, err.Error()), nil
+		return errorResponseFromErr(call, err), nil
 	}
 
 	if snapAbs != "" {
@@ -524,33 +501,118 @@ func (s *Scheduler) mutationDiff(name string, args map[string]any) string {
 	return diff.UnifiedDiff(before, after, filepath.Base(path))
 }
 
-func errorResponse(call provider.ToolCall, message string) *provider.FunctionResponse {
+func errorResponse(call provider.ToolCall, code ErrorCode, message string) *provider.FunctionResponse {
 	return &provider.FunctionResponse{
-		Name:   call.Name,
-		CallID: call.ID,
-		Response: map[string]any{
-			"error": message,
-		},
+		Name:     call.Name,
+		CallID:   call.ID,
+		Response: (&ToolError{Code: code, Message: message}).ToResponse(),
 	}
+}
+
+func errorResponseFromErr(call provider.ToolCall, err error) *provider.FunctionResponse {
+	var te *ToolError
+	if errors.As(err, &te) {
+		return &provider.FunctionResponse{
+			Name:     call.Name,
+			CallID:   call.ID,
+			Response: te.ToResponse(),
+		}
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return errorResponse(call, ErrCodeExecutionTimeout, err.Error())
+	}
+	return errorResponse(call, ErrCodeToolCrash, err.Error())
 }
 
 // validateHookRewrite re-applies the pre-execution gates to arguments a
 // BeforeTool hook rewrote. Without this a hook could redirect a write outside
 // the workspace, or past the read-only gate, since the original checks saw only
 // the model's arguments.
-func (s *Scheduler) validateHookRewrite(name string, args map[string]any) (string, bool) {
+func (s *Scheduler) applyBeforeToolHook(ctx context.Context, name string, args map[string]any) (map[string]any, ErrorCode, string, bool) {
+	if s == nil || s.beforeHook == nil {
+		return args, "", "", true
+	}
+	modArgs, deny, reason, hookErr := s.beforeHook(ctx, name, args)
+	if hookErr != nil {
+		slog.Warn("before tool hook error", "tool", name, "error", hookErr)
+	}
+	if deny {
+		if reason == "" {
+			reason = "tool execution denied by hook"
+		}
+		return args, ErrCodeHookDenied, reason, false
+	}
+	if len(modArgs) == 0 {
+		return args, "", "", true
+	}
+	// Merge rather than replace: a hook that returns only the keys it
+	// cares about must not silently drop the rest of the call.
+	merged := make(map[string]any, len(args)+len(modArgs))
+	for k, v := range args {
+		merged[k] = v
+	}
+	for k, v := range modArgs {
+		merged[k] = v
+	}
+	// The gates above ran against the pre-hook arguments, so a rewritten
+	// path or content has not been checked yet. Re-run them.
+	if code, reason, allowed := s.validateHookRewrite(name, merged); !allowed {
+		return merged, code, reason, false
+	}
+	return merged, "", "", true
+}
+
+func (s *Scheduler) runNested(ctx context.Context, name string, args map[string]any) (map[string]any, error) {
+	if args == nil {
+		args = map[string]any{}
+	}
+	canon := canonicalToolName(name)
+	if canon == ScriptToolName || canon == TaskToolName {
+		return nil, &ToolError{
+			Code:    ErrCodeModeRestriction,
+			Message: fmt.Sprintf("tool %q is not allowed in scripts", canon),
+		}
+	}
 	if allowed, reason := ProjectBoundaryAllow(s.enforce, name, args, s.workspace); !allowed {
-		return reason, false
+		return nil, &ToolError{Code: ErrCodeProjectBoundary, Message: reason}
 	}
 	if allowed, reason := s.interactionModeAllow(name, args); !allowed {
-		return reason, false
+		return nil, &ToolError{Code: ErrCodeModeRestriction, Message: reason}
+	}
+	tool, ok := s.registry.Lookup(name)
+	if !ok {
+		return nil, &ToolError{Code: ErrCodeUnknownTool, Message: fmt.Sprintf("unknown tool %q", name)}
+	}
+	if tool.RequiresConfirmation() {
+		return nil, &ToolError{Code: ErrCodeUserDenied, Message: "cannot be confirmed inside a batch"}
+	}
+	next, code, reason, allowed := s.applyBeforeToolHook(ctx, name, args)
+	if !allowed {
+		return nil, &ToolError{Code: code, Message: reason}
+	}
+	result, err := tool.Execute(ctx, next)
+	if err != nil {
+		return nil, err
+	}
+	if s.afterHook != nil {
+		s.afterHook(ctx, name, next, result)
+	}
+	return result, nil
+}
+
+func (s *Scheduler) validateHookRewrite(name string, args map[string]any) (ErrorCode, string, bool) {
+	if allowed, reason := ProjectBoundaryAllow(s.enforce, name, args, s.workspace); !allowed {
+		return ErrCodeProjectBoundary, reason, false
+	}
+	if allowed, reason := s.interactionModeAllow(name, args); !allowed {
+		return ErrCodeModeRestriction, reason, false
 	}
 	if canonicalToolName(name) == WriteFileToolName {
 		if err := validateWriteFileArgs(args); err != nil {
-			return err.Error(), false
+			return ErrCodeInvalidArgs, err.Error(), false
 		}
 	}
-	return "", true
+	return "", "", true
 }
 
 func (s *Scheduler) interactionModeAllow(toolName string, args map[string]any) (bool, string) {
@@ -625,7 +687,7 @@ func formatToolResult(name string, result map[string]any, writeDiff string) (tex
 		}
 	case GrepToolName:
 		if matches, ok := result["matches"].(string); ok {
-			return capLines(matches, toolResultMaxLines), nil, false
+			return appendSpillHint(capLines(matches, toolResultMaxLines), result), nil, false
 		}
 	case FindSymbolToolName:
 		return formatFindSymbolResult(result), nil, false
@@ -659,7 +721,7 @@ func formatFindSymbolResult(result map[string]any) string {
 	if matches == "" {
 		return header
 	}
-	return header + "\n" + capLines(matches, toolResultMaxLines)
+	return appendSpillHint(header+"\n"+capLines(matches, toolResultMaxLines), result)
 }
 
 // formatShellResult renders a run_shell_command result: the tail of the captured
@@ -669,7 +731,7 @@ func formatShellResult(result map[string]any) (string, *int, bool) {
 	if output == "" {
 		output = "(no output)"
 	}
-	output = capLines(output, toolResultMaxLines)
+	output = appendSpillHint(capLines(output, toolResultMaxLines), result)
 	if code, ok := intValue(result["exit_code"]); ok {
 		c := code
 		return output, &c, c != 0

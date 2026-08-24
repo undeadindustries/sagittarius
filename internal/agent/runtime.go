@@ -48,6 +48,10 @@ type RuntimeConfig struct {
 	WebSearchEnabled bool
 	// WebFetchEnabled toggles the web_fetch tool.
 	WebFetchEnabled bool
+	// SpillDir is where truncated tool outputs are written.
+	SpillDir string
+	// ScriptToolEnabled toggles registration of run_script (default false).
+	ScriptToolEnabled bool
 }
 
 // NewRuntime constructs and performs an initial tool catalog reload.
@@ -84,6 +88,8 @@ func NewRuntime(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 		SymbolsPreferGopls: cfg.SymbolsPreferGopls,
 		WebSearchEnabled:   cfg.WebSearchEnabled,
 		WebFetchEnabled:    cfg.WebFetchEnabled,
+		SpillDir:           cfg.SpillDir,
+		ScriptToolEnabled:  cfg.ScriptToolEnabled,
 	})
 	if err != nil {
 		return nil, err

@@ -6,7 +6,11 @@
 
 # Sagittarius
 
-Sagittarius started as a 1:1 Go port of gemini-cli. Gemini-cli was discontinued and Antigravity is...not ideal. This project has evolved into a bug-free, safe alternative to Gemini-cli, Agy, and Opencode to build large projects, admin your system, or be your assistant.
+Sagittarius is an agentic harness for coding, system administration, and personal assistance. It treats your machines and servers as live production environments where uptime, safety, and operational predictability matter.
+
+### History and background
+
+Sagittarius started as a 1:1 Go port of `gemini-cli`. When upstream development on Gemini-cli ended and alternative forks proved brittle, Sagittarius evolved into an independent, production-grade agent harness. It is built as a dependable, safe alternative to Gemini-cli, Agy, and OpenCode to construct large software projects, administer servers, and automate workflows.
 
 It is an open-source terminal agent CLI that orchestrates requests across:
 
@@ -14,7 +18,7 @@ It is an open-source terminal agent CLI that orchestrates requests across:
 - **OpenAI-compatible endpoints** (OpenAI, OpenRouter, local vLLM, custom/local AI providers)
 - **OpenAI Responses API** (GPT-5 / reasoning models)
 
-You can set specific models for different modes (agent, plan, ask), choose different system prompts (programmer, system admin, personal assistant, creative assistant), and customize temperature and other settings.
+You can set specific models for different modes (agent, plan, ask, debug), choose different system prompts (programmer, system admin, personal assistant, creative assistant), and customize temperature, reasoning effort, and tool execution settings.
 
 ## Requirements
 
@@ -262,6 +266,18 @@ You can extend the agent's domain knowledge and capabilities by creating skills.
 The agent discovers these automatically and can activate them when relevant. Use **`/skills`** in the CLI to list or reload them.
 
 A ready-made `verify-after-edit` skill ships in [docs/skills/verify-after-edit/SKILL.md](docs/skills/verify-after-edit/SKILL.md). Copy it into your skills directory to reinforce running lint, format, type-check, and tests after edits.
+
+## Web tools and search
+
+Sagittarius includes built-in web search (`google_web_search`) and web fetch (`web_fetch`) tools, available to all chat models and interaction modes:
+
+- **Web search cascade:**
+  1. **Google Search grounding:** Used when a Gemini API key is configured. Provides cited prose and source links.
+  2. **Brave Search API:** Used when `BRAVE_API_KEY` is set in the environment. Returns structured organic search results.
+  3. **DuckDuckGo HTML search:** Key-free fallback that returns organic results without requiring any API keys.
+- **Web fetch:** Downloads and extracts clean text from URLs with SSRF protection (blocking private networks and localhost) and sliding-window rate limiting.
+
+See [docs/web-tools.md](docs/web-tools.md) for full configuration details.
 
 ## Code quality
 

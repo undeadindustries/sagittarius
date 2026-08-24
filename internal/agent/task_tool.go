@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/contextmgmt"
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
@@ -26,7 +27,7 @@ func newTaskTool(r *Runner) tools.Tool {
 func (t *taskTool) Name() string { return tools.TaskToolName }
 
 func (t *taskTool) Description() string {
-	return "Launch a new read-only agent to handle research, analysis, or codebase exploration autonomously. Use this to isolate context and prevent large searches or file reads from polluting your own context window."
+	return "Launch a new read-only agent to handle research, analysis, or codebase exploration autonomously. Use this to isolate context and prevent large searches or file reads from polluting your own context window. When run_script is available, prefer it for multi-step read-only research (grep, read, list) that does not need a nested agent — it collapses those calls into one turn."
 }
 
 func (t *taskTool) Declaration() provider.ToolDeclaration {
@@ -106,18 +107,20 @@ func (t *taskTool) ExecuteStream(ctx context.Context, args map[string]any, sink 
 	// In the next step, I'll fix the cache to return a new generator or disable chaining.
 
 	cfg := RunnerConfig{
-		Model:           t.runner.model,
-		ModelPinned:     t.runner.modelPinned,
-		WorkDir:         t.runner.workspace.Root(),
-		ApprovalMode:    t.runner.approval,
-		Interactive:     false, // headless execution
-		ContextManager:  ctxMgr,
-		SessionRecorder: rec,
-		Settings:        settings,
-		ProjectBoundary: t.runner.projectBoundary,
-		Snapshotter:     nil,              // No writes allowed anyway
-		InitialMode:     modes.ModeAsk,    // ModeAsk ensures read-only enforcement
-		Runtime:         t.runner.runtime, // Share MCP and bgproc
+		Model:             t.runner.model,
+		ModelPinned:       t.runner.modelPinned,
+		WorkDir:           t.runner.workspace.Root(),
+		ApprovalMode:      t.runner.approval,
+		Interactive:       false, // headless execution
+		ContextManager:    ctxMgr,
+		SessionRecorder:   rec,
+		Settings:          settings,
+		ProjectBoundary:   t.runner.projectBoundary,
+		Snapshotter:       nil,              // No writes allowed anyway
+		InitialMode:       modes.ModeAsk,    // ModeAsk ensures read-only enforcement
+		Runtime:           t.runner.runtime, // Share MCP and bgproc
+		SpillDir:          t.runner.spillDir,
+		ScriptToolEnabled: config.ScriptToolEnabled(settings, nil),
 	}
 
 	// We need a generator. We must get it from provider layer, but bypass cache or fix cache.

@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -38,10 +39,11 @@ type shellTool struct {
 	// (not a const) so tests can shorten it; production uses the default.
 	autoBackgroundAfter time.Duration
 	bgMgr               *bgproc.Manager
+	spillDir            string
 }
 
-func newShellTool(ws *Workspace, bgMgr *bgproc.Manager) Tool {
-	return &shellTool{ws: ws, autoBackgroundAfter: defaultAutoBackgroundAfter, bgMgr: bgMgr}
+func newShellTool(ws *Workspace, bgMgr *bgproc.Manager, spillDir string) Tool {
+	return &shellTool{ws: ws, autoBackgroundAfter: defaultAutoBackgroundAfter, bgMgr: bgMgr, spillDir: spillDir}
 }
 
 func (t *shellTool) Name() string { return ShellToolName }
@@ -92,7 +94,10 @@ func (t *shellTool) ExecuteStream(ctx context.Context, args map[string]any, sink
 		return nil, err
 	}
 	if IsDangerousCommand(command) {
-		return nil, fmt.Errorf("command blocked by safety policy: %s", command)
+		return nil, &ToolError{
+			Code:    ErrCodeSandboxDenial,
+			Message: fmt.Sprintf("command blocked by safety policy: %s", command),
+		}
 	}
 
 	background, _, err := boolArg(args, ShellParamIsBackground)
@@ -104,7 +109,11 @@ func (t *shellTool) ExecuteStream(ctx context.Context, args map[string]any, sink
 	if background {
 		grace = backgroundStartGrace
 	}
-	return t.run(ctx, command, background, grace, sink)
+	result, err := t.run(ctx, command, background, grace, sink)
+	if err != nil && errors.Is(err, context.DeadlineExceeded) {
+		return nil, &ToolError{Code: ErrCodeExecutionTimeout, Message: "command timed out"}
+	}
+	return result, err
 }
 
 // run starts command with stdout+stderr redirected to a temp log file, then
@@ -282,10 +291,12 @@ func (t *shellTool) completedResult(logPath string, waitErr error) (map[string]a
 	if output == "" {
 		output = "(empty)"
 	}
+	spill := maybeSpillOutput(output, t.spillDir)
 	result := map[string]any{
-		"output":     output,
+		"output":     spill.output,
 		"background": false,
 	}
+	applySpillMeta(result, spill)
 	if waitErr != nil {
 		if exitErr, ok := waitErr.(*exec.ExitError); ok {
 			result["exit_code"] = exitErr.ExitCode()
@@ -311,7 +322,15 @@ func backgroundedResult(pid int, logPath string, explicit bool, after time.Durat
 		)
 	}
 	if startup := readLogSnapshot(logPath); startup != "" {
-		msg += "\nOutput so far:\n" + startup
+		// The live log_file already holds the full stream; cap only what we
+		// echo back so a huge startup banner does not bloat the next turn.
+		head, tail, omitted := splitHeadTail(startup, maxModelOutputBytes)
+		if omitted == 0 {
+			msg += "\nOutput so far:\n" + startup
+		} else {
+			marker := backgroundOmittedMarker(omitted, countOutputLines(startup), logPath)
+			msg += "\nOutput so far:\n" + assemble(head, tail, marker)
+		}
 	}
 	return map[string]any{
 		"output":     msg,

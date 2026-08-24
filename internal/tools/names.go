@@ -15,6 +15,7 @@ const (
 	EditToolName            = "edit"
 	TaskToolName            = "task"
 	SaveMemoryToolName      = "save_memory"
+	ScriptToolName          = "run_script"
 	// AskUserToolName is the grill-mode structured question tool (registered by
 	// internal/agent, not NewBuiltinRegistry, but its name must be known here so
 	// the scheduler's read-only gate can special-case it).
@@ -66,6 +67,8 @@ const (
 
 	ProjectChecksParamPaths = "paths"
 	ProjectChecksParamFix   = "fix"
+
+	ScriptParamScript = "script"
 )
 
 // legacyAliases maps alternate tool names to canonical wire names.

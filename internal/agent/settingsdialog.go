@@ -244,11 +244,55 @@ func (d *settingsDialogDeps) ListSettings(scope config.SettingScope) []settingsd
 		symGoplsMerged = notSet
 	}
 
+	// --- Goal ---
+	var goalMaxTurns, goalMaxTurnsMerged string
+	var goalEvalProvider, goalEvalProviderMerged string
+	var goalEvalModel, goalEvalModelMerged string
+	var goalEvalTimeout, goalEvalTimeoutMerged string
+	var goalDefined bool
+	goalStr := func(s string) string {
+		if s == "" {
+			return notSet
+		}
+		return s
+	}
+	if scopeSettings.Sagittarius != nil && scopeSettings.Sagittarius.Goal != nil {
+		g := scopeSettings.Sagittarius.Goal
+		goalMaxTurns = intVal(g.MaxTurns)
+		goalEvalProvider = goalStr(g.EvaluatorProvider)
+		goalEvalModel = goalStr(g.EvaluatorModel)
+		goalEvalTimeout = intVal(g.EvaluatorTimeout)
+		goalDefined = true
+	} else {
+		goalMaxTurns = notSet
+		goalEvalProvider = notSet
+		goalEvalModel = notSet
+		goalEvalTimeout = notSet
+	}
+	if merged.Sagittarius != nil && merged.Sagittarius.Goal != nil {
+		g := merged.Sagittarius.Goal
+		goalMaxTurnsMerged = intVal(g.MaxTurns)
+		goalEvalProviderMerged = goalStr(g.EvaluatorProvider)
+		goalEvalModelMerged = goalStr(g.EvaluatorModel)
+		goalEvalTimeoutMerged = intVal(g.EvaluatorTimeout)
+	} else {
+		goalMaxTurnsMerged = notSet
+		goalEvalProviderMerged = notSet
+		goalEvalModelMerged = notSet
+		goalEvalTimeoutMerged = notSet
+	}
+
 	sagDefined := scopeSettings.Sagittarius != nil
 
 	contextLimitPreferDiscovered := func(s *config.Settings) *bool {
 		if s != nil && s.Sagittarius != nil {
 			return s.Sagittarius.ContextLimitPreferDiscovered
+		}
+		return nil
+	}
+	scriptToolEnabled := func(s *config.Settings) *bool {
+		if s != nil && s.Sagittarius != nil {
+			return s.Sagittarius.ScriptToolEnabled
 		}
 		return nil
 	}
@@ -434,6 +478,44 @@ func (d *settingsDialogDeps) ListSettings(scope config.SettingScope) []settingsd
 			Kind:        settingsdialog.KindInt,
 		},
 
+		{Label: "Goal", Kind: settingsdialog.KindHeader},
+		{
+			Key:         "sagittarius.goal.maxTurns",
+			Label:       "Max goal turns",
+			Description: "Cap on autonomous /goal loop iterations (default 25)",
+			Value:       goalMaxTurns,
+			DefinedHere: goalDefined && scopeSettings.Sagittarius.Goal.MaxTurns != nil,
+			MergedValue: goalMaxTurnsMerged,
+			Kind:        settingsdialog.KindInt,
+		},
+		{
+			Key:         "sagittarius.goal.evaluatorProvider",
+			Label:       "Evaluator provider",
+			Description: "Provider for the /goal judge. Prefer a different family from the worker — same-family models share self-approval. Empty uses the worker.",
+			Value:       goalEvalProvider,
+			DefinedHere: goalDefined && scopeSettings.Sagittarius.Goal.EvaluatorProvider != "",
+			MergedValue: goalEvalProviderMerged,
+			Kind:        settingsdialog.KindString,
+		},
+		{
+			Key:         "sagittarius.goal.evaluatorModel",
+			Label:       "Evaluator model",
+			Description: "Model that judges goal completion. Prefer a different family from your worker — it catches self-approval a same-family model shares. Stronger helps; empty means the worker grades its own work.",
+			Value:       goalEvalModel,
+			DefinedHere: goalDefined && scopeSettings.Sagittarius.Goal.EvaluatorModel != "",
+			MergedValue: goalEvalModelMerged,
+			Kind:        settingsdialog.KindString,
+		},
+		{
+			Key:         "sagittarius.goal.evaluatorTimeout",
+			Label:       "Evaluator timeout (sec)",
+			Description: "Cap on the judge's tool loop (default 120)",
+			Value:       goalEvalTimeout,
+			DefinedHere: goalDefined && scopeSettings.Sagittarius.Goal.EvaluatorTimeout != nil,
+			MergedValue: goalEvalTimeoutMerged,
+			Kind:        settingsdialog.KindInt,
+		},
+
 		{Label: "Subagents", Kind: settingsdialog.KindHeader},
 		{
 			Key:         "sagittarius.subagents.enabled",
@@ -442,6 +524,15 @@ func (d *settingsDialogDeps) ListSettings(scope config.SettingScope) []settingsd
 			Value:       subEnabled,
 			DefinedHere: subDefined,
 			MergedValue: subEnabledMerged,
+			Kind:        settingsdialog.KindBool,
+		},
+		{
+			Key:         "sagittarius.scriptToolEnabled",
+			Label:       "Script collapsing (run_script)",
+			Description: "Enable run_script to batch read-only tools in one turn (default off)",
+			Value:       boolVal(scriptToolEnabled(scopeSettings)),
+			DefinedHere: sagDefined && scopeSettings.Sagittarius.ScriptToolEnabled != nil,
+			MergedValue: boolVal(scriptToolEnabled(merged)),
 			Kind:        settingsdialog.KindBool,
 		},
 		{Label: "Sessions", Kind: settingsdialog.KindHeader},
@@ -720,6 +811,15 @@ func applySettingValue(s *config.Settings, key, value string) error {
 			s.Sagittarius.Verify = &config.SagittariusVerifyConfig{}
 		}
 		s.Sagittarius.Verify.EditLoopThreshold = &n
+	case "sagittarius.scriptToolEnabled":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("must be true/false: %w", err)
+		}
+		if s.Sagittarius == nil {
+			s.Sagittarius = &config.SagittariusSettings{}
+		}
+		s.Sagittarius.ScriptToolEnabled = &b
 	case "sagittarius.subagents.enabled":
 		b, err := strconv.ParseBool(value)
 		if err != nil {
@@ -780,6 +880,22 @@ func applySettingValue(s *config.Settings, key, value string) error {
 			s.Sagittarius.MCP = &config.SagittariusMCPConfig{}
 		}
 		s.Sagittarius.MCP.PruneToolSchemas = &b
+	case "sagittarius.goal.maxTurns":
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("maxTurns must be an integer: %w", err)
+		}
+		ensureGoalConfig(s).MaxTurns = &n
+	case "sagittarius.goal.evaluatorProvider":
+		ensureGoalConfig(s).EvaluatorProvider = value
+	case "sagittarius.goal.evaluatorModel":
+		ensureGoalConfig(s).EvaluatorModel = value
+	case "sagittarius.goal.evaluatorTimeout":
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("evaluatorTimeout must be an integer: %w", err)
+		}
+		ensureGoalConfig(s).EvaluatorTimeout = &n
 	default:
 		return fmt.Errorf("unknown setting key %q", key)
 	}
@@ -871,6 +987,10 @@ func clearSettingValue(s *config.Settings, key string) error {
 		if s.Sagittarius != nil && s.Sagittarius.Verify != nil {
 			s.Sagittarius.Verify.RepoLocalTools = nil
 		}
+	case "sagittarius.scriptToolEnabled":
+		if s.Sagittarius != nil {
+			s.Sagittarius.ScriptToolEnabled = nil
+		}
 	case "sagittarius.subagents.enabled":
 		if s.Sagittarius != nil && s.Sagittarius.Subagents != nil {
 			s.Sagittarius.Subagents.Enabled = nil
@@ -899,8 +1019,34 @@ func clearSettingValue(s *config.Settings, key string) error {
 		if s.Sagittarius != nil && s.Sagittarius.MCP != nil {
 			s.Sagittarius.MCP.PruneToolSchemas = nil
 		}
+	case "sagittarius.goal.maxTurns":
+		if s.Sagittarius != nil && s.Sagittarius.Goal != nil {
+			s.Sagittarius.Goal.MaxTurns = nil
+		}
+	case "sagittarius.goal.evaluatorProvider":
+		if s.Sagittarius != nil && s.Sagittarius.Goal != nil {
+			s.Sagittarius.Goal.EvaluatorProvider = ""
+		}
+	case "sagittarius.goal.evaluatorModel":
+		if s.Sagittarius != nil && s.Sagittarius.Goal != nil {
+			s.Sagittarius.Goal.EvaluatorModel = ""
+		}
+	case "sagittarius.goal.evaluatorTimeout":
+		if s.Sagittarius != nil && s.Sagittarius.Goal != nil {
+			s.Sagittarius.Goal.EvaluatorTimeout = nil
+		}
 	default:
 		return fmt.Errorf("unknown setting key %q", key)
 	}
 	return nil
+}
+
+func ensureGoalConfig(s *config.Settings) *config.SagittariusGoalConfig {
+	if s.Sagittarius == nil {
+		s.Sagittarius = &config.SagittariusSettings{}
+	}
+	if s.Sagittarius.Goal == nil {
+		s.Sagittarius.Goal = &config.SagittariusGoalConfig{}
+	}
+	return s.Sagittarius.Goal
 }

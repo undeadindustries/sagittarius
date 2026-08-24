@@ -32,6 +32,8 @@ type Catalog struct {
 	webDirectFetch     bool
 	webMaxFetchBytes   int
 	webUtilityClient   *provider.GeminiUtilityClient
+	spillDir           string
+	scriptToolEnabled  bool
 }
 
 // CatalogConfig configures tool catalog assembly.
@@ -57,6 +59,10 @@ type CatalogConfig struct {
 	WebSearchEnabled bool
 	// WebFetchEnabled toggles the web_fetch tool.
 	WebFetchEnabled bool
+	// SpillDir is where truncated tool outputs are written for later read_file.
+	SpillDir string
+	// ScriptToolEnabled toggles registration of run_script (default false).
+	ScriptToolEnabled bool
 }
 
 // NewCatalog constructs a tool catalog.
@@ -110,6 +116,8 @@ func NewCatalog(cfg CatalogConfig) (*Catalog, error) {
 		webDirectFetch:     directFetch,
 		webMaxFetchBytes:   config.WebMaxFetchBytes(cfg.Settings, nil, directFetch),
 		webUtilityClient:   webUtilityClient,
+		spillDir:           cfg.SpillDir,
+		scriptToolEnabled:  cfg.ScriptToolEnabled,
 	}, nil
 }
 
@@ -144,6 +152,7 @@ type builtinToggles struct {
 	webFetchEnabled    bool
 	webDirectFetch     bool
 	webMaxFetchBytes   int
+	scriptToolEnabled  bool
 }
 
 func (c *Catalog) resolveToggles(s *config.Settings) builtinToggles {
@@ -154,13 +163,11 @@ func (c *Catalog) resolveToggles(s *config.Settings) builtinToggles {
 		editEnabled:        config.EditEnabled(s, nil),
 		symbolsEnabled:     config.SymbolsEnabled(s, nil),
 		symbolsPreferGopls: config.SymbolsPreferGopls(s, nil),
-		// The auto-default for search is "on when a Gemini key resolved", which
-		// the already-built client answers. A key added mid-session only takes
-		// effect on the next launch, when the client is constructed.
-		webSearchEnabled: config.WebSearchEnabled(s, nil, c.webUtilityClient != nil),
-		webFetchEnabled:  config.WebFetchEnabled(s, nil),
-		webDirectFetch:   directFetch,
-		webMaxFetchBytes: config.WebMaxFetchBytes(s, nil, directFetch),
+		webSearchEnabled:   config.WebSearchEnabled(s, nil),
+		webFetchEnabled:    config.WebFetchEnabled(s, nil),
+		webDirectFetch:     directFetch,
+		webMaxFetchBytes:   config.WebMaxFetchBytes(s, nil, directFetch),
+		scriptToolEnabled:  config.ScriptToolEnabled(s, nil),
 	}
 }
 
@@ -175,6 +182,7 @@ func (c *Catalog) toggles() builtinToggles {
 		webFetchEnabled:    c.webFetchEnabled,
 		webDirectFetch:     c.webDirectFetch,
 		webMaxFetchBytes:   c.webMaxFetchBytes,
+		scriptToolEnabled:  c.scriptToolEnabled,
 	}
 }
 
@@ -188,6 +196,7 @@ func (c *Catalog) applyToggles(t builtinToggles) {
 	c.webFetchEnabled = t.webFetchEnabled
 	c.webDirectFetch = t.webDirectFetch
 	c.webMaxFetchBytes = t.webMaxFetchBytes
+	c.scriptToolEnabled = t.scriptToolEnabled
 }
 
 // BuildRegistry assembles the current registry without reconnecting MCP servers.
@@ -206,6 +215,8 @@ func (c *Catalog) BuildRegistry() *tools.Registry {
 			c.webDirectFetch,
 			c.webMaxFetchBytes,
 		),
+		tools.WithSpillDir(c.spillDir),
+		tools.WithScriptTool(c.scriptToolEnabled),
 	)
 	reg.Register(tools.NewActivateSkillTool(c.skills))
 	for _, tool := range c.mcp.Tools() {

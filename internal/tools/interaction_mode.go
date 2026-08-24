@@ -25,6 +25,7 @@ var readOnlyBuiltinTools = map[string]bool{
 	GoogleWebSearchToolName: true,
 	WebFetchToolName:        true,
 	TaskToolName:            true,
+	ScriptToolName:          true,
 }
 
 // projectChecksFixRequested reports whether a run_project_checks call asks for
@@ -80,7 +81,7 @@ func askModeAllow(name string, args map[string]any) (bool, string) {
 	case WriteFileToolName:
 		return false, "ask mode: writing files is not allowed; switch to agent mode to make changes"
 	case ShellToolName:
-		return false, "ask mode: shell commands are not allowed; use read_file, grep_search, or list_directory instead"
+		return false, "ask mode: shell commands are not allowed; use read_file, grep_search, list_directory, find_symbol, google_web_search, or web_fetch instead"
 	default:
 		if strings.HasPrefix(name, "mcp_") {
 			return false, "ask mode: MCP tools are not available in read-only Q&A mode"

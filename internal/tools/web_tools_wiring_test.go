@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/undeadindustries/sagittarius/internal/config"
@@ -47,31 +46,44 @@ func TestNewWebFetchToolNormalizesBudget(t *testing.T) {
 	}
 }
 
-// TestWebSearchWithoutClientErrors guards against the nil-pointer dereference
-// that crashed the agent when search was enabled without a resolvable key.
-func TestWebSearchWithoutClientErrors(t *testing.T) {
-	tool := newGoogleWebSearchTool(nil)
-
-	_, err := tool.Execute(context.Background(), map[string]interface{}{ParamQuery: "golang"})
-	if err == nil {
-		t.Fatal("expected an error when no utility client is configured")
-	}
-	if !strings.Contains(err.Error(), "no Gemini API key") {
-		t.Errorf("error %q should explain the missing key", err)
-	}
-}
-
-// TestWebSearchSkippedWithoutClient asserts the registry hides a tool that could
-// never succeed, while web_fetch (which has a key-free fallback) still registers.
-func TestWebSearchSkippedWithoutClient(t *testing.T) {
+// TestWebSearchRegistersWithoutClient asserts google_web_search registers
+// even without a Gemini client, because it cascades to Brave and DuckDuckGo.
+func TestWebSearchRegistersWithoutClient(t *testing.T) {
 	ws := newTestWorkspace(t)
 	reg := NewBuiltinRegistry(ws, WithWebTools(true, true, nil, false, 0))
 
-	if _, ok := reg.Lookup(GoogleWebSearchToolName); ok {
-		t.Errorf("%s should not be registered without a Gemini utility client", GoogleWebSearchToolName)
+	if _, ok := reg.Lookup(GoogleWebSearchToolName); !ok {
+		t.Errorf("%s should register even without a Gemini utility client", GoogleWebSearchToolName)
 	}
 	if _, ok := reg.Lookup(WebFetchToolName); !ok {
-		t.Errorf("%s should register regardless: its Go HTTP fallback needs no key", WebFetchToolName)
+		t.Errorf("%s should register: its Go HTTP fallback needs no key", WebFetchToolName)
+	}
+}
+
+// TestWebSearchTool_Execute_Validation guards against empty or invalid queries.
+func TestWebSearchTool_Execute_Validation(t *testing.T) {
+	tool := newGoogleWebSearchTool(nil)
+
+	if _, err := tool.Execute(context.Background(), map[string]interface{}{}); err == nil {
+		t.Error("expected error for missing query")
+	}
+	if _, err := tool.Execute(context.Background(), map[string]interface{}{ParamQuery: ""}); err == nil {
+		t.Error("expected error for empty query")
+	}
+}
+
+// TestWebSearchTool_Execute_BraveFallback tests that a failing Brave key falls through to DDG.
+func TestWebSearchTool_Execute_BraveFallback(t *testing.T) {
+	t.Setenv("BRAVE_API_KEY", "invalid-brave-key-for-test")
+	tool := newGoogleWebSearchTool(nil)
+
+	res, err := tool.Execute(context.Background(), map[string]interface{}{ParamQuery: "golang testing"})
+	if err != nil {
+		t.Fatalf("Execute returned unexpected fatal error: %v", err)
+	}
+	resultsStr, ok := res["results"].(string)
+	if !ok || resultsStr == "" {
+		t.Errorf("expected string results from cascade, got %#v", res)
 	}
 }
 

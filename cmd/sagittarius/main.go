@@ -767,6 +767,11 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 	symbolsEnabled, symbolsPreferGopls := resolveSymbolsFlags(settings)
 	webSearchEnabled, webFetchEnabled := resolveWebFlags(ctx, settings)
 
+	spillDir := ""
+	if tmpDir, tmpErr := storage.ProjectTmpDir(wd); tmpErr == nil {
+		spillDir = filepath.Join(tmpDir, "spill")
+	}
+
 	runtime, err := agent.NewRuntime(ctx, agent.RuntimeConfig{
 		Settings:           settings,
 		ClientName:         "sagittarius",
@@ -780,6 +785,8 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		SymbolsPreferGopls: symbolsPreferGopls,
 		WebSearchEnabled:   webSearchEnabled,
 		WebFetchEnabled:    webFetchEnabled,
+		SpillDir:           spillDir,
+		ScriptToolEnabled:  config.ScriptToolEnabled(settings, nil),
 	})
 	if err != nil {
 		return nil, nil, nil, "", "", err
@@ -919,6 +926,8 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		AllowFix:                      allowFix,
 		LivenessRelease:               livenessRelease,
 		HooksRegistry:                 hooksReg,
+		SpillDir:                      spillDir,
+		ScriptToolEnabled:             config.ScriptToolEnabled(settings, nil),
 	}
 	// Assign only when non-nil: a nil *os.File stored in the io.WriteCloser
 	// field would be a non-nil interface wrapping a nil pointer, breaking the
@@ -990,16 +999,8 @@ func resolveSymbolsFlags(merged *config.Settings) (enabled, preferGopls bool) {
 }
 
 // resolveWebFlags reads the web-tool flags from the already-merged settings.
-// google_web_search defaults to on only when a Gemini key is resolvable, so the
-// probe must go through the full credential chain (env → keychain → encrypted
-// file) — checking env vars alone would hide search from the common
-// keychain-only setup.
-func resolveWebFlags(ctx context.Context, merged *config.Settings) (searchEnabled, fetchEnabled bool) {
-	hasKey := false
-	if key, err := credentials.ResolveProviderAPIKey(ctx, string(config.BuiltInGeminiAPIKey)); err == nil && key != "" {
-		hasKey = true
-	}
-	return config.WebSearchEnabled(merged, nil, hasKey), config.WebFetchEnabled(merged, nil)
+func resolveWebFlags(_ context.Context, merged *config.Settings) (searchEnabled, fetchEnabled bool) {
+	return config.WebSearchEnabled(merged, nil), config.WebFetchEnabled(merged, nil)
 }
 
 // resumeWindow bounds how long ago the most recent session may have been

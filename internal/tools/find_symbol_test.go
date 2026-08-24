@@ -40,7 +40,7 @@ func requireRipgrep(t *testing.T) {
 
 func TestFindSymbolFileOutline(t *testing.T) {
 	ws := newSymbolWorkspace(t)
-	tool := newFindSymbolTool(ws, false)
+	tool := newFindSymbolTool(ws, false, "")
 
 	res, err := tool.Execute(context.Background(), map[string]any{
 		ParamDirPath: "greet.go",
@@ -64,7 +64,7 @@ func TestFindSymbolFileOutline(t *testing.T) {
 func TestFindSymbolDirectoryScanWithFilter(t *testing.T) {
 	requireRipgrep(t)
 	ws := newSymbolWorkspace(t)
-	tool := newFindSymbolTool(ws, false)
+	tool := newFindSymbolTool(ws, false, "")
 
 	res, err := tool.Execute(context.Background(), map[string]any{
 		FindSymbolParamSymbol: "greet",
@@ -93,7 +93,7 @@ func TestFindSymbolDirectoryScanWithFilter(t *testing.T) {
 func TestFindSymbolKindFilter(t *testing.T) {
 	requireRipgrep(t)
 	ws := newSymbolWorkspace(t)
-	tool := newFindSymbolTool(ws, false)
+	tool := newFindSymbolTool(ws, false, "")
 
 	res, err := tool.Execute(context.Background(), map[string]any{
 		FindSymbolParamSymbol: "helper",
@@ -113,7 +113,7 @@ func TestFindSymbolKindFilter(t *testing.T) {
 func TestFindSymbolMaxResultsTruncation(t *testing.T) {
 	requireRipgrep(t)
 	ws := newSymbolWorkspace(t)
-	tool := newFindSymbolTool(ws, false)
+	tool := newFindSymbolTool(ws, false, "")
 
 	res, err := tool.Execute(context.Background(), map[string]any{
 		FindSymbolParamKind:       findSymbolKindAll,
@@ -132,7 +132,7 @@ func TestFindSymbolMaxResultsTruncation(t *testing.T) {
 
 func TestFindSymbolInvalidKind(t *testing.T) {
 	ws := newSymbolWorkspace(t)
-	tool := newFindSymbolTool(ws, false)
+	tool := newFindSymbolTool(ws, false, "")
 	if _, err := tool.Execute(context.Background(), map[string]any{
 		FindSymbolParamSymbol: "x",
 		FindSymbolParamKind:   "bogus",
@@ -164,11 +164,11 @@ func TestFindSymbolGoplsHintInDescription(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	withHint := newFindSymbolTool(ws, true).Declaration().Description
+	withHint := newFindSymbolTool(ws, true, "").Declaration().Description
 	if !strings.Contains(withHint, "gopls") {
 		t.Errorf("expected gopls note on a Go module with preferGopls, got %q", withHint)
 	}
-	noHint := newFindSymbolTool(ws, false).Declaration().Description
+	noHint := newFindSymbolTool(ws, false, "").Declaration().Description
 	if strings.Contains(noHint, "gopls") {
 		t.Errorf("gopls note should be absent when preferGopls is false")
 	}

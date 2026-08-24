@@ -60,8 +60,10 @@ type mockHooks struct {
 	// setModeCalls records every mode passed to SetInteractionMode, so tests
 	// can assert the top-level /agent, /plan, /ask, /debug shortcuts invoke
 	// the same hook as their "/mode <name>" equivalents.
-	setModeCalls []modes.Mode
-	readOnly     bool
+	setModeCalls   []modes.Mode
+	readOnly       bool
+	goal           *goal.Goal
+	evaluatorLabel string
 }
 
 func (m *mockHooks) RebuildRunner(context.Context) (string, string, error) {
@@ -266,14 +268,20 @@ func (m *mockHooks) KillBackgroundProcess(pid int) error { return nil }
 
 func (m *mockHooks) BackgroundProcessOutput(pid int) string { return "" }
 
-func (m *mockHooks) GoalStatus() *goal.Goal                           { return nil }
-func (m *mockHooks) SetGoal(objective string, tokenBudget *int) error { return nil }
-func (m *mockHooks) PauseGoal(note string) error                      { return nil }
-func (m *mockHooks) ResumeGoal(note string) error                     { return nil }
-func (m *mockHooks) CompleteGoal(note string) error                   { return nil }
-func (m *mockHooks) BlockGoal(note string) error                      { return nil }
-func (m *mockHooks) ClearGoal(note string) error                      { return nil }
-func (m *mockHooks) SetGoalBudget(tokens int) error                   { return nil }
+func (m *mockHooks) GoalStatus() *goal.Goal { return m.goal }
+func (m *mockHooks) GoalEvaluatorLabel() string {
+	return m.evaluatorLabel
+}
+func (m *mockHooks) SetGoal(objective string, tokenBudget *int) error {
+	m.goal = &goal.Goal{Objective: objective, Status: goal.StatusActive, MaxTurns: 25}
+	return nil
+}
+func (m *mockHooks) PauseGoal(note string) error    { return nil }
+func (m *mockHooks) ResumeGoal(note string) error   { return nil }
+func (m *mockHooks) CompleteGoal(note string) error { return nil }
+func (m *mockHooks) BlockGoal(note string) error    { return nil }
+func (m *mockHooks) ClearGoal(note string) error    { return nil }
+func (m *mockHooks) SetGoalBudget(tokens int) error { return nil }
 
 func (m *mockHooks) GrillStatus() *grill.Session { return m.grillSession }
 

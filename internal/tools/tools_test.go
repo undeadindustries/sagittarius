@@ -24,7 +24,7 @@ func TestReadFileTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tool := newReadFileTool(ws)
+	tool := newReadFileTool(ws, "")
 
 	tests := []struct {
 		name    string
@@ -71,6 +71,52 @@ func TestReadFileTool(t *testing.T) {
 				t.Fatalf("content = %q, want %q", got["content"], tt.want)
 			}
 		})
+	}
+}
+
+func TestReadFileToolSpillPath(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	ws, err := NewWorkspace(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spillDir := t.TempDir()
+	spillPath := filepath.Join(spillDir, spillFilePrefix+"page"+spillFileSuffix)
+	content := "line1\nline2\nline3\nline4"
+	if err := os.WriteFile(spillPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tool := newReadFileTool(ws, spillDir)
+	ctx := context.Background()
+
+	got, err := tool.Execute(ctx, map[string]any{ParamFilePath: spillPath})
+	if err != nil {
+		t.Fatalf("read spill: %v", err)
+	}
+	if got["content"] != content {
+		t.Fatalf("content = %q, want %q", got["content"], content)
+	}
+
+	paged, err := tool.Execute(ctx, map[string]any{
+		ParamFilePath:          spillPath,
+		ReadFileParamStartLine: 2,
+		ReadFileParamEndLine:   3,
+	})
+	if err != nil {
+		t.Fatalf("page spill: %v", err)
+	}
+	if paged["content"] != "line2\nline3" {
+		t.Fatalf("paged content = %q", paged["content"])
+	}
+
+	outside := filepath.Join(t.TempDir(), "secrets.txt")
+	if err := os.WriteFile(outside, []byte("nope"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tool.Execute(ctx, map[string]any{ParamFilePath: outside}); err == nil {
+		t.Fatal("expected out-of-root absolute path to be rejected")
 	}
 }
 
@@ -230,7 +276,7 @@ func TestRipgrepIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tool := newGrepTool(ws)
+	tool := newGrepTool(ws, "")
 	got, err := tool.Execute(context.Background(), map[string]any{
 		ParamPattern: "findme",
 	})

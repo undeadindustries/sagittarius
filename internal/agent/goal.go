@@ -31,57 +31,75 @@ func (r *Runner) evaluateGoalTurn(ctx context.Context, out chan<- ui.StreamEvent
 	r.syncContextGauge()
 
 	settings := r.settingsSnapshot()
-	timeoutSecs := 30
+	timeoutSecs := goal.DefaultEvaluatorTimeoutSeconds
 	if settings != nil && settings.Sagittarius != nil && settings.Sagittarius.Goal != nil && settings.Sagittarius.Goal.EvaluatorTimeout != nil {
 		timeoutSecs = *settings.Sagittarius.Goal.EvaluatorTimeout
 	}
 
-	gen, err := r.auxGenerator(ctx)
-	if err != nil {
-		slog.Error("goal evaluation: generator error", "err", err)
-		out <- ui.StreamEvent{Type: ui.StreamError, Err: fmt.Errorf("goal: generator: %w", err)}
-		return false
+	evalCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSecs)*time.Second)
+	defer cancel()
+
+	if !r.hasDedicatedEvaluator() {
+		r.evaluatorSelfJudgeWarned.Do(func() {
+			out <- ui.StreamEvent{Type: ui.StreamInfo, Text: "Evaluator: " + r.GoalEvaluatorLabel()}
+		})
 	}
 
-	// We need the transcript
-	transcript := r.GoalTranscript()
-
-	dec, err := goal.Evaluate(ctx, g, gen, transcript, r.workDir, time.Duration(timeoutSecs)*time.Second)
+	detContext, early, stop, err := goal.PrepareEvaluation(evalCtx, g, r.workDir)
 	if err != nil {
-		// Fail closed
 		slog.Error("goal evaluation failed", "err", err)
 		out <- ui.StreamEvent{Type: ui.StreamError, Err: fmt.Errorf("goal: evaluate: %w", err)}
 		return false
 	}
-
-	r.goalMu.Lock()
-	g.LastReason = dec.Reason
-	if dec.Done {
-		g.Status = goal.StatusComplete
+	if stop {
+		r.recordGoalDecision(early)
+		r.syncContextGauge()
+		out <- ui.StreamEvent{Type: ui.StreamInfo, Text: fmt.Sprintf("Goal paused/blocked: %s", early.Reason)}
+		return false
 	}
-	r.goalMu.Unlock()
 
+	transcript := r.GoalTranscript()
+	dec, warn, err := r.runEvaluatorAgent(evalCtx, g, transcript, detContext)
+	if err != nil {
+		slog.Error("goal evaluation failed", "err", err)
+		out <- ui.StreamEvent{Type: ui.StreamError, Err: fmt.Errorf("goal: evaluate: %w", err)}
+		return false
+	}
+	if warn != "" {
+		out <- ui.StreamEvent{Type: ui.StreamInfo, Text: warn}
+	}
+
+	r.recordGoalDecision(dec)
 	r.syncContextGauge()
 
 	if dec.Done {
-		msg := fmt.Sprintf("Goal achieved: %s", dec.Reason)
-		out <- ui.StreamEvent{Type: ui.StreamInfo, Text: msg}
+		out <- ui.StreamEvent{Type: ui.StreamInfo, Text: fmt.Sprintf("Goal achieved: %s", dec.Reason)}
 		return false
 	}
 
-	if g.Status != goal.StatusActive {
-		msg := fmt.Sprintf("Goal paused/blocked: %s", dec.Reason)
-		out <- ui.StreamEvent{Type: ui.StreamInfo, Text: msg}
+	r.goalMu.RLock()
+	status := g.Status
+	r.goalMu.RUnlock()
+	if status != goal.StatusActive {
+		out <- ui.StreamEvent{Type: ui.StreamInfo, Text: fmt.Sprintf("Goal paused/blocked: %s", dec.Reason)}
 		return false
 	}
 
-	// Goal continues. Inject continuation prompt.
 	contPrompt := fmt.Sprintf("[Goal continuation] The objective is not yet satisfied.\n\nObjective: %s\nEvaluator: %s\n\nContinue working toward the objective. Do not ask the user for input.", g.Objective, dec.Reason)
-	r.appendModelMessage("", nil) // to ensure we have assistant before user if needed? Actually appendUserMessage does it
-	// wait, appendModelMessage is already called before evaluateGoalTurn!
-	// So we just append a user message.
-	r.appendUserMessage(contPrompt, false) // We don't need to expand @mentions for synthetic
+	r.appendUserMessage(contPrompt, false)
 	return true
+}
+
+func (r *Runner) recordGoalDecision(dec goal.Decision) {
+	r.goalMu.Lock()
+	defer r.goalMu.Unlock()
+	if r.activeGoal == nil {
+		return
+	}
+	r.activeGoal.LastReason = dec.Reason
+	if dec.Done {
+		r.activeGoal.Status = goal.StatusComplete
+	}
 }
 
 func (r *Runner) appendUserMessage(text string, isRealUser bool) {
@@ -140,7 +158,11 @@ func (r *Runner) SetGoal(g *goal.Goal) {
 	r.activeGoal = g
 	// Note: in a real implementation we would write to session JSONL here.
 	if r.sessionRecorder != nil {
-		_ = r.sessionRecorder.SetGoal(g.ToSnapshot())
+		if g == nil {
+			_ = r.sessionRecorder.SetGoal(nil)
+		} else {
+			_ = r.sessionRecorder.SetGoal(g.ToSnapshot())
+		}
 	}
 }
 

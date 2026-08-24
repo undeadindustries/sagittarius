@@ -6,18 +6,16 @@ package config
 // WebSearchEnabled takes hasGeminiKey as a parameter rather than reaching for
 // credentials from here — this package stays free of credential lookups.
 
-// WebSearchEnabled resolves sagittarius.web.searchEnabled. When unset in both
-// scopes it follows key availability: google_web_search requires Gemini native
-// grounding, so registering it without a resolvable key would only ever produce
-// errors.
-func WebSearchEnabled(global, project *Settings, hasGeminiKey bool) bool {
+// WebSearchEnabled resolves sagittarius.web.searchEnabled, defaulting to true:
+// google_web_search has Brave and DuckDuckGo fallbacks, so it stays useful without Gemini.
+func WebSearchEnabled(global, project *Settings) bool {
 	if project != nil && project.Sagittarius != nil && project.Sagittarius.Web != nil && project.Sagittarius.Web.SearchEnabled != nil {
 		return *project.Sagittarius.Web.SearchEnabled
 	}
 	if global != nil && global.Sagittarius != nil && global.Sagittarius.Web != nil && global.Sagittarius.Web.SearchEnabled != nil {
 		return *global.Sagittarius.Web.SearchEnabled
 	}
-	return hasGeminiKey
+	return true
 }
 
 // WebFetchEnabled resolves sagittarius.web.fetchEnabled, defaulting to true:

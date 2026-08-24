@@ -58,6 +58,24 @@ no separate summarizer/compressor model setting.
 These live under the top-level `sagittarius` key. Leaf names are typed and
 validated; unknown keys pass through untouched.
 
+### Script collapsing (`sagittarius.scriptToolEnabled`)
+
+| Key | Type | Default | Purpose |
+|-----|------|---------|---------|
+| `scriptToolEnabled` | bool | `false` | Register the `run_script` tool so the model can batch read-only operations (grep, read, list, find_symbol) in one turn instead of one LLM hop per tool. Mutating tools, shell, nested `run_script`, and confirmation-gated tools are rejected. Live-toggled from `/settings`. |
+
+### Goal evaluator (`sagittarius.goal.*`)
+
+| Key | Type | Default | Purpose |
+|-----|------|---------|---------|
+| `maxTurns` | int | `25` | Cap on autonomous `/goal` loop iterations. |
+| `evaluatorProvider` | string | empty | Provider used by the `/goal` judge. Prefer a different family from the worker — same-family models share self-approval. Empty uses the worker's provider. |
+| `evaluatorModel` | string | empty | Model that judges goal completion. Prefer a different family from the worker. Stronger helps; empty means the worker grades its own work. |
+| `evaluatorTimeout` | int (seconds) | `120` | Cap on the judge's read-only tool loop. |
+| `defaultBudget` | int | unset | Token budget applied when `/goal start` does not specify one. |
+
+The judge is a read-only sub-runner (ask-mode tools, 6 tool-round cap) with its own system prompt. It verifies claims against the current working tree and does not depend on git history. Live-toggled from `/settings` (Goal section).
+
 ### Sessions (`sagittarius.sessions.*`)
 
 | Key | Type | Default | Purpose |

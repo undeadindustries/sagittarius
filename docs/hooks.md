@@ -38,9 +38,17 @@ session. `turn_index` counts user turns in the conversation and continues across
 transcript. Tool results are recorded with the user role internally but are not counted as turns.
 
 A `BeforeTool` hook returning `tool_input` **merges** those keys into the call rather than replacing
-it, so a hook can rewrite one argument without having to restate the rest. Rewritten arguments are
-re-checked against the project boundary, the interaction-mode gate, and `write_file` validation,
-since those ran against the model's original arguments.
+it, so a hook can rewrite one argument without having to restate the rest. When several BeforeTool
+hooks fire on the same call, their `tool_input` maps are merged in order (later keys overlay earlier
+ones). A deny/block from any hook still short-circuits. Rewritten arguments are re-checked against
+the project boundary, the interaction-mode gate, and `write_file` validation, since those ran against
+the model's original arguments.
+
+`BeforeTool` and `AfterTool` also fire for each operation inside `run_script`, using the nested
+tool's own name (`read_file`, `grep_search`, …), not `run_script`. Nested calls go through the
+same project-boundary, interaction-mode, and rewrite-revalidation gates as a direct invocation.
+`run_script` itself still gets its own BeforeTool/AfterTool around the batch. Nested operations
+do not emit their own tool cards; the batch's card carries the summary.
 
 ## Security & Trust Model
 

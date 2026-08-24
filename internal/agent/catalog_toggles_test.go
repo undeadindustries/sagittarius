@@ -135,6 +135,34 @@ func TestRefreshBuiltinTogglesSettingsWinOverStartupFlags(t *testing.T) {
 
 // TestRefreshBuiltinTogglesResolvesFetchBudget asserts sagittarius.web
 // .maxFetchBytes reaches the registry rather than defaulting to a zero budget.
+func TestRefreshBuiltinTogglesScriptTool(t *testing.T) {
+	cat := newToggleCatalog(t, CatalogConfig{})
+
+	if _, ok := cat.BuildRegistry().Lookup(tools.ScriptToolName); ok {
+		t.Fatalf("%s should be off by default", tools.ScriptToolName)
+	}
+
+	on := true
+	if changed := cat.RefreshBuiltinToggles(&config.Settings{
+		Sagittarius: &config.SagittariusSettings{ScriptToolEnabled: &on},
+	}); !changed {
+		t.Fatal("enabling run_script should report a change")
+	}
+	if _, ok := cat.BuildRegistry().Lookup(tools.ScriptToolName); !ok {
+		t.Errorf("%s should register after the toggle", tools.ScriptToolName)
+	}
+
+	off := false
+	if changed := cat.RefreshBuiltinToggles(&config.Settings{
+		Sagittarius: &config.SagittariusSettings{ScriptToolEnabled: &off},
+	}); !changed {
+		t.Fatal("disabling run_script should report a change")
+	}
+	if _, ok := cat.BuildRegistry().Lookup(tools.ScriptToolName); ok {
+		t.Errorf("%s should be gone after disable", tools.ScriptToolName)
+	}
+}
+
 func TestRefreshBuiltinTogglesResolvesFetchBudget(t *testing.T) {
 	// Web tools stay off so no Gemini utility client (and no credential lookup)
 	// is attempted; the budget field is resolved either way.

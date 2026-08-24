@@ -19,11 +19,12 @@ const (
 )
 
 type grepTool struct {
-	ws *Workspace
+	ws       *Workspace
+	spillDir string
 }
 
-func newGrepTool(ws *Workspace) Tool {
-	return &grepTool{ws: ws}
+func newGrepTool(ws *Workspace, spillDir string) Tool {
+	return &grepTool{ws: ws, spillDir: spillDir}
 }
 
 func (t *grepTool) Name() string { return GrepToolName }
@@ -217,8 +218,12 @@ func (t *grepTool) Execute(ctx context.Context, args map[string]any) (map[string
 		relOutput = append(relOutput, line)
 	}
 
-	return map[string]any{
+	matches := strings.Join(relOutput, "\n")
+	spill := maybeSpillOutput(matches, t.spillDir)
+	result := map[string]any{
 		"pattern": pattern,
-		"matches": strings.Join(relOutput, "\n"),
-	}, nil
+		"matches": spill.output,
+	}
+	applySpillMeta(result, spill)
+	return result, nil
 }

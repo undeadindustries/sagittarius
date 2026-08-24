@@ -71,20 +71,23 @@ func TestWebDirectFetch(t *testing.T) {
 	}
 }
 
-func TestWebSearchEnabledFollowsKeyWhenUnset(t *testing.T) {
+func TestWebSearchEnabled(t *testing.T) {
 	on, off := true, false
 
-	if WebSearchEnabled(nil, nil, true) != true {
-		t.Error("unset should follow key availability (present)")
+	if !WebSearchEnabled(nil, nil) {
+		t.Error("search should default to true when unset")
 	}
-	if WebSearchEnabled(nil, nil, false) != false {
-		t.Error("unset should follow key availability (absent)")
+	if !WebSearchEnabled(webSettings(&SagittariusWebConfig{SearchEnabled: &on}), nil) {
+		t.Error("an explicit true should be honored")
 	}
-	if !WebSearchEnabled(webSettings(&SagittariusWebConfig{SearchEnabled: &on}), nil, false) {
-		t.Error("an explicit true should win over an absent key")
+	if WebSearchEnabled(webSettings(&SagittariusWebConfig{SearchEnabled: &off}), nil) {
+		t.Error("an explicit false should be honored")
 	}
-	if WebSearchEnabled(webSettings(&SagittariusWebConfig{SearchEnabled: &off}), nil, true) {
-		t.Error("an explicit false should win over a present key")
+	if WebSearchEnabled(
+		webSettings(&SagittariusWebConfig{SearchEnabled: &on}),
+		webSettings(&SagittariusWebConfig{SearchEnabled: &off}),
+	) {
+		t.Error("project should win over global")
 	}
 }
 

@@ -257,7 +257,7 @@ func builtinModeSuffix(mode Mode) string {
 	case ModeAsk:
 		return "**CRITICAL: Ask mode ACTIVE** — read-only Q&A.\n\n" +
 			"STRICTLY FORBIDDEN: writing files, running shell commands, or making any system changes. " +
-			"Use read-only tools (`read_file`, `grep_search`, `list_directory`) to research and answer. " +
+			"Use read-only tools (`read_file`, `grep_search`, `list_directory`, `find_symbol`, `google_web_search`, `web_fetch`) to research and answer. " +
 			"This constraint overrides other instructions.\n\n" +
 			"Switch to agent mode to implement changes."
 	default:

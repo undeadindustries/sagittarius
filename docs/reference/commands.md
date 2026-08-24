@@ -27,6 +27,7 @@ to later phases — see [Deferred commands](#deferred-commands).
   - `/goal complete`: Manually mark the goal as achieved.
   - `/goal block`: Manually mark the goal as blocked.
 - **Note:** Recommended to run under the `yolo` approval mode (`--yolo` or `/approval yolo`), otherwise tool confirmations will block the loop and require manual intervention anyway.
+- **Evaluator:** After each worker turn a read-only judge agent (ask-mode tools only: `read_file`, `grep_search`, `find_symbol`, `run_project_checks`) verifies the objective against the working tree. It uses its own system prompt and does not share the worker persona. Configure `sagittarius.goal.evaluatorProvider` / `evaluatorModel` so a different model family does the judging; leaving them empty means the worker grades its own work, which `/goal start` and `/goal status` both state explicitly. The judge is capped at 6 tool rounds and 120 seconds (override with `evaluatorTimeout`). An unparseable judge reply is treated as not-done, not a dead goal.
 
 ### `/grill`
 
@@ -65,6 +66,24 @@ to later phases — see [Deferred commands](#deferred-commands).
 - **Usage:** `/quit`
 - **Note:** `Ctrl+C` exits when idle. While a turn is running, `Esc` (or `Ctrl+C`)
   cancels just that turn; a second `Ctrl+C` then exits.
+
+### `run_script` (built-in tool)
+
+Off by default. Set `sagittarius.scriptToolEnabled` to true (or toggle it in `/settings`)
+to register a batch tool that runs several read-only operations in one turn — grep,
+read, list, find_symbol, check-only `run_project_checks` — without an LLM hop between
+them. The `script` argument is JSON:
+
+```json
+{"operations":[{"tool":"grep_search","args":{"pattern":"foo","dir_path":"src/"}}]}
+```
+
+A bare JSON array of the same objects is also accepted. Writes, shell, nested
+`run_script`, `task`, and any tool that requires confirmation are rejected.
+Each nested operation runs through the scheduler's project-boundary and
+interaction-mode gates plus `BeforeTool`/`AfterTool` (with the nested tool's
+own name). A hook deny or rewrite-revalidation failure is reported on that
+operation and does not stop the rest of the batch.
 
 ### Tool confirmations
 
@@ -606,4 +625,5 @@ Implemented: `/about`, `/agent`, `/ask`, `/chat`, `/clear`, `/compress`,
 `/mode` (show, switch), `/modes` (override, clear headlessly), `/model`, `/models`, `/mouse`, `/plan`, `/reasoning`,
 `/resume`, `/settings` (curated browser), `/skills` (list, reload), `/agents`
 (list, reload), `/stats`, `/system-prompt`, `/theme`, `/tools` (list, desc,
-enable/disable), `/undo`, `activate_skill` tool, `ask_user` tool, `save_memory` tool.
+enable/disable), `/undo`, `activate_skill` tool, `ask_user` tool, `save_memory` tool,
+`run_script` tool (opt-in via `sagittarius.scriptToolEnabled`).

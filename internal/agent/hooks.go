@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"log/slog"
+	"maps"
 
 	"github.com/undeadindustries/sagittarius/internal/hooks"
 	"github.com/undeadindustries/sagittarius/internal/ui"
@@ -84,20 +85,31 @@ func (r *Runner) beforeToolHook(ctx context.Context, toolName string, args map[s
 		inp.ToolInput = args
 	}, nil)
 
-	var modArgs map[string]any
+	modArgs, deny, reason := mergeBeforeToolResults(results)
+	return modArgs, deny, reason, err
+}
+
+// mergeBeforeToolResults folds every BeforeTool rewrite into one map. Later
+// hooks overlay earlier keys; a deny short-circuits. Last-wins replacement
+// would drop an earlier hook's path change when a later hook returns only
+// {content: ...}.
+func mergeBeforeToolResults(results []hooks.ExecutionResult) (map[string]any, bool, string) {
+	var merged map[string]any
 	for _, res := range results {
-		if res.Output != nil {
-			if res.Output.IsBlocking() || res.Output.ShouldStop() {
-				reason := res.Output.EffectiveReason("Tool execution denied by hook")
-				return nil, true, reason, err
+		if res.Output == nil {
+			continue
+		}
+		if res.Output.IsBlocking() || res.Output.ShouldStop() {
+			return nil, true, res.Output.EffectiveReason("Tool execution denied by hook")
+		}
+		if m := res.Output.ModifiedToolInput(); m != nil {
+			if merged == nil {
+				merged = make(map[string]any)
 			}
-			if m := res.Output.ModifiedToolInput(); m != nil {
-				modArgs = m
-			}
+			maps.Copy(merged, m)
 		}
 	}
-
-	return modArgs, false, "", err
+	return merged, false, ""
 }
 
 func (r *Runner) afterToolHook(ctx context.Context, toolName string, args map[string]any, result map[string]any) {

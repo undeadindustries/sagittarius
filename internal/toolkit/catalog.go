@@ -145,7 +145,7 @@ func Catalog() []Group {
 					DetectFunc: func(cfg ScanConfig) bool {
 						return cfg.WebReady
 					},
-					InstallHint: "export GEMINI_API_KEY and set sagittarius.web.searchEnabled: true",
+					InstallHint: "enabled by default (Gemini grounding, BRAVE_API_KEY, or DuckDuckGo fallback)",
 				},
 			},
 		},

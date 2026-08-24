@@ -60,6 +60,51 @@ func TestApplySettingValueDefaultMode(t *testing.T) {
 	}
 }
 
+func TestApplySettingValueGoal(t *testing.T) {
+	s := &config.Settings{}
+
+	if err := applySettingValue(s, "sagittarius.goal.evaluatorModel", "qwen/qwen3.5-122b"); err != nil {
+		t.Fatalf("apply evaluatorModel: %v", err)
+	}
+	if s.Sagittarius.Goal.EvaluatorModel != "qwen/qwen3.5-122b" {
+		t.Fatalf("evaluatorModel = %q", s.Sagittarius.Goal.EvaluatorModel)
+	}
+
+	if err := applySettingValue(s, "sagittarius.goal.evaluatorProvider", "openrouter"); err != nil {
+		t.Fatalf("apply evaluatorProvider: %v", err)
+	}
+	if s.Sagittarius.Goal.EvaluatorProvider != "openrouter" {
+		t.Fatalf("evaluatorProvider = %q", s.Sagittarius.Goal.EvaluatorProvider)
+	}
+
+	if err := applySettingValue(s, "sagittarius.goal.evaluatorTimeout", "180"); err != nil {
+		t.Fatalf("apply evaluatorTimeout: %v", err)
+	}
+	if s.Sagittarius.Goal.EvaluatorTimeout == nil || *s.Sagittarius.Goal.EvaluatorTimeout != 180 {
+		t.Fatalf("evaluatorTimeout = %v", s.Sagittarius.Goal.EvaluatorTimeout)
+	}
+
+	if err := applySettingValue(s, "sagittarius.goal.maxTurns", "10"); err != nil {
+		t.Fatalf("apply maxTurns: %v", err)
+	}
+	if s.Sagittarius.Goal.MaxTurns == nil || *s.Sagittarius.Goal.MaxTurns != 10 {
+		t.Fatalf("maxTurns = %v", s.Sagittarius.Goal.MaxTurns)
+	}
+
+	if err := clearSettingValue(s, "sagittarius.goal.evaluatorModel"); err != nil {
+		t.Fatalf("clear evaluatorModel: %v", err)
+	}
+	if s.Sagittarius.Goal.EvaluatorModel != "" {
+		t.Fatalf("evaluatorModel not cleared: %q", s.Sagittarius.Goal.EvaluatorModel)
+	}
+	if err := clearSettingValue(s, "sagittarius.goal.evaluatorTimeout"); err != nil {
+		t.Fatalf("clear evaluatorTimeout: %v", err)
+	}
+	if s.Sagittarius.Goal.EvaluatorTimeout != nil {
+		t.Fatal("evaluatorTimeout not cleared")
+	}
+}
+
 func TestApplySettingValueDefaultModeRejectsUnknownValue(t *testing.T) {
 	s := &config.Settings{}
 

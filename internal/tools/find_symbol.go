@@ -38,13 +38,14 @@ const (
 type findSymbolTool struct {
 	ws          *Workspace
 	preferGopls bool
+	spillDir    string
 	// isGoModule is resolved once at construction so Declaration stays static;
 	// it only tweaks the description's gopls note.
 	isGoModule bool
 }
 
-func newFindSymbolTool(ws *Workspace, preferGopls bool) Tool {
-	t := &findSymbolTool{ws: ws, preferGopls: preferGopls}
+func newFindSymbolTool(ws *Workspace, preferGopls bool, spillDir string) Tool {
+	t := &findSymbolTool{ws: ws, preferGopls: preferGopls, spillDir: spillDir}
 	if _, err := os.Stat(filepath.Join(ws.Root(), "go.mod")); err == nil {
 		t.isGoModule = true
 	}
@@ -142,15 +143,24 @@ func (t *findSymbolTool) Execute(ctx context.Context, args map[string]any) (map[
 	}
 
 	defs, refs := countKinds(tags)
-	return map[string]any{
+	matches := t.renderMatches(tags)
+	spill := maybeSpillOutput(matches, t.spillDir)
+	result := map[string]any{
 		"symbol":        symbolQuery,
-		"matches":       t.renderMatches(tags),
+		"matches":       spill.output,
 		"count":         len(tags),
 		"definitions":   defs,
 		"references":    refs,
 		"scanned_files": scannedFiles,
-		"truncated":     truncated,
-	}, nil
+		"truncated":     truncated || spill.truncated,
+	}
+	if spill.truncated {
+		result["total_lines"] = spill.totalLines
+		if spill.spillPath != "" {
+			result["spill_file"] = spill.spillPath
+		}
+	}
+	return result, nil
 }
 
 // resolveKind reads the kind parameter. When no symbol is given the tool acts as

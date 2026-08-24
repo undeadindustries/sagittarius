@@ -118,8 +118,10 @@ type SagittariusSettings struct {
 	MaxToolRounds *int `json:"maxToolRounds,omitempty"`
 	// ContextLimitPreferDiscovered, when true, causes the API-reported context
 	// limits to be preferred over manual pins.
-	ContextLimitPreferDiscovered *bool                      `json:"contextLimitPreferDiscovered,omitempty"`
-	Extra                        map[string]json.RawMessage `json:"-"`
+	ContextLimitPreferDiscovered *bool `json:"contextLimitPreferDiscovered,omitempty"`
+	// ScriptToolEnabled toggles the run_script batch tool (default off).
+	ScriptToolEnabled *bool                      `json:"scriptToolEnabled,omitempty"`
+	Extra             map[string]json.RawMessage `json:"-"`
 }
 
 // SagittariusUpdateConfig configures the self-update feature.
@@ -168,7 +170,7 @@ type SagittariusGoalConfig struct {
 	EvaluatorProvider string `json:"evaluatorProvider,omitempty"`
 	// EvaluatorModel overrides the model used for goal completion checks.
 	EvaluatorModel string `json:"evaluatorModel,omitempty"`
-	// EvaluatorTimeout caps the evaluator call (default 30).
+	// EvaluatorTimeout caps the evaluator call in seconds (default 120).
 	EvaluatorTimeout *int `json:"evaluatorTimeout,omitempty"`
 	// DefaultBudget sets the token budget if not specified at creation.
 	DefaultBudget *int                       `json:"defaultBudget,omitempty"`

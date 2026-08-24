@@ -119,6 +119,22 @@ type RunnerConfig struct {
 	LivenessRelease func()
 	// HooksRegistry holds the lifecycle hooks registry.
 	HooksRegistry *hooks.Registry
+	// SpillDir is where truncated tool outputs are written. Empty disables
+	// spill-file creation (outputs are still head/tail truncated).
+	SpillDir string
+	// ScriptToolEnabled seeds the placeholder registry built by NewRunner.
+	// The live catalog toggle is authoritative after the first rebuild.
+	ScriptToolEnabled bool
+	// SystemPromptOverride, when non-empty, replaces the personality+memory
+	// base prompt (and skips the mode suffix). Used by the goal evaluator so
+	// the judge gets its own stance instead of the ask-mode worker persona.
+	SystemPromptOverride string
+	// MaxToolRoundsOverride, when non-nil, replaces the global max-tool-rounds
+	// setting for this runner only.
+	MaxToolRoundsOverride *int
+	// OmitSessionTools skips goal/grill/task/save_memory registration. The
+	// goal evaluator must not mutate goal state or spawn children.
+	OmitSessionTools bool
 }
 
 // Runner orchestrates conversation history and provider streaming for the agent loop.
@@ -163,6 +179,7 @@ type Runner struct {
 	interactive bool
 	workDir     string
 	workspace   *tools.Workspace
+	spillDir    string
 	regMu       sync.RWMutex
 	registry    *tools.Registry
 	scheduler   *tools.Scheduler
@@ -235,6 +252,10 @@ type Runner struct {
 	livenessRelease func()
 	hooksRegistry   *hooks.Registry
 	firstTurnOnce   sync.Once
+
+	systemPromptOverride     string
+	maxToolRoundsOverride    *int
+	evaluatorSelfJudgeWarned sync.Once
 }
 
 // LoadedMemoryFiles returns the AGENTS.md paths that contributed to the system
@@ -352,7 +373,11 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 	if err != nil {
 		return nil, fmt.Errorf("agent runner: workspace: %w", err)
 	}
-	registry := tools.NewBuiltinRegistry(ws, tools.WithAllowFix(cfg.AllowFix))
+	registry := tools.NewBuiltinRegistry(ws,
+		tools.WithAllowFix(cfg.AllowFix),
+		tools.WithSpillDir(cfg.SpillDir),
+		tools.WithScriptTool(cfg.ScriptToolEnabled),
+	)
 
 	// Create the runner struct first to pass it to goal tools
 	var history []provider.Message
@@ -361,36 +386,39 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 	}
 
 	runner := &Runner{
-		runtime:              cfg.Runtime,
-		gen:                  cfg.Generator,
-		model:                cfg.Model,
-		providerDefaultModel: cfg.Model,
-		modelPinned:          cfg.ModelPinned,
-		settings:             cfg.Settings,
-		modeState:            modes.NewState(cfg.InitialMode),
-		memory:               memory,
-		approval:             mode,
-		interactive:          cfg.Interactive,
-		workDir:              ws.Root(),
-		workspace:            ws,
-		registry:             registry,
-		ctxMgr:               cfg.ContextManager,
-		state:                StateIdle,
-		sessionRecorder:      cfg.SessionRecorder,
-		history:              history,
-		metrics:              newSessionMetrics(),
-		projectBoundary:      cfg.ProjectBoundary,
-		snap:                 cfg.Snapshotter,
-		editStats:            make(map[string]int),
-		editMatchFailures:    make(map[string]int),
-		nudgedPaths:          make(map[string]bool),
-		repoLocalGrants:      make(map[string]bool),
-		goplsHintPending:     needsGoplsHint(cfg.Settings, ws.Root()),
-		loadedMemoryFiles:    memoryFiles,
-		initialSessionGrants: cfg.InitialSessionGrants,
-		verboseLog:           newVerboseLog(cfg.VerboseLog),
-		livenessRelease:      cfg.LivenessRelease,
-		hooksRegistry:        cfg.HooksRegistry,
+		runtime:               cfg.Runtime,
+		gen:                   cfg.Generator,
+		model:                 cfg.Model,
+		providerDefaultModel:  cfg.Model,
+		modelPinned:           cfg.ModelPinned,
+		settings:              cfg.Settings,
+		modeState:             modes.NewState(cfg.InitialMode),
+		memory:                memory,
+		approval:              mode,
+		interactive:           cfg.Interactive,
+		workDir:               ws.Root(),
+		workspace:             ws,
+		spillDir:              cfg.SpillDir,
+		registry:              registry,
+		ctxMgr:                cfg.ContextManager,
+		state:                 StateIdle,
+		sessionRecorder:       cfg.SessionRecorder,
+		history:               history,
+		metrics:               newSessionMetrics(),
+		projectBoundary:       cfg.ProjectBoundary,
+		snap:                  cfg.Snapshotter,
+		editStats:             make(map[string]int),
+		editMatchFailures:     make(map[string]int),
+		nudgedPaths:           make(map[string]bool),
+		repoLocalGrants:       make(map[string]bool),
+		goplsHintPending:      needsGoplsHint(cfg.Settings, ws.Root()),
+		loadedMemoryFiles:     memoryFiles,
+		initialSessionGrants:  cfg.InitialSessionGrants,
+		verboseLog:            newVerboseLog(cfg.VerboseLog),
+		livenessRelease:       cfg.LivenessRelease,
+		hooksRegistry:         cfg.HooksRegistry,
+		systemPromptOverride:  cfg.SystemPromptOverride,
+		maxToolRoundsOverride: cfg.MaxToolRoundsOverride,
 	}
 
 	// A resumed session has already had its first turn, so turn_index continues
@@ -421,13 +449,14 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		runner.readOnlyConversational = *cfg.InitialReadOnlyConversational
 	}
 
-	registerGoalTools(runner, registry)
-	registerGrillTools(runner, registry)
-
-	if cfg.Settings != nil && config.SubagentsEnabled(cfg.Settings, nil) {
-		registry.Register(newTaskTool(runner))
+	if !cfg.OmitSessionTools {
+		registerGoalTools(runner, registry)
+		registerGrillTools(runner, registry)
+		if cfg.Settings != nil && config.SubagentsEnabled(cfg.Settings, nil) {
+			registry.Register(newTaskTool(runner))
+		}
+		registry.Register(newSaveMemoryTool(runner))
 	}
-	registry.Register(newSaveMemoryTool(runner))
 
 	policy := approvalToPolicy(mode)
 	scheduler := tools.NewScheduler(registry, policy, cfg.Interactive, nil, ws)
@@ -953,7 +982,7 @@ func (r *Runner) runAgentLoop(ctx context.Context, userInput string, out chan<- 
 	}
 
 	verifyHinted := false
-	maxRounds := config.ResolveMaxToolRounds(r.sagittariusSettings(), tools.MaxToolRounds)
+	maxRounds := r.maxToolRounds()
 	// Accumulates the assistant's text across this turn's rounds so the fire-once
 	// auto-title sees the whole reply, not just the final round.
 	var turnReply strings.Builder
@@ -1215,7 +1244,21 @@ func (r *Runner) rebuildSystem() {
 // (provider, model), builds the personality prompt with an honest identity
 // line, and concatenates the AGENTS.md memory. The result is stored in
 // systemBase (mode suffix is appended separately by applyModeSystemSuffix).
+func (r *Runner) maxToolRounds() int {
+	if r.maxToolRoundsOverride != nil {
+		return *r.maxToolRoundsOverride
+	}
+	return config.ResolveMaxToolRounds(r.sagittariusSettings(), tools.MaxToolRounds)
+}
+
 func (r *Runner) rebuildBasePrompt() {
+	if r.systemPromptOverride != "" {
+		r.modelMu.Lock()
+		r.systemBase = r.systemPromptOverride
+		r.modelMu.Unlock()
+		return
+	}
+
 	r.modelMu.RLock()
 	model := r.model
 	memory := r.memory
@@ -1251,6 +1294,13 @@ func (r *Runner) rebuildBasePrompt() {
 }
 
 func (r *Runner) applyModeSystemSuffix() {
+	if r.systemPromptOverride != "" {
+		r.modelMu.Lock()
+		r.system = r.systemBase
+		r.modelMu.Unlock()
+		return
+	}
+
 	suffix := modes.SystemPromptSuffix(r.InteractionMode(), r.sagittariusSettings())
 	// Only inject the interrogation directive while actively grilling. Paused
 	// sessions must not steer the model to keep asking questions, and

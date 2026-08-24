@@ -1059,6 +1059,13 @@ func (h *appHooks) GoalStatus() *goal.Goal {
 	return h.app.runner.Goal()
 }
 
+func (h *appHooks) GoalEvaluatorLabel() string {
+	if h.app == nil || h.app.runner == nil {
+		return ""
+	}
+	return h.app.runner.GoalEvaluatorLabel()
+}
+
 func (h *appHooks) SetGoal(objective string, tokenBudget *int) error {
 	if h.app == nil || h.app.runner == nil {
 		return fmt.Errorf("runner not available")
