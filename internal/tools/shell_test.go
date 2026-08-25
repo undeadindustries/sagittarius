@@ -84,9 +84,12 @@ func TestShellAmpersandBackgroundDoesNotHang(t *testing.T) {
 
 	// Capture the child PID so we can clean it up; the shell backgrounds a
 	// 30s sleep and exits immediately.
+	// disown detaches the background sleep from the shell so bash -c exits
+	// immediately after echo; without it bash may wait for the job and the
+	// tool would not return until autoBackgroundAfter (30s).
 	start := time.Now()
 	res, err := tool.Execute(context.Background(), map[string]any{
-		ShellParamCommand: "sleep 30 & echo $!",
+		ShellParamCommand: "sleep 30 & disown; echo $!",
 	})
 	elapsed := time.Since(start)
 	if err != nil {
