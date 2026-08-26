@@ -108,7 +108,11 @@ func classifyFindings(report diagnostics.Report) (modelFeedback, userFeedback []
 	}
 
 	for _, t := range report.MissingTools {
-		userFeedback = append(userFeedback, fmt.Sprintf("Missing tool: %s. Install hint: %s", t.Name, t.InstallHint))
+		if t.InstallHint != "" {
+			userFeedback = append(userFeedback, fmt.Sprintf("Missing tool: %s. Install hint: %s", t.Name, t.InstallHint))
+		} else {
+			userFeedback = append(userFeedback, fmt.Sprintf("Missing tool: %s", t.Name))
+		}
 	}
 
 	return modelFeedback, userFeedback

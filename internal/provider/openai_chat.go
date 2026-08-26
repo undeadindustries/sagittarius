@@ -110,17 +110,24 @@ func (g *OpenAIChatGenerator) GenerateContentStream(
 		return nil, fmt.Errorf("encode openai request: %w", err)
 	}
 
+	requireArgs := toolsRequiringArgs(req.Tools)
+
 	ch := make(chan StreamResponse)
 	go func() {
 		defer close(ch)
-		if err := g.streamOnce(ctx, body, ch); err != nil {
+		if err := g.streamOnce(ctx, body, requireArgs, ch); err != nil {
 			ch <- StreamResponse{Error: err}
 		}
 	}()
 	return ch, nil
 }
 
-func (g *OpenAIChatGenerator) streamOnce(ctx context.Context, body []byte, ch chan<- StreamResponse) error {
+func (g *OpenAIChatGenerator) streamOnce(
+	ctx context.Context,
+	body []byte,
+	requireArgs map[string]bool,
+	ch chan<- StreamResponse,
+) error {
 	streamCtx := ctx
 	if g.timeout > 0 {
 		var cancel context.CancelFunc
@@ -145,7 +152,7 @@ func (g *OpenAIChatGenerator) streamOnce(ctx context.Context, body []byte, ch ch
 			g.url, contentType, preview)
 	}
 
-	needsRetry, parseErr := parseSSEStream(resp.Body, g.toolCallParsing, func(chunk StreamResponse) bool {
+	needsRetry, parseErr := parseSSEStream(resp.Body, g.toolCallParsing, requireArgs, func(chunk StreamResponse) bool {
 		return sendOrDone(streamCtx, ch, chunk)
 	})
 	if parseErr != nil {

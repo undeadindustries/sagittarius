@@ -74,8 +74,48 @@ func InstallHint(command string) string {
 		return "pip install ruff"
 	case "mypy":
 		return "pip install mypy"
-	case "cargo":
+	case "cargo", "cargo-clippy", "rustfmt":
 		return "install Rust via https://rustup.rs"
+	case "crontab":
+		return "install cronie or another cron package"
+	case "clang-format":
+		return "install clang-format"
+	case "clang-tidy":
+		return "install clang-tidy"
+	case "google-java-format":
+		return "install google-java-format"
+	case "ktlint":
+		return "install ktlint"
+	case "php":
+		return "install php"
+	case "dotnet":
+		return "install dotnet sdk"
+	case "rubocop", "ruby":
+		return "gem install rubocop"
+	case "shellcheck", "bash":
+		return "install shellcheck"
+	case "shfmt":
+		return "install shfmt"
+	case "python", "python3":
+		return "install python"
+	case "node":
+		return "install nodejs"
+	case "yamllint":
+		return "pip install yamllint"
+	case "ansible-lint":
+		return "pip install ansible-lint"
+	case "hadolint":
+		return "install hadolint"
+	case "systemd-analyze":
+		return "linux only"
+	case "jq":
+		return "install jq"
+	case "taplo":
+		return "install taplo"
+	case "terraform":
+		return "install terraform"
+	case "tflint":
+		return "install tflint"
 	default:
 		return ""
 	}

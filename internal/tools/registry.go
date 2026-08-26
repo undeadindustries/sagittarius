@@ -233,11 +233,26 @@ func copyAliases() map[string]string {
 func stringArg(args map[string]any, key string) (string, error) {
 	raw, ok := args[key]
 	if !ok {
-		return "", fmt.Errorf("missing required parameter %q", key)
+		return "", missingParamError(args, key)
 	}
 	s, ok := raw.(string)
 	if !ok || strings.TrimSpace(s) == "" {
 		return "", fmt.Errorf("parameter %q must be a non-empty string", key)
+	}
+	return s, nil
+}
+
+// presentStringArg requires the key to be present and hold a string, but
+// allows an empty value: writing an empty file and deleting a snippet with
+// edit are both legitimate.
+func presentStringArg(args map[string]any, key string) (string, error) {
+	raw, ok := args[key]
+	if !ok {
+		return "", missingParamError(args, key)
+	}
+	s, ok := raw.(string)
+	if !ok {
+		return "", fmt.Errorf("parameter %q must be a string", key)
 	}
 	return s, nil
 }

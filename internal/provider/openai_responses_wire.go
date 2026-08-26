@@ -412,18 +412,10 @@ func firstNonEmpty(values ...string) string {
 }
 
 func pendingToToolCall(p *pendingResponsesFunctionCall) ToolCall {
-	args := map[string]any{}
-	raw := p.arguments.String()
-	if raw != "" {
-		_ = json.Unmarshal([]byte(raw), &args)
-	}
-	if args == nil {
-		args = map[string]any{}
-	}
 	return ToolCall{
 		ID:   p.callID,
 		Name: p.name,
-		Args: args,
+		Args: UnmarshalToolArguments(p.arguments.String()),
 	}
 }
 

@@ -220,6 +220,23 @@ func exists(root, name string) bool {
 	return err == nil
 }
 
+// fileContains reports whether the named file in root contains the substring.
+func fileContains(root, name, substr string) bool {
+	data, err := os.ReadFile(filepath.Join(root, name))
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(data), substr)
+}
+
+// hasMypyConfig checks if mypy is explicitly configured in the project.
+func hasMypyConfig(root string) bool {
+	return exists(root, "mypy.ini") ||
+		exists(root, ".mypy.ini") ||
+		fileContains(root, "pyproject.toml", "[tool.mypy]") ||
+		fileContains(root, "setup.cfg", "[mypy]")
+}
+
 // Registry exposes the internal language registry for documentation or tests.
 func Registry() []Language {
 	return registry
@@ -235,8 +252,8 @@ var registry = []Language{
 			{Name: "gofmt", Command: "gofmt", Args: []string{"-l"}, FailOnOutput: true, Severity: SeverityStyle, InstallHint: "included with go"},
 		},
 		ModuleChecks: []Tool{
-			{Name: "vet", Command: "go", Args: []string{"vet", "./..."}, Severity: SeverityError},
-			{Name: "build", Command: "go", Args: []string{"build", "./..."}, Severity: SeverityError},
+			{Name: "vet", Command: "go", Args: []string{"vet", "./..."}, Severity: SeverityError, InstallHint: "install the Go toolchain from https://go.dev/dl/"},
+			{Name: "build", Command: "go", Args: []string{"build", "./..."}, Severity: SeverityError, InstallHint: "install the Go toolchain from https://go.dev/dl/"},
 		},
 		Server: &ServerSpec{
 			Command:      "gopls",
@@ -249,9 +266,9 @@ var registry = []Language{
 		Extensions:  []string{".py"},
 		RootMarkers: []string{"pyproject.toml", "requirements.txt", "setup.py", "setup.cfg"},
 		FileChecks: []Tool{
-			{Name: "ruff", Command: "ruff", Args: []string{"check"}, Severity: SeverityWarning, InstallHint: "pip install ruff", Fallback: &Tool{Name: "py_compile", Command: "python3", Args: []string{"-m", "py_compile"}, Severity: SeverityError}},
-			{Name: "ruff format", Command: "ruff", Args: []string{"format", "--check"}, Severity: SeverityStyle},
-			{Name: "mypy", Command: "mypy", Args: []string{}, Severity: SeverityError, Precondition: func(root string) bool { return exists(root, "mypy.ini") || exists(root, "pyproject.toml") }},
+			{Name: "ruff", Command: "ruff", Args: []string{"check"}, Severity: SeverityWarning, InstallHint: "pip install ruff", Fallback: &Tool{Name: "py_compile", Command: "python3", Args: []string{"-m", "py_compile"}, Severity: SeverityError, InstallHint: "install python"}},
+			{Name: "ruff format", Command: "ruff", Args: []string{"format", "--check"}, Severity: SeverityStyle, InstallHint: "pip install ruff"},
+			{Name: "mypy", Command: "mypy", Args: []string{}, Severity: SeverityError, Precondition: hasMypyConfig, InstallHint: "pip install mypy"},
 		},
 		Server: &ServerSpec{
 			Command:     "pyright",
@@ -265,11 +282,11 @@ var registry = []Language{
 		FileChecks: []Tool{
 			{Name: "eslint", Command: "eslint", Args: []string{}, Severity: SeverityWarning, Precondition: func(root string) bool {
 				return exists(root, "eslint.config.js") || exists(root, ".eslintrc.js") || exists(root, ".eslintrc.json")
-			}, InstallHint: "npm install eslint", Fallback: &Tool{Name: "node check", Command: "node", Args: []string{"--check"}, Severity: SeverityError}},
-			{Name: "prettier", Command: "prettier", Args: []string{"--check"}, Severity: SeverityStyle, Precondition: func(root string) bool { return exists(root, ".prettierrc") || exists(root, ".prettierrc.json") }},
+			}, InstallHint: "npm install eslint", Fallback: &Tool{Name: "node check", Command: "node", Args: []string{"--check"}, Severity: SeverityError, InstallHint: "install nodejs"}},
+			{Name: "prettier", Command: "prettier", Args: []string{"--check"}, Severity: SeverityStyle, Precondition: func(root string) bool { return exists(root, ".prettierrc") || exists(root, ".prettierrc.json") }, InstallHint: "npm install --save-dev prettier"},
 		},
 		ModuleChecks: []Tool{
-			{Name: "tsc", Command: "tsc", Args: []string{"--noEmit"}, Severity: SeverityError, Precondition: func(root string) bool { return exists(root, "tsconfig.json") }},
+			{Name: "tsc", Command: "tsc", Args: []string{"--noEmit"}, Severity: SeverityError, Precondition: func(root string) bool { return exists(root, "tsconfig.json") }, InstallHint: "npm install --save-dev typescript"},
 		},
 		Server: &ServerSpec{
 			Command:      "typescript-language-server",
@@ -285,8 +302,8 @@ var registry = []Language{
 		FileChecks: []Tool{
 			{Name: "eslint", Command: "eslint", Args: []string{}, Severity: SeverityWarning, Precondition: func(root string) bool {
 				return exists(root, "eslint.config.js") || exists(root, ".eslintrc.js") || exists(root, ".eslintrc.json")
-			}, InstallHint: "npm install eslint", Fallback: &Tool{Name: "node check", Command: "node", Args: []string{"--check"}, Severity: SeverityError}},
-			{Name: "prettier", Command: "prettier", Args: []string{"--check"}, Severity: SeverityStyle, Precondition: func(root string) bool { return exists(root, ".prettierrc") || exists(root, ".prettierrc.json") }},
+			}, InstallHint: "npm install eslint", Fallback: &Tool{Name: "node check", Command: "node", Args: []string{"--check"}, Severity: SeverityError, InstallHint: "install nodejs"}},
+			{Name: "prettier", Command: "prettier", Args: []string{"--check"}, Severity: SeverityStyle, Precondition: func(root string) bool { return exists(root, ".prettierrc") || exists(root, ".prettierrc.json") }, InstallHint: "npm install --save-dev prettier"},
 		},
 		Server: &ServerSpec{
 			Command:      "typescript-language-server",
@@ -303,7 +320,7 @@ var registry = []Language{
 			{Name: "rustfmt", Command: "rustfmt", Args: []string{"--check"}, Severity: SeverityStyle, InstallHint: "included with rustup"},
 		},
 		ModuleChecks: []Tool{
-			{Name: "clippy", Command: "cargo", Args: []string{"clippy"}, Severity: SeverityWarning},
+			{Name: "clippy", Command: "cargo", Args: []string{"clippy"}, Severity: SeverityWarning, InstallHint: "install Rust via https://rustup.rs"},
 		},
 		Server: &ServerSpec{
 			Command:      "rust-analyzer",
@@ -388,7 +405,7 @@ var registry = []Language{
 		Extensions:  []string{".rb"},
 		RootMarkers: []string{"Gemfile"},
 		FileChecks: []Tool{
-			{Name: "rubocop", Command: "rubocop", Args: []string{}, Severity: SeverityWarning, Precondition: func(root string) bool { return exists(root, ".rubocop.yml") }, InstallHint: "gem install rubocop", Fallback: &Tool{Name: "ruby syntax", Command: "ruby", Args: []string{"-c"}, Severity: SeverityError}},
+			{Name: "rubocop", Command: "rubocop", Args: []string{}, Severity: SeverityWarning, Precondition: func(root string) bool { return exists(root, ".rubocop.yml") }, InstallHint: "gem install rubocop", Fallback: &Tool{Name: "ruby syntax", Command: "ruby", Args: []string{"-c"}, Severity: SeverityError, InstallHint: "install ruby"}},
 		},
 		Server: &ServerSpec{
 			Command:      "solargraph",
@@ -402,7 +419,7 @@ var registry = []Language{
 		Extensions:  []string{".sh", ".bash"},
 		RootMarkers: []string{".git"}, // Fallback to repo root, mostly for standalone scripts
 		FileChecks: []Tool{
-			{Name: "shellcheck", Command: "shellcheck", Args: []string{}, Severity: SeverityWarning, InstallHint: "install shellcheck", Fallback: &Tool{Name: "bash syntax", Command: "bash", Args: []string{"-n"}, Severity: SeverityError}},
+			{Name: "shellcheck", Command: "shellcheck", Args: []string{}, Severity: SeverityWarning, InstallHint: "install shellcheck", Fallback: &Tool{Name: "bash syntax", Command: "bash", Args: []string{"-n"}, Severity: SeverityError, InstallHint: "install bash"}},
 			{Name: "shfmt", Command: "shfmt", Args: []string{"-d"}, Severity: SeverityStyle, InstallHint: "install shfmt"},
 		},
 		Server: &ServerSpec{
@@ -416,7 +433,7 @@ var registry = []Language{
 		Extensions:  []string{"crontab"},
 		RootMarkers: []string{".git"},
 		FileChecks: []Tool{
-			{Name: "crontab syntax", Command: "crontab", Args: []string{"-c"}, Severity: SeverityError, Fallback: &Tool{Name: "crontab", Command: "crontab", Args: []string{"-l"}, Severity: SeverityError}},
+			{Name: "crontab syntax", Command: "crontab", Args: []string{"-c"}, Severity: SeverityError, InstallHint: "install cronie or another cron package", Fallback: &Tool{Name: "crontab", Command: "crontab", Args: []string{"-l"}, Severity: SeverityError, InstallHint: "install cronie or another cron package"}},
 		},
 	},
 	{
@@ -449,7 +466,7 @@ var registry = []Language{
 		Extensions:  []string{".json"},
 		RootMarkers: []string{".git"},
 		FileChecks: []Tool{
-			{Name: "jq", Command: "jq", Args: []string{"empty"}, Severity: SeverityError, InstallHint: "install jq", Fallback: &Tool{Name: "python json.tool", Command: "python3", Args: []string{"-m", "json.tool"}, Severity: SeverityError}},
+			{Name: "jq", Command: "jq", Args: []string{"empty"}, Severity: SeverityError, InstallHint: "install jq", Fallback: &Tool{Name: "python json.tool", Command: "python3", Args: []string{"-m", "json.tool"}, Severity: SeverityError, InstallHint: "install python"}},
 		},
 	},
 	{
@@ -457,7 +474,7 @@ var registry = []Language{
 		Extensions:  []string{".toml"},
 		RootMarkers: []string{".git"},
 		FileChecks: []Tool{
-			{Name: "taplo", Command: "taplo", Args: []string{"check"}, Severity: SeverityWarning, InstallHint: "install taplo", Fallback: &Tool{Name: "python json.tool", Command: "python3", Args: []string{"-m", "json.tool"}, Severity: SeverityError}},
+			{Name: "taplo", Command: "taplo", Args: []string{"check"}, Severity: SeverityWarning, InstallHint: "install taplo", Fallback: &Tool{Name: "python json.tool", Command: "python3", Args: []string{"-m", "json.tool"}, Severity: SeverityError, InstallHint: "install python"}},
 		},
 	},
 	{
@@ -592,7 +609,11 @@ func Collect(ctx context.Context, opts Options) (Report, error) {
 			if err != nil {
 				if !seenMissing[check.Command] {
 					seenMissing[check.Command] = true
-					r.MissingTools = append(r.MissingTools, MissingTool{Name: check.Command, InstallHint: check.InstallHint})
+					hint := check.InstallHint
+					if hint == "" {
+						hint = checks.InstallHint(check.Command)
+					}
+					r.MissingTools = append(r.MissingTools, MissingTool{Name: check.Command, InstallHint: hint})
 				}
 				continue
 			}
@@ -640,7 +661,11 @@ func Collect(ctx context.Context, opts Options) (Report, error) {
 				if err != nil {
 					if !seenMissing[check.Command] {
 						seenMissing[check.Command] = true
-						r.MissingTools = append(r.MissingTools, MissingTool{Name: check.Command, InstallHint: check.InstallHint})
+						hint := check.InstallHint
+						if hint == "" {
+							hint = checks.InstallHint(check.Command)
+						}
+						r.MissingTools = append(r.MissingTools, MissingTool{Name: check.Command, InstallHint: hint})
 					}
 					continue
 				}

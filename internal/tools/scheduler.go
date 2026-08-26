@@ -203,9 +203,19 @@ func (s *Scheduler) executeOne(
 	if args == nil {
 		args = map[string]any{}
 	}
+	// Rename model-emitted aliases onto the schema keys before anything reads
+	// them, so the boundary gate, mode gate, confirm card, hooks, snapshots,
+	// and history all see one set of names.
+	args = NormalizeToolArgs(name, args)
+	call.Args = args
 
 	emitErr := func(reason string) {
 		emit(ui.StreamEvent{Type: ui.StreamToolResult, ToolName: name, ToolCallID: id, Text: reason, IsError: true})
+	}
+
+	if msg, bad := toolArgParseError(args); bad {
+		emitErr(msg)
+		return errorResponse(call, ErrCodeInvalidArgs, msg), nil
 	}
 
 	emit(ui.StreamEvent{Type: ui.StreamToolStart, ToolName: name, ToolCallID: id, Text: formatToolSummary(name, args)})
@@ -565,6 +575,10 @@ func (s *Scheduler) applyBeforeToolHook(ctx context.Context, name string, args m
 func (s *Scheduler) runNested(ctx context.Context, name string, args map[string]any) (map[string]any, error) {
 	if args == nil {
 		args = map[string]any{}
+	}
+	args = NormalizeToolArgs(name, args)
+	if msg, bad := toolArgParseError(args); bad {
+		return nil, &ToolError{Code: ErrCodeInvalidArgs, Message: msg}
 	}
 	canon := canonicalToolName(name)
 	if canon == ScriptToolName || canon == TaskToolName {

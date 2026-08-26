@@ -112,6 +112,16 @@ func (t *scriptTool) executeOp(ctx context.Context, op scriptOp, run NestedToolR
 			"code":  string(ErrCodeUnknownTool),
 		}
 	}
+	// Normalize before scriptAllow: the local runner bypasses the scheduler, so
+	// this is the only seam ahead of the gate on that path.
+	op.Args = NormalizeToolArgs(name, op.Args)
+	if msg, bad := toolArgParseError(op.Args); bad {
+		return map[string]any{
+			"tool":  name,
+			"error": msg,
+			"code":  string(ErrCodeInvalidArgs),
+		}
+	}
 	if err := scriptAllow(name, tool, op.Args); err != nil {
 		return map[string]any{
 			"tool":  name,

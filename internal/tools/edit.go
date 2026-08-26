@@ -68,22 +68,14 @@ func (t *editTool) Execute(ctx context.Context, args map[string]any) (map[string
 		return nil, err
 	}
 
-	oldStrRaw, ok := args[EditParamOldString]
-	if !ok {
-		return nil, fmt.Errorf("missing required parameter %q", EditParamOldString)
-	}
-	oldStr, ok := oldStrRaw.(string)
-	if !ok {
-		return nil, fmt.Errorf("parameter %q must be a string", EditParamOldString)
+	oldStr, err := presentStringArg(args, EditParamOldString)
+	if err != nil {
+		return nil, err
 	}
 
-	newStrRaw, ok := args[EditParamNewString]
-	if !ok {
-		return nil, fmt.Errorf("missing required parameter %q", EditParamNewString)
-	}
-	newStr, ok := newStrRaw.(string)
-	if !ok {
-		return nil, fmt.Errorf("parameter %q must be a string", EditParamNewString)
+	newStr, err := presentStringArg(args, EditParamNewString)
+	if err != nil {
+		return nil, err
 	}
 
 	replaceAll := false

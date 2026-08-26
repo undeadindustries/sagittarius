@@ -53,13 +53,9 @@ func (t *writeFileTool) Execute(ctx context.Context, args map[string]any) (map[s
 	if err != nil {
 		return nil, err
 	}
-	contentRaw, ok := args[WriteFileParamContent]
-	if !ok {
-		return nil, fmt.Errorf("missing required parameter %q", WriteFileParamContent)
-	}
-	content, ok := contentRaw.(string)
-	if !ok {
-		return nil, fmt.Errorf("parameter %q must be a string", WriteFileParamContent)
+	content, err := presentStringArg(args, WriteFileParamContent)
+	if err != nil {
+		return nil, err
 	}
 	if err := validateWriteFileContent(content); err != nil {
 		return nil, err
@@ -101,7 +97,7 @@ func validateWriteFileContent(content string) error {
 // validateWriteFileArgs checks write_file tool arguments before confirmation or
 // execution so invalid payloads fail immediately with a tool error.
 func validateWriteFileArgs(args map[string]any) error {
-	content, err := stringArg(args, WriteFileParamContent)
+	content, err := presentStringArg(args, WriteFileParamContent)
 	if err != nil {
 		return err
 	}

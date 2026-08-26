@@ -13,11 +13,13 @@ func TestClassifyFindings(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name              string
-		report            diagnostics.Report
-		wantModelMessages int
-		wantUserMessages  int
-		wantStyleInUser   bool
+		name               string
+		report             diagnostics.Report
+		wantModelMessages  int
+		wantUserMessages   int
+		wantStyleInUser    bool
+		wantUserContains   string
+		wantUserNotContain string
 	}{
 		{
 			name:              "empty report yields no feedback",
@@ -51,12 +53,23 @@ func TestClassifyFindings(t *testing.T) {
 			wantStyleInUser:   true,
 		},
 		{
-			name: "missing tools are user-visible only",
+			name: "missing tools are user-visible only with hint",
 			report: diagnostics.Report{MissingTools: []diagnostics.MissingTool{
 				{Name: "ruff", InstallHint: "pip install ruff"},
 			}},
 			wantModelMessages: 0,
 			wantUserMessages:  1,
+			wantUserContains:  "Missing tool: ruff. Install hint: pip install ruff",
+		},
+		{
+			name: "missing tools without hint omit dangling install hint suffix",
+			report: diagnostics.Report{MissingTools: []diagnostics.MissingTool{
+				{Name: "mypy", InstallHint: ""},
+			}},
+			wantModelMessages:  0,
+			wantUserMessages:   1,
+			wantUserContains:   "Missing tool: mypy",
+			wantUserNotContain: "Install hint:",
 		},
 		{
 			name: "a mixed report only sends error/warning to the model",
@@ -88,6 +101,24 @@ func TestClassifyFindings(t *testing.T) {
 				}
 				if !found {
 					t.Fatalf("userFeedback = %v, want the style finding present", userFeedback)
+				}
+			}
+			if tc.wantUserContains != "" {
+				found := false
+				for _, msg := range userFeedback {
+					if strings.Contains(msg, tc.wantUserContains) {
+						found = true
+					}
+				}
+				if !found {
+					t.Fatalf("userFeedback = %v, want substring %q", userFeedback, tc.wantUserContains)
+				}
+			}
+			if tc.wantUserNotContain != "" {
+				for _, msg := range userFeedback {
+					if strings.Contains(msg, tc.wantUserNotContain) {
+						t.Fatalf("userFeedback = %v, unexpectedly contained %q", userFeedback, tc.wantUserNotContain)
+					}
 				}
 			}
 		})

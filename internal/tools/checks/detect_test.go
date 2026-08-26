@@ -100,12 +100,26 @@ func TestDetectFixSwitchesToMutatingVariants(t *testing.T) {
 func TestInstallHint(t *testing.T) {
 	t.Parallel()
 
-	if InstallHint("ruff") == "" {
-		t.Fatal("expected install hint for ruff")
+	commands := []string{
+		"go", "gofmt", "golangci-lint",
+		"eslint", "prettier", "tsc",
+		"ruff", "mypy",
+		"cargo", "cargo-clippy", "rustfmt",
+		"crontab",
+		"clang-format", "clang-tidy",
+		"google-java-format", "ktlint",
+		"php", "dotnet", "rubocop",
+		"shellcheck", "shfmt",
+		"yamllint", "ansible-lint",
+		"hadolint", "systemd-analyze",
+		"jq", "taplo", "terraform", "tflint",
 	}
-	if InstallHint("golangci-lint") == "" {
-		t.Fatal("expected install hint for golangci-lint")
+	for _, cmd := range commands {
+		if hint := InstallHint(cmd); hint == "" {
+			t.Errorf("expected non-empty install hint for command %q", cmd)
+		}
 	}
+
 	if InstallHint("totally-unknown-tool") != "" {
 		t.Fatal("expected empty hint for unknown tool")
 	}

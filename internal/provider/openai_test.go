@@ -217,6 +217,52 @@ func TestOpenAIChatStream(t *testing.T) {
 	}
 }
 
+func TestOpenAIChatStreamRecoversRawNewlinesInToolArgs(t *testing.T) {
+	t.Parallel()
+	sseBody := sseResponse(
+		`{"id":"1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"write_file","arguments":"{\"file_path\":\"a.py\",\"content\":\"def foo():"}}]},"finish_reason":null}]}`,
+		`{"id":"1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\n    return 1\n\"}"}}]},"finish_reason":"tool_calls"}]}`,
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(sseBody))
+	}))
+	t.Cleanup(srv.Close)
+
+	gen, err := NewOpenAIChatGenerator(OpenAIChatConfig{
+		BaseURL:    srv.URL + "/v1/chat/completions",
+		Model:      "local",
+		Bearer:     "test-key",
+		HTTPClient: srv.Client(),
+	})
+	if err != nil {
+		t.Fatalf("NewOpenAIChatGenerator: %v", err)
+	}
+	ch, err := gen.GenerateContentStream(testContext(t), &GenerateRequest{
+		Messages: []Message{{Role: RoleUser, Parts: []Part{{Text: "hi"}}}},
+	})
+	if err != nil {
+		t.Fatalf("GenerateContentStream: %v", err)
+	}
+	var calls []ToolCall
+	for _, chunk := range collectStream(t, ch) {
+		calls = append(calls, chunk.ToolCalls...)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("tool calls = %d, want 1", len(calls))
+	}
+	if _, bad := calls[0].Args[ToolArgParseErrorKey]; bad {
+		t.Fatalf("args failed to salvage: %v", calls[0].Args)
+	}
+	if got, _ := calls[0].Args["file_path"].(string); got != "a.py" {
+		t.Fatalf("file_path = %q, want a.py", got)
+	}
+	want := "def foo():\n    return 1\n"
+	if got, _ := calls[0].Args["content"].(string); got != want {
+		t.Fatalf("content = %q, want %q", got, want)
+	}
+}
+
 func TestXmlToolCallFallback(t *testing.T) {
 	t.Parallel()
 

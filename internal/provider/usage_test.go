@@ -23,6 +23,7 @@ func TestOpenAIChatUsageParsed(t *testing.T) {
 	_, err := parseSSEStream(
 		strings.NewReader(sse),
 		config.ToolCallParsingLenient,
+		nil,
 		func(r StreamResponse) bool {
 			if r.Usage != nil {
 				usageResp = &r
@@ -63,6 +64,7 @@ func TestOpenRouterCostParsed(t *testing.T) {
 	_, err := parseSSEStream(
 		strings.NewReader(sse),
 		config.ToolCallParsingLenient,
+		nil,
 		func(r StreamResponse) bool {
 			if r.Usage != nil {
 				usageResp = &r

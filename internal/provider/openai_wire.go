@@ -348,20 +348,50 @@ type pendingToolCall struct {
 
 type sseStreamState struct {
 	pending       map[int]*pendingToolCall
+	requireArgs   map[string]bool
 	contentBuffer strings.Builder
 	lastFinish    string
 	lastResponse  string
 	lastUsage     *openAIUsage
 }
 
+// toolsRequiringArgs indexes the declared tools whose schema lists at least one
+// required parameter. A tool call naming one of these but carrying no arguments
+// cannot be executed, which is what distinguishes a dropped payload from a
+// legitimate no-argument call.
+func toolsRequiringArgs(tools []ToolDeclaration) map[string]bool {
+	out := make(map[string]bool, len(tools))
+	for _, tool := range tools {
+		if schemaHasRequiredParams(tool.Parameters) {
+			out[tool.Name] = true
+		}
+	}
+	return out
+}
+
+// schemaHasRequiredParams reads the "required" list out of a JSON-schema map.
+// Built-in tools declare it as []string; MCP tools arrive decoded from JSON as
+// []any.
+func schemaHasRequiredParams(schema map[string]any) bool {
+	switch required := schema["required"].(type) {
+	case []string:
+		return len(required) > 0
+	case []any:
+		return len(required) > 0
+	default:
+		return false
+	}
+}
+
 func parseSSEStream(
 	r io.Reader,
 	parseMode config.ToolCallParsingMode,
+	requireArgs map[string]bool,
 	onChunk func(StreamResponse) bool,
 ) (needsNonStreamRetry bool, err error) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	state := &sseStreamState{pending: map[int]*pendingToolCall{}}
+	state := &sseStreamState{pending: map[int]*pendingToolCall{}, requireArgs: requireArgs}
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -447,6 +477,15 @@ func flushSSEState(
 ) (needsNonStreamRetry bool, err error) {
 	if len(state.pending) > 0 {
 		calls := pendingToToolCalls(state.pending)
+		if anyToolCallMissingArgs(calls, state.requireArgs) {
+			// The engine named a tool but delivered none of its arguments.
+			// Some engines pass the model's raw tool-call markup through as
+			// content instead, so try that before paying for a regeneration.
+			xmlCalls := openAIToolCallsToDomain(ParseXMLToolCalls(state.contentBuffer.String(), parseMode))
+			if !salvageMissingToolArgs(calls, xmlCalls, state.requireArgs) {
+				return true, nil
+			}
+		}
 		if !onChunk(StreamResponse{ToolCalls: calls}) {
 			return false, nil
 		}
@@ -530,18 +569,66 @@ func pendingToToolCalls(pending map[int]*pendingToolCall) []ToolCall {
 	return out
 }
 
+// anyToolCallMissingArgs reports whether any call names a tool that requires
+// parameters yet arrived with none. Incremental tool-call parsers can emit the
+// function name and drop every argument -- vLLM's qwen3_coder parser does this
+// when a parameter value is large and multi-line, which is exactly the shape of
+// a whole-file write_file content. The result is indistinguishable from a model
+// that sent "{}", so both are treated as a truncated stream and recovered.
+//
+// Calls whose arguments failed to decode are excluded: UnmarshalToolArguments
+// tags those with a parse error, and that diagnostic is more useful to the model
+// than a regeneration.
+func anyToolCallMissingArgs(calls []ToolCall, requireArgs map[string]bool) bool {
+	for _, call := range calls {
+		if len(call.Args) == 0 && requireArgs[call.Name] {
+			return true
+		}
+	}
+	return false
+}
+
+// salvageMissingToolArgs fills the arguments of name-only calls, in place, from
+// same-named calls parsed out of the streamed content, and reports whether every
+// one of them was filled. A false result means the caller must fall back to the
+// non-streaming retry.
+//
+// The salvage is per-call rather than a wholesale swap of the streamed slice for
+// the parsed one. A turn can carry several tool calls, and only one of them need
+// be truncated: replacing the whole slice would discard the calls that arrived
+// intact, and would promote any markup the model merely quoted or discussed in
+// prose into a call of its own. Matching is by function name, each parsed call is
+// consumed at most once so N truncated calls to the same tool draw N distinct
+// salvages, and the server-assigned call ID is kept (only Args are filled) so the
+// AD-052 tool-call/result pairing still sees the ids the wire history carries.
+func salvageMissingToolArgs(calls, parsed []ToolCall, requireArgs map[string]bool) bool {
+	used := make([]bool, len(parsed))
+	for i := range calls {
+		if len(calls[i].Args) > 0 || !requireArgs[calls[i].Name] {
+			continue
+		}
+		filled := false
+		for j := range parsed {
+			if used[j] || parsed[j].Name != calls[i].Name || len(parsed[j].Args) == 0 {
+				continue
+			}
+			used[j] = true
+			calls[i].Args = parsed[j].Args
+			filled = true
+			break
+		}
+		if !filled {
+			return false
+		}
+	}
+	return true
+}
+
 func openAIToolCallToDomain(tc openAIToolCall) ToolCall {
-	args := map[string]any{}
-	if tc.Function.Arguments != "" {
-		_ = json.Unmarshal([]byte(tc.Function.Arguments), &args)
-	}
-	if args == nil {
-		args = map[string]any{}
-	}
 	return ToolCall{
 		ID:   tc.ID,
 		Name: tc.Function.Name,
-		Args: args,
+		Args: UnmarshalToolArguments(tc.Function.Arguments),
 	}
 }
 

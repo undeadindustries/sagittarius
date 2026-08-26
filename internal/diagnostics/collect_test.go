@@ -395,6 +395,163 @@ func TestCollectEmptyPathsIsANoOp(t *testing.T) {
 	}
 }
 
+func TestRegistryInstallHintsNonEmpty(t *testing.T) {
+	for _, lang := range Registry() {
+		for _, fc := range lang.FileChecks {
+			if fc.InstallHint == "" {
+				t.Errorf("Language %q FileCheck %q (command %q) has empty InstallHint", lang.ID, fc.Name, fc.Command)
+			}
+			if fc.Fallback != nil && fc.Fallback.InstallHint == "" {
+				t.Errorf("Language %q FileCheck %q Fallback %q has empty InstallHint", lang.ID, fc.Name, fc.Fallback.Name)
+			}
+		}
+		for _, mc := range lang.ModuleChecks {
+			if mc.InstallHint == "" {
+				t.Errorf("Language %q ModuleCheck %q (command %q) has empty InstallHint", lang.ID, mc.Name, mc.Command)
+			}
+			if mc.Fallback != nil && mc.Fallback.InstallHint == "" {
+				t.Errorf("Language %q ModuleCheck %q Fallback %q has empty InstallHint", lang.ID, mc.Name, mc.Fallback.Name)
+			}
+		}
+		if lang.Server != nil && lang.Server.InstallHint == "" {
+			t.Errorf("Language %q ServerSpec (command %q) has empty InstallHint", lang.ID, lang.Server.Command)
+		}
+	}
+}
+
+func TestHasMypyConfig(t *testing.T) {
+	t.Run("empty directory returns false", func(t *testing.T) {
+		dir := t.TempDir()
+		if hasMypyConfig(dir) {
+			t.Error("expected false for empty directory")
+		}
+	})
+
+	t.Run("ruff-only pyproject.toml returns false", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "pyproject.toml"), []byte("[tool.ruff]\nline-length = 88\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if hasMypyConfig(dir) {
+			t.Error("expected false for ruff-only pyproject.toml")
+		}
+	})
+
+	t.Run("pyproject.toml with tool.mypy returns true", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "pyproject.toml"), []byte("[tool.mypy]\nstrict = true\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if !hasMypyConfig(dir) {
+			t.Error("expected true for pyproject.toml with [tool.mypy]")
+		}
+	})
+
+	t.Run("mypy.ini returns true", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "mypy.ini"), []byte("[mypy]\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if !hasMypyConfig(dir) {
+			t.Error("expected true for mypy.ini")
+		}
+	})
+
+	t.Run(".mypy.ini returns true", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, ".mypy.ini"), []byte("[mypy]\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if !hasMypyConfig(dir) {
+			t.Error("expected true for .mypy.ini")
+		}
+	})
+
+	t.Run("setup.cfg with mypy section returns true", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "setup.cfg"), []byte("[mypy]\nignore_missing_imports = True\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if !hasMypyConfig(dir) {
+			t.Error("expected true for setup.cfg with [mypy]")
+		}
+	})
+
+	t.Run("setup.cfg without mypy section returns false", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "setup.cfg"), []byte("[metadata]\nname = foo\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if hasMypyConfig(dir) {
+			t.Error("expected false for setup.cfg without [mypy]")
+		}
+	})
+}
+
+func TestMypyPreconditionInCollect(t *testing.T) {
+	// Isolate PATH so neither ruff nor mypy are found.
+	bin := t.TempDir()
+	t.Setenv("PATH", bin)
+	clearLookPathCache("ruff", "mypy", "python3")
+
+	t.Run("ruff-only pyproject does not report missing mypy", func(t *testing.T) {
+		wsRoot := t.TempDir()
+		if err := os.WriteFile(filepath.Join(wsRoot, "pyproject.toml"), []byte("[tool.ruff]\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(wsRoot, "main.py"), []byte("x = 1\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		report, err := Collect(context.Background(), Options{
+			Root:    wsRoot,
+			Paths:   []string{"main.py"},
+			Timeout: 5 * time.Second,
+		})
+		if err != nil {
+			t.Fatalf("Collect: %v", err)
+		}
+
+		for _, mt := range report.MissingTools {
+			if mt.Name == "mypy" {
+				t.Fatalf("unexpected missing mypy report on ruff-only project: %+v", mt)
+			}
+		}
+	})
+
+	t.Run("pyproject with mypy config reports missing mypy with hint", func(t *testing.T) {
+		wsRoot := t.TempDir()
+		if err := os.WriteFile(filepath.Join(wsRoot, "pyproject.toml"), []byte("[tool.mypy]\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(wsRoot, "main.py"), []byte("x = 1\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		report, err := Collect(context.Background(), Options{
+			Root:    wsRoot,
+			Paths:   []string{"main.py"},
+			Timeout: 5 * time.Second,
+		})
+		if err != nil {
+			t.Fatalf("Collect: %v", err)
+		}
+
+		found := false
+		for _, mt := range report.MissingTools {
+			if mt.Name == "mypy" {
+				found = true
+				if mt.InstallHint != "pip install mypy" {
+					t.Errorf("missing mypy hint = %q, want %q", mt.InstallHint, "pip install mypy")
+				}
+			}
+		}
+		if !found {
+			t.Errorf("expected missing mypy in report.MissingTools: %+v", report.MissingTools)
+		}
+	})
+}
+
 // Sanity: this test package must not leak goroutines/processes across the
 // fake-tool subtests (each is a synchronous exec.Command, not backgrounded).
 func TestMain_NoGoroutineLeakSanity(t *testing.T) {
