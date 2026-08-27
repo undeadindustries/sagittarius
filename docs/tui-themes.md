@@ -149,20 +149,21 @@ showing the current activity, an elapsed timer, and a cancel hint — e.g.
 `Ctrl+C` also cancels a running turn rather than quitting outright; a second
 `Ctrl+C` (when idle) exits.
 
-The label is phase-accurate, so the spinner never claims the model is "thinking"
-when it is not:
+The label is phase-accurate, so the spinner reflects actual activity:
 
 - **`Working…`** — the turn is busy with local context preparation, the network
   round-trip, or provider queueing (time-to-first-token), and during the gaps
   between tool rounds while waiting on the next model response. This is the
   default state immediately after you submit.
+- **`Thinking…`** — shown on the standalone spinner line when the model is
+  actively streaming reasoning ("thinking") tokens while the dedicated thinking
+  box is hidden (`showThinking` is off).
 - **`Running {tool}`** — shown in the tool card while a tool executes (the card
   header carries the spinner; the standalone line is suppressed).
 - **Thinking box** — a separate rounded box (its border carries the spinner and
-  a `Thinking` label) appears only when the model actually streams reasoning
-  ("thinking") tokens *and* `showThinking` is enabled (`Ctrl+T`, or a
-  per-provider/model/global setting). Providers that send no reasoning never
-  trigger it, so you see `Working…` instead.
+  a `Thinking` label) appears when the model streams reasoning tokens *and*
+  `showThinking` is enabled (`Ctrl+T`, or a per-provider/model/global setting).
+  Providers that send no reasoning never trigger it, so you see `Working…` instead.
 - **No spinner** — once the assistant's reply text is visibly streaming into the
   scrollback, the spinner line is hidden: the words are the feedback.
 

@@ -51,8 +51,17 @@ func scanMentions(query string) []mention {
 		if isEscaped(runes, i) || !isMentionStart(runes, i) {
 			continue
 		}
+		// If followed immediately by another '@' (e.g. diff hunk header "@@"),
+		// this is not a mention token. Skip consecutive '@' characters.
+		if i+1 < len(runes) && runes[i+1] == '@' {
+			for i < len(runes) && runes[i] == '@' {
+				i++
+			}
+			i-- // loop increment will advance
+			continue
+		}
 		token, next := scanPath(runes, i+1)
-		if token != "" {
+		if token != "" && token != "@" {
 			out = append(out, classify(token))
 		}
 		i = next - 1

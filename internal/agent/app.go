@@ -242,6 +242,7 @@ func (a *App) ComposerStatus() ui.ComposerStatus {
 			model = strings.TrimSpace(ep.Model)
 		}
 		cs.ShowThinking = config.ResolveShowThinking(s, providerID, model)
+		cs.EscapeAtOnPaste = s.UI().EscapeAtOnPaste
 	}
 	return cs
 }

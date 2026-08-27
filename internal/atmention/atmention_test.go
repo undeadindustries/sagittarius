@@ -34,6 +34,11 @@ func TestScanMentions(t *testing.T) {
 		{"bare skill prefix stays a path", "@skill:", []mention{{kindPath, "skill:"}}},
 		{"skill after email is not a mention", "rob@skill:golang", nil},
 		{"skill and file", "@skill:golang @a.go", []mention{{kindSkill, "golang"}, {kindPath, "a.go"}}},
+		{"diff hunk header @@ ignored", "@@ -1,3 +1,2 @@", nil},
+		{"diff hunk header in text ignored", "see diff @@ -10,5 +10,6 @@ done", nil},
+		{"diff hunk header with real mention", "@@ -1,3 +1,2 @@ look at @file.go", []mention{{kindPath, "file.go"}}},
+		{"multiple consecutive at ignored", "@@@", nil},
+		{"trailing bare at ignored", "look at @", nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

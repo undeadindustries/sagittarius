@@ -102,6 +102,8 @@ func toolDisplayName(name string) string {
 		return "Web fetch"
 	case wireAskUser:
 		return "Question"
+	case "continue_agent":
+		return "Continue"
 	default:
 		return name
 	}

@@ -380,6 +380,15 @@ func (d *settingsDialogDeps) ListSettings(scope config.SettingScope) []settingsd
 			MergedValue: strconv.FormatBool(mergedUI.ToolkitChecklistDismissed),
 			Kind:        settingsdialog.KindBool,
 		},
+		{
+			Key:         "ui.escapeAtOnPaste",
+			Label:       "Escape @ on paste",
+			Description: "Auto-escape @ to \\@ when pasting into composer to prevent unwanted file expansion",
+			Value:       strconv.FormatBool(scopeUI.EscapeAtOnPaste),
+			DefinedHere: uiDefined,
+			MergedValue: strconv.FormatBool(mergedUI.EscapeAtOnPaste),
+			Kind:        settingsdialog.KindBool,
+		},
 
 		{Label: "Security", Kind: settingsdialog.KindHeader},
 		{
@@ -681,6 +690,12 @@ func applySettingValue(s *config.Settings, key, value string) error {
 			return fmt.Errorf("toolkitChecklistDismissed must be true/false: %w", err)
 		}
 		return s.SetUIToolkitChecklistDismissed(b)
+	case "ui.escapeAtOnPaste":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("escapeAtOnPaste must be true/false: %w", err)
+		}
+		return s.SetUIEscapeAtOnPaste(b)
 	case "security.projectBoundary.enforce":
 		b, err := strconv.ParseBool(value)
 		if err != nil {
@@ -951,6 +966,8 @@ func clearSettingValue(s *config.Settings, key string) error {
 		return setUIBoolField(s, "hideBanner", false)
 	case "ui.toolkitChecklistDismissed":
 		return s.SetUIToolkitChecklistDismissed(false)
+	case "ui.escapeAtOnPaste":
+		return s.SetUIEscapeAtOnPaste(false)
 	case "security.projectBoundary.enforce":
 		if s.Security != nil && s.Security.ProjectBoundary != nil {
 			s.Security.ProjectBoundary.Enforce = nil

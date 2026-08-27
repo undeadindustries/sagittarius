@@ -556,6 +556,28 @@ func TestSetActiveProvider(t *testing.T) {
 	}
 }
 
+func TestWriteActiveModel(t *testing.T) {
+	t.Parallel()
+
+	settings := &config.Settings{}
+
+	if err := WriteActiveModel(settings, "GX10-01", "gemma-4-31b-it-low"); err != nil {
+		t.Fatalf("WriteActiveModel failed: %v", err)
+	}
+
+	if settings.ActiveProvider() != "GX10-01" {
+		t.Errorf("active = %q, want GX10-01", settings.ActiveProvider())
+	}
+
+	inst := providerInstance(settings, "GX10-01")
+	if inst == nil {
+		t.Fatal("expected instance config to be created")
+	}
+	if inst.Model != "gemma-4-31b-it-low" {
+		t.Errorf("inst.Model = %q, want gemma-4-31b-it-low", inst.Model)
+	}
+}
+
 func TestChatCompletionsURL(t *testing.T) {
 	t.Parallel()
 

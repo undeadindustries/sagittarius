@@ -149,3 +149,76 @@ func TestLerpHex(t *testing.T) {
 		t.Fatalf("lerp at 0.5 = %q, want #808080", got)
 	}
 }
+
+func TestWorkingLabelSwitchesToThinkingOnReasoningDelta(t *testing.T) {
+	t.Parallel()
+	m := newModel(ui.Options{ThemeName: "greyscale"}, quitApp{}, NewTerminal(ui.Options{}))
+	m.busy = true
+	m.setWorking(true, m.busyLabel())
+
+	// Initially, turn is waiting on the model before any output: label is "Working…".
+	if m.workingLabel != "Working…" {
+		t.Fatalf("initial label = %q, want %q", m.workingLabel, "Working…")
+	}
+
+	// Model streams reasoning tokens (with showThinking=false): label switches to "Thinking…".
+	m.handleStream(ui.StreamEvent{Type: ui.StreamReasoningDelta, Text: "Analyzing options..."})
+	if m.workingLabel != "Thinking…" {
+		t.Fatalf("after reasoning delta, label = %q, want %q", m.workingLabel, "Thinking…")
+	}
+	if !m.showWorkingIndicator() {
+		t.Fatal("standalone working indicator should be visible while reasoning with showThinking off")
+	}
+	if !strings.Contains(m.workingDisplayLabel(), "Thinking…") {
+		t.Fatalf("workingDisplayLabel = %q, want containing %q", m.workingDisplayLabel(), "Thinking…")
+	}
+
+	// Additional reasoning deltas keep "Thinking…".
+	m.handleStream(ui.StreamEvent{Type: ui.StreamReasoningDelta, Text: " more thoughts."})
+	if m.workingLabel != "Thinking…" {
+		t.Fatalf("after additional reasoning, label = %q, want %q", m.workingLabel, "Thinking…")
+	}
+
+	// Answer text starts streaming: reasoning is cleared, label resets to "Working…".
+	m.handleStream(ui.StreamEvent{Type: ui.StreamTextDelta, Text: "Here is the plan:"})
+	if m.workingLabel != "Working…" {
+		t.Fatalf("after text delta starts, label = %q, want %q", m.workingLabel, "Working…")
+	}
+	// While text actively streams, working line is hidden.
+	if m.showWorkingIndicator() {
+		t.Fatal("working indicator should be hidden while text is actively streaming")
+	}
+
+	// When streaming pauses, indicator reappears with "Working…".
+	m.lastTextDeltaAt = time.Now().Add(-2 * streamingSpinnerGrace)
+	if !m.showWorkingIndicator() {
+		t.Fatal("working indicator should reappear after streaming pauses")
+	}
+	if !strings.Contains(m.workingDisplayLabel(), "Working…") {
+		t.Fatalf("workingDisplayLabel after text pause = %q, want containing %q", m.workingDisplayLabel(), "Working…")
+	}
+
+	// Tool starts: label reflects the tool.
+	m.handleStream(ui.StreamEvent{Type: ui.StreamToolStart, ToolName: "read_file", ToolCallID: "c1"})
+	if m.workingLabel != "Running Read file" {
+		t.Fatalf("during tool execution, label = %q, want %q", m.workingLabel, "Running Read file")
+	}
+
+	// Tool finishes: label resets to "Working…".
+	m.handleStream(ui.StreamEvent{Type: ui.StreamToolResult, ToolName: "read_file", Text: "content", ToolCallID: "c1"})
+	if m.workingLabel != "Working…" {
+		t.Fatalf("after tool result, label = %q, want %q", m.workingLabel, "Working…")
+	}
+
+	// Next round starts reasoning again: switches back to "Thinking…".
+	m.handleStream(ui.StreamEvent{Type: ui.StreamReasoningDelta, Text: "Reviewing file content..."})
+	if m.workingLabel != "Thinking…" {
+		t.Fatalf("next round reasoning, label = %q, want %q", m.workingLabel, "Thinking…")
+	}
+
+	// Turn finishes: indicator stops.
+	m.handleStream(ui.StreamEvent{Type: ui.StreamDone})
+	if m.showWorkingIndicator() || m.busy {
+		t.Fatalf("after StreamDone: show=%v busy=%v", m.showWorkingIndicator(), m.busy)
+	}
+}

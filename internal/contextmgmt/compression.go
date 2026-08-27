@@ -190,10 +190,14 @@ func (c *Compressor) summarize(ctx context.Context, summaryHistory []Message) (s
 		Role:  RoleUser,
 		Parts: []Part{{Text: anchor + "\n\nFirst, reason in your scratchpad. Then, generate the updated <state_snapshot>."}},
 	})
-	summary, err := c.Summarize(ctx, firstContents, c.CompressionPrompt)
+	raw, err := c.Summarize(ctx, firstContents, c.CompressionPrompt)
 	if err != nil {
 		return "", fmt.Errorf("summarize history: %w", err)
 	}
+	// Extract before the replay below, not just at the end: the verification
+	// pass re-sends this text as a model turn, so leaving the scratchpad in
+	// would pay for it a second time on the way in as well as on the way out.
+	summary := extractSnapshot(raw)
 
 	verifyContents := append(cloneHistory(summaryHistory),
 		Message{Role: RoleModel, Parts: []Part{{Text: summary}}},
@@ -204,11 +208,11 @@ func (c *Compressor) summarize(ctx context.Context, summaryHistory []Message) (s
 		return "", fmt.Errorf("verify summary: %w", err)
 	}
 
-	chosen := strings.TrimSpace(verification)
+	chosen := extractSnapshot(verification)
 	if chosen == "" {
 		chosen = summary
 	}
-	return strings.TrimSpace(chosen), nil
+	return chosen, nil
 }
 
 func (c *Compressor) summarizerHistory(curated, truncated []Message, split, limit int, estimate EstimateFn) []Message {
@@ -414,10 +418,18 @@ func functionResponseString(fr *FunctionResponse) string {
 func buildCompressedHistory(summary string, keep []Message) []Message {
 	out := make([]Message, 0, len(keep)+2)
 	out = append(out,
-		Message{Role: RoleUser, Parts: []Part{{Text: summary}}},
-		Message{Role: RoleModel, Parts: []Part{{Text: "Got it. Thanks for the additional context!"}}},
+		Message{Role: RoleUser, Parts: []Part{{Text: frameCompressedSummary(summary)}}},
+		Message{Role: RoleModel, Parts: []Part{{Text: compressedSummaryAck}}},
 	)
 	return append(out, keep...)
+}
+
+// frameCompressedSummary labels the summary as reference material and closes it
+// with an unambiguous boundary. It occupies the user slot, so without this the
+// model reads a <state_snapshot> as something the user sent and starts emitting
+// snapshots of its own instead of doing the work.
+func frameCompressedSummary(summary string) string {
+	return compressedSummaryPrefix + "\n\n" + summary + "\n\n" + compressedSummaryEndMarker
 }
 
 func historyHasSnapshot(history []Message) bool {

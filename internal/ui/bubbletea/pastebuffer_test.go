@@ -54,6 +54,54 @@ func TestPasteStoreCapture(t *testing.T) {
 	}
 }
 
+func TestEscapeAtSymbols(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "no at",
+			in:   "hello world",
+			want: "hello world",
+		},
+		{
+			name: "single unescaped at",
+			in:   "@main.go",
+			want: `\@main.go`,
+		},
+		{
+			name: "already escaped at",
+			in:   `\@main.go`,
+			want: `\@main.go`,
+		},
+		{
+			name: "double backslash before at",
+			in:   `\\@main.go`,
+			want: `\\\@main.go`,
+		},
+		{
+			name: "diff hunk header",
+			in:   "@@ -1,3 +1,2 @@",
+			want: `\@\@ -1,3 +1,2 \@\@`,
+		},
+		{
+			name: "email and mention mixed",
+			in:   `email rob@example.com and check @file.go or \@skipped.go`,
+			want: `email rob\@example.com and check \@file.go or \@skipped.go`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := escapeAtSymbols(tc.in)
+			if got != tc.want {
+				t.Fatalf("escapeAtSymbols(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestPasteStoreCollisions(t *testing.T) {
 	store := newPasteStore()
 	in := "1\n2\n3\n4\n5\n6"

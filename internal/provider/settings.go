@@ -212,6 +212,36 @@ func SetProviderModel(settings *config.Settings, providerID, model string) error
 	return setProviderInstance(settings, providerID, cfg)
 }
 
+// WriteActiveModel records providers.active and the model override for providerID
+// into settings without requiring providerID to be defined in this specific
+// settings document. This is used when applying a model selection to the
+// project tier where custom provider definitions remain in global settings.
+func WriteActiveModel(settings *config.Settings, providerID, model string) error {
+	providerID = config.NormalizeProviderID(providerID)
+	model = strings.TrimSpace(model)
+	if providerID == "" {
+		return fmt.Errorf("write active model: provider id is required")
+	}
+	if model == "" {
+		return fmt.Errorf("write active model: model is required")
+	}
+	if settings == nil {
+		return fmt.Errorf("write active model: settings are required")
+	}
+	if settings.Providers == nil {
+		settings.Providers = &config.ProvidersSettings{}
+	}
+	settings.Providers.Active = providerID
+
+	inst := providerInstance(settings, providerID)
+	var cfg config.ProviderInstanceConfig
+	if inst != nil {
+		cfg = *inst
+	}
+	cfg.Model = model
+	return setProviderInstance(settings, providerID, &cfg)
+}
+
 // PruneModeOverrides clears any per-mode (provider, model) override whose model
 // is no longer present in the provider's curated active-model set, or whose
 // provider no longer exists. This keeps mode overrides consistent after a model

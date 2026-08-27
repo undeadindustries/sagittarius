@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -120,5 +121,97 @@ func TestSetActiveModelsRefreshesMerged(t *testing.T) {
 	}
 	if !hasModel(provider.AllActiveModels(app.effectiveSettings()), model) {
 		t.Fatal("effectiveSettings/Merged did not pick up the newly activated model")
+	}
+}
+
+type mockRunnerRebuildHooks struct {
+	slash.Hooks
+	rebuildCalled bool
+}
+
+func (m *mockRunnerRebuildHooks) RebuildRunner(ctx context.Context) (string, string, error) {
+	m.rebuildCalled = true
+	return "custom-label", "custom-model", nil
+}
+
+func TestSelectCurrentModelProjectScopeGlobalCustomProvider(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SAGITTARIUS_HOME", home)
+	projectDir := t.TempDir()
+
+	docs, err := config.LoadDocuments(projectDir)
+	if err != nil {
+		t.Fatalf("LoadDocuments: %v", err)
+	}
+
+	// Global settings define custom provider GX10-01 with active models.
+	const customProvider = "GX10-01"
+	const customModel = "gemma-4-31b-it-low"
+	docs.Global.Providers = &config.ProvidersSettings{
+		Active: "gemini-apikey",
+		Custom: map[string]config.CustomProviderDefinition{
+			customProvider: {
+				DisplayName: "GX10 Local Node",
+				BaseURL:     "http://127.0.0.1:8000/v1/chat/completions",
+			},
+		},
+		Extra: map[string]json.RawMessage{
+			customProvider: json.RawMessage(`{"activeModels":["gemma-4-31b-it-low","gemma-4-31b-it-high"]}`),
+		},
+	}
+	// Project settings only have a system prompt (no custom provider definitions).
+	project := docs.TargetSettings(config.ScopeProject)
+	project.Sagittarius = &config.SagittariusSettings{
+		SystemPrompt: &config.SagittariusSystemPromptConfig{
+			Personality: "programmer",
+		},
+	}
+	docs.ReloadMerged()
+
+	mockHooks := &mockRunnerRebuildHooks{}
+	app := &App{
+		docs: docs,
+		deps: slash.Deps{
+			Settings: docs.Global,
+			Hooks:    mockHooks,
+		},
+	}
+
+	d := app.ModelPickDialogDeps()
+	// Selecting model with ScopeProject should succeed even though GX10-01 definition is global-only.
+	if err := d.SelectCurrentModel(t.Context(), customProvider, customModel, config.ScopeProject); err != nil {
+		t.Fatalf("SelectCurrentModel with ScopeProject failed: %v", err)
+	}
+
+	if !mockHooks.rebuildCalled {
+		t.Error("expected RebuildRunner to be called")
+	}
+
+	// Verify project settings file on disk has only active provider & model override, no Custom definition copy.
+	reloadedDocs, err := config.LoadDocuments(projectDir)
+	if err != nil {
+		t.Fatalf("reloaded LoadDocuments: %v", err)
+	}
+	if reloadedDocs.Project.ActiveProvider() != customProvider {
+		t.Errorf("project active provider = %q, want %q", reloadedDocs.Project.ActiveProvider(), customProvider)
+	}
+	if reloadedDocs.Project.Providers != nil && len(reloadedDocs.Project.Providers.Custom) > 0 {
+		t.Errorf("project providers.custom should remain empty, got %+v", reloadedDocs.Project.Providers.Custom)
+	}
+
+	// Merged settings must reflect active provider = GX10-01 and model = gemma-4-31b-it-low
+	merged := reloadedDocs.Merged()
+	if merged.ActiveProvider() != customProvider {
+		t.Errorf("merged active provider = %q, want %q", merged.ActiveProvider(), customProvider)
+	}
+
+	// Validate uncurated model fails
+	if err := d.SelectCurrentModel(t.Context(), customProvider, "non-existent-model", config.ScopeProject); err == nil {
+		t.Error("expected error for model not in active set, got nil")
+	}
+
+	// Validate unknown provider fails
+	if err := d.SelectCurrentModel(t.Context(), "completely-unknown", "model-x", config.ScopeProject); err == nil {
+		t.Error("expected error for unknown provider, got nil")
 	}
 }

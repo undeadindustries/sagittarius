@@ -35,6 +35,29 @@ func isLargePaste(s string) bool {
 	return len(lines) > largePasteLineThreshold || len([]rune(s)) > largePasteRuneThreshold
 }
 
+// escapeAtSymbols converts unescaped '@' characters in s to '\@', leaving
+// already-escaped '\@' characters untouched.
+func escapeAtSymbols(s string) string {
+	if !strings.Contains(s, "@") {
+		return s
+	}
+	var b strings.Builder
+	runes := []rune(s)
+	for i := 0; i < len(runes); i++ {
+		if runes[i] == '@' {
+			bsCount := 0
+			for j := i - 1; j >= 0 && runes[j] == '\\'; j-- {
+				bsCount++
+			}
+			if bsCount%2 == 0 {
+				b.WriteRune('\\')
+			}
+		}
+		b.WriteRune(runes[i])
+	}
+	return b.String()
+}
+
 // capture normalises line endings, stores the pasted content, and returns the
 // placeholder string to display. If the paste is not large, it returns the
 // original string.

@@ -186,7 +186,7 @@ func TestCompressGeminiToolCallPairIntegrity(t *testing.T) {
 	}
 
 	// Verify the synthetic summary prefix
-	if len(newHistory[0].Parts) == 0 || newHistory[0].Parts[0].Text != "compressed summary" {
+	if len(newHistory[0].Parts) == 0 || !strings.Contains(newHistory[0].Parts[0].Text, "compressed summary") {
 		t.Errorf("expected synthetic summary at index 0")
 	}
 
@@ -250,8 +250,8 @@ func TestCompressOverThresholdWithVerification(t *testing.T) {
 	if res.Info.Status != Compressed {
 		t.Fatalf("status = %v, want Compressed", res.Info.Status)
 	}
-	if res.NewHistory[0].Parts[0].Text != "Verified Summary" {
-		t.Errorf("summary = %q, want Verified Summary", res.NewHistory[0].Parts[0].Text)
+	if !strings.Contains(res.NewHistory[0].Parts[0].Text, "Verified Summary") {
+		t.Errorf("summary = %q, want it to carry Verified Summary", res.NewHistory[0].Parts[0].Text)
 	}
 	if len(q.calls) != 2 {
 		t.Errorf("summarizer calls = %d, want 2", len(q.calls))
@@ -271,8 +271,8 @@ func TestCompressFallsBackToInitialSummary(t *testing.T) {
 	if res.Info.Status != Compressed {
 		t.Fatalf("status = %v, want Compressed", res.Info.Status)
 	}
-	if res.NewHistory[0].Parts[0].Text != "Initial Summary" {
-		t.Errorf("summary = %q, want Initial Summary", res.NewHistory[0].Parts[0].Text)
+	if !strings.Contains(res.NewHistory[0].Parts[0].Text, "Initial Summary") {
+		t.Errorf("summary = %q, want it to carry Initial Summary", res.NewHistory[0].Parts[0].Text)
 	}
 }
 
@@ -302,8 +302,11 @@ func TestCompressForceUnderThreshold(t *testing.T) {
 	history := []Message{
 		msg("user", "msg1"), msg("model", "msg2"), msg("user", "msg3"), msg("model", "msg4"),
 	}
+	// OriginalTokenCount stays far below Threshold*EffectiveLimit so Force is
+	// what triggers the compression, but it must exceed the framed summary's own
+	// cost or the inflated-token-count guard correctly rejects the result.
 	res, err := newCompressor(q).Compress(context.Background(), CompressOptions{
-		History: history, Force: true, OriginalTokenCount: 100, Threshold: 0.5, EffectiveLimit: 1_000_000, PreserveFraction: 0.3,
+		History: history, Force: true, OriginalTokenCount: 5_000, Threshold: 0.5, EffectiveLimit: 1_000_000, PreserveFraction: 0.3,
 	})
 	if err != nil {
 		t.Fatalf("Compress: %v", err)

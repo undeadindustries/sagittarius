@@ -21,6 +21,10 @@ type UISettings struct {
 	// ShowThinking reveals the model reasoning ("thinking") box by default.
 	// Off by default; toggled live with Ctrl+T or per-provider/model settings.
 	ShowThinking bool `json:"showThinking,omitempty"`
+	// EscapeAtOnPaste automatically escapes unescaped '@' characters as '\@'
+	// when pasting text into the composer, preventing diffs, emails, and
+	// decorators from triggering atmention file expansion.
+	EscapeAtOnPaste bool `json:"escapeAtOnPaste,omitempty"`
 	// ToolkitChecklistDismissed marks whether the user has permanently dismissed the host toolkit checklist.
 	ToolkitChecklistDismissed bool `json:"toolkitChecklistDismissed,omitempty"`
 	// UpdateCheckedAt is the RFC3339 timestamp of the last background update
@@ -138,6 +142,20 @@ func (s *Settings) SetUIShowThinking(on bool) error {
 			return nil
 		}
 		ui["showThinking"] = json.RawMessage("true")
+		return nil
+	})
+}
+
+// SetUIEscapeAtOnPaste records the paste @ escaping preference under
+// ui.escapeAtOnPaste, preserving other ui.* keys. A false value clears the key
+// (off is the implicit default). The caller flushes via Loader.Save.
+func (s *Settings) SetUIEscapeAtOnPaste(on bool) error {
+	return s.mutateUISection(func(ui map[string]json.RawMessage) error {
+		if !on {
+			delete(ui, "escapeAtOnPaste")
+			return nil
+		}
+		ui["escapeAtOnPaste"] = json.RawMessage("true")
 		return nil
 	})
 }

@@ -4,7 +4,10 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+
+	"github.com/undeadindustries/sagittarius/internal/ui"
 )
 
 func TestToolDisplayName(t *testing.T) {
@@ -143,5 +146,55 @@ func TestRenderToolCardWidthInvariants(t *testing.T) {
 		if gotWidth > width {
 			t.Errorf("card line %d exceeds width: got %d, max %d\nline text: %q", i, gotWidth, width, line)
 		}
+	}
+}
+
+func TestStreamToolConfirmWithoutPriorStartCreatesCard(t *testing.T) {
+	t.Parallel()
+	m := newTestModel()
+	reply := make(chan ui.ConfirmDecision, 1)
+
+	// StreamToolConfirm arrives for continue_agent without prior StreamToolStart
+	m.handleStream(ui.StreamEvent{
+		Type:         ui.StreamToolConfirm,
+		ToolName:     "continue_agent",
+		Text:         "Max tool rounds reached (100). Continue for another 100 rounds?",
+		ConfirmReply: reply,
+	})
+
+	if m.activeCard == nil {
+		t.Fatal("expected activeCard to be created for StreamToolConfirm")
+	}
+	if m.activeCard.phase != toolConfirming {
+		t.Errorf("card phase = %v, want toolConfirming", m.activeCard.phase)
+	}
+	if m.activeCard.displayName != "Continue" {
+		t.Errorf("displayName = %q, want Continue", m.activeCard.displayName)
+	}
+	if m.confirmReply == nil {
+		t.Fatal("expected confirmReply to be set")
+	}
+
+	out := renderCard(m, m.activeCard)
+	if !strings.Contains(out, "Max tool rounds reached (100)") {
+		t.Fatalf("rendered card missing prompt text:\n%s", out)
+	}
+	if !strings.Contains(out, "1 Allow once") {
+		t.Fatalf("rendered card missing menu options:\n%s", out)
+	}
+
+	// Pressing '1' should reply with ConfirmOnce
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("1")})
+	select {
+	case d := <-reply:
+		if d != ui.ConfirmOnce {
+			t.Errorf("decision = %v, want ConfirmOnce", d)
+		}
+	default:
+		t.Fatal("no decision delivered to confirmReply channel")
+	}
+
+	if m.confirmReply != nil {
+		t.Error("expected confirmReply to be cleared after sending decision")
 	}
 }

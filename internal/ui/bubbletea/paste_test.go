@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/undeadindustries/sagittarius/internal/ui"
 )
 
 func TestModelPasteCollapse(t *testing.T) {
@@ -112,5 +114,37 @@ func TestModelPasteAtomicDelete(t *testing.T) {
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
 	if len(m.pastes.content) != 0 {
 		t.Fatalf("paste store should have pruned deleted placeholder")
+	}
+}
+
+func TestModelPasteEscapeAtOnPaste(t *testing.T) {
+	// When EscapeAtOnPaste is true
+	appOn := statusApp{cs: ui.ComposerStatus{EscapeAtOnPaste: true}}
+	mOn := newModel(ui.Options{ThemeName: "greyscale"}, appOn, NewTerminal(ui.Options{}))
+	mOn.width = 80
+	mOn.height = 24
+
+	pasteText := "Check @main.go and @@ -1,2 +1,2 @@ or \\@skip.go"
+	mOn.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(pasteText), Paste: true})
+
+	_, cmd := mOn.handleEnter()
+	msg := cmd().(submitMsg)
+	wantEscaped := `Check \@main.go and \@\@ -1,2 +1,2 \@\@ or \@skip.go`
+	if msg.line != wantEscaped {
+		t.Errorf("got line %q, want %q", msg.line, wantEscaped)
+	}
+
+	// When EscapeAtOnPaste is false
+	appOff := statusApp{cs: ui.ComposerStatus{EscapeAtOnPaste: false}}
+	mOff := newModel(ui.Options{ThemeName: "greyscale"}, appOff, NewTerminal(ui.Options{}))
+	mOff.width = 80
+	mOff.height = 24
+
+	mOff.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(pasteText), Paste: true})
+
+	_, cmdOff := mOff.handleEnter()
+	msgOff := cmdOff().(submitMsg)
+	if msgOff.line != pasteText {
+		t.Errorf("got line %q, want %q", msgOff.line, pasteText)
 	}
 }

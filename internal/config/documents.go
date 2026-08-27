@@ -435,8 +435,44 @@ func mergeProviders(global, project *ProvidersSettings) *ProvidersSettings {
 	merged.GeminiAPIKey = mergeProviderInstance(global.GeminiAPIKey, project.GeminiAPIKey)
 	merged.OpenAIResponses = mergeProviderInstance(global.OpenAIResponses, project.OpenAIResponses)
 	// Extra holds raw custom provider instance blocks; project can override per block.
-	merged.Extra = mergeRaw(global.Extra, project.Extra)
+	merged.Extra = mergeProvidersExtra(global.Extra, project.Extra)
 	return &merged
+}
+
+func mergeProvidersExtra(global, project map[string]json.RawMessage) map[string]json.RawMessage {
+	if len(project) == 0 {
+		return global
+	}
+	if len(global) == 0 {
+		return project
+	}
+	merged := make(map[string]json.RawMessage, len(global)+len(project))
+	for k, v := range global {
+		merged[k] = v
+	}
+	for k, pRaw := range project {
+		gRaw, exists := global[k]
+		if !exists {
+			merged[k] = pRaw
+			continue
+		}
+		var gInst, pInst ProviderInstanceConfig
+		if err := json.Unmarshal(gRaw, &gInst); err != nil {
+			merged[k] = pRaw
+			continue
+		}
+		if err := json.Unmarshal(pRaw, &pInst); err != nil {
+			merged[k] = pRaw
+			continue
+		}
+		mInst := mergeProviderInstance(&gInst, &pInst)
+		if mRaw, err := json.Marshal(mInst); err == nil {
+			merged[k] = mRaw
+		} else {
+			merged[k] = pRaw
+		}
+	}
+	return merged
 }
 
 // mergeProviderInstance overlays non-zero project fields onto a copy of global.

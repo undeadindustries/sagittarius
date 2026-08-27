@@ -805,10 +805,7 @@ func (d *modelPickDialogDeps) SelectCurrentModel(ctx context.Context, providerID
 		}
 	}
 	target := docs.TargetSettings(scope)
-	if err := provider.SetActiveProvider(target, providerID); err != nil {
-		return err
-	}
-	if err := provider.SetProviderModel(target, providerID, model); err != nil {
+	if err := provider.WriteActiveModel(target, providerID, model); err != nil {
 		return err
 	}
 	if err := docs.Save(scope); err != nil {

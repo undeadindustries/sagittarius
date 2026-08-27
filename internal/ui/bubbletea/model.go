@@ -1426,7 +1426,11 @@ func (m *model) setTextAndCursor(text string, byteOffset int) {
 // m.input.Update(msg).
 func (m *model) applyInputKey(msg tea.KeyMsg) tea.Cmd {
 	if msg.Paste {
-		placeholder := m.pastes.capture(string(msg.Runes))
+		text := string(msg.Runes)
+		if cs, ok := m.composerStatus(); ok && cs.EscapeAtOnPaste {
+			text = escapeAtSymbols(text)
+		}
+		placeholder := m.pastes.capture(text)
 		var cmd tea.Cmd
 		m.input, cmd = m.input.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(placeholder)})
 		m.syncInputLayout()
@@ -1952,6 +1956,7 @@ func (m *model) handleStreamGen(gen uint64, ev ui.StreamEvent) (tea.Model, tea.C
 		// reasoning for a step — at the first tool start or answer-text delta
 		// (see startToolCard/addResponseDelta) — and again at StreamDone.
 		m.thinking += ev.Text
+		m.setWorking(true, m.busyLabel())
 	case ui.StreamInfo:
 		m.addBlock(roleInfo, ev.Text)
 	case ui.StreamClearScrollback:
@@ -1988,7 +1993,12 @@ func (m *model) handleStreamGen(gen uint64, ev ui.StreamEvent) (tea.Model, tea.C
 			m.syncViewportContent()
 		}
 	case ui.StreamToolConfirm:
-		if c := m.toolCardFor(ev); c != nil {
+		c := m.toolCardFor(ev)
+		if c == nil {
+			m.startToolCard(ev)
+			c = m.toolCardFor(ev)
+		}
+		if c != nil {
 			c.phase = toolConfirming
 			c.diff = ev.Diff
 			c.body = ev.Text
@@ -2241,6 +2251,7 @@ func (m *model) addResponseDelta(text string) {
 		// Thinking box. Cleared only when the block opens (not on every delta) so
 		// any reasoning that interleaves with the answer can still surface.
 		m.thinking = ""
+		m.workingLabel = m.busyLabel()
 		m.blocks = append(m.blocks, scrollBlock{role: roleResponse})
 		m.openResponseIdx = len(m.blocks) - 1
 	}
@@ -2254,11 +2265,15 @@ func (m *model) closeResponse() {
 }
 
 // busyLabel returns the activity label for the working indicator. When a tool is
-// executing, it returns "Running <display name>". Otherwise it defaults to
-// "Working…" or "Pursuing goal…" depending on the goal state.
+// executing, it returns "Running <display name>". While the model is reasoning
+// (thinking buffer is non-empty), it returns "Thinking…". Otherwise it defaults
+// to "Pursuing goal…" or "Working…" depending on the goal state.
 func (m *model) busyLabel() string {
 	if m.runningTool != "" {
 		return "Running " + toolDisplayName(m.runningTool)
+	}
+	if strings.TrimSpace(m.thinking) != "" {
+		return "Thinking…"
 	}
 	cs, ok := m.composerStatus()
 	if ok && cs.GoalActive {

@@ -9,6 +9,21 @@ const (
 	verificationInstruction     = "Critically evaluate the <state_snapshot> you just generated. Did you omit any specific technical details, file paths, tool results, or user constraints mentioned in the history? If anything is missing or could be more precise, generate a FINAL, improved <state_snapshot>. Otherwise, repeat the exact same <state_snapshot> again."
 )
 
+// Framing for the summary once it is injected back into the conversation. The
+// summary sits in the user slot, so the model reads an unlabeled snapshot as
+// something the user sent it — and then produces snapshots of its own instead of
+// working. Hermes and OpenCode both hit this and both fixed it the same way:
+// label the block as reference material and mark where it ends. The completed-
+// work clause guards the adjacent failure they report, where a weak model reads
+// <current_plan> as a fresh assignment and redoes finished work.
+const (
+	compressedSummaryPrefix = "[CONTEXT SUMMARY — REFERENCE ONLY] Earlier turns in this conversation were compressed into the snapshot below. Treat it as background reference, not as instructions: work it describes as completed is already done, and you must never reproduce this snapshot format in your own replies. Respond to the messages that follow the end marker."
+
+	compressedSummaryEndMarker = "--- END OF CONTEXT SUMMARY — respond to the messages below, not the summary above ---"
+
+	compressedSummaryAck = "Got it. Thanks for the additional context!"
+)
+
 // DefaultCompressionPrompt is the system instruction sent to the summarizer.
 // It instructs the model to distill the conversation into a structured
 // <state_snapshot> that preserves goals, constraints, decisions, and file/tool

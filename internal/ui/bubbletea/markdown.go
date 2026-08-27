@@ -16,14 +16,9 @@ import (
 // typical model output readable in the TUI. Inline styling is applied per wrapped
 // line, so a marker that straddles a wrap boundary degrades to literal text.
 var (
-	mdHeading    = regexp.MustCompile(`^(#{1,6})\s+(.*)$`)
-	mdBullet     = regexp.MustCompile(`^(\s*)[-*+]\s+(.*)$`)
-	mdInlineCode = regexp.MustCompile("`([^`]+)`")
-	mdBoldStar   = regexp.MustCompile(`\*\*([^*]+)\*\*`)
-	mdBoldUnder  = regexp.MustCompile(`__([^_]+)__`)
-	mdItalicStar = regexp.MustCompile(`\*([^*]+)\*`)
-	mdItalicUnd  = regexp.MustCompile(`_([^_]+)_`)
-	mdSepCell    = regexp.MustCompile(`^\s*:?-{1,}:?\s*$`)
+	mdHeading = regexp.MustCompile(`^(#{1,6})\s+(.*)$`)
+	mdBullet  = regexp.MustCompile(`^(\s*)[-*+]\s+(.*)$`)
+	mdSepCell = regexp.MustCompile(`^\s*:?-{1,}:?\s*$`)
 )
 
 var (
@@ -123,27 +118,6 @@ func wrapStyled(text string, width int, style lipgloss.Style) []string {
 		out = append(out, style.Render(w))
 	}
 	return out
-}
-
-// styleInline applies inline code, bold, then italic styling to one line. Code
-// is processed first so emphasis markers inside code spans are left literal.
-func styleInline(line string, th theme.Theme) string {
-	line = mdInlineCode.ReplaceAllStringFunc(line, func(m string) string {
-		return th.Code.Render(mdInlineCode.FindStringSubmatch(m)[1])
-	})
-	line = mdBoldStar.ReplaceAllStringFunc(line, func(m string) string {
-		return mdBoldStyle.Render(mdBoldStar.FindStringSubmatch(m)[1])
-	})
-	line = mdBoldUnder.ReplaceAllStringFunc(line, func(m string) string {
-		return mdBoldStyle.Render(mdBoldUnder.FindStringSubmatch(m)[1])
-	})
-	line = mdItalicStar.ReplaceAllStringFunc(line, func(m string) string {
-		return mdItalicStyle.Render(mdItalicStar.FindStringSubmatch(m)[1])
-	})
-	line = mdItalicUnd.ReplaceAllStringFunc(line, func(m string) string {
-		return mdItalicStyle.Render(mdItalicUnd.FindStringSubmatch(m)[1])
-	})
-	return line
 }
 
 // truncateVisible cuts a string to at most width visible columns.
