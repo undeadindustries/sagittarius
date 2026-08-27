@@ -105,6 +105,31 @@ func TestApplySettingValueGoal(t *testing.T) {
 	}
 }
 
+func TestApplySettingValueMaxToolRounds(t *testing.T) {
+	s := &config.Settings{}
+
+	if err := applySettingValue(s, "sagittarius.maxToolRounds", "0"); err != nil {
+		t.Fatalf("apply 0: %v", err)
+	}
+	if s.Sagittarius.MaxToolRounds == nil || *s.Sagittarius.MaxToolRounds != 0 {
+		t.Fatalf("MaxToolRounds = %v, want 0", s.Sagittarius.MaxToolRounds)
+	}
+
+	if err := applySettingValue(s, "sagittarius.maxToolRounds", "250"); err != nil {
+		t.Fatalf("apply 250: %v", err)
+	}
+	if s.Sagittarius.MaxToolRounds == nil || *s.Sagittarius.MaxToolRounds != 250 {
+		t.Fatalf("MaxToolRounds = %v, want 250", s.Sagittarius.MaxToolRounds)
+	}
+
+	if err := applySettingValue(s, "sagittarius.maxToolRounds", "-1"); err == nil {
+		t.Fatal("expected error for negative maxToolRounds")
+	}
+	if s.Sagittarius.MaxToolRounds == nil || *s.Sagittarius.MaxToolRounds != 250 {
+		t.Fatalf("rejected value mutated MaxToolRounds to %v", s.Sagittarius.MaxToolRounds)
+	}
+}
+
 func TestApplySettingValueDefaultModeRejectsUnknownValue(t *testing.T) {
 	s := &config.Settings{}
 

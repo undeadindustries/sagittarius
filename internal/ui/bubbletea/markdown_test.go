@@ -143,3 +143,56 @@ func TestMarkdownTableAroundFences(t *testing.T) {
 		t.Errorf("table content missing:\n%s", joined)
 	}
 }
+
+// reportedFenceBody is the class of line that used to be truncated at the
+// terminal edge (the GB10 benchmark draft). Words past column 80 — configured,
+// gemma4 — vanished from the scrollback.
+const reportedFenceBody = "" +
+	"    - Node 1 (gx10): SGLang serving Qwen/Qwen3.8-27B (BF16 weights, FP8 KV cache fp8_e4m3, DFlash 2 block-diffusion 8-token drafter, configured as a speculative decoder)\n" +
+	"    - Node 2 (spark2): vLLM serving google/gemma-4-31b-it (BF16 weights, FP8 KV cache, --tool-call-parser gemma4 --reasoning-parser gemma4)\n"
+
+func TestMarkdownFencedCodeDoesNotTruncate(t *testing.T) {
+	t.Parallel()
+	const width = 80
+	md := "```\n" + reportedFenceBody + "```\n"
+	lines := renderMarkdown(md, width, theme.Greyscale())
+	joined := stripANSI(strings.Join(lines, "\n"))
+	for _, word := range []string{"configured", "gemma4", "speculative", "drafter"} {
+		if !strings.Contains(joined, word) {
+			t.Errorf("word %q was truncated:\n%s", word, joined)
+		}
+	}
+	for i, line := range lines {
+		if w := lipgloss.Width(line); w > width {
+			t.Errorf("line %d width %d exceeds %d: %q", i, w, width, stripANSI(line))
+		}
+	}
+	if !strings.Contains(joined, codeWrapHint) {
+		t.Errorf("wrap hint missing after a block that wrapped:\n%s", joined)
+	}
+}
+
+func TestMarkdownCodeWrapHintOnlyOnClosedWrappedBlock(t *testing.T) {
+	t.Parallel()
+
+	short := renderMarkdown("```\nfmt.Println(\"hi\")\n```\n", 80, theme.Greyscale())
+	if strings.Contains(stripANSI(strings.Join(short, "\n")), codeWrapHint) {
+		t.Errorf("hint must not appear when nothing wrapped:\n%s", short)
+	}
+
+	open := renderMarkdown("```\n"+reportedFenceBody, 80, theme.Greyscale())
+	if strings.Contains(stripANSI(strings.Join(open, "\n")), codeWrapHint) {
+		t.Errorf("hint must not appear mid-stream on an unterminated fence:\n%s", open)
+	}
+
+	closed := renderMarkdown("```\n"+reportedFenceBody+"```\n", 80, theme.Greyscale())
+	plain := stripANSI(strings.Join(closed, "\n"))
+	if !strings.Contains(plain, codeWrapHint) {
+		t.Errorf("hint missing on a closed wrapped block:\n%s", plain)
+	}
+	if idx := strings.Index(plain, codeWrapHint); idx >= 0 {
+		if strings.Index(plain, "configured") > idx {
+			t.Error("hint appeared before the wrapped code it describes")
+		}
+	}
+}

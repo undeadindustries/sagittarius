@@ -40,6 +40,11 @@ type tableBlock struct {
 	rows    [][]string
 }
 
+// codeWrapHint is shown under a fenced block only after its closing fence, and
+// only when a line in that block had to wrap. Emitting on the closer keeps the
+// hint from flickering under a block that is still streaming.
+const codeWrapHint = "wrapped to fit · /copy code for the exact text"
+
 // renderMarkdown converts assistant text into styled, width-wrapped lines.
 func renderMarkdown(text string, width int, th theme.Theme) []string {
 	if width < 1 {
@@ -47,15 +52,24 @@ func renderMarkdown(text string, width int, th theme.Theme) []string {
 	}
 	var out []string
 	inCode := false
+	codeWrapped := false
 	rawLines := strings.Split(text, "\n")
 	for i := 0; i < len(rawLines); i++ {
 		raw := rawLines[i]
 		if strings.HasPrefix(strings.TrimSpace(raw), "```") {
+			if inCode && codeWrapped {
+				out = append(out, renderCodeWrapHint(width, th))
+			}
 			inCode = !inCode
+			codeWrapped = false
 			continue // hide the fence markers themselves
 		}
 		if inCode {
-			out = append(out, renderCodeLine(raw, width, th)...)
+			rows := renderCodeLine(raw, width, th)
+			if len(rows) > 1 {
+				codeWrapped = true
+			}
+			out = append(out, rows...)
 			continue
 		}
 		if isTableStart(rawLines, i) {
@@ -69,18 +83,21 @@ func renderMarkdown(text string, width int, th theme.Theme) []string {
 	return out
 }
 
-// renderCodeLine renders a verbatim code line, truncated (not wrapped) so
-// indentation is preserved. There is no left-bar prefix: a copyable "│ "
-// gutter made mouse-select paste unusable for commands the model asked the
-// user to run. Theme.Code still distinguishes the block from prose.
+// renderCodeWrapHint returns the dim pointer to /copy code, truncated so it
+// cannot overflow a narrow terminal.
+func renderCodeWrapHint(width int, th theme.Theme) string {
+	return th.Dim.Render(truncateVisible(codeWrapHint, width))
+}
+
+// renderCodeLine renders a verbatim code line, wrapping (not truncating) so
+// every character stays on screen. Indentation on the first visual row is
+// preserved; continuation rows get no synthetic indent, because spaces we
+// invent would corrupt a mouse-drag paste. There is no left-bar prefix: a
+// copyable "│ " gutter made mouse-select paste unusable for commands the
+// model asked the user to run. Theme.Code still distinguishes the block
+// from prose.
 func renderCodeLine(line string, width int, th theme.Theme) []string {
-	if width < 1 {
-		width = 1
-	}
-	if lipgloss.Width(line) > width {
-		line = truncateVisible(line, width)
-	}
-	return []string{th.Code.Render(line)}
+	return wrapVerbatimStyled(line, width, th.Code)
 }
 
 // renderProseLine handles headings, bullets, and paragraphs with inline styling.

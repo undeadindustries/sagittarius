@@ -932,6 +932,9 @@ func (r *Runner) runAgentLoop(ctx context.Context, userInput string, out chan<- 
 
 	verifyHinted := false
 	maxRounds := r.maxToolRounds()
+	// 0 (settings) or a Session grant on the Continue prompt: no further cap
+	// this turn. An uncapped inner loop only exits via return (model stopped).
+	uncapped := maxRounds == 0
 	// Accumulates the assistant's text across this turn's rounds so the fire-once
 	// auto-title sees the whole reply, not just the final round.
 	var turnReply strings.Builder
@@ -945,7 +948,7 @@ func (r *Runner) runAgentLoop(ctx context.Context, userInput string, out chan<- 
 
 outerLoop:
 	for {
-		for round := 0; round < maxRounds; round++ {
+		for round := 0; uncapped || round < maxRounds; round++ {
 			r.prepareContext(ctx)
 			if !r.pinned() {
 				r.refreshModelFromMode()
@@ -1046,12 +1049,20 @@ outerLoop:
 			r.setState(StateStreaming)
 		}
 
-		// Rounds exhausted. In interactive sessions ask the user whether to
-		// continue; headless always stops to avoid runaway loops.
-		if !r.interactive || !r.askContinueRounds(ctx, out, emit, maxRounds) {
+		// Rounds exhausted. Interactive sessions ask whether to continue;
+		// headless always stops. An already-uncapped turn never reaches here
+		// (the inner loop only ends via return).
+		if !r.interactive {
 			break
 		}
-		// User approved another batch — loop again with the same limit.
+		switch r.askContinueRounds(ctx, emit, maxRounds) {
+		case continueRoundsSession:
+			uncapped = true
+		case continueRoundsOnce:
+			// another batch at the same cap
+		default:
+			break outerLoop
+		}
 	}
 
 	r.fireAfterAgentHooks(ctx, userInput, turnReply.String(), out)
@@ -1129,16 +1140,23 @@ func (r *Runner) buildGenerateRequest() *provider.GenerateRequest {
 	// Resolve temperature against the live model so mid-session model changes
 	// (mode routing) apply the right sampling without rebuilding the generator.
 	req.Temperature = config.ResolveEffectiveTemperature(settings, providerID, model)
-	// Request readable thoughts when the thinking box is enabled; the Gemini
-	// adapter uses this to set ThinkingConfig.IncludeThoughts; other adapters
-	// ignore the field.
-	req.IncludeThoughts = config.ResolveShowThinking(settings, providerID, model)
 	// Resolve adaptive/fixed reasoning defaults per round so a mid-session
 	// model or /reasoning change takes effect on the very next request; see
 	// config.ResolveReasoningRequest for the precedence order.
 	if resolution := config.ResolveReasoningRequest(settings, providerID, model, r.ReasoningOverride()); resolution != nil {
 		req.Reasoning = &provider.ReasoningRequest{Effort: resolution.Effort, Enabled: resolution.Enabled}
 	}
+	// Ask for readable reasoning text whenever reasoning is actually enabled for
+	// this round, not only when the thinking box happens to be visible. The UI
+	// infers "Thinking…" from arriving reasoning deltas, so gating the request on
+	// display made the status label lie whenever the box was collapsed, and made
+	// Ctrl+T mutate the request body instead of just toggling a view. This costs
+	// nothing: both Gemini and OpenAI bill the full reasoning trace whether or
+	// not the summary is returned. ResolveShowThinking is kept as an additional
+	// trigger so a model with no reasoning rule (config.ModelReasoningRule
+	// matches families, not every id) does not lose thoughts it receives today.
+	req.IncludeThoughts = config.ResolveShowThinking(settings, providerID, model) ||
+		req.Reasoning.ProducesReasoning()
 	return req
 }
 
@@ -1825,23 +1843,42 @@ func (r *Runner) WorkDir() string {
 	return r.workDir
 }
 
+// continueAgentToolName is the synthetic confirm used when MaxToolRounds is
+// exhausted. It is not a registered tool; the TUI maps it to a Continue card.
+const continueAgentToolName = "continue_agent"
+
+// continueRoundsDecision is the user's answer to the Continue prompt.
+type continueRoundsDecision int
+
+const (
+	continueRoundsStop continueRoundsDecision = iota
+	continueRoundsOnce
+	continueRoundsSession
+)
+
 // askContinueRounds emits a StreamToolConfirm asking the user whether to
-// continue the agentic loop for another maxRounds cycles. It returns true when
-// the user approves (ConfirmOnce or ConfirmSession) and false on deny or
-// context cancellation.
-func (r *Runner) askContinueRounds(ctx context.Context, out chan<- ui.StreamEvent, emit func(ui.StreamEvent), maxRounds int) bool {
+// continue the agentic loop for another maxRounds cycles. Once grants one
+// more batch; Session lifts the cap for the rest of this turn.
+func (r *Runner) askContinueRounds(ctx context.Context, emit func(ui.StreamEvent), maxRounds int) continueRoundsDecision {
 	replyCh := make(chan ui.ConfirmDecision, 1)
 	emit(ui.StreamEvent{
 		Type:         ui.StreamToolConfirm,
-		ToolName:     "continue_agent",
+		ToolName:     continueAgentToolName,
 		Text:         fmt.Sprintf("Max tool rounds reached (%d). Continue for another %d rounds?", maxRounds, maxRounds),
 		ConfirmReply: replyCh,
 	})
 	select {
 	case <-ctx.Done():
-		return false
+		return continueRoundsStop
 	case decision := <-replyCh:
-		return decision == ui.ConfirmOnce || decision == ui.ConfirmSession
+		switch decision {
+		case ui.ConfirmSession:
+			return continueRoundsSession
+		case ui.ConfirmOnce:
+			return continueRoundsOnce
+		default:
+			return continueRoundsStop
+		}
 	}
 }
 

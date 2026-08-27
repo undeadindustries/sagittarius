@@ -456,23 +456,38 @@ func mergeProvidersExtra(global, project map[string]json.RawMessage) map[string]
 			merged[k] = pRaw
 			continue
 		}
-		var gInst, pInst ProviderInstanceConfig
-		if err := json.Unmarshal(gRaw, &gInst); err != nil {
+		mRaw, err := mergeProviderInstanceRaw(gRaw, pRaw)
+		if err != nil {
+			// The project block still wins, so the user's model pick is honored,
+			// but every global field it does not restate (baseUrl, contextLimit,
+			// activeModels) is dropped for this provider. Failing silently here
+			// presents as a provider that inexplicably forgot its endpoint, with
+			// nothing in the log to point at the malformed block.
+			slog.Warn("provider settings merge fell back to the project block; global fields for this provider were dropped",
+				"provider", k, "error", err)
 			merged[k] = pRaw
 			continue
 		}
-		if err := json.Unmarshal(pRaw, &pInst); err != nil {
-			merged[k] = pRaw
-			continue
-		}
-		mInst := mergeProviderInstance(&gInst, &pInst)
-		if mRaw, err := json.Marshal(mInst); err == nil {
-			merged[k] = mRaw
-		} else {
-			merged[k] = pRaw
-		}
+		merged[k] = mRaw
 	}
 	return merged
+}
+
+// mergeProviderInstanceRaw overlays a project provider instance block onto a
+// global one, both still encoded as raw JSON.
+func mergeProviderInstanceRaw(gRaw, pRaw json.RawMessage) (json.RawMessage, error) {
+	var gInst, pInst ProviderInstanceConfig
+	if err := json.Unmarshal(gRaw, &gInst); err != nil {
+		return nil, fmt.Errorf("decode global block: %w", err)
+	}
+	if err := json.Unmarshal(pRaw, &pInst); err != nil {
+		return nil, fmt.Errorf("decode project block: %w", err)
+	}
+	mRaw, err := json.Marshal(mergeProviderInstance(&gInst, &pInst))
+	if err != nil {
+		return nil, fmt.Errorf("encode merged block: %w", err)
+	}
+	return mRaw, nil
 }
 
 // mergeProviderInstance overlays non-zero project fields onto a copy of global.

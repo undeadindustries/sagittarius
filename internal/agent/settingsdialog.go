@@ -643,6 +643,9 @@ func applySettingValue(s *config.Settings, key, value string) error {
 		if err != nil {
 			return fmt.Errorf("maxToolRounds must be an integer: %w", err)
 		}
+		if n < 0 {
+			return fmt.Errorf("maxToolRounds must be >= 0 (0 = unlimited)")
+		}
 		if s.Sagittarius == nil {
 			s.Sagittarius = &config.SagittariusSettings{}
 		}

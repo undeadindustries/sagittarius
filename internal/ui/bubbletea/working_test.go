@@ -154,7 +154,7 @@ func TestWorkingLabelSwitchesToThinkingOnReasoningDelta(t *testing.T) {
 	t.Parallel()
 	m := newModel(ui.Options{ThemeName: "greyscale"}, quitApp{}, NewTerminal(ui.Options{}))
 	m.busy = true
-	m.setWorking(true, m.busyLabel())
+	m.setWorkingLabel(m.busyLabel())
 
 	// Initially, turn is waiting on the model before any output: label is "Working…".
 	if m.workingLabel != "Working…" {

@@ -180,6 +180,12 @@ func TestScopeLimitClausePresentInEveryPersona(t *testing.T) {
 			if !strings.Contains(out, "a text-only answer with no mutating tool calls is the correct and complete turn") {
 				t.Errorf("%s %s: missing scope-limit clause body", p, v)
 			}
+			if !strings.Contains(out, "Questions are not tasks") {
+				t.Errorf("%s %s: missing questions-are-not-tasks clause, got:\n%s", p, v, out)
+			}
+			if !strings.Contains(out, "do not perform unprompted fixes or changes") {
+				t.Errorf("%s %s: missing questions-are-not-tasks body", p, v)
+			}
 		}
 	}
 }

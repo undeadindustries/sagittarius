@@ -239,9 +239,9 @@ type model struct {
 	// spin drives the animated working/thinking indicator shown above the input
 	// while a turn is in flight. It only ticks while busy.
 	spin spinner.Model
-	// working toggles visibility of the working indicator line; workingLabel is
-	// the current activity (e.g. "Working…" or "Running Shell").
-	working      bool
+	// workingLabel is the current activity shown on the working indicator line
+	// (e.g. "Working…", "Thinking…", "Running Shell"). Visibility is decided by
+	// showWorkingIndicator, not by this field.
 	workingLabel string
 	runningTool  string
 
@@ -983,14 +983,61 @@ func (m *model) sendConfirm(d ui.ConfirmDecision) {
 	m.confirmChoice = 0
 	m.status.Left = ""
 	if m.activeCard != nil && m.activeCard.phase == toolConfirming {
-		// Denials surface as an error result from the scheduler; for an approval
-		// the card resumes running until output/result arrive.
-		m.activeCard.phase = toolRunning
-		m.activeCard.body = ""
-		m.activeCard.diff = ""
+		if m.activeCard.toolName == wireContinueAgent {
+			// continue_agent is a runner prompt, not a tool: no Start/Result
+			// follows, so settle now or the card sticks on "Running…".
+			m.settleContinueCard(d)
+		} else {
+			// Denials surface as an error result from the scheduler; for an
+			// approval the card resumes running until output/result arrive.
+			m.activeCard.phase = toolRunning
+			m.activeCard.body = ""
+			m.activeCard.diff = ""
+		}
 	}
-	m.setWorking(true, m.busyLabel())
+	m.setWorkingLabel(m.busyLabel())
 	m.syncViewportContent()
+}
+
+// settleContinueCard records the Continue prompt's outcome on the card. Allow
+// once / session become success; deny becomes an error. The body names what
+// happens next so the scrollback does not look like a hung tool.
+func (m *model) settleContinueCard(d ui.ConfirmDecision) {
+	c := m.activeCard
+	c.diff = ""
+	switch d {
+	case ui.ConfirmDeny:
+		c.phase = toolError
+		c.body = continueStoppedBody
+	case ui.ConfirmSession:
+		c.phase = toolSuccess
+		c.body = continueSessionBody
+	default:
+		c.phase = toolSuccess
+		if n := continueRoundsFromText(c.summary); n > 0 {
+			c.body = fmt.Sprintf(continueOnceBodyFmt, n)
+		} else {
+			c.body = continueOnceBodyFallback
+		}
+	}
+}
+
+// continueRoundsFromText pulls N from "Continue for another N rounds?".
+func continueRoundsFromText(s string) int {
+	const marker = "another "
+	i := strings.LastIndex(s, marker)
+	if i < 0 {
+		return 0
+	}
+	rest := s[i+len(marker):]
+	n := 0
+	for _, r := range rest {
+		if r < '0' || r > '9' {
+			break
+		}
+		n = n*10 + int(r-'0')
+	}
+	return n
 }
 
 // handleAskKey routes key input while a grill-mode ask_user question is
@@ -1095,7 +1142,7 @@ func (m *model) sendAskAnswer(a ui.AskAnswer) {
 		m.activeCard.phase = toolRunning
 		m.activeCard.body = ""
 	}
-	m.setWorking(true, m.busyLabel())
+	m.setWorkingLabel(m.busyLabel())
 	m.syncViewportContent()
 }
 
@@ -1837,7 +1884,7 @@ func (m *model) cancelTurn() {
 	m.turnCancel()
 	m.turnCancel = nil
 	m.turnCanceled = true
-	m.setWorking(true, "Canceling…")
+	m.setWorkingLabel("Canceling…")
 	m.addBlock(roleInfo, "Turn canceled.")
 }
 
@@ -1850,7 +1897,7 @@ func (m *model) forceAbandonTurn() tea.Cmd {
 	m.runningTool = ""
 	m.turnCanceled = false
 	m.turnStart = time.Time{}
-	m.setWorking(false, "")
+	m.syncViewportContent()
 	m.status = m.idleStatus
 	// Invalidate any streamEventMsg already queued in the Bubble Tea loop.
 	m.activeStreamGen++
@@ -1909,7 +1956,7 @@ func (m *model) handleSubmit(msg submitMsg) (tea.Model, tea.Cmd) {
 	m.turnInFlight = true
 	m.streamGen++
 	m.activeStreamGen = m.streamGen
-	m.setWorking(true, m.busyLabel())
+	m.setWorkingLabel(m.busyLabel())
 
 	base := m.ctx
 	if base == nil {
@@ -1924,7 +1971,7 @@ func (m *model) handleSubmit(msg submitMsg) (tea.Model, tea.Cmd) {
 		m.clearTurn()
 		m.busy = false
 		m.turnInFlight = false
-		m.setWorking(false, "")
+		m.syncViewportContent()
 		m.status = m.idleStatus
 		_ = m.term.ShowError(err)
 		return m, nil
@@ -1956,7 +2003,7 @@ func (m *model) handleStreamGen(gen uint64, ev ui.StreamEvent) (tea.Model, tea.C
 		// reasoning for a step — at the first tool start or answer-text delta
 		// (see startToolCard/addResponseDelta) — and again at StreamDone.
 		m.thinking += ev.Text
-		m.setWorking(true, m.busyLabel())
+		m.setWorkingLabel(m.busyLabel())
 	case ui.StreamInfo:
 		m.addBlock(roleInfo, ev.Text)
 	case ui.StreamClearScrollback:
@@ -1979,14 +2026,14 @@ func (m *model) handleStreamGen(gen uint64, ev ui.StreamEvent) (tea.Model, tea.C
 		return m, cmd
 	case ui.StreamQuit:
 		m.busy = false
-		m.setWorking(false, "")
+		m.syncViewportContent()
 		return m, m.beginQuit()
 	case ui.StreamOpenDialog:
 		m.openDialog(ev.Dialog)
 	case ui.StreamToolStart:
 		m.startToolCard(ev)
 		m.runningTool = ev.ToolName
-		m.setWorking(true, m.busyLabel())
+		m.setWorkingLabel(m.busyLabel())
 	case ui.StreamToolOutput:
 		if c := m.toolCardFor(ev); c != nil {
 			c.body = ev.Text
@@ -2007,7 +2054,7 @@ func (m *model) handleStreamGen(gen uint64, ev ui.StreamEvent) (tea.Model, tea.C
 		m.confirmChoice = 0
 		// Keep the confirming card pinned in view; the spinner gives way to the
 		// card's own '?' icon and inline menu.
-		m.setWorking(false, "")
+		m.syncViewportContent()
 		m.status.Left = "confirm tool"
 		m.followBottom = true
 		m.syncViewportContent()
@@ -2021,7 +2068,7 @@ func (m *model) handleStreamGen(gen uint64, ev ui.StreamEvent) (tea.Model, tea.C
 		m.askReply = ev.AskReply
 		m.askChoice = ev.AskRecommended
 		m.askOtherMode = false
-		m.setWorking(false, "")
+		m.syncViewportContent()
 		m.status.Left = "answer question"
 		m.followBottom = true
 		m.syncViewportContent()
@@ -2039,7 +2086,7 @@ func (m *model) handleStreamGen(gen uint64, ev ui.StreamEvent) (tea.Model, tea.C
 		m.runningTool = ""
 		m.syncViewportContent()
 		// Tool finished; the model will be queried again next.
-		m.setWorking(true, m.busyLabel())
+		m.setWorkingLabel(m.busyLabel())
 	case ui.StreamError:
 		if ev.Err != nil {
 			m.addBlock(roleError, ev.Err.Error())
@@ -2049,7 +2096,7 @@ func (m *model) handleStreamGen(gen uint64, ev ui.StreamEvent) (tea.Model, tea.C
 		m.activeCard = nil
 		m.runningTool = ""
 		m.clearAskState()
-		m.setWorking(false, "")
+		m.syncViewportContent()
 	case ui.StreamDone:
 		m.busy = false
 		m.turnInFlight = false
@@ -2058,7 +2105,7 @@ func (m *model) handleStreamGen(gen uint64, ev ui.StreamEvent) (tea.Model, tea.C
 		m.thinking = ""
 		m.clearAskState()
 		m.clearTurn()
-		m.setWorking(false, "")
+		m.syncViewportContent()
 		m.closeResponse()
 		m.refreshIdleStatus()
 		m.status = m.idleStatus
@@ -2282,12 +2329,11 @@ func (m *model) busyLabel() string {
 	return "Working…"
 }
 
-// setWorking toggles the working/thinking indicator and re-syncs the viewport so
-// it stays scrolled to the bottom as the reserved row appears or disappears. The
-// label is kept when turning the indicator on.
-func (m *model) setWorking(on bool, label string) {
-	m.working = on
-	if on && label != "" {
+// setWorkingLabel updates the activity shown on the working indicator and
+// re-syncs the viewport so it stays scrolled to the bottom as the reserved row
+// appears or disappears. An empty label leaves the current one in place.
+func (m *model) setWorkingLabel(label string) {
+	if label != "" {
 		m.workingLabel = label
 	}
 	m.syncViewportContent()
@@ -2543,9 +2589,6 @@ func (m *model) renderBlock(blk scrollBlock, width int) []string {
 	if blk.role == roleTaskGroup && blk.taskGroup != nil {
 		return m.renderTaskGroup(blk.taskGroup, width)
 	}
-	if blk.role == roleTaskGroup && blk.taskGroup != nil {
-		return m.renderTaskGroup(blk.taskGroup, width)
-	}
 
 	glyph, prefix, body := m.roleStyle(blk.role)
 	gw := lipgloss.Width(glyph)
@@ -2596,7 +2639,7 @@ func (m *model) renderDiffLines(text string, width, maxLines int) []string {
 		default:
 			style = m.th.Dim
 		}
-		for _, wl := range strings.Split(wrapText(ln, max(width, 1)), "\n") {
+		for _, wl := range wrapVerbatim(ln, width) {
 			out = append(out, style.Render(wl))
 		}
 	}

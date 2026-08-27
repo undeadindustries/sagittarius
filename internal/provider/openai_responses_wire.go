@@ -44,7 +44,17 @@ type responsesRequestBody struct {
 
 type responsesReasoning struct {
 	Effort string `json:"effort"`
+	// Summary opts in to a human-readable recap of the reasoning trace. Without
+	// it the API emits no response.reasoning_summary_text.delta events, so the
+	// thinking box stays empty and the status label cannot tell reasoning apart
+	// from a network wait. Requesting it costs nothing: reasoning tokens are
+	// billed as output whether or not the summary is returned.
+	Summary string `json:"summary,omitempty"`
 }
+
+// responsesReasoningSummaryAuto asks for the most detailed summarizer the model
+// supports, per the OpenAI reasoning guide.
+const responsesReasoningSummaryAuto = "auto"
 
 // ResponsesRequestPlan is the translated request payload for /v1/responses.
 type ResponsesRequestPlan struct {

@@ -149,6 +149,32 @@ func TestRenderToolCardWidthInvariants(t *testing.T) {
 	}
 }
 
+func TestRenderToolCardWideDiffWrapsInsideBorder(t *testing.T) {
+	t.Parallel()
+	m := newTestModel()
+	const width = 40
+	diffBody := "--- a/x\n+++ b/x\n@@ -1,1 +1,1 @@\n+" + strings.Repeat("    indented_token ", 12) + "\n"
+	c := &toolCard{
+		toolName:    "write_file",
+		displayName: "Write file",
+		body:        diffBody,
+		phase:       toolSuccess,
+	}
+	lines := m.renderToolCard(c, width)
+	joined := stripANSI(strings.Join(lines, "\n"))
+	if !strings.Contains(joined, "indented_token") {
+		t.Errorf("diff content missing after wrap:\n%s", joined)
+	}
+	if !strings.Contains(joined, "+    indented_token") {
+		t.Errorf("first wrapped diff row lost indent:\n%s", joined)
+	}
+	for i, line := range lines {
+		if got := lipgloss.Width(line); got > width {
+			t.Errorf("card line %d exceeds width: got %d, max %d\nline text: %q", i, got, width, line)
+		}
+	}
+}
+
 func TestStreamToolConfirmWithoutPriorStartCreatesCard(t *testing.T) {
 	t.Parallel()
 	m := newTestModel()
@@ -157,7 +183,7 @@ func TestStreamToolConfirmWithoutPriorStartCreatesCard(t *testing.T) {
 	// StreamToolConfirm arrives for continue_agent without prior StreamToolStart
 	m.handleStream(ui.StreamEvent{
 		Type:         ui.StreamToolConfirm,
-		ToolName:     "continue_agent",
+		ToolName:     wireContinueAgent,
 		Text:         "Max tool rounds reached (100). Continue for another 100 rounds?",
 		ConfirmReply: reply,
 	})
@@ -183,7 +209,8 @@ func TestStreamToolConfirmWithoutPriorStartCreatesCard(t *testing.T) {
 		t.Fatalf("rendered card missing menu options:\n%s", out)
 	}
 
-	// Pressing '1' should reply with ConfirmOnce
+	// Pressing '1' should reply with ConfirmOnce and settle the card (this
+	// confirm has no later Start/Result, so it must not stick on Running…).
 	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("1")})
 	select {
 	case d := <-reply:
@@ -196,5 +223,75 @@ func TestStreamToolConfirmWithoutPriorStartCreatesCard(t *testing.T) {
 
 	if m.confirmReply != nil {
 		t.Error("expected confirmReply to be cleared after sending decision")
+	}
+	if m.activeCard.phase != toolSuccess {
+		t.Errorf("card phase = %v, want toolSuccess", m.activeCard.phase)
+	}
+	wantBody := "Continuing for another 100 rounds."
+	if m.activeCard.body != wantBody {
+		t.Errorf("card body = %q, want %q", m.activeCard.body, wantBody)
+	}
+	settled := renderCard(m, m.activeCard)
+	if strings.Contains(settled, "Running…") {
+		t.Fatalf("settled Continue card still shows Running…:\n%s", settled)
+	}
+	if !strings.Contains(settled, wantBody) {
+		t.Fatalf("settled Continue card missing result body:\n%s", settled)
+	}
+}
+
+func TestStreamToolConfirmContinueDenySettlesError(t *testing.T) {
+	t.Parallel()
+	m := newTestModel()
+	reply := make(chan ui.ConfirmDecision, 1)
+
+	m.handleStream(ui.StreamEvent{
+		Type:         ui.StreamToolConfirm,
+		ToolName:     wireContinueAgent,
+		Text:         "Max tool rounds reached (100). Continue for another 100 rounds?",
+		ConfirmReply: reply,
+	})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("3")})
+	select {
+	case d := <-reply:
+		if d != ui.ConfirmDeny {
+			t.Errorf("decision = %v, want ConfirmDeny", d)
+		}
+	default:
+		t.Fatal("no decision delivered to confirmReply channel")
+	}
+	if m.activeCard.phase != toolError {
+		t.Errorf("card phase = %v, want toolError", m.activeCard.phase)
+	}
+	if m.activeCard.body != continueStoppedBody {
+		t.Errorf("card body = %q, want %q", m.activeCard.body, continueStoppedBody)
+	}
+}
+
+func TestStreamToolConfirmContinueSessionSettles(t *testing.T) {
+	t.Parallel()
+	m := newTestModel()
+	reply := make(chan ui.ConfirmDecision, 1)
+
+	m.handleStream(ui.StreamEvent{
+		Type:         ui.StreamToolConfirm,
+		ToolName:     wireContinueAgent,
+		Text:         "Max tool rounds reached (50). Continue for another 50 rounds?",
+		ConfirmReply: reply,
+	})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("2")})
+	select {
+	case d := <-reply:
+		if d != ui.ConfirmSession {
+			t.Errorf("decision = %v, want ConfirmSession", d)
+		}
+	default:
+		t.Fatal("no decision delivered to confirmReply channel")
+	}
+	if m.activeCard.phase != toolSuccess {
+		t.Errorf("card phase = %v, want toolSuccess", m.activeCard.phase)
+	}
+	if m.activeCard.body != continueSessionBody {
+		t.Errorf("card body = %q, want %q", m.activeCard.body, continueSessionBody)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/undeadindustries/sagittarius/internal/ui"
 	"github.com/undeadindustries/sagittarius/internal/ui/theme"
@@ -26,6 +27,25 @@ func TestRenderDiffLinesPreservesMarkers(t *testing.T) {
 	for _, want := range []string{"@@ -1,2 +1,2 @@", "-old", "+new", " ctx"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("diff render missing %q\n%s", want, out)
+		}
+	}
+}
+
+func TestRenderDiffLinesWrapsPreservingIndent(t *testing.T) {
+	t.Parallel()
+	m := newTestModel()
+	const width = 40
+	long := "+    " + strings.Repeat("body_token ", 20)
+	lines := m.renderDiffLines(long, width, 0)
+	if len(lines) < 2 {
+		t.Fatalf("expected wrapped diff, got %d lines: %q", len(lines), lines)
+	}
+	if got := stripANSI(lines[0]); !strings.HasPrefix(got, "+    ") {
+		t.Errorf("first wrapped row lost indent: %q", got)
+	}
+	for i, line := range lines {
+		if w := lipgloss.Width(line); w > width {
+			t.Errorf("line %d width %d exceeds %d: %q", i, w, width, stripANSI(line))
 		}
 	}
 }

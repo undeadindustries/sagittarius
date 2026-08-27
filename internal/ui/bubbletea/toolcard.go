@@ -63,16 +63,24 @@ const toolCardMaxBodyLines = 15
 // the Bubble Tea layer free of a dependency on the tools package, mirroring how
 // internal/tools itself duplicates the "mcp_" prefix to stay decoupled.
 const (
-	wireShell        = "run_shell_command"
-	wireWriteFile    = "write_file"
-	wireReadFile     = "read_file"
-	wireListDir      = "list_directory"
-	wireGrep         = "grep_search"
-	wireChecks       = "run_project_checks"
-	wireWebSearch    = "google_web_search"
-	wireWebFetch     = "web_fetch"
-	wireMCPPrefix    = "mcp_"
-	wireMCPSeparator = "_"
+	wireShell         = "run_shell_command"
+	wireWriteFile     = "write_file"
+	wireReadFile      = "read_file"
+	wireListDir       = "list_directory"
+	wireGrep          = "grep_search"
+	wireChecks        = "run_project_checks"
+	wireWebSearch     = "google_web_search"
+	wireWebFetch      = "web_fetch"
+	wireContinueAgent = "continue_agent"
+	wireMCPPrefix     = "mcp_"
+	wireMCPSeparator  = "_"
+
+	// Result bodies for the synthetic Continue card. It is not a real tool, so
+	// sendConfirm settles it immediately instead of leaving it in toolRunning.
+	continueOnceBodyFmt      = "Continuing for another %d rounds."
+	continueOnceBodyFallback = "Continuing."
+	continueSessionBody      = "No round limit for the rest of this turn."
+	continueStoppedBody      = "Stopped."
 )
 
 // toolDisplayName maps a wire tool name to a short human label. MCP tools render
@@ -102,7 +110,7 @@ func toolDisplayName(name string) string {
 		return "Web fetch"
 	case wireAskUser:
 		return "Question"
-	case "continue_agent":
+	case wireContinueAgent:
 		return "Continue"
 	default:
 		return name
@@ -247,7 +255,7 @@ func (m *model) toolResultBody(c *toolCard, inner int) []string {
 	if diff.LooksLikeUnifiedDiff(text) {
 		lines = m.renderDiffLines(text, inner, toolCardMaxBodyLines)
 	} else {
-		lines = m.wrapStyled(text, inner, m.th.Secondary)
+		lines = wrapVerbatimStyled(text, inner, m.th.Secondary)
 		if len(lines) > toolCardMaxBodyLines {
 			hidden := len(lines) - toolCardMaxBodyLines
 			lines = append([]string{m.th.Dim.Render(fmt.Sprintf("… %d more lines", hidden))}, lines[len(lines)-toolCardMaxBodyLines:]...)
@@ -275,7 +283,7 @@ func (m *model) toolConfirmBody(c *toolCard, inner int) []string {
 			lines = append(lines, m.th.Dim.Render("▏ ")+ln)
 		}
 	} else if preview := strings.TrimSpace(c.body); preview != "" {
-		for _, ln := range strings.Split(wrapText(preview, max(inner-2, 1)), "\n") {
+		for _, ln := range wrapVerbatim(preview, max(inner-2, 1)) {
 			lines = append(lines, m.th.Dim.Render("▏ ")+m.th.Code.Render(ln))
 		}
 	}

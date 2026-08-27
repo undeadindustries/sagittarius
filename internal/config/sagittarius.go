@@ -114,7 +114,7 @@ type SagittariusSettings struct {
 	Sessions *SagittariusSessionsConfig `json:"sessions,omitempty"`
 	// MaxToolRounds caps how many tool-call/response cycles the agent may
 	// execute per turn. Nil means use the compiled-in default (100).
-	// Set higher for tasks that write many files; set lower to cap runaway loops.
+	// 0 means no cap. Negative values are invalid.
 	MaxToolRounds *int `json:"maxToolRounds,omitempty"`
 	// ContextLimitPreferDiscovered, when true, causes the API-reported context
 	// limits to be preferred over manual pins.
@@ -353,20 +353,19 @@ var validInteractionModes = map[string]struct{}{
 	"debug": {},
 }
 
-// ValidateSagittariusSettings checks typed sagittarius fields for obvious errors.
-//
-// Per-mode blocks need no validation: both fields are optional. A mode with only
-// systemPromptSuffix and no model is valid — ResolveModel falls back to
-// sagittarius.defaultModel or the provider default while the suffix still applies.
 // ResolveMaxToolRounds returns the effective maximum tool-call rounds per turn.
-// It falls back to the compiled-in default when the setting is nil or ≤ 0.
-// The fallback value is imported via a parameter to avoid a circular import
-// between config and tools.
+// Nil falls back to defaultRounds (the compiled-in 100). 0 means no cap.
+// A negative pin is treated as unset so a corrupt value cannot disable the cap;
+// ValidateSagittariusSettings rejects negatives on load.
 func ResolveMaxToolRounds(s *SagittariusSettings, defaultRounds int) int {
-	if s != nil && s.MaxToolRounds != nil && *s.MaxToolRounds > 0 {
-		return *s.MaxToolRounds
+	if s == nil || s.MaxToolRounds == nil {
+		return defaultRounds
 	}
-	return defaultRounds
+	n := *s.MaxToolRounds
+	if n < 0 {
+		return defaultRounds
+	}
+	return n
 }
 
 // ResolveContextLimitPreferDiscovered returns true if the user has configured
@@ -378,6 +377,11 @@ func ResolveContextLimitPreferDiscovered(s *Settings) bool {
 	return false
 }
 
+// ValidateSagittariusSettings checks typed sagittarius fields for obvious errors.
+//
+// Per-mode blocks need no validation: both fields are optional. A mode with only
+// systemPromptSuffix and no model is valid — ResolveModel falls back to
+// sagittarius.defaultModel or the provider default while the suffix still applies.
 func ValidateSagittariusSettings(s *SagittariusSettings) error {
 	if s == nil {
 		return nil
@@ -396,8 +400,8 @@ func ValidateSagittariusSettings(s *SagittariusSettings) error {
 			}
 		}
 	}
-	if s.MaxToolRounds != nil && *s.MaxToolRounds <= 0 {
-		return fmt.Errorf("sagittarius.maxToolRounds must be > 0, got %d", *s.MaxToolRounds)
+	if s.MaxToolRounds != nil && *s.MaxToolRounds < 0 {
+		return fmt.Errorf("sagittarius.maxToolRounds must be >= 0 (0 = unlimited), got %d", *s.MaxToolRounds)
 	}
 	return nil
 }

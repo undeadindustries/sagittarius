@@ -109,8 +109,12 @@ off-screen.
 ## Assistant markdown
 
 Assistant responses are rendered with a lightweight markdown subset: headings,
-bullet/numbered lists, fenced code blocks (shown with a left bar), and inline
-**bold**, *italic*, and `code`. This is intentionally minimal — it is not a full
+bullet/numbered lists, fenced code blocks, and inline **bold**, *italic*, and
+`code`. Fenced code uses `Theme.Code` with no gutter (a copyable `│ ` bar made
+mouse-select paste unusable). Long code, diff, and command-output lines wrap
+instead of truncating; a dim `wrapped to fit · /copy code for the exact text`
+line appears under a fenced block only after it closes, and only when a line
+in that block wrapped. This is intentionally minimal — it is not a full
 CommonMark renderer. User input is always shown verbatim.
 
 ## Launch banner and tips
@@ -164,6 +168,13 @@ The label is phase-accurate, so the spinner reflects actual activity:
   a `Thinking` label) appears when the model streams reasoning tokens *and*
   `showThinking` is enabled (`Ctrl+T`, or a per-provider/model/global setting).
   Providers that send no reasoning never trigger it, so you see `Working…` instead.
+
+`showThinking` controls only whether the box is displayed. Reasoning text is
+requested whenever reasoning is enabled for the model, so `Thinking…` stays
+accurate with the box collapsed and `Ctrl+T` shows the thoughts so far rather
+than starting to collect them. This adds no cost: providers bill the full
+reasoning trace as output tokens whether or not they return a readable summary.
+Turn reasoning off with `/reasoning none` if you want to stop paying for it.
 - **No spinner** — once the assistant's reply text is visibly streaming into the
   scrollback, the spinner line is hidden: the words are the feedback.
 

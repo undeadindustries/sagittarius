@@ -5,11 +5,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -33,6 +35,12 @@ type OpenAIResponsesGenerator struct {
 	// that return to the same provider/model.
 	chainMu        sync.Mutex
 	lastResponseID string
+	// summaryUnsupported latches when an endpoint rejects reasoning.summary.
+	// Azure deployments and OpenAI-compatible gateways lag the upstream schema,
+	// and a rejected field would otherwise fail every subsequent turn. Atomic
+	// rather than chainMu-guarded: it is read while building each request body,
+	// which happens outside that lock.
+	summaryUnsupported atomic.Bool
 }
 
 // OpenAIResponsesConfig holds runtime options for an OpenAIResponsesGenerator.
@@ -103,7 +111,8 @@ func (g *OpenAIResponsesGenerator) GenerateContentStream(
 	ch := make(chan StreamResponse)
 	go func() {
 		defer close(ch)
-		if err := g.streamOnce(ctx, body, ch); err != nil {
+		err := g.streamOnce(ctx, body, ch)
+		if err = g.retryWithoutSummary(ctx, req, model, err, ch); err != nil {
 			if g.useResponseChaining {
 				g.setLastResponseID("")
 			}
@@ -111,6 +120,32 @@ func (g *OpenAIResponsesGenerator) GenerateContentStream(
 		}
 	}()
 	return ch, nil
+}
+
+// retryWithoutSummary reissues a request that the endpoint rejected solely for
+// carrying reasoning.summary, returning the outcome of that second attempt. Any
+// other error passes through untouched.
+//
+// This is safe to retry because the rejection is an HTTP status read before the
+// SSE body, so no chunk has reached the consumer and nothing is duplicated. Only
+// one retry is possible: the rebuilt body omits the field that was rejected.
+func (g *OpenAIResponsesGenerator) retryWithoutSummary(
+	ctx context.Context,
+	req *GenerateRequest,
+	model string,
+	err error,
+	ch chan<- StreamResponse,
+) error {
+	var rejected *reasoningSummaryRejectedError
+	if !errors.As(err, &rejected) {
+		return err
+	}
+	g.summaryUnsupported.Store(true)
+	body, buildErr := g.buildRequestBody(req, model, true)
+	if buildErr != nil {
+		return err // report the server's rejection, not a secondary encode failure
+	}
+	return g.streamOnce(ctx, body, ch)
 }
 
 // setLastResponseID stores the trailing Responses API response id for chaining.
@@ -142,7 +177,12 @@ func (g *OpenAIResponsesGenerator) streamOnce(ctx context.Context, body []byte, 
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return mapOpenAIHTTPError(resp.StatusCode, readBodyPreview(resp.Body, 2048))
+		preview := readBodyPreview(resp.Body, 2048)
+		mapped := mapOpenAIHTTPError(resp.StatusCode, preview)
+		if g.rejectedSummary(resp.StatusCode, preview) {
+			return &reasoningSummaryRejectedError{err: mapped}
+		}
+		return mapped
 	}
 
 	contentType := resp.Header.Get("Content-Type")
@@ -163,6 +203,24 @@ func (g *OpenAIResponsesGenerator) streamOnce(ctx context.Context, body []byte, 
 		g.setLastResponseID(state.ResponseID)
 	}
 	return nil
+}
+
+// reasoningSummaryRejectedError marks a pre-stream client error the server
+// attributed to the reasoning.summary field, so the caller can drop that field
+// and retry instead of failing the turn.
+type reasoningSummaryRejectedError struct{ err error }
+
+func (e *reasoningSummaryRejectedError) Error() string { return e.err.Error() }
+func (e *reasoningSummaryRejectedError) Unwrap() error { return e.err }
+
+// rejectedSummary reports whether a non-2xx response blames reasoning.summary.
+// It answers false once the field has been dropped, so an unrelated 4xx that
+// merely mentions the word cannot be mistaken for a second rejection.
+func (g *OpenAIResponsesGenerator) rejectedSummary(status int, body string) bool {
+	if status < 400 || status >= 500 || g.summaryUnsupported.Load() {
+		return false
+	}
+	return strings.Contains(strings.ToLower(body), "summary")
 }
 
 // DebugWireRequest implements WireRequestDebugger: it builds the Responses API
@@ -224,6 +282,11 @@ func (g *OpenAIResponsesGenerator) buildRequestBody(req *GenerateRequest, model 
 	}
 	if effort != "" {
 		body.Reasoning = &responsesReasoning{Effort: effort}
+		// Ask for the reasoning summary unless this effort suppresses thinking
+		// outright, or an earlier round proved the endpoint rejects the field.
+		if !effortSuppressesReasoning(effort) && !g.summaryUnsupported.Load() {
+			body.Reasoning.Summary = responsesReasoningSummaryAuto
+		}
 	}
 	if g.useResponseChaining && previousID != "" {
 		body.PreviousResponseID = previousID

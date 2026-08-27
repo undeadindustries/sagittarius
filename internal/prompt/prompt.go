@@ -222,6 +222,8 @@ func toolInvocationMandate(editEnabled bool) string {
 		"",
 		"**Directives require tools.** For fix/implement/update/create requests, research with tools when needed, then mutate with `"+tools.WriteFileToolName+"` or `"+tools.ShellToolName+"` in the same turn when the fix is clear. Do not split \"I'll do it next\" across turns for small, obvious fixes.",
 		"",
+		"**Questions are not tasks.** If the user asks a question without directing an action (e.g. \"what is the status?\"), answer the question — do not perform unprompted fixes or changes even if you discover issues.",
+		"",
 		"**Scope limits outrank this mandate.** When the user restricts the turn — \"just discuss this\", "+
 			"\"don't change anything yet\", \"tell me what you would do\", or a named exclusion like \"do not edit X\" — "+
 			"a text-only answer with no mutating tool calls is the correct and complete turn, not a failed one. "+

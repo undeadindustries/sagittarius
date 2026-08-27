@@ -177,11 +177,14 @@ and resets to off on the next launch.
     tags and ` ``` ` markers stripped). Multiple blocks are joined with a blank
     line. Use this when the model asked you to paste commands into a shell or
     another prompt.
-- **Notes:** Mouse-select in the TUI still copies whatever is on screen. Fenced
-  code is styled but no longer prefixed with a copyable `│ ` bar, so a drag
-  selection of a command is pasteable. Tool-card borders (write_file diffs) are
-  unchanged; `/copy` never includes those. If the last reply has no fenced
-  code, `/copy code` says so and copies nothing.
+- **Notes:** Mouse-select in the TUI still copies whatever is on screen. A
+  fenced line that wrapped pastes with a newline at each wrap point; `/copy`
+  and `/copy code` copy the exact last reply (or its fenced bodies) without
+  those wraps. `/copy code` only covers the last assistant reply, so the hint
+  under an older block still runs against the newest one. Fenced code is
+  styled with no copyable `│ ` gutter. Tool-card borders (write_file diffs)
+  are unchanged; `/copy` never includes those. If the last reply has no
+  fenced code, `/copy code` says so and copies nothing.
 
 ### `/providers`
 
@@ -309,7 +312,7 @@ and resets to off on the next launch.
   - **String / Int** — Enter opens a text editor; Esc cancels; Enter again saves.
   - `Ctrl+L` — Clears the key from the selected scope only; the other scope or
     the built-in default takes over.
-- **Categories:** General (`sagittarius.maxToolRounds`), UI (`ui.theme`,
+- **Categories:** General (`sagittarius.maxToolRounds`: default 100, `0` = no cap; interactive sessions show a Continue prompt at the cap), UI (`ui.theme`,
   `ui.showThinking`, `ui.hideBanner`), Security (`security.projectBoundary.enforce`),
   Snapshots (`sagittarius.snapshots.*`), Verify (`sagittarius.edit.enabled`
 `sagittarius.verify.*`),

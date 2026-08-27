@@ -1,5 +1,7 @@
 package provider
 
+import "strings"
+
 // Role identifies who produced a message in a conversation turn.
 type Role string
 
@@ -79,6 +81,25 @@ type GenerateRequest struct {
 type ReasoningRequest struct {
 	Effort  string
 	Enabled bool
+}
+
+// ProducesReasoning reports whether this ask will make the model reason at all,
+// and therefore whether asking for readable reasoning text is meaningful. An
+// effort of none/off disables thinking, so there would be nothing to stream back
+// and requesting a summary alongside it would contradict the same request. A nil
+// receiver reports false.
+func (r *ReasoningRequest) ProducesReasoning() bool {
+	return r != nil && r.Enabled && !effortSuppressesReasoning(r.Effort)
+}
+
+// effortSuppressesReasoning reports whether an effort level turns thinking off
+// rather than dialing it down.
+func effortSuppressesReasoning(effort string) bool {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "none", "off":
+		return true
+	}
+	return false
 }
 
 // Usage holds provider-reported token counts and optional cost for one request.

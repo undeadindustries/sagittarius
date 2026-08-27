@@ -170,6 +170,52 @@ func TestGrillConfigRoundTrip(t *testing.T) {
 	}
 }
 
+func TestResolveMaxToolRounds(t *testing.T) {
+	t.Parallel()
+
+	ptr := func(n int) *int { return &n }
+	const fallback = 100
+	cases := []struct {
+		name string
+		n    *int
+		want int
+	}{
+		{name: "nil settings", n: nil, want: fallback},
+		{name: "zero is unlimited", n: ptr(0), want: 0},
+		{name: "positive cap", n: ptr(25), want: 25},
+		{name: "negative falls back", n: ptr(-1), want: fallback},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var s *SagittariusSettings
+			if tc.n != nil {
+				s = &SagittariusSettings{MaxToolRounds: tc.n}
+			}
+			if got := ResolveMaxToolRounds(s, fallback); got != tc.want {
+				t.Fatalf("ResolveMaxToolRounds = %d, want %d", got, tc.want)
+			}
+		})
+	}
+	if got := ResolveMaxToolRounds(nil, fallback); got != fallback {
+		t.Fatalf("nil settings = %d, want %d", got, fallback)
+	}
+}
+
+func TestValidateSagittariusSettingsMaxToolRounds(t *testing.T) {
+	t.Parallel()
+
+	if _, err := unmarshalSagittarius(json.RawMessage(`{"maxToolRounds":0}`)); err != nil {
+		t.Fatalf("0 should be valid (unlimited): %v", err)
+	}
+	if _, err := unmarshalSagittarius(json.RawMessage(`{"maxToolRounds":50}`)); err != nil {
+		t.Fatalf("50 should be valid: %v", err)
+	}
+	if _, err := unmarshalSagittarius(json.RawMessage(`{"maxToolRounds":-1}`)); err == nil {
+		t.Fatal("expected validation error for negative maxToolRounds")
+	}
+}
+
 func TestValidateSagittariusSettingsRejectsBadMode(t *testing.T) {
 	t.Parallel()
 

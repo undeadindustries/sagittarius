@@ -67,6 +67,12 @@ func (f *fakeGenerator) lastRequest() *provider.GenerateRequest {
 	return f.lastReq
 }
 
+func (f *fakeGenerator) calls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.call
+}
+
 func testContext(t *testing.T) context.Context {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
