@@ -105,6 +105,31 @@ func TestResolveContextManagementHonorsOverrides(t *testing.T) {
 	}
 }
 
+func TestResolveContextLimitTakesSmallerOfPinAndModel(t *testing.T) {
+	t.Parallel()
+	providerPin := 1_048_576
+	modelPin := 131_072
+	settings := &config.Settings{
+		Providers: &config.ProvidersSettings{
+			Active: string(config.BuiltInOpenAI),
+			OpenAI: &config.ProviderInstanceConfig{
+				ContextLimit: &providerPin,
+				Models: map[string]config.ProviderModelConfig{
+					"moonshotai/kimi-k3": {ContextLimit: &modelPin},
+				},
+			},
+		},
+	}
+	cm := ResolveContextManagement(settings, "moonshotai/kimi-k3")
+	if cm.ContextLimit != modelPin {
+		t.Fatalf("ContextLimit = %d, want the smaller per-model pin %d", cm.ContextLimit, modelPin)
+	}
+	cmWide := ResolveContextManagement(settings, "some-other-model")
+	if cmWide.ContextLimit != providerPin {
+		t.Fatalf("unmatched model ContextLimit = %d, want provider pin %d", cmWide.ContextLimit, providerPin)
+	}
+}
+
 func TestResolveContextManagementGeminiFallback(t *testing.T) {
 	t.Parallel()
 

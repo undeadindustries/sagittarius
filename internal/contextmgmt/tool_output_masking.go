@@ -1,8 +1,6 @@
 package contextmgmt
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -224,12 +222,7 @@ func (m *Masker) resolveOutputDir() string {
 }
 
 func (m *Masker) writeOffload(dir, toolName, content string) (string, error) {
-	name := fmt.Sprintf("%s_%s.txt", strings.ToLower(sanitizeFilenamePart(toolName)), randomSuffix())
-	filePath := filepath.Join(dir, name)
-	if err := os.WriteFile(filePath, []byte(content), 0o644); err != nil {
-		return "", fmt.Errorf("write tool-output offload: %w", err)
-	}
-	return filePath, nil
+	return WriteOffloadFile(m.OutputDir, m.SessionID, toolName, content)
 }
 
 func toolOutputContent(fr *FunctionResponse) string {
@@ -355,12 +348,4 @@ func sanitizeFilenamePart(part string) string {
 		}
 	}
 	return b.String()
-}
-
-func randomSuffix() string {
-	var buf [5]byte
-	if _, err := rand.Read(buf[:]); err != nil {
-		return "offload"
-	}
-	return hex.EncodeToString(buf[:])
 }

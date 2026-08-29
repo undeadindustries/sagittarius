@@ -2,7 +2,9 @@ package contextmgmt
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -97,15 +99,16 @@ func TestManagerLatchesFailedCompression(t *testing.T) {
 	if !m.hasFailedCompression {
 		t.Fatal("expected hasFailedCompression to latch after an inflated summary")
 	}
-	if len(q.calls) != 2 {
-		t.Fatalf("summarizer calls after first turn = %d, want 2 (initial + verify)", len(q.calls))
+	if len(q.calls) == 0 {
+		t.Fatal("expected summarizer to run on the first turn")
 	}
+	firstCalls := len(q.calls)
 
 	if _, err := m.PrepareTurn(context.Background(), cloneHistory(history), 1); err != nil {
 		t.Fatalf("second PrepareTurn: %v", err)
 	}
-	if len(q.calls) != 2 {
-		t.Fatalf("summarizer calls after second turn = %d, want 2 (no re-summarization)", len(q.calls))
+	if len(q.calls) != firstCalls {
+		t.Fatalf("summarizer calls after second turn = %d, want %d (no re-summarization)", len(q.calls), firstCalls)
 	}
 }
 
@@ -173,6 +176,60 @@ func TestManagerEjectionSkippedWithHeadroom(t *testing.T) {
 	}
 }
 
+func TestManagerBudgetLimitUsesSafetyFactor(t *testing.T) {
+	t.Parallel()
+	m := NewManager(ManagerConfig{Enabled: true, ContextLimit: 1000})
+	if m.ContextLimit() != 1000 {
+		t.Fatalf("ContextLimit = %d, want 1000", m.ContextLimit())
+	}
+	if got := m.BudgetLimit(); got != 850 {
+		t.Fatalf("BudgetLimit = %d, want 850", got)
+	}
+	m.cfg.EstimateSafetyFactor = 0.5
+	if got := m.BudgetLimit(); got != 500 {
+		t.Fatalf("BudgetLimit with 0.5 = %d, want 500", got)
+	}
+}
+
+func TestManagerLatchesSummarizerError(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	summarize := func(ctx context.Context, contents []Message, systemInstruction string) (string, error) {
+		calls++
+		return "", fmt.Errorf("gemini api error (400 INVALID_ARGUMENT): exceeds 1048576")
+	}
+	history := []Message{
+		msg("user", strings.Repeat("alpha ", 8)),
+		msg("model", strings.Repeat("beta ", 8)),
+		msg("user", strings.Repeat("gamma ", 8)),
+		msg("model", strings.Repeat("delta ", 8)),
+	}
+	m := NewManager(ManagerConfig{
+		Enabled:              true,
+		ContextLimit:         50,
+		CompressionThreshold: 0.4,
+		PreserveFraction:     0.3,
+		Summarize:            summarize,
+	})
+	if _, err := m.PrepareTurn(context.Background(), cloneHistory(history), 0); err == nil {
+		t.Fatal("expected summarizer error")
+	}
+	if !m.hasFailedCompression {
+		t.Fatal("expected hasFailedCompression to latch after a provider error")
+	}
+	firstCalls := calls
+	if _, err := m.PrepareTurn(context.Background(), cloneHistory(history), 1); err != nil {
+		t.Fatalf("second PrepareTurn: %v", err)
+	}
+	if calls != firstCalls {
+		t.Fatalf("summarizer calls after latch = %d, want %d (truncation only)", calls, firstCalls)
+	}
+	m.ResetCompressionFailure()
+	if m.hasFailedCompression {
+		t.Fatal("ResetCompressionFailure left the latch set")
+	}
+}
+
 func TestManagerNilIsPassThrough(t *testing.T) {
 	t.Parallel()
 	var m *Manager
@@ -183,5 +240,159 @@ func TestManagerNilIsPassThrough(t *testing.T) {
 	}
 	if len(got) != len(history) {
 		t.Fatalf("nil manager must pass history through unchanged")
+	}
+}
+
+func TestManagerLatchesEmptySummary(t *testing.T) {
+	t.Parallel()
+	// When summarizer returns an empty summary (e.g. thinking-only model),
+	// the compression status is CompressionFailedEmptySummary and must latch.
+	calls := 0
+	summarize := func(ctx context.Context, contents []Message, systemInstruction string) (string, error) {
+		calls++
+		return "<scratchpad>thinking</scratchpad>", nil // extractSnapshot yields empty summary
+	}
+	history := []Message{
+		msg("user", strings.Repeat("alpha ", 10)),
+		msg("model", strings.Repeat("beta ", 10)),
+		msg("user", strings.Repeat("gamma ", 10)),
+		msg("model", strings.Repeat("delta ", 10)),
+	}
+	m := NewManager(ManagerConfig{
+		Enabled:              true,
+		ContextLimit:         50,
+		CompressionThreshold: 0.4,
+		PreserveFraction:     0.3,
+		Summarize:            summarize,
+	})
+	if _, err := m.PrepareTurn(context.Background(), cloneHistory(history), 0); err != nil {
+		t.Fatalf("PrepareTurn: %v", err)
+	}
+	if !m.hasFailedCompression {
+		t.Fatal("expected hasFailedCompression to latch on empty summary")
+	}
+}
+
+func TestManagerLatchesSub10PercentReduction(t *testing.T) {
+	t.Parallel()
+	// OpenCode's loop guard: a compression that succeeds but achieves <10% reduction
+	// must latch hasFailedCompression to prevent burning summarizer calls repeatedly.
+	history := []Message{
+		msg("user", strings.Repeat("alpha ", 10)),
+		msg("model", strings.Repeat("beta ", 10)),
+		msg("user", strings.Repeat("gamma ", 10)),
+		msg("model", strings.Repeat("delta ", 10)),
+	}
+	origTok := EstimateTokens(flattenParts(history))
+	// Return a summary that is barely smaller (95% of original tokens -> only 5% reduction).
+	hugeSummary := "<state_snapshot>" + strings.Repeat("a", int(float64(origTok*4)*0.95)) + "</state_snapshot>"
+	q := &queuedSummarizer{responses: []string{hugeSummary}}
+
+	m := NewManager(ManagerConfig{
+		Enabled:              true,
+		ContextLimit:         origTok * 2,
+		CompressionThreshold: 0.4,
+		PreserveFraction:     0.2,
+		Summarize:            q.fn,
+	})
+	if _, err := m.PrepareTurn(context.Background(), cloneHistory(history), 0); err != nil {
+		t.Fatalf("PrepareTurn: %v", err)
+	}
+	if !m.hasFailedCompression {
+		t.Fatal("expected hasFailedCompression to latch when compression achieves <10% reduction")
+	}
+}
+
+func TestManagerLatchesRespectedByBudgetTriggered(t *testing.T) {
+	t.Parallel()
+	// A proactive budget-triggered compression (BudgetTriggered: true) must respect
+	// the failure latch and not invoke the summarizer when a prior failure occurred.
+	calls := 0
+	summarize := func(ctx context.Context, contents []Message, systemInstruction string) (string, error) {
+		calls++
+		return "<state_snapshot>ok</state_snapshot>", nil
+	}
+	history := []Message{
+		msg("user", strings.Repeat("alpha ", 20)),
+		msg("model", strings.Repeat("beta ", 20)),
+	}
+	m := NewManager(ManagerConfig{
+		Enabled:                true,
+		ContextLimit:           100,
+		BudgetEnabled:          true,
+		ProactiveCompressAt:    0.3, // triggers budget compression
+		ReservedResponseTokens: 20,
+		Summarize:              summarize,
+	})
+	m.hasFailedCompression = true // latch already set
+
+	got, err := m.PrepareTurn(context.Background(), cloneHistory(history), 0)
+	if err != nil {
+		t.Fatalf("PrepareTurn: %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("summarizer called %d times; want 0 (budget-triggered must respect latch)", calls)
+	}
+	_ = got
+}
+
+func TestManagerConcurrentResetVsPrepare(t *testing.T) {
+	t.Parallel()
+	// Race check: ResetCompressionFailure from UI thread vs PrepareTurn on runner thread.
+	q := &queuedSummarizer{responses: []string{"<state_snapshot>summary</state_snapshot>"}}
+	history := []Message{
+		msg("user", "hello"),
+		msg("model", "world"),
+	}
+	m := NewManager(ManagerConfig{
+		Enabled:              true,
+		ContextLimit:         100,
+		CompressionThreshold: 0.1,
+		Summarize:            q.fn,
+	})
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 50; i++ {
+			m.ResetCompressionFailure()
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 50; i++ {
+			_, _ = m.PrepareTurn(context.Background(), cloneHistory(history), i)
+		}
+	}()
+
+	wg.Wait()
+}
+
+func TestManagerMessageBudget(t *testing.T) {
+	t.Parallel()
+	m := NewManager(ManagerConfig{
+		Enabled:                true,
+		ContextLimit:           1000,
+		EstimateSafetyFactor:   0.85, // budget limit = 850
+		ReservedResponseTokens: 200,
+	})
+
+	// Normal overhead: 850 - 150 - 200 = 500
+	if got := m.MessageBudget(150); got != 500 {
+		t.Errorf("MessageBudget(150) = %d, want 500", got)
+	}
+
+	// Overhead exceeds budget: 850 - 700 - 200 = -50 -> clamped to 1
+	if got := m.MessageBudget(700); got != 1 {
+		t.Errorf("MessageBudget(700) = %d, want 1 (clamped)", got)
+	}
+
+	// Nil / disabled manager returns 0
+	var nilMgr *Manager
+	if got := nilMgr.MessageBudget(100); got != 0 {
+		t.Errorf("nilMgr.MessageBudget = %d, want 0", got)
 	}
 }

@@ -50,6 +50,72 @@ func TestFormatCostUSD(t *testing.T) {
 	}
 }
 
+func TestShowSessionCostInFooter(t *testing.T) {
+	t.Parallel()
+	openrouterCost := []ModelUsageStat{
+		{Provider: "openrouter", Model: "mistral/7b", Mode: "agent", CostKnown: true, CostUSD: 0.0042},
+	}
+	tests := []struct {
+		name  string
+		stats SessionStats
+		want  bool
+	}{
+		{
+			name: "openrouter-active-with-own-cost",
+			stats: SessionStats{
+				Provider:         "openrouter",
+				SessionCostKnown: true,
+				SessionCostUSD:   0.0042,
+				ModelUsage:       openrouterCost,
+			},
+			want: true,
+		},
+		{
+			name: "gemini-active-after-openrouter-cost",
+			stats: SessionStats{
+				Provider:         "gemini",
+				SessionCostKnown: true,
+				SessionCostUSD:   0.0042,
+				ModelUsage:       openrouterCost,
+			},
+			want: false,
+		},
+		{
+			name: "session-cost-unknown",
+			stats: SessionStats{
+				Provider:         "openrouter",
+				SessionCostKnown: false,
+				ModelUsage:       openrouterCost,
+			},
+			want: false,
+		},
+		{
+			name: "empty-provider",
+			stats: SessionStats{
+				SessionCostKnown: true,
+				ModelUsage:       openrouterCost,
+			},
+			want: false,
+		},
+		{
+			name: "no-usage-rows",
+			stats: SessionStats{
+				Provider:         "openrouter",
+				SessionCostKnown: true,
+			},
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tt.stats.ShowSessionCostInFooter(); got != tt.want {
+				t.Errorf("ShowSessionCostInFooter() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFormatDuration(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

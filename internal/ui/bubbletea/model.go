@@ -18,6 +18,7 @@ import (
 
 	"github.com/undeadindustries/sagittarius/internal/bgproc"
 	"github.com/undeadindustries/sagittarius/internal/clipboard"
+	"github.com/undeadindustries/sagittarius/internal/slash"
 	"github.com/undeadindustries/sagittarius/internal/ui"
 	"github.com/undeadindustries/sagittarius/internal/ui/bgprocdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/mcpdialog"
@@ -207,6 +208,10 @@ type model struct {
 	// still update the right card.
 	activeCard *toolCard
 	cardByID   map[string]*toolCard
+	// ptyFocus routes composer keys into the live user `!` PTY. ptyToolCallID
+	// is the bang card's id while that command is running.
+	ptyFocus      bool
+	ptyToolCallID string
 
 	// followBottom pins the scrollback viewport to the newest content. It is
 	// true until the user scrolls up (PgUp/wheel/Shift+Up) and is restored when
@@ -1257,6 +1262,10 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.cycleTheme()
 	}
 
+	if m.ptyFocus && m.ptyToolCallID != "" {
+		return m.handlePtyKey(msg)
+	}
+
 	if m.askReply != nil {
 		return m.handleAskKey(msg)
 	}
@@ -1324,6 +1333,10 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 					idx = 0
 				}
 				m.acceptSuggestion(idx)
+				return m, nil
+			}
+			if m.ptyToolCallID != "" {
+				m.enterPtyFocus()
 				return m, nil
 			}
 			return m.handleBusyTab()
@@ -1579,6 +1592,13 @@ func (m *model) handleBusyEnter() (tea.Model, tea.Cmd) {
 			m.clearSuggestions()
 			m.syncInputLayout()
 			return m, m.runConcurrentSlash(line)
+		}
+		if slash.IsBangInput(display) {
+			m.enqueueMessage(display)
+			m.input.SetValue("")
+			m.clearSuggestions()
+			m.syncInputLayout()
+			return m, nil
 		}
 		m.addBlock(roleInfo, "Slash commands cannot be queued; wait for the current turn to finish.")
 		return m, nil
@@ -2084,6 +2104,9 @@ func (m *model) handleStreamGen(gen uint64, ev ui.StreamEvent) (tea.Model, tea.C
 		}
 		m.activeCard = nil
 		m.runningTool = ""
+		if isBangCallID(ev.ToolCallID) {
+			m.clearPtyFocus()
+		}
 		m.syncViewportContent()
 		// Tool finished; the model will be queried again next.
 		m.setWorkingLabel(m.busyLabel())
@@ -2096,6 +2119,7 @@ func (m *model) handleStreamGen(gen uint64, ev ui.StreamEvent) (tea.Model, tea.C
 		m.activeCard = nil
 		m.runningTool = ""
 		m.clearAskState()
+		m.clearPtyFocus()
 		m.syncViewportContent()
 	case ui.StreamDone:
 		m.busy = false
@@ -2104,6 +2128,7 @@ func (m *model) handleStreamGen(gen uint64, ev ui.StreamEvent) (tea.Model, tea.C
 		m.runningTool = ""
 		m.thinking = ""
 		m.clearAskState()
+		m.clearPtyFocus()
 		m.clearTurn()
 		m.syncViewportContent()
 		m.closeResponse()
@@ -2168,6 +2193,9 @@ func (m *model) syncInputPlaceholder() {
 
 func (m *model) syncInputPrompt(mode string) {
 	prompt := inputPromptForMode(mode)
+	if m.ptyFocus {
+		prompt = shellPrompt
+	}
 	width := runewidth.StringWidth(prompt)
 	m.input.SetPromptFunc(width, func(line int) string {
 		if line == 0 {
@@ -2264,6 +2292,9 @@ func (m *model) startToolCard(ev ui.StreamEvent) {
 			m.cardByID = make(map[string]*toolCard)
 		}
 		m.cardByID[card.callID] = card
+		if isBangCallID(card.callID) {
+			m.ptyToolCallID = card.callID
+		}
 	}
 	m.syncViewportContent()
 }
@@ -2826,7 +2857,8 @@ func renderHeader(opts ui.Options, th theme.Theme, width int) string {
 // Footer line 1 (Right): last-turn "↑{in} ↓{out}" + optional " ${cost}" when
 // OpenRouter cost is known, + optional "  {pct}% context" when a limit exists.
 // Footer line 2 (Detail): existing system-prompt preset label + "  Σ {in}/{out}"
-// session total + optional " ${cost}" when known. The detail line is always shown
+// session total + optional " ${cost}" when the active provider has reported
+// cost this session (ShowSessionCostInFooter). The detail line is always shown
 // even when no context limit is available (e.g. Gemini).
 //
 // On narrow terminals (< 80 cols) the session-total and cost parts are dropped to
@@ -2870,7 +2902,7 @@ func (m *model) statusWithMetrics() ui.StatusBar {
 		sessionStr := fmt.Sprintf("Σ %s/%s",
 			ui.CompactCount(stats.InputTokens),
 			ui.CompactCount(stats.OutputTokens))
-		if stats.SessionCostKnown {
+		if stats.ShowSessionCostInFooter() {
 			sessionStr += "  " + ui.FormatCostUSD(stats.SessionCostUSD)
 		}
 		if status.Detail != "" {

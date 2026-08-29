@@ -367,7 +367,7 @@ func (d *providerDialogDeps) SetModel(ctx context.Context, id, model string) err
 			return err
 		}
 		if limit > 0 {
-			_, _ = provider.MaybeSetContextLimit(s, id, limit)
+			_, _ = provider.MaybeSetModelContextLimit(s, id, model, limit)
 		}
 		applyReasoningInfos(s, id, []string{model}, infos, discovered)
 		return nil

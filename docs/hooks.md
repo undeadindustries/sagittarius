@@ -26,11 +26,13 @@ Sagittarius supports a wire-compatible lifecycle hooks system matching `gemini-c
 | `FirstTurn` | Terminal `StreamDone` on turn 1 | `{prompt, prompt_response}` | Fires **once** per session after turn 1 |
 | `BeforeAgent` | Start of `RunTurn` (pre-history) | `{prompt}` | Block turn (`deny`/`block`) or append `additionalContext` |
 | `AfterAgent` | Terminal `StreamDone` of turn | `{prompt, prompt_response}` | Observe complete turn response |
-| `PreCompress` | Pre-compression trigger | `{trigger: "auto"|"manual"}` | Fire before history compression |
+| `PreCompress` | Pre-compression trigger | `{trigger: "auto"|"manual"}` | Advisory only: fire-and-forget before history compression |
 | `BeforeTool` | Pre-tool execution | `{tool_name, tool_input}` | Block tool (`deny`/`block`) or modify `tool_input` |
 | `AfterTool` | Post-tool execution | `{tool_name, tool_input, tool_response}` | Observe tool result |
 
 *Note: Each event payload also includes `session_id`, `transcript_path`, `cwd`, `hook_event_name`, `timestamp`, and `turn_index`.*
+
+`PreCompress` is advisory. Sagittarius starts it on a background goroutine and does not wait, because the hook cannot rewrite history and its results are discarded. Session JSONL is append-only and compression never touches it, so a mine started just before compression reads the same bytes after. `AfterAgent` stays synchronous so `systemMessage` lines land before `StreamDone`. `BeforeAgent`, `BeforeTool`, and `FirstTurn` stay synchronous because they can block or rewrite arguments.
 
 `prompt` on `AfterAgent` and `FirstTurn` is the prompt for **that** turn, not the first one in the
 session. `turn_index` counts user turns in the conversation and continues across `--resume` and
@@ -53,7 +55,7 @@ do not emit their own tool cards; the batch's card carries the summary.
 ## Security & Trust Model
 
 - **Global Hooks:** Configured in `~/.sagittarius/settings.json` are implicitly trusted.
-- **Project Hooks:** Configured in `<repo>/.sagittarius/settings.json` are fingerprinted by `project_root + key + command` (SHA-256). Fingerprints are stored in `~/.sagittarius/trusted_hooks.json`. If a project hook is added or modified (e.g. via `git pull`), it is marked untrusted until approved.
+- **Project Hooks:** Configured in `<repo>/.sagittarius/settings.json` are fingerprinted by `project_root + key + command` (SHA-256). Fingerprints are stored in `~/.sagittarius/trusted_hooks.json`. If a project hook is added or modified (e.g. via `git pull`), it is marked untrusted until you run `/hooks trust <name>` or `/hooks trust-all`.
 - **Headless Mode:** Untrusted project hooks are automatically skipped in headless execution mode.
 
 ## Slash Commands
@@ -67,6 +69,8 @@ do not emit their own tool cards; the batch's card carries the summary.
 | `/hooks disable-all` | Globally disable all hooks |
 | `/hooks reload` | Reload hook configurations from settings files |
 | `/hooks test <name>` | Test-run a hook with sample event input |
+| `/hooks trust <name>` | Trust a project hook so it can run |
+| `/hooks trust-all` | Trust every loaded project hook |
 
 ## Example: automatic MemPalace capture
 

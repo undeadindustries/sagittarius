@@ -8,6 +8,14 @@ This document mirrors the fork reference (`gemini-cli/docs/reference/commands.md
 for the subset implemented in Sagittarius. Commands not listed here are deferred
 to later phases — see [Deferred commands](#deferred-commands).
 
+## User shell (`!` / `/run`)
+
+- **Description:** Run a shell command in this session without sending it to the model.
+- **Usage:** `!ls -la /tmp` or `/run ls -la /tmp`
+- **TUI:** Output appears as a Shell tool card. While it runs, **Tab** moves typing into the PTY (sudo password, vim, htop). **Shift+Tab** returns to the composer. Esc still cancels the command when you are not focused in the PTY; when focused, Esc goes to the process.
+- **Headless:** `sagittarius -p '!echo hi'` prints the command output and exits with the command's status.
+- **Not recorded:** The command and its output are not added to conversation history or session JSONL.
+
 ## Slash commands (`/`)
 
 ### `/help`
@@ -455,6 +463,12 @@ the model, use an [`@skill:<name>` mention](#skillname).
 - **`test <name>`**
   - **Description:** Execute a dry-run test of a hook by name or command key.
   - **Usage:** `/hooks test mempalace-auto-save`
+- **`trust <name>`**
+  - **Description:** Trust a project hook by name or command key so it can run.
+  - **Usage:** `/hooks trust mempalace-precompact`
+- **`trust-all`**
+  - **Description:** Trust every loaded project hook.
+  - **Usage:** `/hooks trust-all`
 
 ### `/mcp`
 

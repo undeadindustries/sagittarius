@@ -68,6 +68,8 @@ type mockHooks struct {
 	readOnly       bool
 	goal           *goal.Goal
 	evaluatorLabel string
+	trustedHook    string
+	trustAll       bool
 }
 
 func (m *mockHooks) RebuildRunner(context.Context) (string, string, error) {
@@ -365,6 +367,14 @@ func (m *mockHooks) ReloadHooks(ctx context.Context) (string, error) {
 func (m *mockHooks) TestHook(ctx context.Context, name string) (string, error) {
 	return "Hook test succeeded", nil
 }
+func (m *mockHooks) TrustHook(name string) error {
+	m.trustedHook = name
+	return nil
+}
+func (m *mockHooks) TrustAllHooks() error {
+	m.trustAll = true
+	return nil
+}
 
 func testDeps(t *testing.T, settings *config.Settings) (slash.Deps, *config.Loader, *mockHooks) {
 	t.Helper()
@@ -401,9 +411,11 @@ func TestHelpListsCommands(t *testing.T) {
 		"/skills reload",
 		"/mcp reload",
 		"/agents reload",
+		"/hooks trust",
 		"/mode",
 		"/mode show",
 		"List slash commands",
+		"!<command>",
 	}
 	for _, want := range checks {
 		if !strings.Contains(help, want) {
@@ -629,6 +641,33 @@ func TestSystemPromptAppliesPresetArg(t *testing.T) {
 	}
 	if hooks.reloadCalls == 0 {
 		t.Fatal("expected ReloadSystemInstruction after preset apply")
+	}
+}
+
+func TestHooksTrust(t *testing.T) {
+	t.Parallel()
+	deps, _, hooks := testDeps(t, nil)
+	p := slash.NewProcessor()
+
+	missing := p.Process(context.Background(), "/hooks trust", deps)
+	if missing.Err == nil || !strings.Contains(missing.Err.Error(), "usage: /hooks trust") {
+		t.Fatalf("empty trust = %+v, want usage error", missing)
+	}
+
+	named := p.Process(context.Background(), "/hooks trust mempalace-precompact", deps)
+	if named.Err != nil {
+		t.Fatalf("trust named: %v", named.Err)
+	}
+	if hooks.trustedHook != "mempalace-precompact" {
+		t.Fatalf("trustedHook = %q", hooks.trustedHook)
+	}
+
+	all := p.Process(context.Background(), "/hooks trust-all", deps)
+	if all.Err != nil {
+		t.Fatalf("trust-all: %v", all.Err)
+	}
+	if !hooks.trustAll {
+		t.Fatal("expected TrustAllHooks")
 	}
 }
 

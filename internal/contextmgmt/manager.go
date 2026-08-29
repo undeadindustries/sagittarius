@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 )
 
 // ManagerConfig configures a Manager. The agent runner builds one per provider
@@ -67,6 +68,11 @@ type ManagerConfig struct {
 	// Summarize performs compression summarization. Nil disables compression
 	// (masking and ejection still run).
 	Summarize Summarizer
+	// EstimateSafetyFactor scales ContextLimit for budget math so the chars/4
+	// estimator cannot fire thresholds after the provider's real tokenizer
+	// has already overflowed. Zero (and values outside (0,1]) use
+	// defaultEstimateSafetyFactor. ContextLimit() still returns the true window.
+	EstimateSafetyFactor float64
 	// Logger receives structured debug/warn logs; defaults to slog.Default.
 	Logger *slog.Logger
 }
@@ -79,13 +85,12 @@ type Manager struct {
 	adaptive   *AdaptiveTracker
 	exempt     map[string]bool
 	logger     *slog.Logger
-	// hasFailedCompression records that a non-forced compression previously
-	// inflated the token count. Once set, later non-forced compressions skip
-	// summarization (truncation only) to avoid repeated failures and cost,
-	// mirroring the fork's hasFailedCompressionAttempt. PrepareTurn runs one
-	// turn at a time on the runner goroutine, so no lock is required.
+
+	latchMu              sync.Mutex
 	hasFailedCompression bool
 }
+
+const defaultEstimateSafetyFactor = 0.85
 
 // NewManager builds a Manager from cfg. A disabled config yields a pass-through.
 func NewManager(cfg ManagerConfig) *Manager {
@@ -138,6 +143,77 @@ func (m *Manager) ContextLimit() int {
 	return m.cfg.ContextLimit
 }
 
+// BudgetLimit returns ContextLimit scaled by EstimateSafetyFactor. Callers that
+// decide whether history fits (compression, masking, ejection, pre-flight
+// truncation) must use this, not ContextLimit, so a chars/4 underestimate
+// cannot walk the request past the provider's real window. The footer gauge
+// still reads ContextLimit.
+func (m *Manager) BudgetLimit() int {
+	if m == nil || !m.cfg.Enabled {
+		return 0
+	}
+	limit := m.cfg.ContextLimit
+	if limit <= 0 {
+		return 0
+	}
+	factor := m.cfg.EstimateSafetyFactor
+	if factor <= 0 || factor > 1 {
+		factor = defaultEstimateSafetyFactor
+	}
+	return int(float64(limit) * factor)
+}
+
+// MessageBudget calculates the available token budget for messages after
+// subtracting system/tool overhead and reserved response tokens from BudgetLimit.
+// It is clamped to at least 1 so pre-flight truncation always receives a valid target.
+func (m *Manager) MessageBudget(overheadTokens int) int {
+	if m == nil || !m.cfg.Enabled {
+		return 0
+	}
+	limit := m.BudgetLimit()
+	if limit <= 0 {
+		return 0
+	}
+	reserved := m.cfg.ReservedResponseTokens
+	if reserved < 0 {
+		reserved = 0
+	}
+	budget := limit - overheadTokens - reserved
+	if budget < 1 {
+		return 1
+	}
+	return budget
+}
+
+// ResetCompressionFailure clears the summarizer-failure latch so the next
+// PrepareTurn may attempt summarization again (manual /compress or a model switch).
+func (m *Manager) ResetCompressionFailure() {
+	if m == nil {
+		return
+	}
+	m.latchMu.Lock()
+	m.hasFailedCompression = false
+	m.latchMu.Unlock()
+}
+
+func (m *Manager) getFailedCompression() bool {
+	if m == nil {
+		return false
+	}
+	m.latchMu.Lock()
+	defer m.latchMu.Unlock()
+	return m.hasFailedCompression
+}
+
+func (m *Manager) setFailedCompression(val bool) {
+	if m == nil {
+		return
+	}
+	m.latchMu.Lock()
+	m.hasFailedCompression = val
+	m.latchMu.Unlock()
+}
+
 // CompressionAvailable reports whether manual compression can run: the manager
 // must be enabled and have a configured summarizer. It is false for nil or
 // disabled managers (gemini-native and openai-responses paths).
@@ -153,6 +229,7 @@ func (m *Manager) ForceCompress(ctx context.Context, history []Message) ([]Messa
 	if !m.CompressionAvailable() || len(history) == 0 {
 		return history, CompressionInfo{Status: CompressionNoOp}, nil
 	}
+	m.ResetCompressionFailure()
 	preserveFraction := m.cfg.PreserveFraction
 	if preserveFraction <= 0 {
 		preserveFraction = DefaultLocalPreserveFraction
@@ -162,7 +239,7 @@ func (m *Manager) ForceCompress(ctx context.Context, history []Message) ([]Messa
 		History:            history,
 		Force:              true,
 		OriginalTokenCount: original,
-		EffectiveLimit:     m.cfg.ContextLimit,
+		EffectiveLimit:     m.BudgetLimit(),
 		PreserveFraction:   preserveFraction,
 	}
 	if WillCompress(opts) && m.cfg.OnWillCompress != nil {
@@ -209,7 +286,7 @@ func (m *Manager) applyEjection(history []Message) []Message {
 	// mutating its prior tool calls.
 	if m.cfg.ContextLimit > 0 {
 		historyTokens := EstimateTokens(flattenParts(history))
-		if float64(historyTokens) < ejectionTriggerFraction*float64(m.cfg.ContextLimit) {
+		if float64(historyTokens) < ejectionTriggerFraction*float64(m.BudgetLimit()) {
 			return history
 		}
 	}
@@ -240,7 +317,7 @@ func (m *Manager) applyMasking(history []Message) []Message {
 		prunableFraction = DefaultLocalMaskingPrunableFraction
 	}
 	cfg := GetLocalMaskingDefaults(LocalMaskingSettings{
-		ContextLimit:       m.cfg.ContextLimit,
+		ContextLimit:       m.BudgetLimit(),
 		Enabled:            true,
 		ProtectionFraction: protectionFraction,
 		PrunableFraction:   prunableFraction,
@@ -258,6 +335,19 @@ func (m *Manager) applyMasking(history []Message) []Message {
 	return res.NewHistory
 }
 
+const minCompressionReductionFraction = 0.1 // OpenCode's loop guard, issue #27924
+
+func unproductive(info CompressionInfo) bool {
+	switch info.Status {
+	case CompressionFailedEmptySummary, CompressionFailedInflatedTokenCount:
+		return true
+	case Compressed:
+		saved := info.OriginalTokenCount - info.NewTokenCount
+		return float64(saved) < minCompressionReductionFraction*float64(info.OriginalTokenCount)
+	}
+	return false
+}
+
 func (m *Manager) applyBudgetCompression(ctx context.Context, history []Message, turnIndex int) ([]Message, error) {
 	if m.compressor == nil {
 		return history, nil
@@ -272,7 +362,7 @@ func (m *Manager) applyBudgetCompression(ctx context.Context, history []Message,
 	if m.cfg.BudgetEnabled {
 		assessment := AssessTurnBudget(PreTurnBudgetInput{
 			CurrentHistoryTokens:   historyTokens,
-			ContextLimit:           m.cfg.ContextLimit,
+			ContextLimit:           m.BudgetLimit(),
 			ReservedResponseTokens: m.cfg.ReservedResponseTokens,
 			ProactiveCompressAt:    m.cfg.ProactiveCompressAt,
 		})
@@ -286,26 +376,26 @@ func (m *Manager) applyBudgetCompression(ctx context.Context, history []Message,
 	threshold := m.effectiveThreshold(turnIndex)
 	opts := CompressOptions{
 		History:            history,
-		Force:              budgetTriggered,
+		BudgetTriggered:    budgetTriggered,
 		OriginalTokenCount: historyTokens,
 		Threshold:          threshold,
-		EffectiveLimit:     m.cfg.ContextLimit,
+		EffectiveLimit:     m.BudgetLimit(),
 		PreserveFraction:   preserveFraction,
-		HasFailedAttempt:   m.hasFailedCompression,
+		HasFailedAttempt:   m.getFailedCompression(),
 	}
 	if WillCompress(opts) && m.cfg.OnWillCompress != nil {
 		m.cfg.OnWillCompress(ctx, "auto")
 	}
 	res, err := m.compressor.Compress(ctx, opts)
 	if err != nil {
+		m.setFailedCompression(true)
 		m.logger.Warn("context: compression failed", "error", err)
 		return history, err
 	}
 
-	// Latch the failure flag when a non-forced summarization inflated the token
-	// count, matching the fork: hasFailed = hasFailed || !force.
-	if res.Info.Status == CompressionFailedInflatedTokenCount && !budgetTriggered {
-		m.hasFailedCompression = true
+	// Latch the failure flag on any unproductive outcome when not manual/forced.
+	if unproductive(res.Info) && !opts.Force {
+		m.setFailedCompression(true)
 	}
 
 	if m.cfg.AdaptiveEnabled {

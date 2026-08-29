@@ -46,6 +46,19 @@ func EstimateTokens(parts []provider.Part) int {
 	return int(math.Floor(total))
 }
 
+// EstimateRequestOverhead calculates the token overhead of the system instruction
+// plus all tool declarations in the request.
+func EstimateRequestOverhead(system string, tools []provider.ToolDeclaration) int {
+	total := 0.0
+	if system != "" {
+		total += estimateTextTokens(system)
+	}
+	for i := range tools {
+		total += jsonLen(tools[i]) / defaultCharsPerToken
+	}
+	return int(math.Ceil(total))
+}
+
 func estimatePartTokens(part provider.Part) float64 {
 	switch {
 	case part.Text != "":

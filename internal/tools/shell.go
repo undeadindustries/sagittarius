@@ -117,11 +117,30 @@ func (t *shellTool) ExecuteStream(ctx context.Context, args map[string]any, sink
 	if background {
 		grace = backgroundStartGrace
 	}
-	result, err := t.run(ctx, command, background, grace, sink)
+	result, err := t.run(ctx, command, background, grace, sink, nil)
 	if err != nil && errors.Is(err, context.DeadlineExceeded) {
 		return nil, &ToolError{Code: ErrCodeExecutionTimeout, Message: "command timed out"}
 	}
 	return result, err
+}
+
+// userShellWaitForever disables auto-background so a user `!` command
+// stays in the foreground until it exits or the context is canceled.
+const userShellWaitForever time.Duration = 0
+
+// ExecuteUser runs command in the PTY without auto-background, optionally
+// accepting keystrokes on stdin. It is the user-`!` path, not a model tool call.
+func (t *shellTool) ExecuteUser(ctx context.Context, command string, sink ToolOutputSink, stdin *PTYStdin) (map[string]any, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if IsDangerousCommand(command) {
+		return nil, &ToolError{
+			Code:    ErrCodeSandboxDenial,
+			Message: fmt.Sprintf("command blocked by safety policy: %s", command),
+		}
+	}
+	return t.run(ctx, command, false, userShellWaitForever, sink, stdin)
 }
 
 // run starts command with stdout+stderr redirected to a temp log file, then
@@ -137,7 +156,7 @@ func (t *shellTool) ExecuteStream(ctx context.Context, args map[string]any, sink
 // returns without risking SIGPIPE on the writer or leaking a copy goroutine.
 // The process is started under context.Background, not ctx, so a backgrounded
 // process outlives the agent turn; cancellation is handled explicitly below.
-func (t *shellTool) run(ctx context.Context, command string, explicitBackground bool, grace time.Duration, sink ToolOutputSink) (map[string]any, error) {
+func (t *shellTool) run(ctx context.Context, command string, explicitBackground bool, grace time.Duration, sink ToolOutputSink, stdin *PTYStdin) (map[string]any, error) {
 	logFile, err := os.CreateTemp("", shellLogPattern)
 	if err != nil {
 		return nil, fmt.Errorf("shell: create log file: %w", err)
@@ -171,6 +190,9 @@ func (t *shellTool) run(ctx context.Context, command string, explicitBackground 
 		_ = os.Remove(logPath)
 		return nil, fmt.Errorf("shell pty failed: %w", err)
 	}
+
+	stdin.attach(f)
+	defer stdin.detach()
 
 	pid := cmd.Process.Pid
 	term := vt.NewEmulator(80, 24)
@@ -249,6 +271,32 @@ func (t *shellTool) run(ctx context.Context, command string, explicitBackground 
 				}
 			}
 		}()
+	}
+
+	if grace <= 0 {
+		select {
+		case err = <-waitErr:
+			<-ioDone
+			isDone.Store(true)
+			if tailCancel != nil {
+				tailCancel()
+			}
+			if sink != nil {
+				sink(renderEmulator(term))
+			}
+			t.captureJobs(jobsPath, command, logPath)
+			return t.completedResult(logPath, err, storedErr(&logWriteErr))
+		case <-ctx.Done():
+			isDone.Store(true)
+			if tailCancel != nil {
+				tailCancel()
+			}
+			_ = syscall.Kill(-pid, syscall.SIGKILL)
+			_ = f.Close()
+			<-ioDone
+			_ = os.Remove(logPath)
+			return nil, ctx.Err()
+		}
 	}
 
 	timer := time.NewTimer(grace)

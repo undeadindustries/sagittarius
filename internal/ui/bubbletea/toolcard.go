@@ -246,7 +246,7 @@ func (m *model) toolResultBody(c *toolCard, inner int) []string {
 	text := strings.TrimSpace(c.body)
 	if text == "" {
 		if c.phase == toolRunning {
-			return []string{m.th.Dim.Render("Running…")}
+			return m.withBangHint(c, []string{m.th.Dim.Render("Running…")})
 		}
 		text = "ok"
 	}
@@ -268,7 +268,18 @@ func (m *model) toolResultBody(c *toolCard, inner int) []string {
 		}
 		lines = append(lines, style.Render(fmt.Sprintf("exit %d", *c.exitCode)))
 	}
-	return lines
+	return m.withBangHint(c, lines)
+}
+
+func (m *model) withBangHint(c *toolCard, lines []string) []string {
+	if c.phase != toolRunning || !isBangCallID(c.callID) {
+		return lines
+	}
+	hint := "Tab to interact"
+	if m.ptyFocus && m.ptyToolCallID == c.callID {
+		hint = "Shift+Tab to leave"
+	}
+	return append(lines, m.th.Dim.Render(hint))
 }
 
 // toolConfirmBody renders the confirmation UX inside the card: a nested

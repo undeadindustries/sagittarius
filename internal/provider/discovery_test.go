@@ -261,6 +261,26 @@ func TestMaybeSetContextLimitRespectsPin(t *testing.T) {
 		t.Fatalf("pinned contextLimit changed: %d", *s2.Providers.OpenAI.ContextLimit)
 	}
 }
+func TestMaybeSetModelContextLimitWritesPerModel(t *testing.T) {
+	t.Parallel()
+	s := &config.Settings{Providers: &config.ProvidersSettings{Active: string(config.BuiltInOpenAI), OpenAI: &config.ProviderInstanceConfig{}}}
+	changed, err := MaybeSetModelContextLimit(s, string(config.BuiltInOpenAI), "moonshotai/kimi-k3", 131072)
+	if err != nil || !changed {
+		t.Fatalf("expected change, got changed=%v err=%v", changed, err)
+	}
+	if s.Providers.OpenAI.ContextLimit != nil {
+		t.Fatalf("provider-wide contextLimit should stay unset, got %v", *s.Providers.OpenAI.ContextLimit)
+	}
+	mc, ok := config.LookupModelConfig(s.Providers.OpenAI, "moonshotai/kimi-k3")
+	if !ok || mc.ContextLimit == nil || *mc.ContextLimit != 131072 {
+		t.Fatalf("per-model contextLimit = %+v ok=%v", mc.ContextLimit, ok)
+	}
+	changed, err = MaybeSetModelContextLimit(s, string(config.BuiltInOpenAI), "moonshotai/kimi-k3", 131072)
+	if err != nil || changed {
+		t.Fatalf("idempotent write should be a no-op, got changed=%v err=%v", changed, err)
+	}
+}
+
 func TestMaybeSetContextLimitPreferDiscovered(t *testing.T) {
 	t.Parallel()
 	pinned := true

@@ -7,6 +7,7 @@ const (
 	newSnapshotInstruction      = "Generate a new <state_snapshot> based on the provided history."
 	anchoredSnapshotInstruction = "A previous <state_snapshot> exists in the history. You MUST integrate all still-relevant information from that snapshot into the new one, updating it with the more recent events. Do not lose established constraints or critical knowledge."
 	verificationInstruction     = "Critically evaluate the <state_snapshot> you just generated. Did you omit any specific technical details, file paths, tool results, or user constraints mentioned in the history? If anything is missing or could be more precise, generate a FINAL, improved <state_snapshot>. Otherwise, repeat the exact same <state_snapshot> again."
+	summarizerScratchpadCue     = "\n\nFirst, reason in your scratchpad. Then, generate the updated <state_snapshot>."
 )
 
 // Framing for the summary once it is injected back into the conversation. The

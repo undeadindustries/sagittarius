@@ -35,6 +35,13 @@ import (
 // /auth or /provider use before the next request.
 var errProviderUnavailable = errors.New("no provider configured: run /auth to set an API key or /provider use <id> to switch")
 
+// emptyModelReplyMsg is emitted when a turn produces no text, no tool calls,
+// and no reasoning. A silent StreamDone is how an over-window request looks
+// on providers that return 200 with an empty body (AD-094 / AD-126).
+const emptyModelReplyMsg = "The model returned no content. This often means the request was larger than the model's context window."
+
+const requestBudgetDroppedFmt = "Context exceeded the model window. Dropped %d oldest messages to continue; /clear starts fresh."
+
 // State is the runner lifecycle phase for one user turn.
 type State int
 
@@ -247,6 +254,9 @@ type Runner struct {
 	livenessRelease func()
 	hooksRegistry   *hooks.Registry
 	firstTurnOnce   sync.Once
+	// hookSkipWarned keys untrusted-hook skip warnings so a denied project
+	// hook logs once per session instead of once per event.
+	hookSkipWarned sync.Map
 
 	systemPromptOverride     string
 	maxToolRoundsOverride    *int
@@ -938,6 +948,7 @@ func (r *Runner) runAgentLoop(ctx context.Context, userInput string, out chan<- 
 	// Accumulates the assistant's text across this turn's rounds so the fire-once
 	// auto-title sees the whole reply, not just the final round.
 	var turnReply strings.Builder
+	overflowRetried := false
 
 	emit := func(ev ui.StreamEvent) {
 		select {
@@ -953,7 +964,7 @@ outerLoop:
 			if !r.pinned() {
 				r.refreshModelFromMode()
 			}
-			req := r.buildGenerateRequest()
+			req := r.enforceRequestBudget(r.buildGenerateRequest(), out)
 			r.storeLastRequest(req)
 			currentModel := r.Model()
 			currentProvider := r.activeProviderID()
@@ -966,12 +977,43 @@ outerLoop:
 
 			respCh, err := gen.GenerateContentStream(ctx, req)
 			if err != nil {
-				r.verboseLog.LogError(err)
-				out <- ui.StreamEvent{Type: ui.StreamError, Err: err}
-				return
+				if provider.IsContextOverflow(err) && !overflowRetried {
+					overflowRetried = true
+					r.historyMu.Lock()
+					mgr := r.contextManager()
+					overhead := contextmgmt.EstimateRequestOverhead(req.SystemInstruction, req.Tools)
+					target := 0
+					if mgr != nil && mgr.Enabled() {
+						target = mgr.MessageBudget(overhead) / 2
+					}
+					if target <= 0 {
+						target = estimateMessageTokens(r.history) / 2
+					}
+					res := contextmgmt.TruncateHistoryToFit(r.history, target, contextmgmt.EstimateTokens)
+					if res.DroppedCount > 0 {
+						r.history = res.NewHistory
+					} else if len(r.history) > 2 {
+						r.history = r.history[len(r.history)/2:]
+					}
+					r.historyMu.Unlock()
+					if out != nil {
+						out <- ui.StreamEvent{
+							Type: ui.StreamInfo,
+							Text: "Context length overflow reported by provider. Truncated history and retrying once.",
+						}
+					}
+					r.syncContextGauge()
+					req = r.enforceRequestBudget(r.buildGenerateRequest(), out)
+					respCh, err = gen.GenerateContentStream(ctx, req)
+				}
+				if err != nil {
+					r.verboseLog.LogError(err)
+					out <- ui.StreamEvent{Type: ui.StreamError, Err: err}
+					return
+				}
 			}
 
-			toolCalls, modelText, modelParts, streamUsage, streamErr := r.consumeStream(ctx, respCh, out)
+			toolCalls, modelText, modelParts, streamUsage, hadReasoning, streamErr := r.consumeStream(ctx, respCh, out)
 			if streamErr != nil {
 				r.verboseLog.LogError(streamErr)
 				return
@@ -1005,6 +1047,12 @@ outerLoop:
 			}
 
 			if len(toolCalls) == 0 {
+				if strings.TrimSpace(modelText) == "" && !hadReasoning {
+					out <- ui.StreamEvent{Type: ui.StreamError, Text: emptyModelReplyMsg}
+					r.setState(StateDone)
+					out <- ui.StreamEvent{Type: ui.StreamDone}
+					return
+				}
 				if r.evaluateGoalTurn(ctx, out, modelText) {
 					continue outerLoop
 				}
@@ -1113,12 +1161,75 @@ func (r *Runner) SetContextManager(mgr *contextmgmt.Manager) {
 	r.ctxMgrMu.Lock()
 	r.ctxMgr = mgr
 	r.ctxMgrMu.Unlock()
+	// A model/provider switch builds a fresh manager; reset anyway so a
+	// reused instance does not keep a prior summarizer-failure latch.
+	mgr.ResetCompressionFailure()
 }
 
 func (r *Runner) contextManager() *contextmgmt.Manager {
 	r.ctxMgrMu.RLock()
 	defer r.ctxMgrMu.RUnlock()
 	return r.ctxMgr
+}
+
+// enforceRequestBudget executes the pre-flight budget ladder before sending a request.
+// It counts system instruction, tool declarations, and reserved response tokens,
+// and truncates or caps history to ensure the outbound request fits the model window.
+func (r *Runner) enforceRequestBudget(req *provider.GenerateRequest, out chan<- ui.StreamEvent) *provider.GenerateRequest {
+	if req == nil {
+		return req
+	}
+	mgr := r.contextManager()
+	if mgr == nil || !mgr.Enabled() {
+		return req
+	}
+	overhead := contextmgmt.EstimateRequestOverhead(req.SystemInstruction, req.Tools)
+	target := mgr.MessageBudget(overhead)
+	if target <= 0 {
+		return req
+	}
+	if estimateMessageTokens(req.Messages) <= target {
+		return req
+	}
+
+	r.historyMu.Lock()
+	res := contextmgmt.TruncateHistoryToFit(r.history, target, contextmgmt.EstimateTokens)
+	if res.DroppedCount > 0 {
+		r.history = res.NewHistory
+	}
+
+	cappedCount := 0
+	if res.NewTokenCount > target {
+		capRes, err := contextmgmt.CapOversizedMessages(r.history, target, contextmgmt.EstimateTokens, "", r.CurrentSessionID())
+		if err == nil && capRes.CappedCount > 0 {
+			r.history = capRes.NewHistory
+			cappedCount = capRes.CappedCount
+		}
+	}
+	r.historyMu.Unlock()
+
+	if res.DroppedCount == 0 && cappedCount == 0 {
+		return req
+	}
+
+	var infoText string
+	switch {
+	case res.DroppedCount > 0 && cappedCount > 0:
+		infoText = fmt.Sprintf("Context budget exceeded: dropped %d oldest message(s) and capped %d oversized message(s) to fit model window.", res.DroppedCount, cappedCount)
+	case res.DroppedCount > 0:
+		infoText = fmt.Sprintf(requestBudgetDroppedFmt, res.DroppedCount)
+	case cappedCount > 0:
+		infoText = fmt.Sprintf("Context budget exceeded: capped %d oversized message(s) with file offload to fit model window.", cappedCount)
+	}
+
+	if out != nil && infoText != "" {
+		out <- ui.StreamEvent{
+			Type: ui.StreamInfo,
+			Text: infoText,
+		}
+	}
+	r.syncContextGauge()
+	return r.buildGenerateRequest()
 }
 
 func (r *Runner) buildGenerateRequest() *provider.GenerateRequest {
@@ -1538,18 +1649,19 @@ func (r *Runner) consumeStream(
 	ctx context.Context,
 	respCh <-chan provider.StreamResponse,
 	out chan<- ui.StreamEvent,
-) ([]provider.ToolCall, string, []provider.Part, *provider.Usage, error) {
+) ([]provider.ToolCall, string, []provider.Part, *provider.Usage, bool, error) {
 	var modelText strings.Builder
 	var toolCalls []provider.ToolCall
 	var modelParts []provider.Part
 	var usage *provider.Usage
+	var hadReasoning bool
 	streamDone := false
 
 	for !streamDone {
 		select {
 		case <-ctx.Done():
 			out <- ui.StreamEvent{Type: ui.StreamError, Err: ctx.Err()}
-			return nil, "", nil, nil, ctx.Err()
+			return nil, "", nil, nil, hadReasoning, ctx.Err()
 		case resp, ok := <-respCh:
 			if !ok {
 				streamDone = true
@@ -1557,7 +1669,10 @@ func (r *Runner) consumeStream(
 			}
 			if resp.Error != nil {
 				out <- ui.StreamEvent{Type: ui.StreamError, Err: resp.Error}
-				return nil, "", nil, nil, resp.Error
+				return nil, "", nil, nil, hadReasoning, resp.Error
+			}
+			if resp.ReasoningDelta != "" {
+				hadReasoning = true
 			}
 			if resp.TextDelta != "" {
 				modelText.WriteString(resp.TextDelta)
@@ -1578,14 +1693,14 @@ func (r *Runner) consumeStream(
 				select {
 				case <-ctx.Done():
 					out <- ui.StreamEvent{Type: ui.StreamError, Err: ctx.Err()}
-					return nil, "", nil, nil, ctx.Err()
+					return nil, "", nil, nil, hadReasoning, ctx.Err()
 				case out <- ev:
 				}
 			}
 		}
 	}
 
-	return toolCalls, modelText.String(), modelParts, usage, nil
+	return toolCalls, modelText.String(), modelParts, usage, hadReasoning, nil
 }
 
 func (r *Runner) appendModelMessage(text string, toolCalls []provider.ToolCall) {

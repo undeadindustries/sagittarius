@@ -95,6 +95,39 @@ func MaybeSetContextLimit(settings *config.Settings, providerID string, limit in
 	return true, setProviderInstance(settings, canonical, cfg)
 }
 
+// MaybeSetModelContextLimit writes a discovered context limit onto
+// providers.<id>.models.<model>.contextLimit. Unlike MaybeSetContextLimit it
+// does not touch the provider-wide pin, so one large-window model cannot
+// starve a smaller sibling. A non-positive limit or empty model is a no-op.
+func MaybeSetModelContextLimit(settings *config.Settings, providerID, model string, limit int) (bool, error) {
+	if settings == nil {
+		return false, fmt.Errorf("set model context limit: settings are required")
+	}
+	if limit <= 0 || model == "" {
+		return false, nil
+	}
+	canonical := config.NormalizeProviderID(providerID)
+	if inst := providerInstance(settings, canonical); inst != nil {
+		if mc, ok := config.LookupModelConfig(inst, model); ok && mc.ContextLimit != nil && *mc.ContextLimit == limit {
+			return false, nil
+		}
+	}
+	cfg, err := ensureProviderInstance(settings, canonical)
+	if err != nil {
+		return false, err
+	}
+	if cfg.Models == nil {
+		cfg.Models = make(map[string]config.ProviderModelConfig)
+	}
+	mc := cfg.Models[model]
+	if mc.ContextLimit != nil && *mc.ContextLimit == limit {
+		return false, nil
+	}
+	mc.ContextLimit = &limit
+	cfg.Models[model] = mc
+	return true, setProviderInstance(settings, canonical, cfg)
+}
+
 // ReasoningCapabilityKnown reports whether a model's reasoning capability has
 // already been cached (by a prior MaybeSetReasoningCapability call), so
 // callers can skip a redundant discovery round-trip.

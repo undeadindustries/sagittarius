@@ -69,6 +69,7 @@ func TestFooterOpenRouterCostShown(t *testing.T) {
 
 	app := footerMetricsApp{
 		stats: ui.SessionStats{
+			Provider:         "openrouter",
 			LastInputTokens:  200,
 			LastOutputTokens: 80,
 			LastCostUSD:      0.0021,
@@ -77,6 +78,9 @@ func TestFooterOpenRouterCostShown(t *testing.T) {
 			OutputTokens:     160,
 			SessionCostUSD:   0.0042,
 			SessionCostKnown: true,
+			ModelUsage: []ui.ModelUsageStat{
+				{Provider: "openrouter", Model: "mistral/7b", Mode: "agent", CostKnown: true, CostUSD: 0.0042},
+			},
 		},
 	}
 	m := newModel(ui.Options{ThemeName: "greyscale"}, app, NewTerminal(ui.Options{}))
@@ -90,6 +94,42 @@ func TestFooterOpenRouterCostShown(t *testing.T) {
 	}
 	if !strings.Contains(detail, "$0.0042") {
 		t.Errorf("footer Detail missing session cost: %q", detail)
+	}
+}
+
+func TestFooterSessionCostHiddenOnNonCostProvider(t *testing.T) {
+	t.Parallel()
+
+	app := footerMetricsApp{
+		stats: ui.SessionStats{
+			Provider:         "gemini",
+			LastInputTokens:  555100,
+			LastOutputTokens: 257,
+			LastCostKnown:    false,
+			InputTokens:      149962000,
+			OutputTokens:     65900,
+			SessionCostUSD:   2.2901,
+			SessionCostKnown: true,
+			ModelUsage: []ui.ModelUsageStat{
+				{Provider: "openrouter", Model: "mistral/7b", Mode: "agent", CostKnown: true, CostUSD: 2.2901},
+				{Provider: "gemini-apikey", Model: "gemini-flash-latest", Mode: "agent", CostKnown: false},
+			},
+		},
+	}
+	m := newModel(ui.Options{ThemeName: "greyscale"}, app, NewTerminal(ui.Options{}))
+	m.width = 100
+	status := m.statusWithMetrics()
+	detail := stripANSI(status.Detail)
+	right := stripANSI(status.Right)
+
+	if !strings.Contains(detail, "Σ") {
+		t.Errorf("footer Detail missing session Σ: %q", detail)
+	}
+	if strings.Contains(detail, "$") {
+		t.Errorf("footer Detail should hide session $ on gemini after OpenRouter spend: %q", detail)
+	}
+	if strings.Contains(right, "$") {
+		t.Errorf("footer Right should not show last-turn $ when LastCostKnown=false: %q", right)
 	}
 }
 

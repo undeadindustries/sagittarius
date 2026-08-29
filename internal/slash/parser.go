@@ -84,3 +84,36 @@ func lookupCommand(commands []Command, name string) *Command {
 func IsSlashInput(line string) bool {
 	return strings.HasPrefix(strings.TrimSpace(line), "/")
 }
+
+const runSlashPrefix = "/run"
+
+// IsBangInput reports whether line is a user-initiated shell command
+// (`!cmd` or `/run cmd`) and should not be sent to the model.
+func IsBangInput(line string) bool {
+	s := strings.TrimSpace(line)
+	if s == "" {
+		return false
+	}
+	if s[0] == '!' {
+		return true
+	}
+	lower := strings.ToLower(s)
+	if lower == runSlashPrefix {
+		return true
+	}
+	return strings.HasPrefix(lower, runSlashPrefix+" ") ||
+		strings.HasPrefix(lower, runSlashPrefix+"\t")
+}
+
+// ParseBangCommand extracts the shell command from a bang / `/run` line.
+// ok is false when line is not bang input.
+func ParseBangCommand(line string) (command string, ok bool) {
+	if !IsBangInput(line) {
+		return "", false
+	}
+	s := strings.TrimSpace(line)
+	if s[0] == '!' {
+		return strings.TrimSpace(s[1:]), true
+	}
+	return strings.TrimSpace(s[len(runSlashPrefix):]), true
+}

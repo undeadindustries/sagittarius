@@ -27,6 +27,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/provider"
 	"github.com/undeadindustries/sagittarius/internal/selfupdate"
 	"github.com/undeadindustries/sagittarius/internal/session"
+	"github.com/undeadindustries/sagittarius/internal/slash"
 	"github.com/undeadindustries/sagittarius/internal/snapshot"
 	"github.com/undeadindustries/sagittarius/internal/storage"
 	"github.com/undeadindustries/sagittarius/internal/ui"
@@ -352,13 +353,30 @@ func runHeadless(prompt string, opts runnerOptions, fmt_ outputFormat) int {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	runner, _, runtime, _, _, err := buildRunner(ctx, opts)
+	runner, docs, runtime, sessID, baseProviderID, err := buildRunner(ctx, opts)
 	if err != nil {
 		writeStartupError(err)
 		return 1
 	}
 	defer func() { _ = runtime.Close() }()
 	defer func() { _ = runner.Close() }()
+
+	if slash.IsBangInput(prompt) {
+		app := newCLIApp(runner, docs, runtime, sessID, baseProviderID)
+		events, err := app.HandleInput(ctx, prompt)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err.Error())
+			return 1
+		}
+		switch fmt_ {
+		case outputFormatJSON:
+			return consumeHeadlessJSON(ctx, events, false)
+		case outputFormatStreamJSON:
+			return consumeHeadlessJSON(ctx, events, true)
+		default:
+			return consumeHeadlessBangText(events)
+		}
+	}
 
 	switch fmt_ {
 	case outputFormatJSON:
@@ -397,22 +415,7 @@ func runSlash(command string, opts runnerOptions) int {
 	defer func() { _ = runtime.Close() }()
 	defer func() { _ = runner.Close() }()
 
-	providerLabel := "ready"
-	if endpoint, epErr := provider.ResolveEndpointConfig(docs.Merged()); epErr == nil {
-		providerLabel = config.ProviderDisplayID(endpoint.ProviderID)
-	}
-
-	app := agent.NewApp(agent.AppConfig{
-		Runner:         runner,
-		Runtime:        runtime,
-		ProviderLabel:  providerLabel,
-		Model:          runner.Model(),
-		Loader:         docs.Loader(),
-		Settings:       docs.Global,
-		Documents:      docs,
-		SessionID:      sessID,
-		BaseProviderID: baseProviderID,
-	})
+	app := newCLIApp(runner, docs, runtime, sessID, baseProviderID)
 
 	events, err := app.HandleInput(ctx, command)
 	if err != nil {
@@ -423,8 +426,11 @@ func runSlash(command string, opts runnerOptions) int {
 	exit := 0
 	for ev := range events {
 		switch ev.Type {
-		case ui.StreamInfo, ui.StreamTextDelta:
+		case ui.StreamInfo, ui.StreamTextDelta, ui.StreamToolResult:
 			fmt.Print(ev.Text)
+			if ev.Type == ui.StreamToolResult && ev.IsError {
+				exit = 1
+			}
 		case ui.StreamError:
 			switch {
 			case ev.Err != nil:
@@ -449,16 +455,73 @@ func runHeadlessJSON(ctx context.Context, runner *agent.Runner, prompt string, s
 		writeJSONError(err, streaming)
 		return 1
 	}
+	return consumeHeadlessJSON(ctx, events, streaming)
+}
 
+func newCLIApp(runner *agent.Runner, docs *config.Documents, runtime *agent.Runtime, sessID, baseProviderID string) *agent.App {
+	providerLabel := "ready"
+	if docs != nil {
+		if endpoint, epErr := provider.ResolveEndpointConfig(docs.Merged()); epErr == nil {
+			providerLabel = config.ProviderDisplayID(endpoint.ProviderID)
+		}
+	}
+	cfg := agent.AppConfig{
+		Runner:         runner,
+		Runtime:        runtime,
+		ProviderLabel:  providerLabel,
+		Model:          runner.Model(),
+		SessionID:      sessID,
+		BaseProviderID: baseProviderID,
+	}
+	if docs != nil {
+		cfg.Loader = docs.Loader()
+		cfg.Settings = docs.Global
+		cfg.Documents = docs
+	}
+	return agent.NewApp(cfg)
+}
+
+func consumeHeadlessBangText(events <-chan ui.StreamEvent) int {
+	exit := 0
+	for ev := range events {
+		switch ev.Type {
+		case ui.StreamToolResult:
+			fmt.Print(ev.Text)
+			if ev.Text != "" && !strings.HasSuffix(ev.Text, "\n") {
+				fmt.Println()
+			}
+			if ev.IsError {
+				exit = 1
+			}
+			if ev.ExitCode != nil && *ev.ExitCode != 0 {
+				exit = *ev.ExitCode
+				if exit < 0 {
+					exit = 1
+				}
+			}
+		case ui.StreamInfo:
+			fmt.Print(ev.Text)
+		case ui.StreamError:
+			switch {
+			case ev.Err != nil:
+				fmt.Fprintln(os.Stderr, ev.Err.Error())
+			case ev.Text != "":
+				fmt.Fprintln(os.Stderr, ev.Text)
+			}
+			exit = 1
+		}
+	}
+	return exit
+}
+
+func consumeHeadlessJSON(ctx context.Context, events <-chan ui.StreamEvent, streaming bool) int {
 	var textBuf strings.Builder
-
 	for ev := range events {
 		select {
 		case <-ctx.Done():
 			return 130
 		default:
 		}
-
 		switch ev.Type {
 		case ui.StreamTextDelta:
 			if streaming {
@@ -473,10 +536,14 @@ func runHeadlessJSON(ctx context.Context, runner *agent.Runner, prompt string, s
 		case ui.StreamToolResult:
 			if streaming {
 				emitJSONLine(map[string]string{"type": "tool_result", "tool": ev.ToolName, "text": ev.Text})
+			} else {
+				textBuf.WriteString(ev.Text)
 			}
 		case ui.StreamInfo:
 			if streaming {
 				emitJSONLine(map[string]string{"type": "info", "text": ev.Text})
+			} else {
+				textBuf.WriteString(ev.Text)
 			}
 		case ui.StreamError:
 			if ev.Err != nil {

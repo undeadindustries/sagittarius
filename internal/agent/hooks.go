@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"maps"
+	"strings"
 
 	"github.com/undeadindustries/sagittarius/internal/hooks"
 	"github.com/undeadindustries/sagittarius/internal/ui"
@@ -40,6 +41,11 @@ func (r *Runner) FireHookEvent(ctx context.Context, event hooks.HookEventName, t
 			}
 		}
 		if res.Error != nil {
+			if isUntrustedHookSkip(res.Error) {
+				if _, seen := r.hookSkipWarned.LoadOrStore(res.HookConfig.Key(), true); seen {
+					continue
+				}
+			}
 			slog.Warn("hook execution failed", "event", event, "hook", res.HookConfig.Key(), "error", res.Error)
 		}
 	}
@@ -66,14 +72,24 @@ func (r *Runner) fireAfterAgentHooks(ctx context.Context, userInput, assistantRe
 	}, out)
 }
 
-// OnWillCompress fires PreCompress hooks before compression runs.
+// OnWillCompress fires PreCompress hooks without waiting. Results are
+// discarded (the hook cannot rewrite history), and the hook runner SIGKILLs
+// its process group when the parent context ends, so the work must run under
+// context.WithoutCancel.
 func (r *Runner) OnWillCompress(ctx context.Context, trigger string) {
 	if r == nil || r.hooksRegistry == nil {
 		return
 	}
-	_, _ = r.FireHookEvent(ctx, hooks.EventPreCompress, trigger, func(inp *hooks.HookInput) {
-		inp.PreCompressTrigger = trigger
-	}, nil)
+	detached := context.WithoutCancel(ctx)
+	go func() {
+		_, _ = r.FireHookEvent(detached, hooks.EventPreCompress, trigger, func(inp *hooks.HookInput) {
+			inp.PreCompressTrigger = trigger
+		}, nil)
+	}()
+}
+
+func isUntrustedHookSkip(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "untrusted project hook")
 }
 
 func (r *Runner) beforeToolHook(ctx context.Context, toolName string, args map[string]any) (map[string]any, bool, string, error) {

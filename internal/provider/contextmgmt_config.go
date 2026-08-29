@@ -93,21 +93,28 @@ func ResolveContextManagement(settings *config.Settings, liveModel string) Conte
 
 func resolveContextLimit(settings *config.Settings, providerID, model string, fallback int) int {
 	inst := providerInstance(settings, providerID)
+	var modelLimit, instLimit int
 	if inst != nil {
-		if !config.ResolveContextLimitPreferDiscovered(settings) {
-			// Per-model override wins (set via /models settings editor). Use the
-			// caller-supplied model (live, mode-resolved) rather than re-resolving
-			// the endpoint's persisted default, which may differ when a mode
-			// override is active.
-			if model != "" {
-				if mc, ok := config.LookupModelConfig(inst, model); ok && mc.ContextLimit != nil && *mc.ContextLimit > 0 {
-					return *mc.ContextLimit
-				}
+		// Always consider a per-model pin when present. A stale provider-wide
+		// pin from a larger sibling (the OpenRouter 1M / Kimi case) must not
+		// win: take the smaller of the two so an over-large limit cannot
+		// produce hard 400s.
+		if model != "" {
+			if mc, ok := config.LookupModelConfig(inst, model); ok && mc.ContextLimit != nil && *mc.ContextLimit > 0 {
+				modelLimit = *mc.ContextLimit
 			}
 		}
 		if inst.ContextLimit != nil && *inst.ContextLimit > 0 {
-			return *inst.ContextLimit
+			instLimit = *inst.ContextLimit
 		}
+	}
+	switch {
+	case modelLimit > 0 && instLimit > 0:
+		return min(modelLimit, instLimit)
+	case modelLimit > 0:
+		return modelLimit
+	case instLimit > 0:
+		return instLimit
 	}
 	if settings.Providers != nil {
 		if custom, ok := settings.Providers.Custom[providerID]; ok {

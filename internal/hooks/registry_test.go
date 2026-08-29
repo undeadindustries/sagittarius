@@ -3,6 +3,7 @@ package hooks_test
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/undeadindustries/sagittarius/internal/config"
@@ -155,5 +156,44 @@ func TestRegistry_EnableDisable(t *testing.T) {
 	}
 	if len(res2) != 1 {
 		t.Errorf("expected 1 result when hook-a is re-enabled, got %d", len(res2))
+	}
+}
+
+func TestRegistry_TrustNamedAndSkipMessage(t *testing.T) {
+	t.Parallel()
+	globalHome := t.TempDir()
+	projectRoot := t.TempDir()
+	reg := hooks.NewRegistry(globalHome, projectRoot, filepath.Join(projectRoot, "docs", "plans"))
+	reg.LoadConfig(nil, &config.HooksConfig{
+		Events: map[string][]config.HookDefConfig{
+			"AfterAgent": {{
+				Matcher: "*",
+				Hooks:   []config.HookExecConfig{{Name: "proj-hook", Command: "echo proj"}},
+			}},
+		},
+	})
+
+	input := hooks.NewHookInput("sess-1", "/tmp/transcript.jsonl", projectRoot, hooks.EventAfterAgent, 1)
+	res, err := reg.FireEvent(context.Background(), hooks.EventAfterAgent, "", input)
+	if err != nil {
+		t.Fatalf("FireEvent: %v", err)
+	}
+	if len(res) != 1 || res[0].Error == nil {
+		t.Fatalf("want one untrusted skip, got %+v", res)
+	}
+	if !strings.Contains(res[0].Error.Error(), "/hooks trust proj-hook") {
+		t.Fatalf("skip error = %v, want it to name /hooks trust", res[0].Error)
+	}
+
+	if err := reg.TrustNamed("proj-hook"); err != nil {
+		t.Fatalf("TrustNamed: %v", err)
+	}
+	list := reg.ListHooks()
+	if len(list) != 1 || !list[0].Trusted {
+		t.Fatalf("after TrustNamed, list = %+v", list)
+	}
+
+	if err := reg.TrustNamed("missing"); err == nil {
+		t.Fatal("TrustNamed(missing) should error")
 	}
 }

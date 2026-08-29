@@ -159,7 +159,7 @@ func (r *Registry) FireEvent(ctx context.Context, event HookEventName, target st
 					HookConfig: h,
 					EventName:  event,
 					Success:    false,
-					Error:      fmt.Errorf("untrusted project hook %q skipped", h.Key()),
+					Error:      fmt.Errorf("untrusted project hook %q skipped; run /hooks trust %s to approve it", h.Key(), h.Key()),
 				})
 				continue
 			}
@@ -249,19 +249,53 @@ func (r *Registry) EnableHook(key string) {
 
 // ExecuteTestHook executes a specific hook by name or command key for testing.
 func (r *Registry) ExecuteTestHook(ctx context.Context, key string, input HookInput) (ExecutionResult, error) {
-	r.mu.RLock()
-	defs := r.events
-	r.mu.RUnlock()
+	h, evt, ok := r.findHook(key)
+	if !ok {
+		return ExecutionResult{}, fmt.Errorf("hook %q not found", key)
+	}
+	return r.runner.ExecuteHook(ctx, h, evt, input), nil
+}
 
-	for evt, defGroup := range defs {
+func (r *Registry) findHook(key string) (HookConfig, HookEventName, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	for evt, defGroup := range r.events {
 		for _, d := range defGroup {
 			for _, h := range d.Hooks {
 				if h.Key() == key || h.Name == key || h.Command == key {
-					res := r.runner.ExecuteHook(ctx, h, evt, input)
-					return res, nil
+					return h, evt, true
 				}
 			}
 		}
 	}
-	return ExecutionResult{}, fmt.Errorf("hook %q not found", key)
+	return HookConfig{}, "", false
+}
+
+// TrustNamed records the named hook in the trust store. Global hooks are
+// already trusted and this is a no-op for them.
+func (r *Registry) TrustNamed(name string) error {
+	h, _, ok := r.findHook(name)
+	if !ok {
+		return fmt.Errorf("hook %q not found", name)
+	}
+	return r.trustMgr.TrustHook(r.projectRoot, h)
+}
+
+// TrustAll records every loaded project hook in the trust store.
+func (r *Registry) TrustAll() error {
+	r.mu.RLock()
+	root := r.projectRoot
+	var list []HookConfig
+	for _, defs := range r.events {
+		for _, d := range defs {
+			list = append(list, d.Hooks...)
+		}
+	}
+	r.mu.RUnlock()
+	for _, h := range list {
+		if err := r.trustMgr.TrustHook(root, h); err != nil {
+			return err
+		}
+	}
+	return nil
 }

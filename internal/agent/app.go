@@ -67,6 +67,7 @@ var (
 	_ ui.MentionCompleter       = (*App)(nil)
 	_ ui.MetricsProvider        = (*App)(nil)
 	_ ui.ComposerStatusProvider = (*App)(nil)
+	_ ui.BangInputWriter        = (*App)(nil)
 )
 
 // App adapts Runner to ui.App for interactive TUI sessions.
@@ -99,6 +100,9 @@ type App struct {
 	// mentions is the lazily-built "@path" completion index over the runner's
 	// workspace. nil until the first CompleteMention call.
 	mentions *atmention.Index
+	// bangMu guards bangStdin, the live PTY write handle for an in-flight `!`.
+	bangMu    sync.Mutex
+	bangStdin *tools.PTYStdin
 }
 
 // NewApp wraps runner for interactive use and exposes footer metadata.
@@ -139,9 +143,12 @@ func NewApp(cfg AppConfig) *App {
 	return app
 }
 
-// HandleInput implements ui.App. Slash commands are handled locally; other
-// input is delegated to the agent runner.
+// HandleInput implements ui.App. Bang (`!` / `/run`) and slash commands are
+// handled locally; other input is delegated to the agent runner.
 func (a *App) HandleInput(ctx context.Context, input string) (<-chan ui.StreamEvent, error) {
+	if slash.IsBangInput(input) {
+		return a.HandleBang(ctx, input)
+	}
 	if slash.IsSlashInput(input) {
 		return a.handleSlash(ctx, input)
 	}
@@ -896,6 +903,20 @@ func (h *appHooks) TestHook(ctx context.Context, name string) (string, error) {
 		return fmt.Sprintf("Hook %q failed (exit code %d):\nStderr: %s\nStdout: %s", res.HookConfig.Key(), res.ExitCode, res.Stderr, res.Stdout), nil
 	}
 	return fmt.Sprintf("Hook %q succeeded (exit code 0):\nStdout: %s", res.HookConfig.Key(), res.Stdout), nil
+}
+
+func (h *appHooks) TrustHook(name string) error {
+	if h.app == nil || h.app.runner == nil || h.app.runner.HooksRegistry() == nil {
+		return fmt.Errorf("hooks registry not active")
+	}
+	return h.app.runner.HooksRegistry().TrustNamed(name)
+}
+
+func (h *appHooks) TrustAllHooks() error {
+	if h.app == nil || h.app.runner == nil || h.app.runner.HooksRegistry() == nil {
+		return fmt.Errorf("hooks registry not active")
+	}
+	return h.app.runner.HooksRegistry().TrustAll()
 }
 
 func (h *appHooks) ReloadSkills(ctx context.Context) (string, error) {

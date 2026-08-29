@@ -740,6 +740,11 @@ func formatFindSymbolResult(result map[string]any) string {
 
 // formatShellResult renders a run_shell_command result: the tail of the captured
 // output plus a non-zero exit code as an error.
+// FormatShellResult renders a run_shell_command result for a tool card.
+func FormatShellResult(result map[string]any) (string, *int, bool) {
+	return formatShellResult(result)
+}
+
 func formatShellResult(result map[string]any) (string, *int, bool) {
 	output := strings.TrimSpace(asString(result["output"]))
 	if output == "" {

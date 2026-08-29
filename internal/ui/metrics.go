@@ -67,6 +67,23 @@ type SessionStats struct {
 	ModelUsage []ModelUsageStat
 }
 
+// ShowSessionCostInFooter is true when cumulative known cost exists and the
+// active provider (Provider) has itself reported cost this session. Used by
+// the live footer so a switch to Gemini (or any non-cost provider) hides the
+// leftover OpenRouter $; switching back to a cost-reporting provider shows it
+// again. Exit /stats keep using SessionCostKnown so attribution is unchanged.
+func (s SessionStats) ShowSessionCostInFooter() bool {
+	if !s.SessionCostKnown || s.Provider == "" {
+		return false
+	}
+	for _, u := range s.ModelUsage {
+		if u.CostKnown && u.Provider == s.Provider {
+			return true
+		}
+	}
+	return false
+}
+
 // ContextPercent returns the share of the context window in use (0–100), or -1
 // when no limit is known so callers can omit the figure.
 func (s SessionStats) ContextPercent() int {

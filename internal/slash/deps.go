@@ -105,6 +105,8 @@ type Hooks interface {
 	SetHookEnabled(name string, enabled bool)
 	ReloadHooks(ctx context.Context) (string, error)
 	TestHook(ctx context.Context, name string) (string, error)
+	TrustHook(name string) error
+	TrustAllHooks() error
 	// SetUITheme persists the chosen TUI theme ("default" or "greyscale") to
 	// settings. Used by /theme; the live switch is driven separately via the UI.
 	SetUITheme(name string) error

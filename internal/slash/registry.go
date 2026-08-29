@@ -59,6 +59,8 @@ func (r *Registry) RenderHelp() string {
 		writeCommandHelp(&b, cmd, "")
 	}
 	b.WriteString("\nInput / Tools:\n\n")
+	fmt.Fprintf(&b, "  %-28s %s\n", "!<command>",
+		"run a shell command here; output is not sent to the model. Tab types into it")
 	fmt.Fprintf(&b, "  %-28s %s\n", "@path/to/file",
 		"reference a file; its contents are sent to the model (tab to autocomplete)")
 	fmt.Fprintf(&b, "  %-28s %s\n", "Web Tools",

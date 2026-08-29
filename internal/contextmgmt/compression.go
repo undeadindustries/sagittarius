@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -53,6 +51,9 @@ type CompressionInfo struct {
 	NewTokenCount int
 	// Status is the outcome.
 	Status CompressionStatus
+	// ChunksDropped is how many oldest summarizer chunks were skipped when
+	// the history needed more than maxSummarizerPasses.
+	ChunksDropped int
 }
 
 // CompressionResult carries the (possibly nil) new history and its info.
@@ -92,8 +93,10 @@ type Compressor struct {
 type CompressOptions struct {
 	// History is the curated chat history (oldest first).
 	History []Message
-	// Force compresses regardless of the threshold check.
+	// Force compresses regardless of threshold or failure latch (manual /compress only).
 	Force bool
+	// BudgetTriggered indicates the pre-turn budget was exceeded; bypasses threshold check but respects prior failure latch.
+	BudgetTriggered bool
 	// OriginalTokenCount is the pre-turn token estimate of History.
 	OriginalTokenCount int
 	// Threshold is the compression trigger fraction.
@@ -111,7 +114,7 @@ func WillCompress(opts CompressOptions) bool {
 	if len(opts.History) == 0 {
 		return false
 	}
-	if !opts.Force && belowThreshold(opts.OriginalTokenCount, opts.Threshold, opts.EffectiveLimit) {
+	if !opts.Force && !opts.BudgetTriggered && belowThreshold(opts.OriginalTokenCount, opts.Threshold, opts.EffectiveLimit) {
 		return false
 	}
 	return true
@@ -146,8 +149,7 @@ func (c *Compressor) Compress(ctx context.Context, opts CompressOptions) (Compre
 		return noopResult(original), nil
 	}
 
-	summaryHistory := c.summarizerHistory(opts.History, truncated, split, opts.EffectiveLimit, estimate)
-	finalSummary, err := c.summarize(ctx, summaryHistory)
+	finalSummary, dropped, err := c.summarizeChunked(ctx, historyToCompress, opts.EffectiveLimit)
 	if err != nil {
 		return CompressionResult{}, err
 	}
@@ -156,6 +158,7 @@ func (c *Compressor) Compress(ctx context.Context, opts CompressOptions) (Compre
 			OriginalTokenCount: original,
 			NewTokenCount:      original,
 			Status:             CompressionFailedEmptySummary,
+			ChunksDropped:      dropped,
 		}}, nil
 	}
 
@@ -167,6 +170,7 @@ func (c *Compressor) Compress(ctx context.Context, opts CompressOptions) (Compre
 			OriginalTokenCount: original,
 			NewTokenCount:      newTokenCount,
 			Status:             CompressionFailedInflatedTokenCount,
+			ChunksDropped:      dropped,
 		}}, nil
 	}
 	return CompressionResult{
@@ -175,6 +179,7 @@ func (c *Compressor) Compress(ctx context.Context, opts CompressOptions) (Compre
 			OriginalTokenCount: original,
 			NewTokenCount:      newTokenCount,
 			Status:             Compressed,
+			ChunksDropped:      dropped,
 		},
 	}, nil
 }
@@ -188,7 +193,7 @@ func (c *Compressor) summarize(ctx context.Context, summaryHistory []Message) (s
 
 	firstContents := append(cloneHistory(summaryHistory), Message{
 		Role:  RoleUser,
-		Parts: []Part{{Text: anchor + "\n\nFirst, reason in your scratchpad. Then, generate the updated <state_snapshot>."}},
+		Parts: []Part{{Text: anchor + summarizerScratchpadCue}},
 	})
 	raw, err := c.Summarize(ctx, firstContents, c.CompressionPrompt)
 	if err != nil {
@@ -215,13 +220,59 @@ func (c *Compressor) summarize(ctx context.Context, summaryHistory []Message) (s
 	return chosen, nil
 }
 
-func (c *Compressor) summarizerHistory(curated, truncated []Message, split, limit int, estimate EstimateFn) []Message {
-	originalToCompress := curated[:minInt(split, len(curated))]
-	originalTokens := estimate(flattenParts(originalToCompress))
-	if originalTokens < limit {
-		return originalToCompress
+// summarizeChunked summarizes history in budget-sized chunks. A history that
+// fits in one chunk keeps the existing two-pass verify. An over-budget history
+// is refined rolling: each pass sends the prior snapshot plus the next chunk.
+// Verification is skipped when chunking. Oldest chunks beyond maxSummarizerPasses
+// are dropped so the algorithm always terminates.
+func (c *Compressor) summarizeChunked(ctx context.Context, history []Message, limit int) (string, int, error) {
+	capped := CapMessagesForSummarizer(history, SummarizerMessageMaxChars)
+	budget := summarizerBudget(limit)
+	chunks := splitIntoBudgetedChunks(capped, budget, c.estimator())
+	dropped := 0
+	if len(chunks) > maxSummarizerPasses {
+		dropped = len(chunks) - maxSummarizerPasses
+		chunks = chunks[dropped:]
 	}
-	return truncated[:split]
+	if len(chunks) == 0 {
+		return "", dropped, nil
+	}
+	if len(chunks) == 1 {
+		summary, err := c.summarize(ctx, chunks[0])
+		return summary, dropped, err
+	}
+	var prior string
+	for _, chunk := range chunks {
+		summary, err := c.summarizePass(ctx, chunk, prior)
+		if err != nil {
+			return "", dropped, err
+		}
+		if summary == "" {
+			return "", dropped, nil
+		}
+		prior = summary
+	}
+	return prior, dropped, nil
+}
+
+func (c *Compressor) summarizePass(ctx context.Context, chunk []Message, priorSnapshot string) (string, error) {
+	contents := cloneHistory(chunk)
+	if priorSnapshot != "" {
+		contents = append([]Message{{Role: RoleModel, Parts: []Part{{Text: priorSnapshot}}}}, contents...)
+	}
+	anchor := newSnapshotInstruction
+	if priorSnapshot != "" || historyHasSnapshot(contents) {
+		anchor = anchoredSnapshotInstruction
+	}
+	contents = append(contents, Message{
+		Role:  RoleUser,
+		Parts: []Part{{Text: anchor + summarizerScratchpadCue}},
+	})
+	raw, err := c.Summarize(ctx, contents, c.CompressionPrompt)
+	if err != nil {
+		return "", fmt.Errorf("summarize history: %w", err)
+	}
+	return extractSnapshot(raw), nil
 }
 
 func belowThreshold(original int, threshold float64, limit int) bool {
@@ -327,20 +378,7 @@ func (c *Compressor) saveTruncated() func(content, toolName string, id int) (str
 }
 
 func (c *Compressor) defaultSaveTruncated(content, toolName string, id int) (string, error) {
-	dir := c.OutputDir
-	if dir == "" {
-		dir = filepath.Join(os.TempDir(), "sagittarius")
-	}
-	dir = filepath.Join(dir, ToolOutputsDir)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", fmt.Errorf("create truncation dir: %w", err)
-	}
-	name := fmt.Sprintf("%s_%d.txt", strings.ToLower(sanitizeFilenamePart(toolName)), id)
-	filePath := filepath.Join(dir, name)
-	if err := os.WriteFile(filePath, []byte(content), 0o644); err != nil {
-		return "", fmt.Errorf("write truncation offload: %w", err)
-	}
-	return filePath, nil
+	return WriteOffloadFile(c.OutputDir, "", fmt.Sprintf("%s_%d", toolName, id), content)
 }
 
 // FindCompressSplitPoint returns the index of the oldest item to keep when
@@ -469,13 +507,6 @@ func noopResult(tokens int) CompressionResult {
 		NewTokenCount:      tokens,
 		Status:             CompressionNoOp,
 	}}
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }
 
 // withThousands formats n with comma separators (e.g. 32000 -> "32,000"),

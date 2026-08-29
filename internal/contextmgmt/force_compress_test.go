@@ -21,7 +21,7 @@ func TestForceCompress(t *testing.T) {
 
 	m := NewManager(ManagerConfig{
 		Enabled:              true,
-		ContextLimit:         50,
+		ContextLimit:         4000,
 		CompressionThreshold: 0.4,
 		PreserveFraction:     0.3,
 		Summarize:            q.fn,

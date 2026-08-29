@@ -677,7 +677,7 @@ func handleAgentsList(ctx *Context) Result {
 func hooksCommand() Command {
 	return Command{
 		Name:        "hooks",
-		Description: "Manage lifecycle hooks (list, enable, disable, enable-all, disable-all, reload, test)",
+		Description: "Manage lifecycle hooks (list, enable, disable, enable-all, disable-all, reload, test, trust, trust-all)",
 		SubCommands: []Command{
 			{
 				Name:        "list",
@@ -713,6 +713,16 @@ func hooksCommand() Command {
 				Name:        "test",
 				Description: "Test-run a hook by name or key",
 				Handler:     handleHooksTest,
+			},
+			{
+				Name:        "trust",
+				Description: "Trust a project hook by name or key",
+				Handler:     handleHooksTrust,
+			},
+			{
+				Name:        "trust-all",
+				Description: "Trust every loaded project hook",
+				Handler:     handleHooksTrustAll,
 			},
 		},
 		Handler: handleHooksList,
@@ -804,4 +814,28 @@ func handleHooksTest(ctx *Context) Result {
 		return ErrorResult(err)
 	}
 	return InfoResult(res)
+}
+
+func handleHooksTrust(ctx *Context) Result {
+	if ctx.Deps.Hooks == nil {
+		return InfoResult("Hooks unavailable.")
+	}
+	name := strings.TrimSpace(ctx.Args)
+	if name == "" {
+		return ErrorResult(errors.New("usage: /hooks trust <name>"))
+	}
+	if err := ctx.Deps.Hooks.TrustHook(name); err != nil {
+		return ErrorResult(err)
+	}
+	return InfoResult(fmt.Sprintf("Trusted hook %q.", name))
+}
+
+func handleHooksTrustAll(ctx *Context) Result {
+	if ctx.Deps.Hooks == nil {
+		return InfoResult("Hooks unavailable.")
+	}
+	if err := ctx.Deps.Hooks.TrustAllHooks(); err != nil {
+		return ErrorResult(err)
+	}
+	return InfoResult("Trusted all project hooks.")
 }

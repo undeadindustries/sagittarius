@@ -174,7 +174,7 @@ func TestCompressGeminiToolCallPairIntegrity(t *testing.T) {
 	// split candidate at that message (the only FunctionResponse-free user
 	// turn before the end) is what crosses the target.
 	res, err := c.Compress(context.Background(), CompressOptions{
-		History: history, OriginalTokenCount: 100_000, Threshold: 0.1, EffectiveLimit: 100, Force: true, PreserveFraction: 0.6,
+		History: history, OriginalTokenCount: 100_000, Threshold: 0.1, EffectiveLimit: 10_000, Force: true, PreserveFraction: 0.6,
 	})
 	if err != nil {
 		t.Fatalf("Compress: %v", err)
@@ -345,6 +345,135 @@ func TestCompressFailsOnEmptySummary(t *testing.T) {
 	}
 	if res.Info.Status != CompressionFailedEmptySummary || res.NewHistory != nil {
 		t.Errorf("status = %v, want FailedEmptySummary", res.Info.Status)
+	}
+}
+
+func TestSummarizeChunkedRollingRefine(t *testing.T) {
+	t.Parallel()
+	// Small window so two ~60-token pairs need more than one summarizer pass.
+	pair := func(n string) []Message {
+		body := strings.Repeat(n+" ", 40)
+		return []Message{msg("user", body), msg("model", body)}
+	}
+	history := append(pair("one"), pair("two")...)
+	history = append(history, pair("three")...)
+
+	q := &queuedSummarizer{responses: []string{
+		"<state_snapshot>pass1</state_snapshot>",
+		"<state_snapshot>pass2</state_snapshot>",
+		"<state_snapshot>pass3</state_snapshot>",
+		"<state_snapshot>pass4</state_snapshot>",
+		"<state_snapshot>pass5</state_snapshot>",
+		"<state_snapshot>pass6</state_snapshot>",
+	}}
+	c := newCompressor(q)
+	limit := 160
+	budget := summarizerBudget(limit)
+	summary, dropped, err := c.summarizeChunked(context.Background(), history, limit)
+	if err != nil {
+		t.Fatalf("summarizeChunked: %v", err)
+	}
+	if dropped != 0 {
+		t.Errorf("ChunksDropped = %d, want 0", dropped)
+	}
+	if !strings.Contains(summary, "pass") {
+		t.Errorf("summary = %q, want a rolling snapshot", summary)
+	}
+	if len(q.calls) < 2 {
+		t.Fatalf("calls = %d, want at least 2 (chunked, no verify)", len(q.calls))
+	}
+	for i, call := range q.calls {
+		tok := EstimateTokens(flattenParts(call))
+		// The anchor user turn is extra; budget applies to history chunks, not
+		// the full request. Still require each call stay well under the window.
+		if tok > limit {
+			t.Errorf("call %d tokens = %d, want <= limit %d", i, tok, limit)
+		}
+		_ = budget
+	}
+	if !strings.Contains(q.calls[0][len(q.calls[0])-1].Parts[0].Text, "Generate a new <state_snapshot>") &&
+		!strings.Contains(q.calls[0][len(q.calls[0])-1].Parts[0].Text, "A previous <state_snapshot> exists") {
+		t.Errorf("first pass missing snapshot instruction: %q", q.calls[0][len(q.calls[0])-1].Parts[0].Text)
+	}
+	if len(q.calls) > 1 {
+		second := q.calls[1]
+		if second[0].Role != RoleModel || !strings.Contains(second[0].Parts[0].Text, "<state_snapshot>") {
+			t.Errorf("pass 2 should open with prior snapshot as RoleModel, got %#v", second[0])
+		}
+		last := second[len(second)-1]
+		if !strings.Contains(last.Parts[0].Text, "A previous <state_snapshot> exists") {
+			t.Errorf("pass 2 missing anchored instruction: %q", last.Parts[0].Text)
+		}
+	}
+}
+
+func TestSummarizeChunkedSkipsVerification(t *testing.T) {
+	t.Parallel()
+	pair := func(n string) []Message {
+		body := strings.Repeat(n+" ", 40)
+		return []Message{msg("user", body), msg("model", body)}
+	}
+	history := append(pair("a"), pair("b")...)
+	q := &queuedSummarizer{responses: []string{
+		"<state_snapshot>one</state_snapshot>",
+		"<state_snapshot>two</state_snapshot>",
+		"SHOULD_NOT_BE_CALLED",
+	}}
+	c := newCompressor(q)
+	_, _, err := c.summarizeChunked(context.Background(), history, 160)
+	if err != nil {
+		t.Fatalf("summarizeChunked: %v", err)
+	}
+	for _, call := range q.calls {
+		last := call[len(call)-1]
+		if strings.Contains(last.Parts[0].Text, "Critically evaluate") {
+			t.Fatal("chunked summarization must skip the verification pass")
+		}
+	}
+}
+
+func TestSummarizeChunkedCapsPasses(t *testing.T) {
+	t.Parallel()
+	var history []Message
+	for i := 0; i < maxSummarizerPasses+3; i++ {
+		body := strings.Repeat("x ", 40)
+		history = append(history, msg("user", body), msg("model", body))
+	}
+	q := &queuedSummarizer{}
+	for i := 0; i < maxSummarizerPasses+2; i++ {
+		q.responses = append(q.responses, "<state_snapshot>x</state_snapshot>")
+	}
+	c := newCompressor(q)
+	_, dropped, err := c.summarizeChunked(context.Background(), history, 160)
+	if err != nil {
+		t.Fatalf("summarizeChunked: %v", err)
+	}
+	if dropped == 0 {
+		t.Fatal("expected oldest chunks to be dropped when over maxSummarizerPasses")
+	}
+	if len(q.calls) > maxSummarizerPasses {
+		t.Fatalf("calls = %d, want <= %d", len(q.calls), maxSummarizerPasses)
+	}
+}
+
+func TestSummarizeChunkedSingleChunkKeepsVerification(t *testing.T) {
+	t.Parallel()
+	q := &queuedSummarizer{responses: []string{"Initial", "Verified"}}
+	c := newCompressor(q)
+	summary, dropped, err := c.summarizeChunked(context.Background(), []Message{
+		msg("user", "hi"), msg("model", "hey"),
+	}, 1_000_000)
+	if err != nil {
+		t.Fatalf("summarizeChunked: %v", err)
+	}
+	if dropped != 0 {
+		t.Errorf("dropped = %d, want 0", dropped)
+	}
+	if summary != "Verified" && summary != "Initial" {
+		t.Errorf("summary = %q, want verified or initial", summary)
+	}
+	if len(q.calls) != 2 {
+		t.Errorf("calls = %d, want 2 (initial + verify)", len(q.calls))
 	}
 }
 

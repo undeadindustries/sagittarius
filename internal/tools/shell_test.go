@@ -584,3 +584,65 @@ func TestShellLogWriteFailureIsNotEmpty(t *testing.T) {
 		t.Fatalf("error key missing; output = %q", out)
 	}
 }
+
+func TestShellExecuteUserWaitsPastAutoBackground(t *testing.T) {
+	t.Parallel()
+	tool := newTestShellTool(t)
+	tool.autoBackgroundAfter = 50 * time.Millisecond
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := tool.ExecuteUser(ctx, "sleep 0.2; echo waited", nil, nil)
+	if err != nil {
+		t.Fatalf("ExecuteUser: %v", err)
+	}
+	if bg, _ := res["background"].(bool); bg {
+		t.Fatal("ExecuteUser auto-backgrounded; want wait-until-exit")
+	}
+	out, _ := res["output"].(string)
+	if !strings.Contains(out, "waited") {
+		t.Fatalf("output = %q, want waited", out)
+	}
+}
+
+func TestShellUserStdinEcho(t *testing.T) {
+	t.Parallel()
+	tool := newTestShellTool(t)
+	stdin := &PTYStdin{}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	done := make(chan struct{})
+	var res map[string]any
+	var execErr error
+	go func() {
+		defer close(done)
+		res, execErr = tool.ExecuteUser(ctx, `read line; printf 'got:%s\n' "$line"`, nil, stdin)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	var wrote bool
+	for time.Now().Before(deadline) {
+		if _, err := stdin.Write([]byte("hello\r")); err == nil {
+			wrote = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !wrote {
+		t.Fatal("could not write to PTY stdin")
+	}
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("ExecuteUser did not return after stdin write")
+	}
+	if execErr != nil {
+		t.Fatalf("ExecuteUser: %v", execErr)
+	}
+	out, _ := res["output"].(string)
+	if !strings.Contains(out, "got:hello") {
+		t.Fatalf("output = %q, want got:hello", out)
+	}
+}
