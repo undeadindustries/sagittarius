@@ -14,6 +14,7 @@ const (
 	WebFetchToolName        = "web_fetch"
 	EditToolName            = "edit"
 	TaskToolName            = "task"
+	CodeTaskToolName        = "code_task"
 	SaveMemoryToolName      = "save_memory"
 	ScriptToolName          = "run_script"
 	// AskUserToolName is the grill-mode structured question tool (registered by
@@ -40,6 +41,8 @@ const (
 
 	TaskParamDescription = "description"
 	TaskParamPrompt      = "prompt"
+
+	CodeTaskParamWritePaths = "write_paths"
 
 	SaveMemoryParamText  = "text"
 	SaveMemoryParamScope = "scope"
@@ -85,4 +88,11 @@ var legacyAliases = map[string]string{
 func IsFileMutatingTool(name string) bool {
 	c := canonicalToolName(name)
 	return c == WriteFileToolName || c == EditToolName
+}
+
+// IsSubagentTool reports whether name launches a child agent. These run
+// concurrently in the scheduler fan-out and cannot be nested.
+func IsSubagentTool(name string) bool {
+	c := canonicalToolName(name)
+	return c == TaskToolName || c == CodeTaskToolName
 }

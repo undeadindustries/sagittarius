@@ -71,6 +71,8 @@ const (
 	wireChecks        = "run_project_checks"
 	wireWebSearch     = "google_web_search"
 	wireWebFetch      = "web_fetch"
+	wireTask          = "task"
+	wireCodeTask      = "code_task"
 	wireContinueAgent = "continue_agent"
 	wireMCPPrefix     = "mcp_"
 	wireMCPSeparator  = "_"
@@ -112,6 +114,10 @@ func toolDisplayName(name string) string {
 		return "Question"
 	case wireContinueAgent:
 		return "Continue"
+	case wireTask:
+		return "Research subagent"
+	case wireCodeTask:
+		return "Coding subagent"
 	default:
 		return name
 	}

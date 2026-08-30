@@ -23,7 +23,8 @@ type Catalog struct {
 	settings           *config.Settings
 	bgMgr              *bgproc.Manager
 	allowFix           bool
-	subagentsEnabled   bool
+	researchSubagents  bool
+	codingSubagents    bool
 	editEnabled        bool
 	symbolsEnabled     bool
 	symbolsPreferGopls bool
@@ -48,7 +49,6 @@ type CatalogConfig struct {
 	Version    string
 	// AllowFix permits run_project_checks to run mutating formatters (fix=true).
 	AllowFix         bool
-	SubagentsEnabled bool
 	EditEnabled      bool
 	PruneToolSchemas bool
 	// SymbolsEnabled toggles registration of the find_symbol tool (default true).
@@ -63,7 +63,20 @@ type CatalogConfig struct {
 	SpillDir string
 	// ScriptToolEnabled toggles registration of run_script (default false).
 	ScriptToolEnabled bool
+	// ResearchSubagentsEnabled and CodingSubagentsEnabled are change-detection
+	// state only: the task and code_task tools are registered by the runner
+	// (NewRunner and App.SetRegistry), because they need a *Runner. Tracking
+	// them here is what makes a live /settings toggle rebuild the registry.
+	ResearchSubagentsEnabled bool
+	CodingSubagentsEnabled   bool
 }
+
+// ResearchSubagentsEnabled reports the catalog's current research-subagent
+// toggle, refreshed from settings by RefreshBuiltinToggles.
+func (c *Catalog) ResearchSubagentsEnabled() bool { return c != nil && c.researchSubagents }
+
+// CodingSubagentsEnabled reports the catalog's current coding-subagent toggle.
+func (c *Catalog) CodingSubagentsEnabled() bool { return c != nil && c.codingSubagents }
 
 // NewCatalog constructs a tool catalog.
 func NewCatalog(cfg CatalogConfig) (*Catalog, error) {
@@ -107,7 +120,8 @@ func NewCatalog(cfg CatalogConfig) (*Catalog, error) {
 		settings:           cfg.Settings,
 		bgMgr:              cfg.BgMgr,
 		allowFix:           cfg.AllowFix,
-		subagentsEnabled:   cfg.SubagentsEnabled,
+		researchSubagents:  cfg.ResearchSubagentsEnabled,
+		codingSubagents:    cfg.CodingSubagentsEnabled,
 		editEnabled:        cfg.EditEnabled,
 		symbolsEnabled:     cfg.SymbolsEnabled,
 		symbolsPreferGopls: cfg.SymbolsPreferGopls,
@@ -144,7 +158,8 @@ func (c *Catalog) RefreshBuiltinToggles(s *config.Settings) bool {
 // a field cannot silently escape it.
 type builtinToggles struct {
 	allowFix           bool
-	subagentsEnabled   bool
+	researchSubagents  bool
+	codingSubagents    bool
 	editEnabled        bool
 	symbolsEnabled     bool
 	symbolsPreferGopls bool
@@ -159,7 +174,8 @@ func (c *Catalog) resolveToggles(s *config.Settings) builtinToggles {
 	directFetch := config.WebDirectFetch(s, nil)
 	return builtinToggles{
 		allowFix:           config.VerifyAllowFix(s, nil),
-		subagentsEnabled:   config.SubagentsEnabled(s, nil),
+		researchSubagents:  config.ResearchSubagentsEnabled(s, nil),
+		codingSubagents:    config.CodingSubagentsEnabled(s, nil),
 		editEnabled:        config.EditEnabled(s, nil),
 		symbolsEnabled:     config.SymbolsEnabled(s, nil),
 		symbolsPreferGopls: config.SymbolsPreferGopls(s, nil),
@@ -174,7 +190,8 @@ func (c *Catalog) resolveToggles(s *config.Settings) builtinToggles {
 func (c *Catalog) toggles() builtinToggles {
 	return builtinToggles{
 		allowFix:           c.allowFix,
-		subagentsEnabled:   c.subagentsEnabled,
+		researchSubagents:  c.researchSubagents,
+		codingSubagents:    c.codingSubagents,
 		editEnabled:        c.editEnabled,
 		symbolsEnabled:     c.symbolsEnabled,
 		symbolsPreferGopls: c.symbolsPreferGopls,
@@ -188,7 +205,8 @@ func (c *Catalog) toggles() builtinToggles {
 
 func (c *Catalog) applyToggles(t builtinToggles) {
 	c.allowFix = t.allowFix
-	c.subagentsEnabled = t.subagentsEnabled
+	c.researchSubagents = t.researchSubagents
+	c.codingSubagents = t.codingSubagents
 	c.editEnabled = t.editEnabled
 	c.symbolsEnabled = t.symbolsEnabled
 	c.symbolsPreferGopls = t.symbolsPreferGopls

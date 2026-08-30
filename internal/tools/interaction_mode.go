@@ -13,6 +13,12 @@ const (
 	PolicyNone ReadOnlyPolicy = iota
 	PolicyStrict
 	PolicyInspect
+	// PolicyShellInspect filters run_shell_command exactly as PolicyInspect
+	// does but leaves file mutations alone: a coding subagent exists to write,
+	// and its writes are bounded by a path lease instead. Shell cannot be
+	// leased (sed -i, a > redirect, a script that moves files), so it stays
+	// read-only.
+	PolicyShellInspect
 )
 
 var readOnlyBuiltinTools = map[string]bool{
@@ -143,6 +149,34 @@ func inspectModeAllow(name string, args map[string]any) (bool, string) {
 		}
 		return false, fmt.Sprintf("inspect mode: tool %q is not allowed", name) + readOnlyExit
 	}
+}
+
+// shellVerdictEscalates reports whether a policy sends an unclassifiable shell
+// command to confirmation rather than running it. A headless child fails that
+// confirmation closed, which is the intended outcome for a command neither the
+// classifier nor a human has vouched for.
+func shellVerdictEscalates(p ReadOnlyPolicy) bool {
+	return p == PolicyInspect || p == PolicyShellInspect
+}
+
+// shellInspectAllow is the PolicyShellInspect gate. Only run_shell_command is
+// filtered; everything else is left to the write-lease gate and the ordinary
+// interaction-mode rules.
+func shellInspectAllow(name string, args map[string]any) (bool, string) {
+	if name != ShellToolName {
+		return true, ""
+	}
+	cmd, err := stringArg(args, ShellParamCommand)
+	if err != nil {
+		return false, "invalid command"
+	}
+	if verdict, reason := ClassifyShellReadOnly(cmd); verdict == VerdictMutating {
+		return false, "subagent shell is read-only: " + reason +
+			"; use write_file or edit inside your lease, and run_project_checks to verify"
+	}
+	// VerdictUnknown passes here and is escalated to a confirmation the child,
+	// being headless, will fail closed on.
+	return true, ""
 }
 
 func planModeAllow(name string, args map[string]any, ws *Workspace) (bool, string) {

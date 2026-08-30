@@ -23,6 +23,19 @@ type Runtime struct {
 	BgMgr    *bgproc.Manager
 	LSPPool  *lsp.Pool
 	workDir  string
+	// fileState is shared by the parent runner and every subagent it launches,
+	// so a write by one is visible as staleness to the others.
+	fileState *tools.FileStateRegistry
+}
+
+// FileState returns the registry coordinating file access across the parent
+// agent and its subagents. It is never nil for a constructed Runtime; a nil
+// Runtime yields a nil registry, whose methods are themselves nil-safe.
+func (r *Runtime) FileState() *tools.FileStateRegistry {
+	if r == nil {
+		return nil
+	}
+	return r.fileState
 }
 
 // RuntimeConfig configures session-scoped MCP/skills/extensions services.
@@ -36,8 +49,11 @@ type RuntimeConfig struct {
 	AllowFix bool
 	// EditEnabled toggles registration of the edit tool (default true).
 	EditEnabled bool
-	// SubagentsEnabled toggles subagent registration (default false).
-	SubagentsEnabled bool
+	// ResearchSubagentsEnabled toggles the read-only task tool (default false).
+	ResearchSubagentsEnabled bool
+	// CodingSubagentsEnabled toggles the write-capable code_task tool
+	// (default false).
+	CodingSubagentsEnabled bool
 	// PruneToolSchemas truncates MCP schemas to save tokens.
 	PruneToolSchemas bool
 	// SymbolsEnabled toggles registration of the find_symbol tool (default true).
@@ -82,7 +98,6 @@ func NewRuntime(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 		ClientName:         cfg.ClientName,
 		Version:            cfg.ClientVersion,
 		AllowFix:           cfg.AllowFix,
-		SubagentsEnabled:   cfg.SubagentsEnabled,
 		EditEnabled:        cfg.EditEnabled,
 		PruneToolSchemas:   cfg.PruneToolSchemas,
 		SymbolsEnabled:     cfg.SymbolsEnabled,
@@ -91,6 +106,9 @@ func NewRuntime(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 		WebFetchEnabled:    cfg.WebFetchEnabled,
 		SpillDir:           cfg.SpillDir,
 		ScriptToolEnabled:  cfg.ScriptToolEnabled,
+
+		ResearchSubagentsEnabled: cfg.ResearchSubagentsEnabled,
+		CodingSubagentsEnabled:   cfg.CodingSubagentsEnabled,
 	})
 	if err != nil {
 		return nil, err
@@ -99,12 +117,13 @@ func NewRuntime(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 		return nil, fmt.Errorf("initial tool reload: %w", err)
 	}
 	rt := &Runtime{
-		Catalog:  catalog,
-		Agents:   agents.NewRegistry(ws.Root(), cfg.Trusted),
-		Settings: cfg.Settings,
-		BgMgr:    bgMgr,
-		LSPPool:  lsp.NewPool(),
-		workDir:  ws.Root(),
+		Catalog:   catalog,
+		Agents:    agents.NewRegistry(ws.Root(), cfg.Trusted),
+		Settings:  cfg.Settings,
+		BgMgr:     bgMgr,
+		LSPPool:   lsp.NewPool(),
+		workDir:   ws.Root(),
+		fileState: tools.NewFileStateRegistry(),
 	}
 	if _, err := rt.Agents.Reload(ctx, extLoader.ActiveAgents()); err != nil {
 		return nil, fmt.Errorf("initial agent reload: %w", err)

@@ -93,6 +93,17 @@ interaction-mode gates plus `BeforeTool`/`AfterTool` (with the nested tool's
 own name). A hook deny or rewrite-revalidation failure is reported on that
 operation and does not stop the rest of the batch.
 
+### `task` / `code_task` (built-in tools)
+
+Both off by default. `sagittarius.subagents.research.enabled` registers `task`,
+which launches a read-only child that explores and reports back.
+`sagittarius.subagents.coding.enabled` registers `code_task`, which launches a
+write-capable child that must declare `write_paths` — the only paths it may
+modify. Several coding subagents run in parallel; leases that overlap are
+rejected before any of them starts, and a coding subagent's shell is read-only.
+`code_task` asks for confirmation once, showing the lease. See
+[subagents.md](../subagents.md).
+
 ### Tool confirmations
 
 When a tool needs approval (e.g. `write_file`, `run_shell_command` in the
@@ -693,4 +704,6 @@ Implemented: `/about`, `/agent`, `/ask`, `/chat`, `/clear`, `/compress`,
 `/resume`, `/settings` (curated browser), `/skills` (list, reload), `/agents`
 (list, reload), `/stats`, `/system-prompt`, `/theme`, `/tools` (list, desc,
 enable/disable), `/undo`, `activate_skill` tool, `ask_user` tool, `save_memory` tool,
-`run_script` tool (opt-in via `sagittarius.scriptToolEnabled`).
+`run_script` tool (opt-in via `sagittarius.scriptToolEnabled`), `task` and
+`code_task` tools (opt-in via `sagittarius.subagents.research.enabled` and
+`sagittarius.subagents.coding.enabled`).

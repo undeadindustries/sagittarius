@@ -94,7 +94,7 @@ func TestRefreshBuiltinTogglesEditTool(t *testing.T) {
 // credentials or on a default changing underneath the test.
 func TestRefreshBuiltinTogglesNoopWhenUnchanged(t *testing.T) {
 	off, on := false, true
-	cat := newToggleCatalog(t, CatalogConfig{SymbolsEnabled: true, SymbolsPreferGopls: true, EditEnabled: true, SubagentsEnabled: false})
+	cat := newToggleCatalog(t, CatalogConfig{SymbolsEnabled: true, SymbolsPreferGopls: true, EditEnabled: true, ResearchSubagentsEnabled: false, CodingSubagentsEnabled: false})
 
 	same := &config.Settings{
 		Sagittarius: &config.SagittariusSettings{

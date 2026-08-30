@@ -36,8 +36,16 @@ var reservedSagittariusModeKeys = map[string]struct{}{
 	"agent": {},
 }
 
+// reservedSagittariusSubagentKeys names the keys under sagittarius.subagents
+// that are decoded into struct fields. Anything else becomes a Named entry, so
+// a new field MUST be listed here or it would be double-handled: decoded into
+// the field and then again into Named, with its scalar members swallowed into
+// that entry's Extra.
 var reservedSagittariusSubagentKeys = map[string]struct{}{
-	"default": {},
+	"default":  {},
+	"enabled":  {},
+	"research": {},
+	"coding":   {},
 }
 
 func unmarshalModeConfig(raw json.RawMessage) (*SagittariusModeConfig, error) {
@@ -222,6 +230,65 @@ func marshalSubagentConfig(cfg SagittariusSubagentConfig) (json.RawMessage, erro
 	return json.Marshal(obj)
 }
 
+func unmarshalSubagentClass(raw json.RawMessage) (*SagittariusSubagentClass, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, fmt.Errorf("decode subagent class: %w", err)
+	}
+	cls := &SagittariusSubagentClass{Extra: make(map[string]json.RawMessage)}
+	for key, val := range obj {
+		switch key {
+		case "enabled":
+			var b bool
+			if err := json.Unmarshal(val, &b); err != nil {
+				return nil, fmt.Errorf("decode enabled: %w", err)
+			}
+			cls.Enabled = &b
+		case "model":
+			if err := json.Unmarshal(val, &cls.Model); err != nil {
+				return nil, fmt.Errorf("decode model: %w", err)
+			}
+		default:
+			cls.Extra[key] = val
+		}
+	}
+	if len(cls.Extra) == 0 {
+		cls.Extra = nil
+	}
+	return cls, nil
+}
+
+func marshalSubagentClass(cls *SagittariusSubagentClass) (json.RawMessage, error) {
+	if cls == nil {
+		return nil, nil
+	}
+	obj := make(map[string]json.RawMessage)
+	if cls.Enabled != nil {
+		b, err := json.Marshal(*cls.Enabled)
+		if err != nil {
+			return nil, err
+		}
+		obj["enabled"] = b
+	}
+	if cls.Model != "" {
+		b, err := json.Marshal(cls.Model)
+		if err != nil {
+			return nil, err
+		}
+		obj["model"] = b
+	}
+	for key, val := range cls.Extra {
+		obj[key] = val
+	}
+	if len(obj) == 0 {
+		return json.RawMessage("{}"), nil
+	}
+	return json.Marshal(obj)
+}
+
 func unmarshalSubagents(raw json.RawMessage) (*SagittariusSubagents, error) {
 	if len(raw) == 0 {
 		return nil, nil
@@ -249,6 +316,18 @@ func unmarshalSubagents(raw json.RawMessage) (*SagittariusSubagents, error) {
 				return nil, fmt.Errorf("decode sagittarius.subagents.enabled: %w", err)
 			}
 			s.Enabled = &b
+			continue
+		}
+		if key == "research" || key == "coding" {
+			cls, err := unmarshalSubagentClass(val)
+			if err != nil {
+				return nil, fmt.Errorf("decode sagittarius.subagents.%s: %w", key, err)
+			}
+			if key == "research" {
+				s.Research = cls
+			} else {
+				s.Coding = cls
+			}
 			continue
 		}
 		if _, reserved := reservedSagittariusSubagentKeys[key]; reserved {
@@ -280,6 +359,16 @@ func marshalSubagents(s *SagittariusSubagents) (json.RawMessage, error) {
 			return nil, err
 		}
 		obj["enabled"] = b
+	}
+	for name, cls := range map[string]*SagittariusSubagentClass{"research": s.Research, "coding": s.Coding} {
+		if cls == nil {
+			continue
+		}
+		b, err := marshalSubagentClass(cls)
+		if err != nil {
+			return nil, fmt.Errorf("encode sagittarius.subagents.%s: %w", name, err)
+		}
+		obj[name] = b
 	}
 	if s.Default.Model != "" || len(s.Default.Extra) > 0 {
 		b, err := marshalSubagentConfig(s.Default)

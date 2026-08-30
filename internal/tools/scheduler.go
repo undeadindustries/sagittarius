@@ -26,6 +26,12 @@ import (
 // for real agentic tasks that write multiple files.
 const MaxToolRounds = 100
 
+// maxConcurrentSubagents bounds the scheduler fan-out. Children each hold a
+// provider connection and a full agent loop, so this is a resource cap rather
+// than a correctness one — write collisions are prevented by lease overlap
+// denial, not by serialization.
+const maxConcurrentSubagents = 8
+
 // Scheduler executes tool calls from the agent loop.
 type Scheduler struct {
 	registry    *Registry
@@ -40,6 +46,16 @@ type Scheduler struct {
 	// interrogating uses PolicyStrict; inspection gate uses PolicyInspect). ask_user is always exempt so the interrogation itself
 	// can proceed.
 	readOnlyPolicy func() ReadOnlyPolicy
+
+	// lease, when non-nil, bounds every file mutation this scheduler executes
+	// to the paths a coding subagent declared. nil means unleased (the parent).
+	lease *WriteLease
+	// agentID identifies this scheduler's agent to the shared file-state
+	// registry. Empty disables read/write tracking for it.
+	agentID string
+	// fileState is shared with sibling schedulers so a write by one agent can
+	// be seen as staleness by another. nil-safe.
+	fileState *FileStateRegistry
 
 	// sessionGrants records tools the user approved "for this session" so later
 	// invocations of the same tool skip confirmation. Guarded by mu.
@@ -104,6 +120,25 @@ func WithReadOnlyPolicy(fn func() ReadOnlyPolicy) SchedulerOption {
 	return func(s *Scheduler) { s.readOnlyPolicy = fn }
 }
 
+// WithWriteLease bounds every file mutation to the leased paths. Installing a
+// lease also denies tools whose writes cannot be bounded by a path (MCP tools,
+// save_memory), because an unbounded write is exactly what the lease exists to
+// prevent.
+func WithWriteLease(lease WriteLease) SchedulerOption {
+	return func(s *Scheduler) { s.lease = &lease }
+}
+
+// WithAgentID labels this scheduler's agent in the shared file-state registry.
+func WithAgentID(id string) SchedulerOption {
+	return func(s *Scheduler) { s.agentID = id }
+}
+
+// WithFileState shares a file-state registry across parent and children so
+// concurrent reads and writes to the same path are visible to each other.
+func WithFileState(reg *FileStateRegistry) SchedulerOption {
+	return func(s *Scheduler) { s.fileState = reg }
+}
+
 // NewScheduler constructs a scheduler for the given registry and policy.
 // When interactive is false (headless), confirmations are auto-approved or denied per policy.
 // mode and workspace enable interaction-mode tool restrictions (plan/ask read-only gates).
@@ -136,50 +171,109 @@ func (s *Scheduler) Execute(
 ) ([]provider.FunctionResponse, error) {
 	responses := make([]provider.FunctionResponse, len(calls))
 
+	// Two coding subagents that claim the same path would race each other's
+	// writes, so the whole batch is refused before any child is launched.
+	conflict := leaseConflict(calls)
+
 	var eg errgroup.Group
-	eg.SetLimit(8) // Max concurrent tasks
+	eg.SetLimit(maxConcurrentSubagents)
 
 	for i, call := range calls {
 		i, call := i, call
-		c := canonicalToolName(call.Name)
-		if c == TaskToolName {
-			eg.Go(func() error {
-				resp, err := s.executeOne(ctx, call, emit)
-				if err != nil {
-					return err
-				}
-				if resp != nil {
-					responses[i] = *resp
-				}
-				return nil
-			})
+		if !IsSubagentTool(call.Name) {
+			continue
 		}
-	}
-
-	if err := eg.Wait(); err != nil {
-		// If tasks fail, return the partial array up to the failure?
-		// Better to just return the error. The original stopped at the first error.
-		return responses, err
-	}
-
-	for i, call := range calls {
-		c := canonicalToolName(call.Name)
-		if c != TaskToolName {
+		if conflict != "" && canonicalToolName(call.Name) == CodeTaskToolName {
+			emit(ui.StreamEvent{
+				Type: ui.StreamToolResult, ToolName: call.Name, ToolCallID: call.ID,
+				Text: conflict, IsError: true,
+			})
+			responses[i] = *errorResponse(call, ErrCodeInvalidArgs, conflict)
+			continue
+		}
+		eg.Go(func() error {
 			resp, err := s.executeOne(ctx, call, emit)
 			if err != nil {
-				// To preserve the partial result pattern, we could truncate 'responses'
-				// but since we allocate len(calls) upfront, returning it as is with empty responses at the end might break AD-052 logic if it expects exact lengths or if the caller expects no empty responses.
-				// Wait, the original code aborted and returned the slice so far.
-				// Let's filter out empty responses before returning.
-				return filterValidResponses(responses), err
+				// A child that dies must not throw away the work its siblings
+				// already committed to disk. Record the failure in that child's
+				// own slot and let the rest of the batch finish. Cancellation
+				// is different: nothing is running any more, so it propagates.
+				if ctx.Err() != nil {
+					return err
+				}
+				emit(ui.StreamEvent{
+					Type: ui.StreamToolResult, ToolName: call.Name, ToolCallID: call.ID,
+					Text: err.Error(), IsError: true,
+				})
+				responses[i] = *errorResponseFromErr(call, err)
+				return nil
 			}
 			if resp != nil {
 				responses[i] = *resp
 			}
+			return nil
+		})
+	}
+
+	if err := eg.Wait(); err != nil {
+		return filterValidResponses(responses), err
+	}
+
+	for i, call := range calls {
+		if IsSubagentTool(call.Name) {
+			continue
+		}
+		resp, err := s.executeOne(ctx, call, emit)
+		if err != nil {
+			return filterValidResponses(responses), err
+		}
+		if resp != nil {
+			responses[i] = *resp
 		}
 	}
 
 	return filterValidResponses(responses), nil
+}
+
+// leaseConflict reports the first pair of code_task calls in a batch whose
+// declared write paths could name the same file, as a model-facing message.
+// A lease that will not parse is skipped: the tool itself reports that, with a
+// better error than this function could produce.
+func leaseConflict(calls []provider.ToolCall) string {
+	type claim struct {
+		label string
+		lease WriteLease
+	}
+	var claims []claim
+	for _, call := range calls {
+		if canonicalToolName(call.Name) != CodeTaskToolName {
+			continue
+		}
+		args := NormalizeToolArgs(call.Name, call.Args)
+		lease, err := ParseWriteLease(args[CodeTaskParamWritePaths])
+		if err != nil {
+			continue
+		}
+		label, _ := args[TaskParamDescription].(string)
+		if label == "" {
+			label = call.ID
+		}
+		claims = append(claims, claim{label: label, lease: lease})
+	}
+	for i := range claims {
+		for j := i + 1; j < len(claims); j++ {
+			pair, overlaps := LeasesOverlap(claims[i].lease, claims[j].lease)
+			if !overlaps {
+				continue
+			}
+			return fmt.Sprintf(
+				"overlapping write leases: %q and %q both claim %s. "+
+					"Subagents run in parallel, so no two may write the same path. "+
+					"Split the work so each lease is disjoint, or run them in separate turns.",
+				claims[i].label, claims[j].label, pair)
+		}
+	}
+	return ""
 }
 
 func filterValidResponses(in []provider.FunctionResponse) []provider.FunctionResponse {
@@ -220,6 +314,13 @@ func (s *Scheduler) executeOne(
 
 	emit(ui.StreamEvent{Type: ui.StreamToolStart, ToolName: name, ToolCallID: id, Text: formatToolSummary(name, args)})
 
+	// The lease gate runs on the normalized arguments so an aliased key
+	// (AD-113) cannot smuggle a path past it.
+	if code, reason, ok := s.leaseAllow(name, args); !ok {
+		emitErr(reason)
+		return errorResponse(call, code, reason), nil
+	}
+
 	// Project-boundary gate runs before the interaction-mode gate so it applies
 	// in every mode (the protected-snapshot guard is always active; out-of-root
 	// blocking is gated on enforce).
@@ -258,7 +359,7 @@ func (s *Scheduler) executeOne(
 	needsConfirm := s.policy.NeedsConfirmation(tool)
 	grantKey := tool.Name()
 	isEscalation := false
-	if s.readOnlyPolicy != nil && s.readOnlyPolicy() == PolicyInspect && canonicalToolName(name) == ShellToolName {
+	if s.readOnlyPolicy != nil && shellVerdictEscalates(s.readOnlyPolicy()) && canonicalToolName(name) == ShellToolName {
 		if cmd, err := stringArg(args, ShellParamCommand); err == nil {
 			verdict, _ := ClassifyShellReadOnly(cmd)
 			if verdict == VerdictUnknown {
@@ -286,6 +387,15 @@ func (s *Scheduler) executeOne(
 			emitErr(errText)
 			return errorResponse(call, ErrCodeUserDenied, errText), nil
 		}
+	}
+
+	// Hold the target path for the whole read-modify-write region so a sibling
+	// agent cannot land a write between the diff, the snapshot, and the edit.
+	mutAbs := s.mutationTarget(name, args)
+	staleBy := ""
+	if mutAbs != "" {
+		defer s.fileState.LockPath(mutAbs)()
+		staleBy, _ = s.fileState.CheckStale(s.agentID, mutAbs)
 	}
 
 	// Compute the mutation diff (before -> after) before the tool mutates the
@@ -335,6 +445,7 @@ func (s *Scheduler) executeOne(
 	if snapAbs != "" {
 		s.snapshotter.CommitWrite(snapAbs, canonicalToolName(name))
 	}
+	s.recordFileAccess(name, args, mutAbs, staleBy, result)
 
 	resultText, exitCode, isErr := formatToolResult(name, result, writeDiff)
 	emit(ui.StreamEvent{
@@ -355,21 +466,96 @@ func (s *Scheduler) executeOne(
 // mutate, or "" when snapshotting does not apply (no snapshotter, not a
 // write_file, missing/invalid path, or path outside the workspace).
 func (s *Scheduler) snapshotTarget(name string, args map[string]any) string {
-	if s.snapshotter == nil || s.workspace == nil {
+	if s.snapshotter == nil {
 		return ""
 	}
-	if !IsFileMutatingTool(name) {
+	return s.mutationTarget(name, args)
+}
+
+// mutationTarget resolves the absolute path a file-mutating call will change,
+// or "" when the call does not mutate one resolvable path.
+func (s *Scheduler) mutationTarget(name string, args map[string]any) string {
+	if s.workspace == nil || !IsFileMutatingTool(name) {
 		return ""
 	}
-	path, err := stringArg(args, ParamFilePath)
+	return s.resolveArgPath(args, ParamFilePath)
+}
+
+func (s *Scheduler) resolveArgPath(args map[string]any, key string) string {
+	if s.workspace == nil {
+		return ""
+	}
+	p, err := stringArg(args, key)
 	if err != nil {
 		return ""
 	}
-	abs, err := s.workspace.ResolvePath(path)
+	abs, err := s.workspace.ResolvePath(p)
 	if err != nil {
 		return ""
 	}
 	return abs
+}
+
+// leaseAllow enforces a coding subagent's write lease.
+//
+// Beyond the leased paths themselves it denies tools whose side effects a path
+// lease cannot describe. Letting those through would leave the lease as
+// decoration: a child could reach any file via an MCP server, or write global
+// memory, while its write_file calls stayed dutifully in bounds.
+func (s *Scheduler) leaseAllow(name string, args map[string]any) (ErrorCode, string, bool) {
+	if s.lease == nil {
+		return "", "", true
+	}
+	c := canonicalToolName(name)
+	if !IsFileMutatingTool(c) {
+		if c == SaveMemoryToolName || strings.HasPrefix(c, "mcp_") {
+			return ErrCodeModeRestriction, fmt.Sprintf(
+				"subagent: tool %q is not available because its effects cannot be bounded by a write lease; report what you need instead", name), false
+		}
+		if c == ProjectChecksToolName && projectChecksFixRequested(args) {
+			return ErrCodeModeRestriction, "subagent: run_project_checks fix mode is not available because formatter/fix mutations cannot be bounded by a write lease; run check-only (fix=false) or have the parent run checks with fix", false
+		}
+		return "", "", true
+	}
+	raw, err := stringArg(args, ParamFilePath)
+	if err != nil {
+		return ErrCodeInvalidArgs, err.Error(), false
+	}
+	if s.workspace == nil {
+		return ErrCodeModeRestriction, "write lease: no workspace is configured, so no path can be verified against the lease", false
+	}
+	// A path that will not resolve inside the workspace is outside the lease by
+	// definition; reporting it as a lease denial keeps one message for one rule.
+	rel, err := s.workspace.RelativePath(raw)
+	if err != nil {
+		rel = raw
+	}
+	if err != nil || !s.lease.Allows(rel) {
+		return ErrCodeModeRestriction, fmt.Sprintf(
+			"write lease: %s is outside this subagent's lease (%s). "+
+				"Do not work around this — report the change the parent needs to make and stop.",
+			rel, s.lease), false
+	}
+	return "", "", true
+}
+
+// recordFileAccess publishes this call's file access to the shared registry and
+// attaches a staleness note when a sibling changed the file after this agent
+// last read it. Staleness is a warning, not a failure: the write the user
+// approved has already happened, and the model can usually reconcile.
+func (s *Scheduler) recordFileAccess(name string, args map[string]any, mutAbs, staleBy string, result map[string]any) {
+	if mutAbs != "" {
+		s.fileState.RecordWrite(s.agentID, mutAbs)
+		if staleBy != "" && result != nil {
+			result["stale_warning"] = fmt.Sprintf(
+				"%s was modified by %s after you last read it; re-read it before making further changes",
+				filepath.Base(mutAbs), staleBy)
+		}
+		return
+	}
+	if canonicalToolName(name) == ReadFileToolName {
+		s.fileState.RecordRead(s.agentID, s.resolveArgPath(args, ParamFilePath))
+	}
 }
 
 func (s *Scheduler) requestApproval(
@@ -581,11 +767,14 @@ func (s *Scheduler) runNested(ctx context.Context, name string, args map[string]
 		return nil, &ToolError{Code: ErrCodeInvalidArgs, Message: msg}
 	}
 	canon := canonicalToolName(name)
-	if canon == ScriptToolName || canon == TaskToolName {
+	if canon == ScriptToolName || IsSubagentTool(canon) {
 		return nil, &ToolError{
 			Code:    ErrCodeModeRestriction,
 			Message: fmt.Sprintf("tool %q is not allowed in scripts", canon),
 		}
+	}
+	if code, reason, ok := s.leaseAllow(name, args); !ok {
+		return nil, &ToolError{Code: code, Message: reason}
 	}
 	if allowed, reason := ProjectBoundaryAllow(s.enforce, name, args, s.workspace); !allowed {
 		return nil, &ToolError{Code: ErrCodeProjectBoundary, Message: reason}
@@ -615,6 +804,9 @@ func (s *Scheduler) runNested(ctx context.Context, name string, args map[string]
 }
 
 func (s *Scheduler) validateHookRewrite(name string, args map[string]any) (ErrorCode, string, bool) {
+	if code, reason, ok := s.leaseAllow(name, args); !ok {
+		return code, reason, false
+	}
 	if allowed, reason := ProjectBoundaryAllow(s.enforce, name, args, s.workspace); !allowed {
 		return ErrCodeProjectBoundary, reason, false
 	}
@@ -638,6 +830,10 @@ func (s *Scheduler) interactionModeAllow(toolName string, args map[string]any) (
 			}
 		case PolicyInspect:
 			if allowed, reason := inspectModeAllow(canonicalToolName(toolName), args); !allowed {
+				return false, reason
+			}
+		case PolicyShellInspect:
+			if allowed, reason := shellInspectAllow(canonicalToolName(toolName), args); !allowed {
 				return false, reason
 			}
 		}
@@ -709,6 +905,8 @@ func formatToolResult(name string, result map[string]any, writeDiff string) (tex
 		if path, ok := result["path"].(string); ok {
 			return fmt.Sprintf("Saved to %s", path), nil, false
 		}
+	case CodeTaskToolName:
+		return formatCodeTaskResult(result), nil, false
 	}
 
 	// MCP tools (and any other tool) carry their payload under "result".
@@ -716,6 +914,43 @@ func formatToolResult(name string, result map[string]any, writeDiff string) (tex
 		return capLines(stringifyResult(v), toolResultMaxLines), nil, false
 	}
 	return "ok", nil, false
+}
+
+// formatCodeTaskResult renders a coding subagent's card: what it wrote, any
+// staleness warning, then its report. The file list leads because a lease that
+// touched the wrong thing is the failure the user most needs to catch.
+func formatCodeTaskResult(result map[string]any) string {
+	var parts []string
+	if written := stringSlice(result["files_written"]); len(written) > 0 {
+		parts = append(parts, fmt.Sprintf("Wrote %d file(s): %s", len(written), strings.Join(written, ", ")))
+	} else {
+		parts = append(parts, "No files written")
+	}
+	if warn := asString(result["stale_warnings"]); warn != "" {
+		parts = append(parts, warn)
+	}
+	if text := strings.TrimSpace(asString(result["result"])); text != "" {
+		parts = append(parts, text)
+	}
+	return capLines(strings.Join(parts, "\n"), toolResultMaxLines)
+}
+
+// stringSlice reads a []string or a []any of strings, since a value can reach
+// here either directly from a built-in tool or round-tripped through JSON.
+func stringSlice(v any) []string {
+	switch t := v.(type) {
+	case []string:
+		return t
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, e := range t {
+			if s, ok := e.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
 }
 
 // formatFindSymbolResult renders a find_symbol result: a one-line count header
@@ -849,6 +1084,18 @@ func formatConfirmSummary(toolName string, args map[string]any) string {
 		if text, ok := args[SaveMemoryParamText].(string); ok {
 			return fmt.Sprintf("remember: %s", text)
 		}
+	case CodeTaskToolName:
+		// The lease is the whole decision the user is being asked to make, so it
+		// goes in the summary rather than the description of the task.
+		lease, err := ParseWriteLease(args[CodeTaskParamWritePaths])
+		if err != nil {
+			return fmt.Sprintf("%s (invalid write_paths)", toolName)
+		}
+		desc, _ := args[TaskParamDescription].(string)
+		if desc == "" {
+			desc = "coding subagent"
+		}
+		return fmt.Sprintf("%s — may write %s", desc, lease.String())
 	}
 	return toolName
 }

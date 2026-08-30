@@ -2272,7 +2272,7 @@ func (m *model) startToolCard(ev ui.StreamEvent) {
 	m.thinking = ""
 	card := newToolCard(ev)
 
-	if card.toolName == "task" {
+	if card.toolName == wireTask || card.toolName == wireCodeTask {
 		if len(m.blocks) > 0 && m.blocks[len(m.blocks)-1].role == roleTaskGroup {
 			// append to existing task group
 			tg := m.blocks[len(m.blocks)-1].taskGroup

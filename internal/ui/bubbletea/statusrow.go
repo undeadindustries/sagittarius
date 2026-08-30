@@ -144,7 +144,7 @@ func (m *model) statusRowParts() (left, right string) {
 
 	nWorking := 0
 	for _, c := range m.cardByID {
-		if c.toolName == "task" && c.phase == toolRunning {
+		if (c.toolName == wireTask || c.toolName == wireCodeTask) && c.phase == toolRunning {
 			nWorking++
 		}
 	}

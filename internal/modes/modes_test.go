@@ -130,43 +130,6 @@ func TestGlobalDefaultFallbackWhenProviderUnset(t *testing.T) {
 	}
 }
 
-func TestSubagentModelFallback(t *testing.T) {
-	t.Parallel()
-
-	cfg := &config.SagittariusSettings{
-		DefaultModel: "global-default",
-		Subagents: &config.SagittariusSubagents{
-			Default: config.SagittariusSubagentConfig{Model: "subagent-default"},
-			Named: map[string]config.SagittariusSubagentConfig{
-				"investigator": {Model: "investigator-model"},
-			},
-		},
-	}
-	liveModel := "live-model"
-
-	tests := []struct {
-		name string
-		want string
-	}{
-		{"investigator", "investigator-model"},
-		{"unknown", "subagent-default"},
-	}
-	for _, tc := range tests {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			if got := ResolveSubagentModel(tc.name, cfg, liveModel); got != tc.want {
-				t.Fatalf("ResolveSubagentModel(%q) = %q, want %q", tc.name, got, tc.want)
-			}
-		})
-	}
-
-	// With no subagent override, a subagent follows the live model.
-	if got := ResolveSubagentModel("unknown", &config.SagittariusSettings{}, liveModel); got != liveModel {
-		t.Fatalf("ResolveSubagentModel no override = %q, want live model %q", got, liveModel)
-	}
-}
-
 func TestGlobalDefaultWhenUnset(t *testing.T) {
 	t.Parallel()
 
@@ -196,12 +159,6 @@ func TestGlobalDefaultWhenUnset(t *testing.T) {
 			mode: ModeAgent,
 			want: providerDefault,
 		},
-		{
-			name: "subagent falls through to provider when no subagent keys",
-			cfg:  &config.SagittariusSettings{},
-			mode: ModeAgent,
-			want: providerDefault,
-		},
 	}
 	for _, tc := range tests {
 		tc := tc
@@ -211,10 +168,6 @@ func TestGlobalDefaultWhenUnset(t *testing.T) {
 				t.Fatalf("ResolveModel() = %q, want %q", got, tc.want)
 			}
 		})
-	}
-
-	if got := ResolveSubagentModel("any", nil, providerDefault); got != providerDefault {
-		t.Fatalf("ResolveSubagentModel nil cfg = %q, want live model %q", got, providerDefault)
 	}
 }
 

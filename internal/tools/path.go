@@ -62,8 +62,9 @@ func (w *Workspace) Root() string {
 }
 
 // ResolvePath resolves a user-supplied path relative to the workspace root.
-// Existing paths are canonicalized with EvalSymlinks; new paths are checked
-// against the root without requiring the target to exist.
+// Existing paths and existing ancestor directories of new paths are
+// canonicalized with EvalSymlinks so symlink targets are verified against the
+// workspace root and lease boundaries.
 func (w *Workspace) ResolvePath(pathStr string) (string, error) {
 	if err := validatePathString(pathStr); err != nil {
 		return "", err
@@ -79,18 +80,82 @@ func (w *Workspace) ResolvePath(pathStr string) (string, error) {
 		return "", fmt.Errorf("path %q is outside the trusted workspace", pathStr)
 	}
 
-	if _, err := os.Stat(abs); err == nil {
-		real, err := filepath.EvalSymlinks(abs)
-		if err != nil {
-			return "", fmt.Errorf("resolve symlinks: %w", err)
-		}
-		if !w.isWithinRoot(real) {
-			return "", fmt.Errorf("path %q resolves outside the trusted workspace", pathStr)
-		}
-		return real, nil
+	real, err := resolveExistingPrefix(abs)
+	if err != nil {
+		return "", fmt.Errorf("resolve symlinks: %w", err)
 	}
 
-	return abs, nil
+	if !w.isWithinRoot(real) {
+		return "", fmt.Errorf("path %q resolves outside the trusted workspace", pathStr)
+	}
+
+	return real, nil
+}
+
+// resolveExistingPrefix canonicalizes all existing path components using EvalSymlinks.
+// For paths where the target does not exist, it finds the deepest existing ancestor,
+// resolves symlinks on that ancestor, appends the remaining non-existent components,
+// and repeats until all existing symlink components have been fully resolved.
+func resolveExistingPrefix(abs string) (string, error) {
+	current := abs
+	for range 255 {
+		next, changed, err := resolveOneExistingPrefix(current)
+		if err != nil {
+			return "", err
+		}
+		if !changed {
+			return next, nil
+		}
+		current = next
+	}
+	return "", fmt.Errorf("excessive symlink hops or path resolution loop in %q", abs)
+}
+
+func resolveOneExistingPrefix(target string) (string, bool, error) {
+	cur := target
+	var rest string
+	for {
+		if _, err := os.Lstat(cur); err == nil {
+			realCur, err := filepath.EvalSymlinks(cur)
+			if err != nil {
+				return "", false, err
+			}
+			var next string
+			if rest == "" {
+				next = realCur
+			} else {
+				next = filepath.Clean(filepath.Join(realCur, rest))
+			}
+			return next, next != target, nil
+		}
+		parent := filepath.Dir(cur)
+		base := filepath.Base(cur)
+		if parent == cur {
+			return target, false, nil
+		}
+		if rest == "" {
+			rest = base
+		} else {
+			rest = filepath.Join(base, rest)
+		}
+		cur = parent
+	}
+}
+
+// RelativePath resolves a user-supplied path and returns it relative to the
+// workspace root with slash separators. Anything outside the workspace is an
+// error, so a caller matching against workspace-relative patterns never has to
+// reason about absolute or traversing input.
+func (w *Workspace) RelativePath(pathStr string) (string, error) {
+	abs, err := w.ResolvePath(pathStr)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(w.root, abs)
+	if err != nil {
+		return "", fmt.Errorf("relativize %q: %w", pathStr, err)
+	}
+	return filepath.ToSlash(rel), nil
 }
 
 func (w *Workspace) isWithinRoot(pathToCheck string) bool {

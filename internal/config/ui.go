@@ -146,6 +146,18 @@ func (s *Settings) SetUIShowThinking(on bool) error {
 	})
 }
 
+// ClearUIField removes one key from the passthrough ui object without writing
+// a false (or any other) value. The section is dropped when it becomes empty.
+func (s *Settings) ClearUIField(field string) error {
+	if strings.TrimSpace(field) == "" {
+		return fmt.Errorf("clear ui field: empty name")
+	}
+	return s.mutateUISection(func(ui map[string]json.RawMessage) error {
+		delete(ui, field)
+		return nil
+	})
+}
+
 // SetUIEscapeAtOnPaste records the paste @ escaping preference under
 // ui.escapeAtOnPaste, preserving other ui.* keys. A false value clears the key
 // (off is the implicit default). The caller flushes via Loader.Save.

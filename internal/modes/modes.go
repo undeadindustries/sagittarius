@@ -149,31 +149,6 @@ func ResolveToolsModel(cfg *config.SagittariusSettings, liveModel string) string
 	return ResolveUtilityModel(utilityModel(cfg, roleTools), liveModel)
 }
 
-// ResolveSubagentModel selects a model for a named subagent.
-//
-// Resolution order (first non-empty wins):
-//  1. sagittarius.subagents.<name>.model
-//  2. sagittarius.subagents.default.model
-//  3. liveModel — the live mode-resolved model the main loop is using
-//
-// The live model already encodes the full mode chain (mode override →
-// defaultModels → provider default → legacy default), so a subagent without its
-// own override simply follows the active model.
-func ResolveSubagentModel(name string, cfg *config.SagittariusSettings, liveModel string) string {
-	name = strings.TrimSpace(name)
-	if cfg != nil && cfg.Subagents != nil {
-		if entry, ok := cfg.Subagents.Named[name]; ok {
-			if m := strings.TrimSpace(entry.Model); m != "" {
-				return m
-			}
-		}
-		if m := strings.TrimSpace(cfg.Subagents.Default.Model); m != "" {
-			return m
-		}
-	}
-	return ResolveUtilityModel("", liveModel)
-}
-
 type utilityRole int
 
 const (

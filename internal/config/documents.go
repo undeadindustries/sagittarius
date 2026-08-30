@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -218,8 +219,9 @@ func (d *Documents) TargetSettings(scope SettingScope) *Settings {
 	return d.Global
 }
 
-// IsDefined reports whether the given top-level JSON key is explicitly set in
-// the given scope's settings file (not just inherited from the other tier).
+// IsDefined reports whether the given JSON key (top-level or dotted path) is
+// explicitly set in the given scope's settings file, not inherited from the
+// other tier or a compiled-in default.
 func (d *Documents) IsDefined(scope SettingScope, key string) bool {
 	var s *Settings
 	switch scope {
@@ -273,23 +275,49 @@ func (d *Documents) GlobalPath() string {
 	return d.loader.Path()
 }
 
-// settingsHasKey reports whether s has the key set at the top level of the
-// JSON document (typed sections or Raw passthrough).
+// settingsHasKey reports whether s has the key set in the JSON document.
+// key may be a top-level name ("sagittarius") or a dotted path
+// ("sagittarius.verify.allowFix", "ui.hideBanner"). A present parent with a
+// missing leaf returns false.
 func settingsHasKey(s *Settings, key string) bool {
-	if s == nil {
+	if s == nil || key == "" {
 		return false
 	}
-	switch key {
-	case "providers":
-		return s.Providers != nil
-	case "sagittarius":
-		return s.Sagittarius != nil
-	case "security":
-		return s.Security != nil
-	default:
-		_, ok := s.Raw[key]
-		return ok
+	obj, err := settingsJSONObject(s)
+	if err != nil {
+		return false
 	}
+	return jsonObjectHasPath(obj, strings.Split(key, "."))
+}
+
+func settingsJSONObject(s *Settings) (map[string]json.RawMessage, error) {
+	raw, err := encodeSettingsDocument(s)
+	if err != nil {
+		return nil, err
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, err
+	}
+	return obj, nil
+}
+
+func jsonObjectHasPath(obj map[string]json.RawMessage, parts []string) bool {
+	if len(parts) == 0 || parts[0] == "" {
+		return false
+	}
+	raw, ok := obj[parts[0]]
+	if !ok {
+		return false
+	}
+	if len(parts) == 1 {
+		return true
+	}
+	var child map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &child); err != nil {
+		return false
+	}
+	return jsonObjectHasPath(child, parts[1:])
 }
 
 // ─── Merge engine ────────────────────────────────────────────────────────────
@@ -580,12 +608,27 @@ func mergeSubagents(global, project *SagittariusSubagents) *SagittariusSubagents
 	}
 	merged := *global
 	merged.Enabled = overlayPtr(global.Enabled, project.Enabled)
+	merged.Research = mergeSubagentClass(global.Research, project.Research)
+	merged.Coding = mergeSubagentClass(global.Coding, project.Coding)
 	if project.Default.Model != "" {
 		merged.Default = project.Default
 	}
 	if len(project.Named) > 0 {
 		merged.Named = project.Named
 	}
+	return &merged
+}
+
+func mergeSubagentClass(global, project *SagittariusSubagentClass) *SagittariusSubagentClass {
+	if project == nil {
+		return global
+	}
+	if global == nil {
+		return project
+	}
+	merged := *global
+	merged.Enabled = overlayPtr(global.Enabled, project.Enabled)
+	merged.Model = overlayStr(global.Model, project.Model)
 	return &merged
 }
 

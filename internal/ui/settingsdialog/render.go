@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/ui"
 	"github.com/undeadindustries/sagittarius/internal/ui/overlay"
 )
@@ -55,12 +56,12 @@ func (m Model) renderEntry(e SettingEntry, selected bool) string {
 		star = "* "
 	}
 	label := e.Label
-	val := e.Value
-	if val == "" {
-		val = dim.Render("(not set)")
+	val, suffix := settingDisplay(e, m.scopeSel.Scope)
+	if suffix != "" {
+		val += dim.Render(suffix)
 	}
 	row := fmt.Sprintf("%s%-30s %s", star, label, val)
-	if e.MergedValue != "" && e.MergedValue != e.Value && e.MergedValue != "(not set)" {
+	if e.MergedValue != "" && e.MergedValue != e.Value {
 		row += dim.Render(fmt.Sprintf("  [effective: %s]", e.MergedValue))
 	}
 	if e.ReadOnly {
@@ -91,4 +92,26 @@ func (m Model) footerHint() string {
 
 func (m Model) wrap(s string) string {
 	return ui.WrapText(s, overlay.ContentWidth(m.width, overlay.DefaultMinWidth))
+}
+
+const (
+	suffixFromGlobal  = " (from global)"
+	suffixFromProject = " (from project)"
+	suffixDefault     = " (default)"
+)
+
+func settingDisplay(e SettingEntry, scope config.SettingScope) (value, suffix string) {
+	if e.DefinedHere {
+		return e.Value, ""
+	}
+	if e.Inherited {
+		if scope == config.ScopeProject {
+			return e.MergedValue, suffixFromGlobal
+		}
+		return e.MergedValue, suffixFromProject
+	}
+	if e.DefaultValue != "" {
+		return e.DefaultValue, suffixDefault
+	}
+	return "", suffixDefault
 }

@@ -195,9 +195,14 @@ func (m *Manager) CommitWrite(absPath, toolName string) {
 	}
 	m.stack = append(m.stack, c)
 	m.lastAfter[rel] = after
+	// The append stays inside the critical section. Coding subagents commit
+	// writes in parallel, and a change record carries whole file bodies, so two
+	// concurrent O_APPEND encodes can interleave into one corrupt JSONL line.
+	// Holding the lock also closes the window where an append lands between
+	// Undo's truncate and its rewrite, resurrecting a change that was just
+	// reverted.
+	m.appendIndexLocked(c)
 	m.mu.Unlock()
-
-	m.appendIndex(c)
 }
 
 // Diff renders the net unified diff for files changed this session. A non-empty
@@ -417,11 +422,11 @@ func (m *Manager) relPath(absPath string) (string, bool) {
 	return filepath.ToSlash(rel), true
 }
 
-// appendIndex appends one change record to the session JSONL index. A write
-// failure is non-fatal (the in-memory stack still powers /diff and /undo) but
-// is surfaced on stderr-style logging by the caller chain; here we silently
-// best-effort to avoid coupling to a logger.
-func (m *Manager) appendIndex(c change) {
+// appendIndexLocked appends one change record to the session JSONL index. A
+// write failure is non-fatal (the in-memory stack still powers /diff and /undo)
+// but is surfaced on stderr-style logging by the caller chain; here we silently
+// best-effort to avoid coupling to a logger. Caller holds m.mu.
+func (m *Manager) appendIndexLocked(c change) {
 	f, err := os.OpenFile(m.indexPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return

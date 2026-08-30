@@ -64,6 +64,20 @@ validated; unknown keys pass through untouched.
 |-----|------|---------|---------|
 | `scriptToolEnabled` | bool | `false` | Register the `run_script` tool so the model can batch read-only operations (grep, read, list, find_symbol) in one turn instead of one LLM hop per tool. Mutating tools, shell, nested `run_script`, and confirmation-gated tools are rejected. Live-toggled from `/settings`. |
 
+### Subagents (`sagittarius.subagents.*`)
+
+| Key | Type | Default | Purpose |
+|-----|------|---------|---------|
+| `research.enabled` | bool | `false` | Register the `task` tool: read-only children that explore and summarize, isolating a large search from your context window. |
+| `coding.enabled` | bool | `false` | Register the `code_task` tool: write-capable children that each declare the paths they may modify. Siblings run in parallel and overlapping leases are rejected before any child starts. |
+| `research.model` / `coding.model` | string | empty | Model for that class. Empty falls back to `default.model`, then the live model. |
+| `default.model` | string | empty | Model for any subagent class without its own pin. |
+| `enabled` | bool | `false` | Deprecated. Stands in for `research.enabled` when that key is unset; never enables coding subagents. |
+
+Both switches are live-toggled from `/settings`. See [subagents.md](../subagents.md)
+for the lease format, what a coding subagent cannot do, and why approval is a
+single up-front prompt.
+
 ### Goal evaluator (`sagittarius.goal.*`)
 
 | Key | Type | Default | Purpose |

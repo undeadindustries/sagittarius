@@ -2078,9 +2078,7 @@ func (r *Runner) SetRegistry(registry *tools.Registry) {
 
 	registerGoalTools(r, registry)
 	registerGrillTools(r, registry)
-	if config.SubagentsEnabled(r.settingsSnapshot(), nil) {
-		registry.Register(newTaskTool(r))
-	}
+	registerSubagentTools(r, registry, r.settingsSnapshot())
 	registry.Register(newSaveMemoryTool(r))
 
 	r.regMu.Lock()

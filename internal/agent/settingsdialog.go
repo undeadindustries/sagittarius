@@ -7,8 +7,13 @@ import (
 	"strconv"
 
 	"github.com/undeadindustries/sagittarius/internal/config"
+	"github.com/undeadindustries/sagittarius/internal/goal"
+	"github.com/undeadindustries/sagittarius/internal/modes"
+	"github.com/undeadindustries/sagittarius/internal/tools"
 	"github.com/undeadindustries/sagittarius/internal/ui/settingsdialog"
 )
+
+const defaultGoalMaxTurns = 25
 
 // SettingsDialogDeps returns the side-effect adapter the /settings browser uses.
 func (a *App) SettingsDialogDeps() settingsdialog.Deps {
@@ -21,579 +26,275 @@ func (d *settingsDialogDeps) docs() *config.Documents { return d.app.docs }
 
 // ListSettings returns the curated settings list with values drawn from the
 // given scope (not merged). DefinedHere is true when the key exists in that
-// scope's file; MergedValue is what the runtime actually uses.
+// scope's file; MergedValue is the other-scope raw value when inherited.
 func (d *settingsDialogDeps) ListSettings(scope config.SettingScope) []settingsdialog.SettingEntry {
-	docs := d.docs()
+	return listSettings(d.docs(), scope)
+}
+
+func listSettings(docs *config.Documents, scope config.SettingScope) []settingsdialog.SettingEntry {
+	if docs == nil {
+		return nil
+	}
 	scopeSettings := docs.TargetSettings(scope)
-	merged := docs.Merged()
-	if merged == nil {
-		merged = scopeSettings
-	}
+	global := docs.Global
+	project := docs.Project
 
-	notSet := "(not set)"
-
-	boolVal := func(p *bool) string {
-		if p == nil {
-			return notSet
+	row := func(e settingsdialog.SettingEntry, scopePresent, globalPresent, projectPresent string) settingsdialog.SettingEntry {
+		e.DefinedHere = docs.IsDefined(scope, e.Key)
+		if e.DefinedHere {
+			e.Value = scopePresent
 		}
-		if *p {
-			return "true"
+		switch {
+		case docs.IsDefined(config.ScopeProject, e.Key):
+			e.MergedValue = projectPresent
+		case docs.IsDefined(config.ScopeGlobal, e.Key):
+			e.MergedValue = globalPresent
 		}
-		return "false"
+		e.Inherited = e.Value == "" && e.MergedValue != ""
+		return e
 	}
 
-	pruneToolSchemas := func(s *config.Settings) *bool {
-		if s != nil && s.Sagittarius != nil && s.Sagittarius.MCP != nil {
-			return s.Sagittarius.MCP.PruneToolSchemas
-		}
-		return nil
-	}
-	intVal := func(p *int) string {
-		if p == nil {
-			return notSet
-		}
-		return strconv.Itoa(*p)
-	}
-	strVal := func(p *string) string {
-		if p == nil {
-			return notSet
-		}
-		return *p
-	}
-	// --- General ---
-	var maxRounds, maxRoundsMerged string
-	if scopeSettings.Sagittarius != nil {
-		maxRounds = intVal(scopeSettings.Sagittarius.MaxToolRounds)
-	} else {
-		maxRounds = notSet
-	}
-	if merged.Sagittarius != nil {
-		maxRoundsMerged = intVal(merged.Sagittarius.MaxToolRounds)
-	} else {
-		maxRoundsMerged = notSet
-	}
-
-	// --- UI ---
-	scopeUI := scopeSettings.UI()
-	mergedUI := merged.UI()
-	uiDefined := scopeSettings.Raw != nil
-	if _, ok := scopeSettings.Raw["ui"]; !ok {
-		uiDefined = false
-	}
-
-	themeVal := func(s string) string {
-		if s == "" {
-			return notSet
-		}
-		return s
-	}
-
-	// --- Security ---
-	var secEnforce, secEnforceMerged string
-	var secDefined bool
-	if scopeSettings.Security != nil && scopeSettings.Security.ProjectBoundary != nil {
-		secEnforce = boolVal(scopeSettings.Security.ProjectBoundary.Enforce)
-		secDefined = true
-	} else {
-		secEnforce = notSet
-	}
-	if merged.Security != nil && merged.Security.ProjectBoundary != nil {
-		secEnforceMerged = boolVal(merged.Security.ProjectBoundary.Enforce)
-	} else {
-		secEnforceMerged = notSet
-	}
-
-	// --- Snapshots ---
-	var snapEnabled, snapEnabledMerged string
-	var snapMaxBytes, snapMaxBytesMerged string
-	var snapDefined bool
-	if scopeSettings.Sagittarius != nil && scopeSettings.Sagittarius.Snapshots != nil {
-		s := scopeSettings.Sagittarius.Snapshots
-		snapEnabled = boolVal(s.Enabled)
-		snapMaxBytes = intVal(s.MaxFileBytes)
-		snapDefined = true
-	} else {
-		snapEnabled = notSet
-		snapMaxBytes = notSet
-	}
-	if merged.Sagittarius != nil && merged.Sagittarius.Snapshots != nil {
-		s := merged.Sagittarius.Snapshots
-		snapEnabledMerged = boolVal(s.Enabled)
-		snapMaxBytesMerged = intVal(s.MaxFileBytes)
-	} else {
-		snapEnabledMerged = notSet
-		snapMaxBytesMerged = notSet
-	}
-
-	// --- Verify ---
-	var verifyFix, verifyFixMerged string
-	var verifySuggest, verifySuggestMerged string
-	var verifyAutoCheck, verifyAutoCheckMerged string
-	var verifyModuleWide, verifyModuleWideMerged string
-	var verifyTimeout, verifyTimeoutMerged string
-	var verifyRepoLocal, verifyRepoLocalMerged string
-	var verifyEditLoop, verifyEditLoopMerged string
-	var verifyDefined bool
-	if scopeSettings.Sagittarius != nil && scopeSettings.Sagittarius.Verify != nil {
-		v := scopeSettings.Sagittarius.Verify
-		verifyFix = boolVal(v.AllowFix)
-		verifySuggest = boolVal(v.SuggestAfterWrite)
-		verifyAutoCheck = boolVal(v.AutoCheckAfterWrite)
-		verifyModuleWide = boolVal(v.AutoCheckModuleWide)
-		verifyTimeout = intVal(v.AutoCheckTimeoutSeconds)
-		verifyRepoLocal = strVal(v.RepoLocalTools)
-		verifyEditLoop = intVal(v.EditLoopThreshold)
-		verifyDefined = true
-	} else {
-		verifyFix = notSet
-		verifySuggest = notSet
-		verifyAutoCheck = notSet
-		verifyModuleWide = notSet
-		verifyTimeout = notSet
-		verifyRepoLocal = notSet
-		verifyEditLoop = notSet
-	}
-	if merged.Sagittarius != nil && merged.Sagittarius.Verify != nil {
-		v := merged.Sagittarius.Verify
-		verifyFixMerged = boolVal(v.AllowFix)
-		verifySuggestMerged = boolVal(v.SuggestAfterWrite)
-		verifyAutoCheckMerged = boolVal(v.AutoCheckAfterWrite)
-		verifyModuleWideMerged = boolVal(v.AutoCheckModuleWide)
-		verifyTimeoutMerged = intVal(v.AutoCheckTimeoutSeconds)
-		verifyRepoLocalMerged = strVal(v.RepoLocalTools)
-		verifyEditLoopMerged = intVal(v.EditLoopThreshold)
-	} else {
-		verifyFixMerged = notSet
-		verifySuggestMerged = notSet
-		verifyAutoCheckMerged = notSet
-		verifyModuleWideMerged = notSet
-		verifyTimeoutMerged = notSet
-		verifyRepoLocalMerged = notSet
-		verifyEditLoopMerged = notSet
-	}
-	// --- Subagents ---
-	var subEnabled, subEnabledMerged string
-	var subDefined bool
-	if scopeSettings.Sagittarius != nil && scopeSettings.Sagittarius.Subagents != nil {
-		s := scopeSettings.Sagittarius.Subagents
-		subEnabled = boolVal(s.Enabled)
-		subDefined = true
-	} else {
-		subEnabled = notSet
-	}
-	if merged.Sagittarius != nil && merged.Sagittarius.Subagents != nil {
-		s := merged.Sagittarius.Subagents
-		subEnabledMerged = boolVal(s.Enabled)
-	} else {
-		subEnabledMerged = notSet
-	}
-
-	// --- Sessions ---
-	var sessAutoTitle, sessAutoTitleMerged string
-	var sessDefined bool
-	if scopeSettings.Sagittarius != nil && scopeSettings.Sagittarius.Sessions != nil {
-		s := scopeSettings.Sagittarius.Sessions
-		sessAutoTitle = strVal(s.AutoTitle)
-		sessDefined = true
-	} else {
-		sessAutoTitle = notSet
-	}
-	if merged.Sagittarius != nil && merged.Sagittarius.Sessions != nil {
-		s := merged.Sagittarius.Sessions
-		sessAutoTitleMerged = strVal(s.AutoTitle)
-	} else {
-		sessAutoTitleMerged = notSet
-	}
-
-	// --- Edit ---
-	var editEnabled, editEnabledMerged string
-	var editDefined bool
-	if scopeSettings.Sagittarius != nil && scopeSettings.Sagittarius.Edit != nil {
-		s := scopeSettings.Sagittarius.Edit
-		editEnabled = boolVal(s.Enabled)
-		editDefined = true
-	} else {
-		editEnabled = notSet
-	}
-	if merged.Sagittarius != nil && merged.Sagittarius.Edit != nil {
-		s := merged.Sagittarius.Edit
-		editEnabledMerged = boolVal(s.Enabled)
-	} else {
-		editEnabledMerged = notSet
-	}
-
-	// --- Symbols ---
-	var symEnabled, symEnabledMerged string
-	var symGopls, symGoplsMerged string
-	var symDefined bool
-	if scopeSettings.Sagittarius != nil && scopeSettings.Sagittarius.Symbols != nil {
-		s := scopeSettings.Sagittarius.Symbols
-		symEnabled = boolVal(s.Enabled)
-		symGopls = boolVal(s.PreferGopls)
-		symDefined = true
-	} else {
-		symEnabled = notSet
-		symGopls = notSet
-	}
-	if merged.Sagittarius != nil && merged.Sagittarius.Symbols != nil {
-		s := merged.Sagittarius.Symbols
-		symEnabledMerged = boolVal(s.Enabled)
-		symGoplsMerged = boolVal(s.PreferGopls)
-	} else {
-		symEnabledMerged = notSet
-		symGoplsMerged = notSet
-	}
-
-	// --- Goal ---
-	var goalMaxTurns, goalMaxTurnsMerged string
-	var goalEvalProvider, goalEvalProviderMerged string
-	var goalEvalModel, goalEvalModelMerged string
-	var goalEvalTimeout, goalEvalTimeoutMerged string
-	var goalDefined bool
-	goalStr := func(s string) string {
-		if s == "" {
-			return notSet
-		}
-		return s
-	}
-	if scopeSettings.Sagittarius != nil && scopeSettings.Sagittarius.Goal != nil {
-		g := scopeSettings.Sagittarius.Goal
-		goalMaxTurns = intVal(g.MaxTurns)
-		goalEvalProvider = goalStr(g.EvaluatorProvider)
-		goalEvalModel = goalStr(g.EvaluatorModel)
-		goalEvalTimeout = intVal(g.EvaluatorTimeout)
-		goalDefined = true
-	} else {
-		goalMaxTurns = notSet
-		goalEvalProvider = notSet
-		goalEvalModel = notSet
-		goalEvalTimeout = notSet
-	}
-	if merged.Sagittarius != nil && merged.Sagittarius.Goal != nil {
-		g := merged.Sagittarius.Goal
-		goalMaxTurnsMerged = intVal(g.MaxTurns)
-		goalEvalProviderMerged = goalStr(g.EvaluatorProvider)
-		goalEvalModelMerged = goalStr(g.EvaluatorModel)
-		goalEvalTimeoutMerged = intVal(g.EvaluatorTimeout)
-	} else {
-		goalMaxTurnsMerged = notSet
-		goalEvalProviderMerged = notSet
-		goalEvalModelMerged = notSet
-		goalEvalTimeoutMerged = notSet
-	}
-
-	sagDefined := scopeSettings.Sagittarius != nil
-
-	contextLimitPreferDiscovered := func(s *config.Settings) *bool {
-		if s != nil && s.Sagittarius != nil {
-			return s.Sagittarius.ContextLimitPreferDiscovered
-		}
-		return nil
-	}
-	scriptToolEnabled := func(s *config.Settings) *bool {
-		if s != nil && s.Sagittarius != nil {
-			return s.Sagittarius.ScriptToolEnabled
-		}
-		return nil
-	}
-
-	modeVal := func(m string) string {
-		if m == "" {
-			return notSet
-		}
-		return m
-	}
-	var scopeDefaultMode, mergedDefaultMode string
-	if sagDefined {
-		scopeDefaultMode = scopeSettings.Sagittarius.DefaultMode
-	}
-	if merged.Sagittarius != nil {
-		mergedDefaultMode = merged.Sagittarius.DefaultMode
+	if global == nil {
+		global = &config.Settings{}
 	}
 
 	return []settingsdialog.SettingEntry{
 		{Label: "General", Kind: settingsdialog.KindHeader},
-		{
-			Key:         "sagittarius.maxToolRounds",
-			Label:       "Max tool rounds",
-			Description: "Maximum number of tool-use rounds per turn (0 = unlimited)",
-			Value:       maxRounds,
-			DefinedHere: sagDefined && scopeSettings.Sagittarius.MaxToolRounds != nil,
-			MergedValue: maxRoundsMerged,
-			Kind:        settingsdialog.KindInt,
-		},
-		{
-			Key:         "sagittarius.contextLimitPreferDiscovered",
-			Label:       "Prefer discovered context limits",
-			Description: "Ignore manual pins and use API-reported limits (context_length)",
-			Value:       boolVal(contextLimitPreferDiscovered(scopeSettings)),
-			DefinedHere: sagDefined && scopeSettings.Sagittarius.ContextLimitPreferDiscovered != nil,
-			MergedValue: boolVal(contextLimitPreferDiscovered(merged)),
-			Kind:        settingsdialog.KindBool,
-		},
-		{
-			Key:         "sagittarius.defaultMode",
-			Label:       "Default interaction mode",
-			Description: "Interaction mode a new session starts in (compiled-in fallback is agent)",
-			Value:       modeVal(scopeDefaultMode),
-			DefinedHere: sagDefined && scopeDefaultMode != "",
-			MergedValue: modeVal(mergedDefaultMode),
-			Kind:        settingsdialog.KindEnum,
-			Choices:     []string{"agent", "plan", "ask", "debug"},
-		},
+		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.maxToolRounds",
+			Label:        "Max tool rounds",
+			Description:  "Maximum number of tool-use rounds per turn (0 = unlimited)",
+			DefaultValue: strconv.Itoa(config.ResolveMaxToolRounds(nil, tools.MaxToolRounds)),
+			Kind:         settingsdialog.KindInt,
+		}, sagMaxRounds(scopeSettings), sagMaxRounds(global), sagMaxRounds(project)),
+		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.contextLimitPreferDiscovered",
+			Label:        "Prefer discovered context limits",
+			Description:  "Ignore manual pins and use API-reported limits (context_length)",
+			DefaultValue: fmtBool(config.ResolveContextLimitPreferDiscovered(nil)),
+			Kind:         settingsdialog.KindBool,
+		}, sagPreferDiscovered(scopeSettings), sagPreferDiscovered(global), sagPreferDiscovered(project)),
+		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.defaultMode",
+			Label:        "Default interaction mode",
+			Description:  "Interaction mode a new session starts in (compiled-in fallback is agent)",
+			DefaultValue: modes.DefaultFromSettings(nil).String(),
+			Kind:         settingsdialog.KindEnum,
+			Choices:      []string{"agent", "plan", "ask", "debug"},
+		}, sagDefaultMode(scopeSettings), sagDefaultMode(global), sagDefaultMode(project)),
 
 		{Label: "UI", Kind: settingsdialog.KindHeader},
-		{
-			Key:         "ui.theme",
-			Label:       "Theme",
-			Description: "Color theme: default (purple) or greyscale",
-			Value:       themeVal(scopeUI.Theme),
-			DefinedHere: uiDefined && scopeUI.Theme != "",
-			MergedValue: themeVal(mergedUI.Theme),
-			Kind:        settingsdialog.KindEnum,
-			Choices:     []string{"default", "greyscale"},
-		},
-		{
-			Key:         "ui.showThinking",
-			Label:       "Show thinking box",
-			Description: "Show the reasoning/thinking box when the model supports it",
-			Value:       strconv.FormatBool(scopeUI.ShowThinking),
-			DefinedHere: uiDefined,
-			MergedValue: strconv.FormatBool(mergedUI.ShowThinking),
-			Kind:        settingsdialog.KindBool,
-		},
-		{
-			Key:         "ui.hideBanner",
-			Label:       "Hide launch banner",
-			Description: "Suppress the ASCII art banner at startup",
-			Value:       strconv.FormatBool(scopeUI.HideBanner),
-			DefinedHere: uiDefined,
-			MergedValue: strconv.FormatBool(mergedUI.HideBanner),
-			Kind:        settingsdialog.KindBool,
-		},
-		{
-			Key:         "ui.toolkitChecklistDismissed",
-			Label:       "Dismiss toolkit checklist",
-			Description: "Never show the host toolkit checklist on startup",
-			Value:       strconv.FormatBool(scopeUI.ToolkitChecklistDismissed),
-			DefinedHere: uiDefined,
-			MergedValue: strconv.FormatBool(mergedUI.ToolkitChecklistDismissed),
-			Kind:        settingsdialog.KindBool,
-		},
-		{
-			Key:         "ui.escapeAtOnPaste",
-			Label:       "Escape @ on paste",
-			Description: "Auto-escape @ to \\@ when pasting into composer to prevent unwanted file expansion",
-			Value:       strconv.FormatBool(scopeUI.EscapeAtOnPaste),
-			DefinedHere: uiDefined,
-			MergedValue: strconv.FormatBool(mergedUI.EscapeAtOnPaste),
-			Kind:        settingsdialog.KindBool,
-		},
+		row(settingsdialog.SettingEntry{
+			Key:          "ui.theme",
+			Label:        "Theme",
+			Description:  "Color theme: default (purple) or greyscale",
+			DefaultValue: "default",
+			Kind:         settingsdialog.KindEnum,
+			Choices:      []string{"default", "greyscale"},
+		}, scopeSettings.UI().Theme, global.UI().Theme, projectUITheme(project)),
+		row(settingsdialog.SettingEntry{
+			Key:          "ui.showThinking",
+			Label:        "Show thinking box",
+			Description:  "Show the reasoning/thinking box when the model supports it",
+			DefaultValue: fmtBool(config.ResolveShowThinking(nil, "", "")),
+			Kind:         settingsdialog.KindBool,
+		}, uiBool(scopeSettings, "showThinking"), uiBool(global, "showThinking"), uiBool(project, "showThinking")),
+		row(settingsdialog.SettingEntry{
+			Key:          "ui.hideBanner",
+			Label:        "Hide launch banner",
+			Description:  "Suppress the ASCII art banner at startup",
+			DefaultValue: "false",
+			Kind:         settingsdialog.KindBool,
+		}, uiBool(scopeSettings, "hideBanner"), uiBool(global, "hideBanner"), uiBool(project, "hideBanner")),
+		row(settingsdialog.SettingEntry{
+			Key:          "ui.toolkitChecklistDismissed",
+			Label:        "Dismiss toolkit checklist",
+			Description:  "Never show the host toolkit checklist on startup",
+			DefaultValue: "false",
+			Kind:         settingsdialog.KindBool,
+		}, uiBool(scopeSettings, "toolkitChecklistDismissed"), uiBool(global, "toolkitChecklistDismissed"), uiBool(project, "toolkitChecklistDismissed")),
+		row(settingsdialog.SettingEntry{
+			Key:          "ui.escapeAtOnPaste",
+			Label:        "Escape @ on paste",
+			Description:  "Auto-escape @ to \\@ when pasting into composer to prevent unwanted file expansion",
+			DefaultValue: "false",
+			Kind:         settingsdialog.KindBool,
+		}, uiBool(scopeSettings, "escapeAtOnPaste"), uiBool(global, "escapeAtOnPaste"), uiBool(project, "escapeAtOnPaste")),
 
 		{Label: "Security", Kind: settingsdialog.KindHeader},
-		{
-			Key:         "security.projectBoundary.enforce",
-			Label:       "Project boundary",
-			Description: "Prevent file writes and risky shell commands outside the project root",
-			Value:       secEnforce,
-			DefinedHere: secDefined,
-			MergedValue: secEnforceMerged,
-			Kind:        settingsdialog.KindBool,
-		},
+		row(settingsdialog.SettingEntry{
+			Key:          "security.projectBoundary.enforce",
+			Label:        "Project boundary",
+			Description:  "Prevent file writes and risky shell commands outside the project root",
+			DefaultValue: fmtBool(config.ProjectBoundaryEnforced(nil, nil)),
+			Kind:         settingsdialog.KindBool,
+		}, boundaryEnforce(scopeSettings), boundaryEnforce(global), boundaryEnforce(project)),
 
 		{Label: "Snapshots", Kind: settingsdialog.KindHeader},
-		{
-			Key:         "sagittarius.snapshots.enabled",
-			Label:       "Snapshots enabled",
-			Description: "Capture file snapshots before write_file for /diff and /undo",
-			Value:       snapEnabled,
-			DefinedHere: snapDefined,
-			MergedValue: snapEnabledMerged,
-			Kind:        settingsdialog.KindBool,
-		},
-		{
-			Key:         "sagittarius.snapshots.maxFileBytes",
-			Label:       "Snapshot max file size",
-			Description: "Maximum file size to snapshot (bytes; 0 = no limit)",
-			Value:       snapMaxBytes,
-			DefinedHere: snapDefined,
-			MergedValue: snapMaxBytesMerged,
-			Kind:        settingsdialog.KindInt,
-		},
+		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.snapshots.enabled",
+			Label:        "Snapshots enabled",
+			Description:  "Capture file snapshots before write_file for /diff and /undo",
+			DefaultValue: fmtBool(config.SnapshotsEnabled(nil, nil)),
+			Kind:         settingsdialog.KindBool,
+		}, snapEnabled(scopeSettings), snapEnabled(global), snapEnabled(project)),
+		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.snapshots.maxFileBytes",
+			Label:        "Snapshot max file size",
+			Description:  "Maximum file size to snapshot (bytes; 0 = no limit)",
+			DefaultValue: strconv.Itoa(config.SnapshotMaxFileBytes(nil, nil)),
+			Kind:         settingsdialog.KindInt,
+		}, snapMaxBytes(scopeSettings), snapMaxBytes(global), snapMaxBytes(project)),
 
 		{Label: "Verify", Kind: settingsdialog.KindHeader},
-		{
-			Key:         "sagittarius.verify.allowFix",
-			Label:       "Allow fix mode",
-			Description: "Allow run_project_checks to apply auto-fixes (mutates files)",
-			Value:       verifyFix,
-			DefinedHere: verifyDefined,
-			MergedValue: verifyFixMerged,
-			Kind:        settingsdialog.KindBool,
-		},
-		{
-			Key:         "sagittarius.verify.suggestAfterWrite",
-			Label:       "Suggest verify after write",
-			Description: "Emit a one-line hint to run checks after write_file edits",
-			Value:       verifySuggest,
-			DefinedHere: verifyDefined,
-			MergedValue: verifySuggestMerged,
-			Kind:        settingsdialog.KindBool,
-		},
-		{
-			Key:         "sagittarius.verify.autoCheckAfterWrite",
-			Label:       "Auto-check after write",
-			Description: "Automatically run read-only lint/format checks on files after edits",
-			Value:       verifyAutoCheck,
-			DefinedHere: verifyDefined,
-			MergedValue: verifyAutoCheckMerged,
-			Kind:        settingsdialog.KindBool,
-		},
-		{
-			Key:         "sagittarius.verify.autoCheckModuleWide",
-			Label:       "Auto-check module-wide",
-			Description: "Include whole-module checks (vet, tsc) in automatic post-write checks",
-			Value:       verifyModuleWide,
-			DefinedHere: verifyDefined,
-			MergedValue: verifyModuleWideMerged,
-			Kind:        settingsdialog.KindBool,
-		},
-		{
-			Key:         "sagittarius.verify.autoCheckTimeoutSeconds",
-			Label:       "Auto-check timeout (sec)",
-			Description: "Maximum time allowed for post-write checks before aborting",
-			Value:       verifyTimeout,
-			DefinedHere: verifyDefined,
-			MergedValue: verifyTimeoutMerged,
-			Kind:        settingsdialog.KindInt,
-		},
-		{
-			Key:         "sagittarius.verify.repoLocalTools",
-			Label:       "Repo-local tools policy",
-			Description: "Policy for running repo-local linters (e.g. node_modules/.bin)",
-			Value:       verifyRepoLocal,
-			DefinedHere: verifyDefined,
-			MergedValue: verifyRepoLocalMerged,
-			Kind:        settingsdialog.KindEnum,
-			Choices:     []string{"prompt", "allow", "deny"},
-		},
-		{
-			Key:         "sagittarius.verify.editLoopThreshold",
-			Label:       "Edit loop threshold",
-			Description: "Number of failing edits to a single file before triggering a stop-and-re-evaluate nudge (0 to disable)",
-			Value:       verifyEditLoop,
-			DefinedHere: verifyDefined,
-			MergedValue: verifyEditLoopMerged,
-			Kind:        settingsdialog.KindInt,
-		},
+		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.verify.allowFix",
+			Label:        "Allow fix mode",
+			Description:  "Allow run_project_checks to apply auto-fixes (mutates files)",
+			DefaultValue: fmtBool(config.VerifyAllowFix(nil, nil)),
+			Kind:         settingsdialog.KindBool,
+		}, verifyAllowFix(scopeSettings), verifyAllowFix(global), verifyAllowFix(project)),
+		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.verify.suggestAfterWrite",
+			Label:        "Suggest verify after write",
+			Description:  "Emit a one-line hint to run checks after write_file edits",
+			DefaultValue: fmtBool(config.VerifySuggestAfterWrite(nil, nil)),
+			Kind:         settingsdialog.KindBool,
+		}, verifySuggest(scopeSettings), verifySuggest(global), verifySuggest(project)),
+		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.verify.autoCheckAfterWrite",
+			Label:        "Auto-check after write",
+			Description:  "Automatically run read-only lint/format checks on files after edits",
+			DefaultValue: fmtBool(config.VerifyAutoCheckAfterWrite(nil, nil)),
+			Kind:         settingsdialog.KindBool,
+		}, verifyAutoCheck(scopeSettings), verifyAutoCheck(global), verifyAutoCheck(project)),
+		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.verify.autoCheckModuleWide",
+			Label:        "Auto-check module-wide",
+			Description:  "Include whole-module checks (vet, tsc) in automatic post-write checks",
+			DefaultValue: fmtBool(config.VerifyAutoCheckModuleWide(nil, nil)),
+			Kind:         settingsdialog.KindBool,
+		}, verifyModuleWide(scopeSettings), verifyModuleWide(global), verifyModuleWide(project)),
+		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.verify.autoCheckTimeoutSeconds",
+			Label:        "Auto-check timeout (sec)",
+			Description:  "Maximum time allowed for post-write checks before aborting",
+			DefaultValue: strconv.Itoa(config.VerifyAutoCheckTimeoutSeconds(nil, nil)),
+			Kind:         settingsdialog.KindInt,
+		}, verifyTimeout(scopeSettings), verifyTimeout(global), verifyTimeout(project)),
+		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.verify.repoLocalTools",
+			Label:        "Repo-local tools policy",
+			Description:  "Policy for running repo-local linters (e.g. node_modules/.bin)",
+			DefaultValue: string(config.VerifyRepoLocalTools(nil, nil)),
+			Kind:         settingsdialog.KindEnum,
+			Choices:      []string{"prompt", "allow", "deny"},
+		}, verifyRepoLocal(scopeSettings), verifyRepoLocal(global), verifyRepoLocal(project)),
+		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.verify.editLoopThreshold",
+			Label:        "Edit loop threshold",
+			Description:  "Number of failing edits to a single file before triggering a stop-and-re-evaluate nudge (0 to disable)",
+			DefaultValue: strconv.Itoa(config.VerifyEditLoopThreshold(nil, nil)),
+			Kind:         settingsdialog.KindInt,
+		}, verifyEditLoop(scopeSettings), verifyEditLoop(global), verifyEditLoop(project)),
 
 		{Label: "Goal", Kind: settingsdialog.KindHeader},
-		{
-			Key:         "sagittarius.goal.maxTurns",
-			Label:       "Max goal turns",
-			Description: "Cap on autonomous /goal loop iterations (default 25)",
-			Value:       goalMaxTurns,
-			DefinedHere: goalDefined && scopeSettings.Sagittarius.Goal.MaxTurns != nil,
-			MergedValue: goalMaxTurnsMerged,
-			Kind:        settingsdialog.KindInt,
-		},
-		{
+		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.goal.maxTurns",
+			Label:        "Max goal turns",
+			Description:  "Cap on autonomous /goal loop iterations (default 25)",
+			DefaultValue: strconv.Itoa(defaultGoalMaxTurns),
+			Kind:         settingsdialog.KindInt,
+		}, goalMaxTurns(scopeSettings), goalMaxTurns(global), goalMaxTurns(project)),
+		row(settingsdialog.SettingEntry{
 			Key:         "sagittarius.goal.evaluatorProvider",
 			Label:       "Evaluator provider",
 			Description: "Provider for the /goal judge. Prefer a different family from the worker — same-family models share self-approval. Empty uses the worker.",
-			Value:       goalEvalProvider,
-			DefinedHere: goalDefined && scopeSettings.Sagittarius.Goal.EvaluatorProvider != "",
-			MergedValue: goalEvalProviderMerged,
 			Kind:        settingsdialog.KindString,
-		},
-		{
+		}, goalEvalProvider(scopeSettings), goalEvalProvider(global), goalEvalProvider(project)),
+		row(settingsdialog.SettingEntry{
 			Key:         "sagittarius.goal.evaluatorModel",
 			Label:       "Evaluator model",
 			Description: "Model that judges goal completion. Prefer a different family from your worker — it catches self-approval a same-family model shares. Stronger helps; empty means the worker grades its own work.",
-			Value:       goalEvalModel,
-			DefinedHere: goalDefined && scopeSettings.Sagittarius.Goal.EvaluatorModel != "",
-			MergedValue: goalEvalModelMerged,
 			Kind:        settingsdialog.KindString,
-		},
-		{
-			Key:         "sagittarius.goal.evaluatorTimeout",
-			Label:       "Evaluator timeout (sec)",
-			Description: "Cap on the judge's tool loop (default 120)",
-			Value:       goalEvalTimeout,
-			DefinedHere: goalDefined && scopeSettings.Sagittarius.Goal.EvaluatorTimeout != nil,
-			MergedValue: goalEvalTimeoutMerged,
-			Kind:        settingsdialog.KindInt,
-		},
+		}, goalEvalModel(scopeSettings), goalEvalModel(global), goalEvalModel(project)),
+		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.goal.evaluatorTimeout",
+			Label:        "Evaluator timeout (sec)",
+			Description:  "Cap on the judge's tool loop (default 120)",
+			DefaultValue: strconv.Itoa(goal.DefaultEvaluatorTimeoutSeconds),
+			Kind:         settingsdialog.KindInt,
+		}, goalEvalTimeout(scopeSettings), goalEvalTimeout(global), goalEvalTimeout(project)),
 
 		{Label: "Subagents", Kind: settingsdialog.KindHeader},
-		{
-			Key:         "sagittarius.subagents.enabled",
-			Label:       "Research subagents (task)",
-			Description: "Enable the task tool for launching read-only context-isolated research subagents (default off)",
-			Value:       subEnabled,
-			DefinedHere: subDefined,
-			MergedValue: subEnabledMerged,
-			Kind:        settingsdialog.KindBool,
-		},
-		{
-			Key:         "sagittarius.scriptToolEnabled",
-			Label:       "Script collapsing (run_script)",
-			Description: "Enable run_script to batch read-only tools in one turn (default off)",
-			Value:       boolVal(scriptToolEnabled(scopeSettings)),
-			DefinedHere: sagDefined && scopeSettings.Sagittarius.ScriptToolEnabled != nil,
-			MergedValue: boolVal(scriptToolEnabled(merged)),
-			Kind:        settingsdialog.KindBool,
-		},
+		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.subagents.research.enabled",
+			Label:        "Research subagents (task)",
+			Description:  "Enable the task tool for launching read-only context-isolated research subagents (default off)",
+			DefaultValue: fmtBool(config.ResearchSubagentsEnabled(nil, nil)),
+			Kind:         settingsdialog.KindBool,
+		}, subResearchEnabled(scopeSettings), subResearchEnabled(global), subResearchEnabled(project)),
+		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.subagents.coding.enabled",
+			Label:        "Coding subagents (code_task)",
+			Description:  "Enable the code_task tool for launching write-capable subagents. Each declares the paths it may write and siblings run in parallel, so a wrong lease is a wrong edit (default off)",
+			DefaultValue: fmtBool(config.CodingSubagentsEnabled(nil, nil)),
+			Kind:         settingsdialog.KindBool,
+		}, subCodingEnabled(scopeSettings), subCodingEnabled(global), subCodingEnabled(project)),
+		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.subagents.enabled",
+			Label:        "Subagents (deprecated alias)",
+			Description:  "Old single switch. It now only stands in for research subagents when the research row above is unset, and never enables coding subagents",
+			DefaultValue: fmtBool(false),
+			Kind:         settingsdialog.KindBool,
+		}, subEnabled(scopeSettings), subEnabled(global), subEnabled(project)),
+		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.scriptToolEnabled",
+			Label:        "Script collapsing (run_script)",
+			Description:  "Enable run_script to batch read-only tools in one turn (default off)",
+			DefaultValue: fmtBool(config.ScriptToolEnabled(nil, nil)),
+			Kind:         settingsdialog.KindBool,
+		}, scriptEnabled(scopeSettings), scriptEnabled(global), scriptEnabled(project)),
 		{Label: "Sessions", Kind: settingsdialog.KindHeader},
-		{
-			Key:         "sagittarius.sessions.autoTitle",
-			Label:       "Auto-title sessions",
-			Description: "Title the conversation after the first exchange: prompt (confirm), auto (silent), or off",
-			Value:       sessAutoTitle,
-			DefinedHere: sessDefined,
-			MergedValue: sessAutoTitleMerged,
-			Kind:        settingsdialog.KindEnum,
-			Choices:     []string{"prompt", "auto", "off"},
-		},
+		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.sessions.autoTitle",
+			Label:        "Auto-title sessions",
+			Description:  "Title the conversation after the first exchange: prompt (confirm), auto (silent), or off",
+			DefaultValue: string(config.SessionsAutoTitle(nil, nil)),
+			Kind:         settingsdialog.KindEnum,
+			Choices:      []string{"prompt", "auto", "off"},
+		}, sessAutoTitle(scopeSettings), sessAutoTitle(global), sessAutoTitle(project)),
 		{Label: "Edit Tool", Kind: settingsdialog.KindHeader},
-		{
-			Key:         "sagittarius.edit.enabled",
-			Label:       "Edit file (edit)",
-			Description: "Register the edit tool (default on; off to fall back to full write_file only)",
-			Value:       editEnabled,
-			DefinedHere: editDefined,
-			MergedValue: editEnabledMerged,
-			Kind:        settingsdialog.KindBool,
-		},
+		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.edit.enabled",
+			Label:        "Edit file (edit)",
+			Description:  "Register the edit tool (default on; off to fall back to full write_file only)",
+			DefaultValue: fmtBool(config.EditEnabled(nil, nil)),
+			Kind:         settingsdialog.KindBool,
+		}, editEnabled(scopeSettings), editEnabled(global), editEnabled(project)),
 		{Label: "Symbols", Kind: settingsdialog.KindHeader},
-		{
-			Key:         "sagittarius.symbols.enabled",
-			Label:       "Symbol navigation (find_symbol)",
-			Description: "Register the find_symbol code-navigation tool (default on; off to use an external MCP)",
-			Value:       symEnabled,
-			DefinedHere: symDefined,
-			MergedValue: symEnabledMerged,
-			Kind:        settingsdialog.KindBool,
-		},
-		{
-			Key:         "sagittarius.symbols.preferGopls",
-			Label:       "Prefer gopls for Go",
-			Description: "Note gopls MCP tools in find_symbol's description on Go modules (prompt-only)",
-			Value:       symGopls,
-			DefinedHere: symDefined,
-			MergedValue: symGoplsMerged,
-			Kind:        settingsdialog.KindBool,
-		},
+		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.symbols.enabled",
+			Label:        "Symbol navigation (find_symbol)",
+			Description:  "Register the find_symbol code-navigation tool (default on; off to use an external MCP)",
+			DefaultValue: fmtBool(config.SymbolsEnabled(nil, nil)),
+			Kind:         settingsdialog.KindBool,
+		}, symbolsEnabled(scopeSettings), symbolsEnabled(global), symbolsEnabled(project)),
+		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.symbols.preferGopls",
+			Label:        "Prefer gopls for Go",
+			Description:  "Note gopls MCP tools in find_symbol's description on Go modules (prompt-only)",
+			DefaultValue: fmtBool(config.SymbolsPreferGopls(nil, nil)),
+			Kind:         settingsdialog.KindBool,
+		}, symbolsPreferGopls(scopeSettings), symbolsPreferGopls(global), symbolsPreferGopls(project)),
 		{Label: "MCP", Kind: settingsdialog.KindHeader},
-		{
-			Key:         "sagittarius.mcp.pruneToolSchemas",
-			Label:       "Prune tool schemas",
-			Description: "Truncate descriptions of MCP tools sent to the model to save tokens",
-			Value:       boolVal(pruneToolSchemas(scopeSettings)),
-			DefinedHere: sagDefined && scopeSettings.Sagittarius.MCP != nil && scopeSettings.Sagittarius.MCP.PruneToolSchemas != nil,
-			MergedValue: boolVal(pruneToolSchemas(merged)),
-			Kind:        settingsdialog.KindBool,
-		},
+		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.mcp.pruneToolSchemas",
+			Label:        "Prune tool schemas",
+			Description:  "Truncate descriptions of MCP tools sent to the model to save tokens",
+			DefaultValue: fmtBool(config.PruneToolSchemasEnabled(nil, nil)),
+			Kind:         settingsdialog.KindBool,
+		}, pruneSchemas(scopeSettings), pruneSchemas(global), pruneSchemas(project)),
 	}
 }
 
@@ -850,6 +551,13 @@ func applySettingValue(s *config.Settings, key, value string) error {
 			s.Sagittarius.Subagents = &config.SagittariusSubagents{}
 		}
 		s.Sagittarius.Subagents.Enabled = &b
+	case "sagittarius.subagents.research.enabled", "sagittarius.subagents.coding.enabled":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("enabled must be true/false: %w", err)
+		}
+		cls := subagentClassSlot(s, key)
+		cls.Enabled = &b
 	case "sagittarius.edit.enabled":
 		b, err := strconv.ParseBool(value)
 		if err != nil {
@@ -962,15 +670,13 @@ func clearSettingValue(s *config.Settings, key string) error {
 			return err
 		}
 	case "ui.showThinking":
-		if err := s.SetUIShowThinking(false); err != nil {
-			return err
-		}
+		return s.ClearUIField("showThinking")
 	case "ui.hideBanner":
-		return setUIBoolField(s, "hideBanner", false)
+		return s.ClearUIField("hideBanner")
 	case "ui.toolkitChecklistDismissed":
-		return s.SetUIToolkitChecklistDismissed(false)
+		return s.ClearUIField("toolkitChecklistDismissed")
 	case "ui.escapeAtOnPaste":
-		return s.SetUIEscapeAtOnPaste(false)
+		return s.ClearUIField("escapeAtOnPaste")
 	case "security.projectBoundary.enforce":
 		if s.Security != nil && s.Security.ProjectBoundary != nil {
 			s.Security.ProjectBoundary.Enforce = nil
@@ -1014,6 +720,14 @@ func clearSettingValue(s *config.Settings, key string) error {
 	case "sagittarius.subagents.enabled":
 		if s.Sagittarius != nil && s.Sagittarius.Subagents != nil {
 			s.Sagittarius.Subagents.Enabled = nil
+		}
+	case "sagittarius.subagents.research.enabled":
+		if cls := existingSubagentClass(s, config.SubagentResearch); cls != nil {
+			cls.Enabled = nil
+		}
+	case "sagittarius.subagents.coding.enabled":
+		if cls := existingSubagentClass(s, config.SubagentCoding); cls != nil {
+			cls.Enabled = nil
 		}
 	case "sagittarius.edit.enabled":
 		if s.Sagittarius != nil && s.Sagittarius.Edit != nil {
@@ -1069,4 +783,298 @@ func ensureGoalConfig(s *config.Settings) *config.SagittariusGoalConfig {
 		s.Sagittarius.Goal = &config.SagittariusGoalConfig{}
 	}
 	return s.Sagittarius.Goal
+}
+
+func fmtBool(b bool) string { return strconv.FormatBool(b) }
+
+func fmtPtrBool(p *bool) string {
+	if p == nil {
+		return ""
+	}
+	return strconv.FormatBool(*p)
+}
+
+func fmtPtrInt(p *int) string {
+	if p == nil {
+		return ""
+	}
+	return strconv.Itoa(*p)
+}
+
+func fmtPtrStr(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
+
+func sagOf(s *config.Settings) *config.SagittariusSettings {
+	if s == nil {
+		return nil
+	}
+	return s.Sagittarius
+}
+
+func sagMaxRounds(s *config.Settings) string {
+	if sag := sagOf(s); sag != nil {
+		return fmtPtrInt(sag.MaxToolRounds)
+	}
+	return ""
+}
+
+func sagPreferDiscovered(s *config.Settings) string {
+	if sag := sagOf(s); sag != nil {
+		return fmtPtrBool(sag.ContextLimitPreferDiscovered)
+	}
+	return ""
+}
+
+func sagDefaultMode(s *config.Settings) string {
+	if sag := sagOf(s); sag != nil {
+		return sag.DefaultMode
+	}
+	return ""
+}
+
+func projectUITheme(s *config.Settings) string {
+	if s == nil {
+		return ""
+	}
+	return s.UI().Theme
+}
+
+func uiBool(s *config.Settings, field string) string {
+	if s == nil {
+		return ""
+	}
+	ui := s.UI()
+	switch field {
+	case "showThinking":
+		return fmtBool(ui.ShowThinking)
+	case "hideBanner":
+		return fmtBool(ui.HideBanner)
+	case "toolkitChecklistDismissed":
+		return fmtBool(ui.ToolkitChecklistDismissed)
+	case "escapeAtOnPaste":
+		return fmtBool(ui.EscapeAtOnPaste)
+	default:
+		return ""
+	}
+}
+
+func boundaryEnforce(s *config.Settings) string {
+	if s == nil || s.Security == nil || s.Security.ProjectBoundary == nil {
+		return ""
+	}
+	return fmtPtrBool(s.Security.ProjectBoundary.Enforce)
+}
+
+func snapCfg(s *config.Settings) *config.SagittariusSnapshotConfig {
+	if sag := sagOf(s); sag != nil {
+		return sag.Snapshots
+	}
+	return nil
+}
+
+func snapEnabled(s *config.Settings) string {
+	if c := snapCfg(s); c != nil {
+		return fmtPtrBool(c.Enabled)
+	}
+	return ""
+}
+
+func snapMaxBytes(s *config.Settings) string {
+	if c := snapCfg(s); c != nil {
+		return fmtPtrInt(c.MaxFileBytes)
+	}
+	return ""
+}
+
+func verifyCfg(s *config.Settings) *config.SagittariusVerifyConfig {
+	if sag := sagOf(s); sag != nil {
+		return sag.Verify
+	}
+	return nil
+}
+
+func verifyAllowFix(s *config.Settings) string {
+	if c := verifyCfg(s); c != nil {
+		return fmtPtrBool(c.AllowFix)
+	}
+	return ""
+}
+
+func verifySuggest(s *config.Settings) string {
+	if c := verifyCfg(s); c != nil {
+		return fmtPtrBool(c.SuggestAfterWrite)
+	}
+	return ""
+}
+
+func verifyAutoCheck(s *config.Settings) string {
+	if c := verifyCfg(s); c != nil {
+		return fmtPtrBool(c.AutoCheckAfterWrite)
+	}
+	return ""
+}
+
+func verifyModuleWide(s *config.Settings) string {
+	if c := verifyCfg(s); c != nil {
+		return fmtPtrBool(c.AutoCheckModuleWide)
+	}
+	return ""
+}
+
+func verifyTimeout(s *config.Settings) string {
+	if c := verifyCfg(s); c != nil {
+		return fmtPtrInt(c.AutoCheckTimeoutSeconds)
+	}
+	return ""
+}
+
+func verifyRepoLocal(s *config.Settings) string {
+	if c := verifyCfg(s); c != nil {
+		return fmtPtrStr(c.RepoLocalTools)
+	}
+	return ""
+}
+
+func verifyEditLoop(s *config.Settings) string {
+	if c := verifyCfg(s); c != nil {
+		return fmtPtrInt(c.EditLoopThreshold)
+	}
+	return ""
+}
+
+func goalCfg(s *config.Settings) *config.SagittariusGoalConfig {
+	if sag := sagOf(s); sag != nil {
+		return sag.Goal
+	}
+	return nil
+}
+
+func goalMaxTurns(s *config.Settings) string {
+	if c := goalCfg(s); c != nil {
+		return fmtPtrInt(c.MaxTurns)
+	}
+	return ""
+}
+
+func goalEvalProvider(s *config.Settings) string {
+	if c := goalCfg(s); c != nil {
+		return c.EvaluatorProvider
+	}
+	return ""
+}
+
+func goalEvalModel(s *config.Settings) string {
+	if c := goalCfg(s); c != nil {
+		return c.EvaluatorModel
+	}
+	return ""
+}
+
+func goalEvalTimeout(s *config.Settings) string {
+	if c := goalCfg(s); c != nil {
+		return fmtPtrInt(c.EvaluatorTimeout)
+	}
+	return ""
+}
+
+func subEnabled(s *config.Settings) string {
+	if sag := sagOf(s); sag != nil && sag.Subagents != nil {
+		return fmtPtrBool(sag.Subagents.Enabled)
+	}
+	return ""
+}
+
+func subResearchEnabled(s *config.Settings) string {
+	if cls := existingSubagentClass(s, config.SubagentResearch); cls != nil {
+		return fmtPtrBool(cls.Enabled)
+	}
+	return ""
+}
+
+func subCodingEnabled(s *config.Settings) string {
+	if cls := existingSubagentClass(s, config.SubagentCoding); cls != nil {
+		return fmtPtrBool(cls.Enabled)
+	}
+	return ""
+}
+
+// existingSubagentClass reads a class block without creating one, so a read
+// never marks the key as defined in this scope.
+func existingSubagentClass(s *config.Settings, class config.SubagentClass) *config.SagittariusSubagentClass {
+	sag := sagOf(s)
+	if sag == nil || sag.Subagents == nil {
+		return nil
+	}
+	if class == config.SubagentCoding {
+		return sag.Subagents.Coding
+	}
+	return sag.Subagents.Research
+}
+
+// subagentClassSlot returns the class block for a settings key, creating the
+// intermediate structs so a write to an untouched document works.
+func subagentClassSlot(s *config.Settings, key string) *config.SagittariusSubagentClass {
+	if s.Sagittarius == nil {
+		s.Sagittarius = &config.SagittariusSettings{}
+	}
+	if s.Sagittarius.Subagents == nil {
+		s.Sagittarius.Subagents = &config.SagittariusSubagents{}
+	}
+	subs := s.Sagittarius.Subagents
+	if key == "sagittarius.subagents.coding.enabled" {
+		if subs.Coding == nil {
+			subs.Coding = &config.SagittariusSubagentClass{}
+		}
+		return subs.Coding
+	}
+	if subs.Research == nil {
+		subs.Research = &config.SagittariusSubagentClass{}
+	}
+	return subs.Research
+}
+
+func scriptEnabled(s *config.Settings) string {
+	if sag := sagOf(s); sag != nil {
+		return fmtPtrBool(sag.ScriptToolEnabled)
+	}
+	return ""
+}
+
+func sessAutoTitle(s *config.Settings) string {
+	if sag := sagOf(s); sag != nil && sag.Sessions != nil {
+		return fmtPtrStr(sag.Sessions.AutoTitle)
+	}
+	return ""
+}
+
+func editEnabled(s *config.Settings) string {
+	if sag := sagOf(s); sag != nil && sag.Edit != nil {
+		return fmtPtrBool(sag.Edit.Enabled)
+	}
+	return ""
+}
+
+func symbolsEnabled(s *config.Settings) string {
+	if sag := sagOf(s); sag != nil && sag.Symbols != nil {
+		return fmtPtrBool(sag.Symbols.Enabled)
+	}
+	return ""
+}
+
+func symbolsPreferGopls(s *config.Settings) string {
+	if sag := sagOf(s); sag != nil && sag.Symbols != nil {
+		return fmtPtrBool(sag.Symbols.PreferGopls)
+	}
+	return ""
+}
+
+func pruneSchemas(s *config.Settings) string {
+	if sag := sagOf(s); sag != nil && sag.MCP != nil {
+		return fmtPtrBool(sag.MCP.PruneToolSchemas)
+	}
+	return ""
 }

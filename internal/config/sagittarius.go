@@ -332,12 +332,27 @@ type SagittariusModeConfig struct {
 	Extra              map[string]json.RawMessage `json:"-"`
 }
 
-// SagittariusSubagents holds subagent model routing defaults.
+// SagittariusSubagents holds subagent enablement and model routing.
+//
+// Research and coding subagents are independently toggled: research children
+// are read-only and coding children write under a declared path lease, so one
+// switch cannot express both postures.
 type SagittariusSubagents struct {
-	Enabled *bool                                `json:"enabled,omitempty"`
-	Default SagittariusSubagentConfig            `json:"default,omitempty"`
-	Named   map[string]SagittariusSubagentConfig `json:"-"`
-	Extra   map[string]json.RawMessage           `json:"-"`
+	// Enabled is the legacy single switch. It is the fallback for
+	// Research.Enabled only; it never grants write access.
+	Enabled  *bool                                `json:"enabled,omitempty"`
+	Research *SagittariusSubagentClass            `json:"research,omitempty"`
+	Coding   *SagittariusSubagentClass            `json:"coding,omitempty"`
+	Default  SagittariusSubagentConfig            `json:"default,omitempty"`
+	Named    map[string]SagittariusSubagentConfig `json:"-"`
+	Extra    map[string]json.RawMessage           `json:"-"`
+}
+
+// SagittariusSubagentClass configures one subagent class (research or coding).
+type SagittariusSubagentClass struct {
+	Enabled *bool                      `json:"enabled,omitempty"`
+	Model   string                     `json:"model,omitempty"`
+	Extra   map[string]json.RawMessage `json:"-"`
 }
 
 // SagittariusSubagentConfig configures one subagent's model override.

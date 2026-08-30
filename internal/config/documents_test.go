@@ -322,6 +322,37 @@ func TestDocuments_IsDefined(t *testing.T) {
 	}
 }
 
+func TestSettingsHasKeyDottedPath(t *testing.T) {
+	t.Parallel()
+	s, err := decodeSettingsDocument([]byte(`{
+		"sagittarius": {"verify": {"allowFix": true}, "edit": {"enabled": true}},
+		"ui": {"theme": "greyscale"}
+	}`))
+	if err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	tests := []struct {
+		key  string
+		want bool
+	}{
+		{"sagittarius", true},
+		{"sagittarius.verify", true},
+		{"sagittarius.verify.allowFix", true},
+		{"sagittarius.verify.suggestAfterWrite", false},
+		{"sagittarius.edit.enabled", true},
+		{"ui", true},
+		{"ui.theme", true},
+		{"ui.hideBanner", false},
+		{"providers", false},
+		{"", false},
+	}
+	for _, tc := range tests {
+		if got := settingsHasKey(s, tc.key); got != tc.want {
+			t.Errorf("settingsHasKey(%q) = %v, want %v", tc.key, got, tc.want)
+		}
+	}
+}
+
 // MutateGlobal -------------------------------------------------------------
 
 func TestDocuments_MutateGlobalRefreshesMerged(t *testing.T) {

@@ -840,20 +840,21 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 	}
 
 	runtime, err := agent.NewRuntime(ctx, agent.RuntimeConfig{
-		Settings:           settings,
-		ClientName:         "sagittarius",
-		ClientVersion:      version.String(),
-		Trusted:            true,
-		AllowFix:           allowFix,
-		EditEnabled:        config.EditEnabled(settings, nil),
-		SubagentsEnabled:   config.SubagentsEnabled(settings, nil),
-		PruneToolSchemas:   config.PruneToolSchemasEnabled(settings, nil),
-		SymbolsEnabled:     symbolsEnabled,
-		SymbolsPreferGopls: symbolsPreferGopls,
-		WebSearchEnabled:   webSearchEnabled,
-		WebFetchEnabled:    webFetchEnabled,
-		SpillDir:           spillDir,
-		ScriptToolEnabled:  config.ScriptToolEnabled(settings, nil),
+		Settings:                 settings,
+		ClientName:               "sagittarius",
+		ClientVersion:            version.String(),
+		Trusted:                  true,
+		AllowFix:                 allowFix,
+		EditEnabled:              config.EditEnabled(settings, nil),
+		ResearchSubagentsEnabled: config.ResearchSubagentsEnabled(settings, nil),
+		CodingSubagentsEnabled:   config.CodingSubagentsEnabled(settings, nil),
+		PruneToolSchemas:         config.PruneToolSchemasEnabled(settings, nil),
+		SymbolsEnabled:           symbolsEnabled,
+		SymbolsPreferGopls:       symbolsPreferGopls,
+		WebSearchEnabled:         webSearchEnabled,
+		WebFetchEnabled:          webFetchEnabled,
+		SpillDir:                 spillDir,
+		ScriptToolEnabled:        config.ScriptToolEnabled(settings, nil),
 	})
 	if err != nil {
 		return nil, nil, nil, "", "", err

@@ -148,15 +148,14 @@ func (m Model) activateCurrent(keyStr string) (Model, tea.Cmd) {
 	}
 	switch e.Kind {
 	case KindBool:
-		// Toggle the bool inline.
 		newVal := "true"
-		if e.Value == "true" {
+		if e.EffectiveValue() == "true" {
 			newVal = "false"
 		}
 		return m.saveValue(e.Key, newVal)
 	case KindEnum:
 		if keyStr == "enter" {
-			next := nextChoice(e.Value, e.Choices)
+			next := nextChoice(e.EffectiveValue(), e.Choices)
 			return m.saveValue(e.Key, next)
 		}
 	case KindInt, KindString:

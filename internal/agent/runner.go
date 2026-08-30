@@ -124,6 +124,22 @@ type RunnerConfig struct {
 	// SpillDir is where truncated tool outputs are written. Empty disables
 	// spill-file creation (outputs are still head/tail truncated).
 	SpillDir string
+	// WriteLease, when set, bounds every file mutation this runner performs to
+	// the declared paths. Only coding subagents carry one.
+	WriteLease *tools.WriteLease
+	// AgentID labels this runner in the shared file-state registry. Empty means
+	// the parent agent.
+	AgentID string
+	// SubagentCharter is appended to the system prompt, telling a child what
+	// class it is running as and what it may touch. Empty for the parent.
+	SubagentCharter string
+	// FileState is the registry coordinating concurrent file access across an
+	// agent tree. Empty falls back to the Runtime's, then to a fresh one.
+	FileState *tools.FileStateRegistry
+	// SubagentGenerator builds a child's content generator. Empty uses the
+	// real provider constructor; it is injectable so a full multi-subagent
+	// pipeline can be driven without provider credentials.
+	SubagentGenerator SubagentGeneratorFunc
 	// ScriptToolEnabled seeds the placeholder registry built by NewRunner.
 	// The live catalog toggle is authoritative after the first rebuild.
 	ScriptToolEnabled bool
@@ -203,6 +219,21 @@ type Runner struct {
 	metrics         *sessionMetrics
 	projectBoundary bool
 	snap            *snapshot.Manager
+	// writeLease is nil for the parent and non-nil for a coding subagent, whose
+	// file mutations are confined to the declared paths.
+	writeLease *tools.WriteLease
+	// agentID labels this runner in the shared file-state registry.
+	agentID string
+	// fileState coordinates concurrent file access across this runner and its
+	// children. The whole agent tree shares one; it normally comes from the
+	// Runtime, with a runner-local fallback when there is no Runtime.
+	fileState *tools.FileStateRegistry
+	// subagentCharter is appended to the system prompt for a subagent, naming
+	// the posture it is running under. Empty for the parent.
+	subagentCharter string
+	// newSubagentGenerator builds a child's generator. Never nil after
+	// construction.
+	newSubagentGenerator SubagentGeneratorFunc
 	// editStatsMu guards editStats and nudgedPaths, the AD-080 repeated-edit
 	// loop detector's per-turn state (see postwrite.go). Both maps are reset
 	// at the start of every RunTurn.
@@ -422,6 +453,23 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		hooksRegistry:         cfg.HooksRegistry,
 		systemPromptOverride:  cfg.SystemPromptOverride,
 		maxToolRoundsOverride: cfg.MaxToolRoundsOverride,
+		writeLease:            cfg.WriteLease,
+		agentID:               cfg.AgentID,
+		fileState:             cfg.FileState,
+		subagentCharter:       cfg.SubagentCharter,
+		newSubagentGenerator:  cfg.SubagentGenerator,
+	}
+	if runner.agentID == "" {
+		runner.agentID = parentAgentID
+	}
+	if runner.fileState == nil {
+		runner.fileState = cfg.Runtime.FileState()
+	}
+	if runner.fileState == nil {
+		runner.fileState = tools.NewFileStateRegistry()
+	}
+	if runner.newSubagentGenerator == nil {
+		runner.newSubagentGenerator = provider.NewContentGenerator
 	}
 
 	// A resumed session has already had its first turn, so turn_index continues
@@ -452,9 +500,7 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 	if !cfg.OmitSessionTools {
 		registerGoalTools(runner, registry)
 		registerGrillTools(runner, registry)
-		if cfg.Settings != nil && config.SubagentsEnabled(cfg.Settings, nil) {
-			registry.Register(newTaskTool(runner))
-		}
+		registerSubagentTools(runner, registry, cfg.Settings)
 		registry.Register(newSaveMemoryTool(runner))
 	}
 
@@ -1382,24 +1428,17 @@ func (r *Runner) applyModeSystemSuffix() {
 	// sessions must not steer the model to keep asking questions, and
 	// summarizing/complete sessions are past the interview phase.
 	if g := r.Grill(); g != nil && g.Status == grill.StatusActive {
-		directive := grill.Directive(g.Topic, r.grillDirectiveConfig())
-		if suffix != "" {
-			suffix = strings.TrimRight(suffix, "\n") + "\n\n" + directive
-		} else {
-			suffix = directive
-		}
+		suffix = appendDirective(suffix, grill.Directive(g.Topic, r.grillDirectiveConfig()))
 	}
+	// A subagent's charter tells it what it is and what it may touch. It comes
+	// before constraints so a standing constraint still has the last word.
+	suffix = appendDirective(suffix, r.subagentCharter)
 	// Standing session constraints go last (highest recency) in the suffix,
 	// which is itself appended after systemBase (personality prompt + memory),
 	// so they are the final text the model reads and outrank the mode suffix,
 	// the grill directive, and the tool-invocation mandate baked into systemBase.
 	if constraints := r.Constraints(); len(constraints) > 0 {
-		directive := renderConstraintsDirective(constraints)
-		if suffix != "" {
-			suffix = strings.TrimRight(suffix, "\n") + "\n\n" + directive
-		} else {
-			suffix = directive
-		}
+		suffix = appendDirective(suffix, renderConstraintsDirective(constraints))
 	}
 
 	// Add the read-only gate directive if the durable posture is active.
@@ -1408,12 +1447,7 @@ func (r *Runner) applyModeSystemSuffix() {
 	r.modelMu.RUnlock()
 
 	if roPosture {
-		directive := "**CRITICAL:** You are currently in READ-ONLY INSPECTION MODE. Mutating tools (writing files, making configuration changes, running non-inspection shell commands) are disabled and will be rejected. You MUST NOT attempt to use them. A text-only report of your findings is a correct and complete turn. If the user asks for a change, tell them to run `/readonly off` (or switch to agent mode, which lifts it) — this posture is set deliberately and does not clear on its own. Never tell them to restart."
-		if suffix != "" {
-			suffix = strings.TrimRight(suffix, "\n") + "\n\n" + directive
-		} else {
-			suffix = directive
-		}
+		suffix = appendDirective(suffix, "**CRITICAL:** You are currently in READ-ONLY INSPECTION MODE. Mutating tools (writing files, making configuration changes, running non-inspection shell commands) are disabled and will be rejected. You MUST NOT attempt to use them. A text-only report of your findings is a correct and complete turn. If the user asks for a change, tell them to run `/readonly off` (or switch to agent mode, which lifts it) — this posture is set deliberately and does not clear on its own. Never tell them to restart.")
 	}
 
 	r.modelMu.Lock()
@@ -1423,6 +1457,19 @@ func (r *Runner) applyModeSystemSuffix() {
 	}
 	r.system = base
 	r.modelMu.Unlock()
+}
+
+// appendDirective joins a system-prompt directive onto an accumulating suffix,
+// keeping one blank line between sections and treating an empty directive as a
+// no-op so every call site reads the same.
+func appendDirective(suffix, directive string) string {
+	if directive == "" {
+		return suffix
+	}
+	if suffix == "" {
+		return directive
+	}
+	return strings.TrimRight(suffix, "\n") + "\n\n" + directive
 }
 
 // settingsSnapshot returns the current full settings under the settings lock.
@@ -1535,7 +1582,12 @@ func (r *Runner) schedulerOptions() []tools.SchedulerOption {
 		}),
 		tools.WithReadOnlyPolicy(r.readOnlyPolicy),
 		tools.WithHooks(r.beforeToolHook, r.afterToolHook),
+		tools.WithAgentID(r.agentID),
+		tools.WithFileState(r.fileState),
 	)
+	if r.writeLease != nil {
+		opts = append(opts, tools.WithWriteLease(*r.writeLease))
+	}
 	return opts
 }
 
@@ -1556,6 +1608,12 @@ func (r *Runner) readOnlyPolicy() tools.ReadOnlyPolicy {
 
 	if posture {
 		return tools.PolicyInspect
+	}
+
+	// A leased subagent writes through write_file and edit, which the lease
+	// bounds. Shell cannot be bounded that way, so it stays inspection-only.
+	if r.writeLease != nil {
+		return tools.PolicyShellInspect
 	}
 
 	return tools.PolicyNone
