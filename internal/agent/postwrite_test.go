@@ -2,10 +2,13 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/undeadindustries/sagittarius/internal/diagnostics"
+	"github.com/undeadindustries/sagittarius/internal/provider"
 	"github.com/undeadindustries/sagittarius/internal/ui"
 )
 
@@ -255,5 +258,112 @@ func TestRunPostWriteChecksNoFindingsReturnsFalse(t *testing.T) {
 	}
 	if !sawPassed {
 		t.Fatalf("events = %v, want a \"Checks passed\" info event", events)
+	}
+}
+
+func TestExtractWrittenPathsFromHistory_NormalizesAndDedupes(t *testing.T) {
+	t.Parallel()
+	r := newPostWriteTestRunner(t)
+	root := r.Workspace().Root()
+
+	subFileAbs := filepath.Join(root, "sub", "file.py")
+	otherFileAbs := filepath.Join(root, "sub", "other.py")
+	if err := os.MkdirAll(filepath.Join(root, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	r.history = []provider.Message{
+		{
+			Role: provider.RoleModel,
+			Parts: []provider.Part{
+				{
+					FunctionCall: &provider.ToolCall{
+						ID:   "call_1",
+						Name: "write_file",
+						Args: map[string]any{"file_path": subFileAbs, "content": "x = 1"},
+					},
+				},
+				{
+					FunctionCall: &provider.ToolCall{
+						ID:   "call_2",
+						Name: "write_file",
+						Args: map[string]any{"file_path": "sub/file.py", "content": "x = 2"},
+					},
+				},
+				{
+					FunctionCall: &provider.ToolCall{
+						ID:   "call_3",
+						Name: "edit",
+						Args: map[string]any{"file_path": otherFileAbs, "old_string": "a", "new_string": "b"},
+					},
+				},
+				{
+					FunctionCall: &provider.ToolCall{
+						ID:   "call_4",
+						Name: "write_file",
+						Args: map[string]any{"file_path": "/etc/nginx/nginx.conf", "content": "server {}"},
+					},
+				},
+				{
+					FunctionCall: &provider.ToolCall{
+						ID:   "call_5",
+						Name: "write_file",
+						Args: map[string]any{"file_path": "failed.py", "content": "bad"},
+					},
+				},
+			},
+		},
+		{
+			Role: provider.RoleUser,
+			Parts: []provider.Part{
+				{
+					FunctionResponse: &provider.FunctionResponse{
+						CallID:   "call_1",
+						Name:     "write_file",
+						Response: map[string]any{"output": "ok"},
+					},
+				},
+				{
+					FunctionResponse: &provider.FunctionResponse{
+						CallID:   "call_2",
+						Name:     "write_file",
+						Response: map[string]any{"output": "ok"},
+					},
+				},
+				{
+					FunctionResponse: &provider.FunctionResponse{
+						CallID:   "call_3",
+						Name:     "edit",
+						Response: map[string]any{"output": "ok"},
+					},
+				},
+				{
+					FunctionResponse: &provider.FunctionResponse{
+						CallID:   "call_4",
+						Name:     "write_file",
+						Response: map[string]any{"output": "ok"},
+					},
+				},
+				{
+					FunctionResponse: &provider.FunctionResponse{
+						CallID:   "call_5",
+						Name:     "write_file",
+						Response: map[string]any{"error": "permission denied"},
+					},
+				},
+			},
+		},
+	}
+
+	paths := extractWrittenPathsFromHistory(r)
+	want := []string{"sub/file.py", "sub/other.py", "/etc/nginx/nginx.conf"}
+
+	if len(paths) != len(want) {
+		t.Fatalf("extractWrittenPathsFromHistory = %v (len %d), want %v (len %d)", paths, len(paths), want, len(want))
+	}
+	for i := range want {
+		if paths[i] != want[i] {
+			t.Errorf("paths[%d] = %q, want %q", i, paths[i], want[i])
+		}
 	}
 }

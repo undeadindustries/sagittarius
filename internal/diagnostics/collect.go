@@ -65,7 +65,7 @@ const (
 // Options configure the behavior of a diagnostics run.
 type Options struct {
 	Root       string
-	Paths      []string // workspace-relative
+	Paths      []string // relative to Root, or absolute
 	ModuleWide bool
 	Timeout    time.Duration
 	LSP        Diagnoser // nil when unavailable
@@ -512,6 +512,10 @@ func findRoot(startDir, wsRoot string, markers []string) string {
 	dir := filepath.Clean(startDir)
 	if wsRoot != "" {
 		wsRoot = filepath.Clean(wsRoot)
+		rel, err := filepath.Rel(wsRoot, dir)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+			return ""
+		}
 	}
 
 	for {
@@ -557,7 +561,14 @@ func Collect(ctx context.Context, opts Options) (Report, error) {
 	targets := make(map[string]*runTarget)
 
 	for _, p := range opts.Paths {
-		absPath := filepath.Join(opts.Root, p)
+		absPath := p
+		if !filepath.IsAbs(absPath) {
+			absPath = filepath.Join(opts.Root, p)
+		}
+		absPath = filepath.Clean(absPath)
+		if _, err := os.Stat(absPath); err != nil {
+			continue
+		}
 		lang := FindLanguage(absPath)
 		if lang == nil {
 			continue

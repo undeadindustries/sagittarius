@@ -562,3 +562,114 @@ func TestMain_NoGoroutineLeakSanity(t *testing.T) {
 		t.Fatalf("goroutine count grew from %d to %d after a no-op Collect", before, after)
 	}
 }
+
+// TestCollectAcceptsAbsolutePaths is a regression test for the bug where
+// passing an absolute file path caused filepath.Join(opts.Root, p) to create
+// a doubled bogus path (e.g. /wsRoot/wsRoot/file.py), which then failed with
+// a chdir error when running external check commands.
+func TestCollectAcceptsAbsolutePaths(t *testing.T) {
+	bin := withFakeBin(t)
+	writeFakeTool(t, bin, "fake-abs-linter", 1)
+	clearLookPathCache("fake-abs-linter")
+
+	wsRoot := t.TempDir()
+	absPath := filepath.Join(wsRoot, "a.src")
+	if err := os.WriteFile(absPath, []byte("a"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	orig := registry
+	registry = []Language{
+		{
+			ID:         "fakelang",
+			Extensions: []string{".src"},
+			FileChecks: []Tool{
+				{Name: "flagged", Command: "fake-abs-linter", Args: []string{"--check"}, Severity: SeverityWarning},
+			},
+		},
+	}
+	t.Cleanup(func() { registry = orig })
+
+	report, err := Collect(context.Background(), Options{
+		Root:    wsRoot,
+		Paths:   []string{absPath},
+		Timeout: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if len(report.Findings) != 1 {
+		t.Fatalf("Findings = %v, want exactly 1", report.Findings)
+	}
+	got := report.Findings[0].Message
+	want := "--check a.src"
+	if got != want {
+		t.Fatalf("received argv = %q, want %q", got, want)
+	}
+}
+
+// TestCollectSkipsMissingFiles asserts that files that do not exist are skipped
+// before invoking checks, avoiding spurious chdir errors or bogus linter executions.
+func TestCollectSkipsMissingFiles(t *testing.T) {
+	bin := withFakeBin(t)
+	writeFakeTool(t, bin, "fake-missing-linter", 1)
+	clearLookPathCache("fake-missing-linter")
+
+	wsRoot := t.TempDir()
+	orig := registry
+	registry = []Language{
+		{
+			ID:         "fakelang",
+			Extensions: []string{".src"},
+			FileChecks: []Tool{
+				{Name: "flagged", Command: "fake-missing-linter", Args: []string{"--check"}, Severity: SeverityWarning},
+			},
+		},
+	}
+	t.Cleanup(func() { registry = orig })
+
+	report, err := Collect(context.Background(), Options{
+		Root:    wsRoot,
+		Paths:   []string{"nonexistent.src", filepath.Join(wsRoot, "also_missing.src")},
+		Timeout: 10 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if len(report.Findings) != 0 {
+		t.Fatalf("Findings = %v, want 0 for missing files", report.Findings)
+	}
+}
+
+// TestFindRootStopsOutsideWorkspace verifies that findRoot does not walk up to the
+// filesystem root when startDir is outside wsRoot.
+func TestFindRootStopsOutsideWorkspace(t *testing.T) {
+	wsRoot := t.TempDir()
+	outsideRoot := t.TempDir()
+	nestedOutside := filepath.Join(outsideRoot, "nested", "dir")
+	if err := os.MkdirAll(nestedOutside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outsideRoot, "pyproject.toml"), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// When startDir is outside wsRoot and wsRoot != "", findRoot must return "" immediately.
+	got := findRoot(nestedOutside, wsRoot, []string{"pyproject.toml"})
+	if got != "" {
+		t.Fatalf("findRoot outside wsRoot = %q, want empty string", got)
+	}
+
+	// Inside wsRoot, it should find the marker.
+	if err := os.WriteFile(filepath.Join(wsRoot, "pyproject.toml"), []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	nestedInside := filepath.Join(wsRoot, "nested", "dir")
+	if err := os.MkdirAll(nestedInside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	got = findRoot(nestedInside, wsRoot, []string{"pyproject.toml"})
+	if got != wsRoot {
+		t.Fatalf("findRoot inside wsRoot = %q, want %q", got, wsRoot)
+	}
+}

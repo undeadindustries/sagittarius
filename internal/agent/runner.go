@@ -206,10 +206,9 @@ type Runner struct {
 	// editStatsMu guards editStats and nudgedPaths, the AD-080 repeated-edit
 	// loop detector's per-turn state (see postwrite.go). Both maps are reset
 	// at the start of every RunTurn.
-	editStatsMu       sync.Mutex
-	editStats         map[string]int
-	editMatchFailures map[string]int
-	nudgedPaths       map[string]bool
+	editStatsMu sync.Mutex
+	editStats   map[string]int
+	nudgedPaths map[string]bool
 	// repoLocalMu guards repoLocalGrants, the session-lifetime memo of
 	// interactive repo-local tool approvals ("allow for this session"),
 	// mirroring Scheduler.sessionGrants.
@@ -413,7 +412,6 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		projectBoundary:       cfg.ProjectBoundary,
 		snap:                  cfg.Snapshotter,
 		editStats:             make(map[string]int),
-		editMatchFailures:     make(map[string]int),
 		nudgedPaths:           make(map[string]bool),
 		repoLocalGrants:       make(map[string]bool),
 		goplsHintPending:      needsGoplsHint(cfg.Settings, ws.Root()),
@@ -2028,6 +2026,10 @@ func containsSuccessfulWrite(responses []provider.FunctionResponse) bool {
 	return false
 }
 
+// extractWrittenPathsFromHistory looks at the last round of history and
+// extracts the canonical file paths of any mutating tool calls (write_file, edit)
+// that succeeded. Paths within the workspace are normalized to workspace-relative;
+// out-of-root writes are kept absolute. Duplicate paths in the same turn are deduped.
 func extractWrittenPathsFromHistory(r *Runner) []string {
 	r.historyMu.RLock()
 	defer r.historyMu.RUnlock()
@@ -2063,7 +2065,7 @@ func extractWrittenPathsFromHistory(r *Runner) []string {
 		return paths
 	}
 
-	// Build a map of successful write_file call IDs
+	// Build a map of successful mutating call IDs
 	successfulWrites := make(map[string]bool)
 	for _, p := range lastUser.Parts {
 		if p.FunctionResponse != nil && tools.IsFileMutatingTool(p.FunctionResponse.Name) {
@@ -2074,17 +2076,49 @@ func extractWrittenPathsFromHistory(r *Runner) []string {
 	}
 
 	// Now extract the paths from the assistant's calls that matched
+	seen := make(map[string]bool)
 	for _, p := range lastAsst.Parts {
 		if p.FunctionCall != nil && tools.IsFileMutatingTool(p.FunctionCall.Name) {
 			if successfulWrites[p.FunctionCall.ID] {
 				if path, ok := p.FunctionCall.Args["file_path"].(string); ok && path != "" {
-					paths = append(paths, path)
+					normalized := normalizeWrittenPath(r, path)
+					if normalized != "" && !seen[normalized] {
+						seen[normalized] = true
+						paths = append(paths, normalized)
+					}
 				}
 			}
 		}
 	}
 
 	return paths
+}
+
+func normalizeWrittenPath(r *Runner, pathStr string) string {
+	pathStr = strings.TrimSpace(pathStr)
+	if pathStr == "" {
+		return ""
+	}
+	ws := r.Workspace()
+	if ws != nil {
+		if abs, err := ws.ResolvePath(pathStr); err == nil {
+			if rel, err := filepath.Rel(ws.Root(), abs); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				return rel
+			}
+			return abs
+		}
+	}
+	// Fallback when workspace is nil or path is outside root: clean the path.
+	if filepath.IsAbs(pathStr) {
+		return filepath.Clean(pathStr)
+	}
+	if ws != nil {
+		return filepath.Clean(filepath.Join(ws.Root(), pathStr))
+	}
+	if r.workDir != "" {
+		return filepath.Clean(filepath.Join(r.workDir, pathStr))
+	}
+	return filepath.Clean(pathStr)
 }
 
 // goplsHint is the one-time startup nudge shown for Go projects without a gopls
