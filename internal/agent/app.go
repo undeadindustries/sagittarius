@@ -295,6 +295,14 @@ func (a *App) SetShowThinking(on bool) error {
 	return a.persistGlobal(func(s *config.Settings) error { return s.SetUIShowThinking(on) })
 }
 
+// ExportRequestDebug implements ui.RequestDebugExporter: it writes the most
+// recent provider request to a timestamped JSON file in the working directory
+// and returns the path. Same artifact as /chat debug. Safe mid-turn because
+// lastRequest is stored before the provider stream starts.
+func (a *App) ExportRequestDebug() (string, error) {
+	return (&appHooks{app: a}).WriteRequestDebug()
+}
+
 // CycleTheme implements ui.ThemeController: it toggles the TUI color theme
 // between "default" and "greyscale", persists the choice (ui.theme), and returns
 // the new name so the TUI applies it live. Backs the Alt+T shortcut.

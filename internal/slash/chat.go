@@ -71,7 +71,7 @@ func chatCommand() Command {
 			},
 			{
 				Name:        "debug",
-				Description: "Write the most recent provider request to a JSON file",
+				Description: "Write the most recent provider request to a JSON file (works mid-turn)",
 				Handler:     handleChatDebug,
 			},
 			{

@@ -2,6 +2,7 @@ package bubbletea
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -54,6 +55,86 @@ func (a *shortcutApp) CycleModelReverse(context.Context) (<-chan ui.StreamEvent,
 func (a *shortcutApp) CycleTheme() (string, error) {
 	a.themeCalls++
 	return a.themeReturn, nil
+}
+
+// debugExportApp implements ui.App and ui.RequestDebugExporter.
+type debugExportApp struct {
+	path  string
+	err   error
+	calls int
+}
+
+func (*debugExportApp) HandleInput(context.Context, string) (<-chan ui.StreamEvent, error) {
+	return doneStream(), nil
+}
+
+func (a *debugExportApp) ExportRequestDebug() (string, error) {
+	a.calls++
+	return a.path, a.err
+}
+
+func TestCtrlShiftDExportsRequestWhileBusy(t *testing.T) {
+	t.Parallel()
+	app := &debugExportApp{path: "/tmp/sagittarius-request-test.json"}
+	m := newShortcutModel(app)
+	m.busy = true
+	before := len(m.blocks)
+
+	// KeyRunes of the binding string: bubbletea has no KeyCtrlShiftD type;
+	// handleKey matches msg.String(), which for KeyRunes is the rune text.
+	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(requestDebugKey)})
+	if cmd == nil {
+		t.Fatal("Ctrl+Shift+D should return a command")
+	}
+	if !m.busy {
+		t.Fatal("export must not cancel the in-flight turn")
+	}
+	msg := cmd()
+	if app.calls != 1 {
+		t.Fatalf("ExportRequestDebug calls = %d, want 1", app.calls)
+	}
+	m.Update(msg)
+	if len(m.blocks) != before+1 {
+		t.Fatalf("expected one info block, got %d new", len(m.blocks)-before)
+	}
+	got := stripANSI(m.renderScrollback(80))
+	if !strings.Contains(got, "Wrote last request to /tmp/sagittarius-request-test.json") {
+		t.Fatalf("export info missing from scrollback:\n%s", got)
+	}
+}
+
+func TestCtrlShiftDExportErrorSurfaces(t *testing.T) {
+	t.Parallel()
+	app := &debugExportApp{err: errors.New("no provider request recorded yet — send a message first")}
+	m := newShortcutModel(app)
+	before := len(m.blocks)
+	_, cmd := m.exportRequestDebug()
+	if cmd == nil {
+		t.Fatal("exportRequestDebug should return a command")
+	}
+	m.Update(cmd())
+	if len(m.blocks) != before+1 {
+		t.Fatalf("expected one error block, got %d new", len(m.blocks)-before)
+	}
+	if !strings.Contains(stripANSI(m.renderScrollback(80)), "no provider request recorded yet") {
+		t.Fatal("error text missing from scrollback")
+	}
+}
+
+func TestCtrlShiftDWithoutCapability(t *testing.T) {
+	t.Parallel()
+	m := newTestModel()
+	before := len(m.blocks)
+	_, cmd := m.exportRequestDebug()
+	if cmd != nil {
+		t.Fatal("no exporter should not return a command")
+	}
+	if len(m.blocks) != before+1 {
+		t.Fatalf("expected an unavailable notice, got %d new blocks", len(m.blocks)-before)
+	}
+	if !strings.Contains(stripANSI(m.renderScrollback(80)), "unavailable") {
+		t.Fatal("unavailable notice missing")
+	}
 }
 
 func newShortcutModel(app ui.App) *model {

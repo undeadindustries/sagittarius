@@ -40,6 +40,9 @@ func TestIsConcurrentSafeSlash(t *testing.T) {
 		"/GRILL PAUSE":   true, // case-insensitive
 		"/stats":         true,
 		"/stats tools":   true,
+		"/chat debug":    true,
+		"/CHAT DEBUG":    true,
+		"/chat share":    false,
 		"/grill done":    false,
 		"/grill start x": false,
 		"/grill resume":  false,
@@ -91,6 +94,31 @@ func TestGrillStatusRunsConcurrentlyWhileBusy(t *testing.T) {
 	_, cmd := m.handleBusyEnter()
 	if cmd == nil {
 		t.Fatal("expected a command running /grill status concurrently")
+	}
+	cmd()
+	if got := app.callCount(); got != 1 {
+		t.Fatalf("HandleInput calls = %d, want 1", got)
+	}
+}
+
+// TestChatDebugRunsConcurrentlyWhileBusy asserts /chat debug reaches the app
+// immediately mid-turn so a request dump does not require cancelling the turn.
+func TestChatDebugRunsConcurrentlyWhileBusy(t *testing.T) {
+	t.Parallel()
+	app := &recordingApp{}
+	m := newShortcutModel(app)
+	m.busy = true
+	m.input.SetValue("/chat debug")
+
+	_, cmd := m.handleBusyEnter()
+	if cmd == nil {
+		t.Fatal("expected a command running /chat debug concurrently")
+	}
+	if m.input.Value() != "" {
+		t.Fatalf("input should be cleared, got %q", m.input.Value())
+	}
+	if len(m.queue) != 0 {
+		t.Fatalf("queue = %v, want empty (concurrent-safe commands are not queued)", m.queue)
 	}
 	cmd()
 	if got := app.callCount(); got != 1 {

@@ -157,6 +157,14 @@ type ThemeController interface {
 	CycleTheme() (string, error)
 }
 
+// RequestDebugExporter is an optional capability the TUI uses to write the
+// most recent provider request to a JSON file (Ctrl+Shift+D, same as /chat
+// debug). Safe to call while a turn is in flight: the runner stores the
+// request before the stream starts. The agent App implements it.
+type RequestDebugExporter interface {
+	ExportRequestDebug() (path string, err error)
+}
+
 // CompactCount formats a token count compactly (e.g. 1234 -> "1.2k").
 func CompactCount(n int) string {
 	if n < 1000 {

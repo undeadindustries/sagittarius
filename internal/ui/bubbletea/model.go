@@ -513,6 +513,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			_ = m.term.ShowError(msg.err)
 		}
 		return m, nil
+	case requestDebugExportedMsg:
+		if msg.err != nil {
+			m.addBlock(roleError, msg.err.Error())
+			return m, nil
+		}
+		m.addBlock(roleInfo, "Wrote last request to "+msg.path)
+		return m, nil
 	case themeCycledMsg:
 		if msg.err != nil {
 			_ = m.term.ShowError(msg.err)
@@ -1250,6 +1257,12 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.toggleThinking()
 	}
 
+	// Ctrl+Shift+D exports the last provider request (same as /chat debug) in
+	// any state, including mid-turn. Bare ctrl+d stays PTY EOF.
+	if msg.String() == requestDebugKey {
+		return m.exportRequestDebug()
+	}
+
 	// Alt+M toggles mouse-wheel scrolling in any state. It is off by default so
 	// the terminal's native click-drag text selection works. 'µ' is Mac Option+M.
 	if msg.String() == "alt+m" || msg.String() == "µ" {
@@ -1615,6 +1628,7 @@ func isConcurrentSafeSlash(line string) bool {
 	return l == "/goal pause" || l == "/goal status" || l == "/stats" ||
 		l == "/grill pause" || l == "/grill status" ||
 		l == "/constraints list" ||
+		l == "/chat debug" ||
 		strings.HasPrefix(l, "/stats ")
 }
 
@@ -2461,6 +2475,17 @@ func (m *model) effectiveShowThinking() bool {
 // the Update goroutine (fire-and-forget; only errors are surfaced).
 type thinkingSavedMsg struct{ err error }
 
+// requestDebugKey is the mid-turn (and idle) shortcut that writes the last
+// provider request to a JSON file. Distinct from ctrl+d (PTY EOF).
+const requestDebugKey = "ctrl+shift+d"
+
+// requestDebugExportedMsg carries the path (or error) from an async
+// RequestDebugExporter call so the disk write never blocks Update.
+type requestDebugExportedMsg struct {
+	path string
+	err  error
+}
+
 // themeCycledMsg carries the new theme name (and any save error) back from the
 // async ThemeController call so it is applied on the Update goroutine.
 type themeCycledMsg struct {
@@ -2487,6 +2512,20 @@ func (m *model) toggleThinking() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	return m, func() tea.Msg { return thinkingSavedMsg{err: tc.SetShowThinking(newVal)} }
+}
+
+// exportRequestDebug writes the last provider request off the Update goroutine
+// via a tea.Cmd (same artifact as /chat debug). Never cancels the in-flight turn.
+func (m *model) exportRequestDebug() (tea.Model, tea.Cmd) {
+	ex, ok := m.app.(ui.RequestDebugExporter)
+	if !ok {
+		m.addBlock(roleInfo, "Request debug export is unavailable in this session.")
+		return m, nil
+	}
+	return m, func() tea.Msg {
+		path, err := ex.ExportRequestDebug()
+		return requestDebugExportedMsg{path: path, err: err}
+	}
 }
 
 // streamContext returns the live turn context, falling back to a background

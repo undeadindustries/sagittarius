@@ -142,6 +142,7 @@ Interactive shortcuts, headless flags, and slash commands for the same features 
 | **Model** (pick or cycle active set) | `Ctrl+/` (forward), `Ctrl+Shift+P` (back); or `/model`, `/models` | `-m`, `--model <id>` (pins model for this run; disables mode-based model routing) |
 | **Tool approval** (confirm vs auto-run tools) | Tool cards: Allow once / session / deny; status row shows policy | `--approval-mode` (`default`, `autoEdit`, `yolo`); `-y`, `--yolo` (shorthand for yolo; not combinable with `--approval-mode`) |
 | **Thinking / reasoning box** | `Ctrl+T` (persists `ui.showThinking`) | — (use `/settings` or per-model `showThinking` in `/models`) |
+| **Export last provider request** | `Ctrl+Shift+D`; or `/chat debug` (works while a turn is running) | — |
 | **Color theme** | `Alt+T` (persists `ui.theme`) | `/theme` (no startup flag) |
 | **Mouse-wheel scroll** | `Alt+M` (per session; off again on next launch) | `/mouse` (`on`, `off`, `toggle`, `show`) |
 | **Background processes** | `Ctrl+B` | — |

@@ -125,6 +125,7 @@ These work in the interactive TUI in addition to the slash commands above.
 | `Ctrl+Shift+P` | Cycle backward through active models |
 | `Alt+T` | Cycle the color theme (default ↔ greyscale) |
 | `Ctrl+T` | Toggle the thinking ("reasoning") box |
+| `Ctrl+Shift+D` | Export the last provider request to a JSON file (works mid-turn; same as `/chat debug`) |
 | `Ctrl+O` | Expand or collapse a pasted text placeholder in place |
 | `Alt+M` | Toggle mouse-wheel scrolling (see below) |
 | `Ctrl+B` | Open the background process viewer |
@@ -170,7 +171,7 @@ and resets to off on the next launch.
   - `/chat rename <title>`: Set the current session's title (shown in session lists). Titles are trimmed, capped at 80 characters, and have control characters stripped.
   - `/chat fork`: Copy the current conversation into a **new** session and switch recording to it. The forked session inherits the title with a `" (fork)"` suffix and the recorded git branch. End-of-conversation only; fork-from-a-message is not yet supported.
   - `/chat share [file.md|file.json]`: Export the conversation to Markdown or JSON.
-  - `/chat debug`: Write the most recent provider request to a JSON file.
+  - `/chat debug`: Write the most recent provider request to a JSON file. Works while a turn is running (`Ctrl+Shift+D` does the same export).
 - **Session titles:** After your first full exchange Sagittarius proposes a short
   title automatically (see `sagittarius.sessions.autoTitle`: `prompt` asks with a
   one-key rename hint, `auto` applies silently, `off` disables it). `/chat rename`
