@@ -66,14 +66,38 @@ type openAIChatRequest struct {
 	// field, so it is safe to send whenever GenerateRequest.Reasoning resolves
 	// to non-nil regardless of which openai-chat backend is active.
 	Reasoning *openAIReasoning `json:"reasoning,omitempty"`
+	// ReasoningBudgetTokens and ReasoningBudgetMessage are llama.cpp's
+	// per-request thinking budget. llama-server enforces the budget with a
+	// logit sampler that forces the message followed by the thinking close tag
+	// once the budget is spent, so generation continues into the answer rather
+	// than being truncated. The message is not cosmetic: llama.cpp measured a
+	// large quality drop for a bare cut versus one that says why it happened.
+	// Other backends ignore both fields.
+	ReasoningBudgetTokens  *int   `json:"reasoning_budget_tokens,omitempty"`
+	ReasoningBudgetMessage string `json:"reasoning_budget_message,omitempty"`
+	// ChatTemplateKwargs passes Jinja arguments to servers that render the
+	// chat template per request (vLLM, SGLang). It is the only lever that
+	// disables thinking on Qwen-family templates.
+	ChatTemplateKwargs *chatTemplateKwargs `json:"chat_template_kwargs,omitempty"`
 }
 
 // openAIReasoning is OpenRouter's unified reasoning request object: Effort
 // pins a level; Enabled alone (Effort == "") asks the provider to reason using
 // its own default effort — the adaptive-by-default case.
+//
+// Enabled has no omitempty because "enabled": false is the payload that turns
+// reasoning off; omitting it would silently mean "no opinion" instead.
 type openAIReasoning struct {
 	Effort  string `json:"effort,omitempty"`
-	Enabled bool   `json:"enabled,omitempty"`
+	Enabled bool   `json:"enabled"`
+}
+
+// chatTemplateKwargs carries chat-template arguments for servers that render
+// the template at request time.
+type chatTemplateKwargs struct {
+	// EnableThinking is a pointer because the value worth sending is false,
+	// which omitempty would drop on a plain bool.
+	EnableThinking *bool `json:"enable_thinking,omitempty"`
 }
 
 type streamOptions struct {

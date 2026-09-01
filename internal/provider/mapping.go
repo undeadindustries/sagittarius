@@ -179,15 +179,38 @@ func BuildGenerateContentConfig(req *GenerateRequest) *genai.GenerateContentConf
 	if tools := ToolDeclarationsToGenai(req.Tools); len(tools) > 0 {
 		cfg.Tools = tools
 	}
-	if req.IncludeThoughts || (req.Reasoning != nil && req.Reasoning.Enabled) {
+	if req.IncludeThoughts || (req.Reasoning != nil && req.Reasoning.Enabled) || req.SuppressThinking {
 		tc := &genai.ThinkingConfig{}
-		if req.IncludeThoughts {
+		if req.IncludeThoughts && !req.SuppressThinking {
 			tc.IncludeThoughts = true
 		}
 		applyReasoningToThinkingConfig(tc, req.Reasoning, req.Model)
+		applyThinkingBudgetToThinkingConfig(tc, req)
 		cfg.ThinkingConfig = tc
 	}
 	return cfg
+}
+
+// applyThinkingBudgetToThinkingConfig overlays an explicit token budget onto
+// Gemini's ThinkingConfig, after applyReasoningToThinkingConfig has set the
+// effort-derived default.
+//
+// Gemini 2.5 takes a raw token count, so a configured budget maps straight
+// onto it — the native enforcement AD-077 deliberately declined to guess from
+// an effort string, but which a user-supplied number states outright. Gemini 3
+// has no numeric budget (it exposes ThinkingLevel instead), so a budget is
+// left to the level path there rather than sent as a value the API rejects.
+func applyThinkingBudgetToThinkingConfig(tc *genai.ThinkingConfig, req *GenerateRequest) {
+	if req.SuppressThinking {
+		off := int32(0)
+		tc.ThinkingBudget = &off
+		tc.ThinkingLevel = ""
+		return
+	}
+	if req.ThinkingBudgetTokens > 0 && !isGemini3Model(req.Model) {
+		budget := int32(min(req.ThinkingBudgetTokens, maxThinkingBudgetTokens))
+		tc.ThinkingBudget = &budget
+	}
 }
 
 // applyReasoningToThinkingConfig translates a resolved ReasoningRequest into
@@ -411,5 +434,32 @@ func BuildOpenAIChatRequest(req *GenerateRequest, model string, parseMode config
 	if req.Reasoning != nil && req.Reasoning.Enabled {
 		body.Reasoning = &openAIReasoning{Effort: req.Reasoning.Effort, Enabled: true}
 	}
+	applyThinkingBudgetToChatRequest(&body, req)
 	return body
+}
+
+// applyThinkingBudgetToChatRequest sets the thinking-budget and
+// thinking-suppression fields on an openai-chat body.
+//
+// Suppression wins over a budget: it is only set on a retry after the
+// client-side budget already cut a round short, and asking that retry to think
+// "a bit less" instead of "not at all" would just spend the budget again. No
+// single key suppresses thinking across backends, so all three are sent —
+// llama.cpp honors a zero budget, OpenRouter honors reasoning.enabled, and
+// Qwen-family templates on vLLM/SGLang honor enable_thinking. Backends ignore
+// the keys they do not know.
+func applyThinkingBudgetToChatRequest(body *openAIChatRequest, req *GenerateRequest) {
+	if req.SuppressThinking {
+		zero := 0
+		off := false
+		body.ReasoningBudgetTokens = &zero
+		body.Reasoning = &openAIReasoning{Enabled: false}
+		body.ChatTemplateKwargs = &chatTemplateKwargs{EnableThinking: &off}
+		return
+	}
+	if req.ThinkingBudgetTokens > 0 {
+		budget := req.ThinkingBudgetTokens
+		body.ReasoningBudgetTokens = &budget
+		body.ReasoningBudgetMessage = ThinkingBudgetMessage
+	}
 }

@@ -71,7 +71,32 @@ type GenerateRequest struct {
 	// ThinkingLevel, OpenAI Responses maps it to reasoning.effort, and
 	// openai-chat maps it to a unified reasoning:{enabled,effort} object.
 	Reasoning *ReasoningRequest
+	// ThinkingBudgetTokens caps the tokens the model may spend reasoning in
+	// this round. Zero means unset. Adapters advertise it to servers that
+	// enforce a budget natively (llama.cpp reasoning_budget_tokens, Gemini
+	// ThinkingBudget); servers that do not recognize it ignore the field.
+	ThinkingBudgetTokens int
+	// SuppressThinking asks the provider to skip reasoning entirely for this
+	// round. It is set only when a previous round was cut short by the
+	// client-side thinking budget, so the retry must answer rather than think
+	// again. Adapters send every suppression key they know, because no single
+	// key works across llama.cpp, OpenRouter and Qwen-on-vLLM.
+	SuppressThinking bool
 }
+
+// ThinkingBudgetMessage is the wrap-up text a server injects at the end of a
+// spent thinking budget, immediately before the thinking close tag, so the
+// model sees why its reasoning ended rather than finding it cut mid-thought.
+//
+// It is not cosmetic. llama.cpp measured Qwen3.5 9B HumanEval at 89% when the
+// budget ended with a message against 79% for a bare truncation — worse than
+// disabling thinking entirely. The trailing newline is deliberate: without it,
+// reasoning has been observed to run past the close tag.
+const ThinkingBudgetMessage = "\n\n... reasoning budget exceeded. I have enough to answer now.\n"
+
+// maxThinkingBudgetTokens bounds a configured budget before it is narrowed to
+// the int32 the Gemini SDK takes, so a nonsensical value cannot wrap negative.
+const maxThinkingBudgetTokens = 1 << 30
 
 // ReasoningRequest describes the resolved reasoning ask for one round.
 // Effort pins a level (minimal/low/medium/high/xhigh/none); empty means

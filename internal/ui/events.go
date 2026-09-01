@@ -47,6 +47,15 @@ const (
 	// the ask_user tool during grill-me interrogation: AskQuestion + AskOptions
 	// describe the prompt, and the TUI sends the answer via AskReply.
 	StreamAskUser
+	// StreamThinkingBudget reports that a model's reasoning was cut short
+	// because it spent its configured thinking budget, and that the round is
+	// being retried with thinking disabled. Text carries the explanation.
+	//
+	// It is distinct from StreamInfo because the reasoning it interrupted is
+	// still buffered in the thinking view: a UI showing that buffer has to
+	// retire it, or the display keeps claiming the model is thinking after it
+	// has been told to stop.
+	StreamThinkingBudget
 )
 
 // AskOption is one selectable answer for a StreamAskUser prompt.

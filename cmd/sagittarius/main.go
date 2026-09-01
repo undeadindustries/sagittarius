@@ -501,6 +501,10 @@ func consumeHeadlessBangText(events <-chan ui.StreamEvent) int {
 			}
 		case ui.StreamInfo:
 			fmt.Print(ev.Text)
+		case ui.StreamThinkingBudget:
+			// Diagnostic, not part of the answer: keep it off stdout so a
+			// scripted `-p` caller's output stays clean.
+			fmt.Fprintln(os.Stderr, ev.Text)
 		case ui.StreamError:
 			switch {
 			case ev.Err != nil:
@@ -544,6 +548,12 @@ func consumeHeadlessJSON(ctx context.Context, events <-chan ui.StreamEvent, stre
 				emitJSONLine(map[string]string{"type": "info", "text": ev.Text})
 			} else {
 				textBuf.WriteString(ev.Text)
+			}
+		case ui.StreamThinkingBudget:
+			// Never buffered into textBuf: it is a diagnostic about the turn,
+			// not part of the model's answer.
+			if streaming {
+				emitJSONLine(map[string]string{"type": "info", "text": ev.Text})
 			}
 		case ui.StreamError:
 			if ev.Err != nil {

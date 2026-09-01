@@ -267,11 +267,39 @@ and resets to off on the next launch.
 
 ### `/models`
 
-- **Description:** Edit **per-model settings** — temperature, context limit, and
-  reasoning effort — for any active `{Provider}/{Model}` pair.
+- **Description:** Edit **per-model settings** — temperature, context limit,
+  reasoning effort, thinking-box visibility, and the thinking budget — for any
+  active `{Provider}/{Model}` pair.
 - **Menu-first:** `/models` opens a global model list. Select a model to open its
   settings submenu. Changes are saved to `providers.<id>.models.<model>` in
   `settings.json` and take effect immediately for the active model.
+
+#### Thinking budget
+
+Two rows cap how long a model may reason before it has to act. They exist for
+local models that reason indefinitely; hosted models with native adaptive
+thinking rarely need them.
+
+- **`thinkingBudgetTokens`** — reasoning tokens allowed per round. `0` (or
+  clearing the row) turns it off. Whenever it is set, Sagittarius advertises it
+  to the provider on every request: `reasoning_budget_tokens` plus a wrap-up
+  message for llama.cpp-style servers, and `ThinkingConfig.ThinkingBudget` for
+  Gemini 2.5. A server that enforces the budget itself steers the model into
+  concluding mid-generation, which always beats cutting a stream after the fact.
+  Gemini 3 has no numeric budget — use `/reasoning` there instead.
+- **`hardThinkingBudget`** — `true` adds a client-side backstop for servers that
+  ignore the advertised budget (vLLM and SGLang currently do). Once the streamed
+  reasoning passes the budget and the model has not yet started an answer or a
+  tool call, the round is abandoned and re-issued with the model's own partial
+  reasoning quoted back to it and thinking switched off, so it answers from what
+  it already worked out. The TUI prints a notice naming the budget. Default off:
+  a cut costs a full extra round, so it is worth paying only for a model that
+  genuinely loops.
+
+A cut can never immediately follow another — the retry round runs with the
+budget disabled — so a model that reasons at length twice in a row is left
+alone rather than cut repeatedly. Later rounds in the same turn are protected
+again.
 
 ### `/system-prompt`
 

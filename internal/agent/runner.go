@@ -246,6 +246,13 @@ type Runner struct {
 	repoLocalMu      sync.Mutex
 	repoLocalGrants  map[string]bool
 	goplsHintPending bool
+	// thinkingCutMu guards pendingThinkingCut, the one-shot note describing a
+	// round the thinking budget cut short. It is written by runAgentLoop and
+	// consumed by buildGenerateRequest on the very next round; a mutex rather
+	// than a plain field because /chat debug can build a request concurrently
+	// with a turn (AD-131).
+	thinkingCutMu      sync.Mutex
+	pendingThinkingCut string
 	// lastBranch records the git branch most recently written to the session
 	// file so recordBranch only appends a $set line on change (a long session
 	// can cross branches; sampling every turn without this guard would bloat
@@ -906,6 +913,7 @@ func (r *Runner) RunTurn(ctx context.Context, userInput string) (<-chan ui.Strea
 	r.setState(StateIdle)
 	r.metrics.recordTurn()
 	r.resetEditLoopStats()
+	r.clearThinkingCut()
 	r.recordBranch()
 	r.historyMu.Lock()
 	r.history = append(r.history, provider.Message{
@@ -993,6 +1001,10 @@ func (r *Runner) runAgentLoop(ctx context.Context, userInput string, out chan<- 
 	// auto-title sees the whole reply, not just the final round.
 	var turnReply strings.Builder
 	overflowRetried := false
+	// True while the next round is the suppressed retry after a budget cut. It
+	// disables the budget for exactly that round, so a cut can never be
+	// followed immediately by another; a normal round clears it again.
+	thinkingCutPending := false
 
 	emit := func(ev ui.StreamEvent) {
 		select {
@@ -1013,13 +1025,27 @@ outerLoop:
 			currentModel := r.Model()
 			currentProvider := r.activeProviderID()
 			currentMode := r.InteractionMode().String()
+			hardBudget := 0
+			if !thinkingCutPending {
+				if tokens, hard := config.ResolveThinkingBudget(
+					r.settingsSnapshot(), currentProvider, currentModel,
+				); hard {
+					hardBudget = tokens
+				}
+			}
 
 			if r.verboseLog != nil {
 				body, dbgErr := r.debugRequestBody(req)
 				r.verboseLog.LogRequest(round, body, dbgErr)
 			}
 
-			respCh, err := gen.GenerateContentStream(ctx, req)
+			// Each round streams under its own child context so a thinking-budget
+			// cut can stop the producer without ending the turn. It is cancelled
+			// explicitly on every exit path rather than deferred, because a defer
+			// inside this loop would hold every round's context until the turn ends.
+			streamCtx, cancelStream := context.WithCancel(ctx)
+
+			respCh, err := gen.GenerateContentStream(streamCtx, req)
 			if err != nil {
 				if provider.IsContextOverflow(err) && !overflowRetried {
 					overflowRetried = true
@@ -1048,20 +1074,44 @@ outerLoop:
 					}
 					r.syncContextGauge()
 					req = r.enforceRequestBudget(r.buildGenerateRequest(), out)
-					respCh, err = gen.GenerateContentStream(ctx, req)
+					respCh, err = gen.GenerateContentStream(streamCtx, req)
 				}
 				if err != nil {
+					cancelStream()
 					r.verboseLog.LogError(err)
 					out <- ui.StreamEvent{Type: ui.StreamError, Err: err}
 					return
 				}
 			}
 
-			toolCalls, modelText, modelParts, streamUsage, hadReasoning, streamErr := r.consumeStream(ctx, respCh, out)
+			res, streamErr := r.consumeStream(streamCtx, respCh, out, hardBudget)
+			cancelStream()
+			if errors.Is(streamErr, errThinkingBudgetExceeded) {
+				thinkingCutPending = true
+				r.armThinkingCut(hardBudget, res.Reasoning)
+				r.recordAbortedRoundUsage(req, currentProvider, currentModel, currentMode, res.Reasoning)
+				out <- ui.StreamEvent{
+					Type: ui.StreamThinkingBudget,
+					Text: fmt.Sprintf(thinkingBudgetNotice, hardBudget),
+				}
+				// A cut produced neither an answer nor a tool call, so it is
+				// not a completed tool round. The for-loop increment would
+				// otherwise burn a maxToolRounds slot and, at a cap of 1,
+				// skip the suppressed retry entirely.
+				round--
+				continue
+			}
 			if streamErr != nil {
 				r.verboseLog.LogError(streamErr)
 				return
 			}
+			// A round that completed normally re-arms the budget: the cut is
+			// latched only against an immediate second cut, which is what could
+			// otherwise loop, not against protecting later rounds in the turn.
+			thinkingCutPending = false
+			r.clearThinkingCut()
+			toolCalls, modelText, modelParts := res.ToolCalls, res.Text, res.ModelParts
+			streamUsage, hadReasoning := res.Usage, res.HadReasoning
 			r.verboseLog.LogResponse(round, modelText, toolCalls, streamUsage)
 			if modelText != "" {
 				turnReply.WriteString(modelText)
@@ -1312,6 +1362,21 @@ func (r *Runner) buildGenerateRequest() *provider.GenerateRequest {
 	// matches families, not every id) does not lose thoughts it receives today.
 	req.IncludeThoughts = config.ResolveShowThinking(settings, providerID, model) ||
 		req.Reasoning.ProducesReasoning()
+	// Advertise any configured budget on every request, whether or not it is
+	// also enforced client-side: a server that enforces it natively steers the
+	// model into wrapping up mid-generation, which is always better than
+	// cutting a stream after the fact.
+	budgetTokens, _ := config.ResolveThinkingBudget(settings, providerID, model)
+	req.ThinkingBudgetTokens = budgetTokens
+	if note, ok := r.peekThinkingCut(); ok {
+		req.Messages = append(req.Messages, provider.Message{
+			Role:  provider.RoleUser,
+			Parts: []provider.Part{{Text: note}},
+		})
+		req.SuppressThinking = true
+		req.IncludeThoughts = false
+		req.ThinkingBudgetTokens = 0
+	}
 	return req
 }
 
@@ -1701,45 +1766,68 @@ func (r *Runner) toolScheduler() *tools.Scheduler {
 	return r.scheduler
 }
 
+// streamResult is one model round as assembled from the provider stream.
+type streamResult struct {
+	ToolCalls    []provider.ToolCall
+	Text         string
+	ModelParts   []provider.Part
+	Usage        *provider.Usage
+	HadReasoning bool
+	// Reasoning holds the accumulated thinking text. It is populated only when
+	// the client-side thinking budget cut this round short, so the retry can
+	// hand the model back what it already worked out.
+	Reasoning string
+}
+
+// consumeStream drains one provider stream, forwarding UI events as it goes
+// and assembling the round's text, tool calls, parts and usage.
+//
+// budget, when positive, cuts the round short once the model's reasoning
+// passes that many estimated tokens, returning errThinkingBudgetExceeded with
+// the reasoning so far. Cancelling ctx is the caller's job: this returns as
+// soon as the budget is spent, and the caller must stop the producer.
 func (r *Runner) consumeStream(
 	ctx context.Context,
 	respCh <-chan provider.StreamResponse,
 	out chan<- ui.StreamEvent,
-) ([]provider.ToolCall, string, []provider.Part, *provider.Usage, bool, error) {
+	budget int,
+) (streamResult, error) {
 	var modelText strings.Builder
-	var toolCalls []provider.ToolCall
-	var modelParts []provider.Part
-	var usage *provider.Usage
-	var hadReasoning bool
+	var res streamResult
+	watch := newThinkingBudgetWatch(budget)
 	streamDone := false
+
+	fail := func(err error) (streamResult, error) {
+		out <- ui.StreamEvent{Type: ui.StreamError, Err: err}
+		return streamResult{HadReasoning: res.HadReasoning}, err
+	}
 
 	for !streamDone {
 		select {
 		case <-ctx.Done():
-			out <- ui.StreamEvent{Type: ui.StreamError, Err: ctx.Err()}
-			return nil, "", nil, nil, hadReasoning, ctx.Err()
+			return fail(ctx.Err())
 		case resp, ok := <-respCh:
 			if !ok {
 				streamDone = true
 				continue
 			}
 			if resp.Error != nil {
-				out <- ui.StreamEvent{Type: ui.StreamError, Err: resp.Error}
-				return nil, "", nil, nil, hadReasoning, resp.Error
+				return fail(resp.Error)
 			}
 			if resp.ReasoningDelta != "" {
-				hadReasoning = true
+				res.HadReasoning = true
+				watch.add(resp.ReasoningDelta)
 			}
 			if resp.TextDelta != "" {
 				modelText.WriteString(resp.TextDelta)
 			}
 			if resp.Usage != nil {
-				usage = resp.Usage
+				res.Usage = resp.Usage
 			}
 			if len(resp.ModelParts) > 0 {
-				modelParts = resp.ModelParts
+				res.ModelParts = resp.ModelParts
 			}
-			toolCalls = append(toolCalls, resp.ToolCalls...)
+			res.ToolCalls = append(res.ToolCalls, resp.ToolCalls...)
 
 			for _, ev := range MapStreamResponse(resp) {
 				if ev.Type == ui.StreamDone {
@@ -1748,15 +1836,25 @@ func (r *Runner) consumeStream(
 				}
 				select {
 				case <-ctx.Done():
-					out <- ui.StreamEvent{Type: ui.StreamError, Err: ctx.Err()}
-					return nil, "", nil, nil, hadReasoning, ctx.Err()
+					return fail(ctx.Err())
 				case out <- ev:
 				}
+			}
+
+			// Only cut while the model is still purely thinking. Once answer
+			// text or a tool call has arrived the thinking phase is over, and
+			// cutting would throw away work the budget was never about.
+			if modelText.Len() == 0 && len(res.ToolCalls) == 0 && watch.exceeded() {
+				return streamResult{
+					HadReasoning: res.HadReasoning,
+					Reasoning:    watch.text(),
+				}, errThinkingBudgetExceeded
 			}
 		}
 	}
 
-	return toolCalls, modelText.String(), modelParts, usage, hadReasoning, nil
+	res.Text = modelText.String()
+	return res, nil
 }
 
 func (r *Runner) appendModelMessage(text string, toolCalls []provider.ToolCall) {

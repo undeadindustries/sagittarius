@@ -53,6 +53,39 @@ and are not yet user-configurable.
 Compression and summarization always use the **active provider model**; there is
 no separate summarizer/compressor model setting.
 
+## Thinking budget (`providers.<id>.models.<model>.*`)
+
+Caps how long a model may reason before it has to act. Both keys are per-model
+only — there is no provider-wide fallback, because a budget that suits a local
+reasoning model is wrong for every other model behind the same endpoint. Edit
+them in `/models`.
+
+| Key | Type | Default | Purpose |
+|-----|------|---------|---------|
+| `thinkingBudgetTokens` | int (tokens) | unset | Reasoning tokens allowed per round. When set, it is advertised on every request as `reasoning_budget_tokens` (llama-server, with a wrap-up message) and as `ThinkingConfig.ThinkingBudget` (Gemini 2.5). `0` or absent means no budget. Gemini 3 takes a level, not a number — use `/reasoning` there. |
+| `hardThinkingBudget` | bool | `false` | Enforce the budget client-side for servers that ignore the advertised one (vLLM, SGLang). The over-budget round is abandoned and re-issued with the model's partial reasoning quoted back and thinking switched off. Costs one extra round per cut, so leave it off unless a model actually loops. |
+
+A cut only happens while the model is still purely thinking; once answer text or
+a tool call has arrived the round runs to completion. The retry round runs with
+the budget disabled, so two cuts can never happen back to back.
+
+### Example
+
+```json
+{
+  "providers": {
+    "local-vllm": {
+      "models": {
+        "qwen3-30b": {
+          "thinkingBudgetTokens": 4096,
+          "hardThinkingBudget": true
+        }
+      }
+    }
+  }
+}
+```
+
 ## Sagittarius settings (`sagittarius.*`)
 
 These live under the top-level `sagittarius` key. Leaf names are typed and

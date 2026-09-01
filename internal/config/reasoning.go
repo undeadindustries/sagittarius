@@ -288,3 +288,29 @@ func DescribeReasoningCapability(settings *Settings, providerID, model string) s
 	}
 	return "adaptive by default — enabled (discovered reasoning-capable model)"
 }
+
+// ResolveThinkingBudget returns the reasoning-token budget configured for a
+// (provider, model) and whether it should also be enforced client-side.
+//
+// tokens is advisory: it is advertised to the provider on every request so a
+// server that understands a budget (llama.cpp, Gemini) can enforce it during
+// generation, which is always better than cutting a stream. hard adds a
+// client-side backstop for servers that ignore the advertisement.
+//
+// Both are per-model only (providers.<id>.models.<model>.*); there is
+// deliberately no provider-wide fallback. A non-positive budget resolves to
+// (0, false) so a stray hardThinkingBudget with no budget cannot cut anything.
+func ResolveThinkingBudget(settings *Settings, providerID, model string) (tokens int, hard bool) {
+	if settings == nil {
+		return 0, false
+	}
+	inst := settings.ProviderInstance(providerID)
+	if inst == nil {
+		return 0, false
+	}
+	mc, ok := lookupModelConfig(inst, model)
+	if !ok || mc.ThinkingBudgetTokens == nil || *mc.ThinkingBudgetTokens <= 0 {
+		return 0, false
+	}
+	return *mc.ThinkingBudgetTokens, mc.HardThinkingBudget != nil && *mc.HardThinkingBudget
+}

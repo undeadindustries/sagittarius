@@ -81,6 +81,8 @@ var settingsMenu = []settingItem{
 	{label: "contextLimit (tokens)", key: "contextLimit"},
 	{label: "reasoningEffort", key: "reasoningEffort"},
 	{label: "showThinking (true/false)", key: "showThinking"},
+	{label: "thinkingBudgetTokens (0 = off)", key: "thinkingBudgetTokens"},
+	{label: "hardThinkingBudget (true/false)", key: "hardThinkingBudget"},
 	{label: "← Back", key: "back"},
 }
 

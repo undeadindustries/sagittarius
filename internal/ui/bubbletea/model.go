@@ -2040,6 +2040,14 @@ func (m *model) handleStreamGen(gen uint64, ev ui.StreamEvent) (tea.Model, tea.C
 		m.setWorkingLabel(m.busyLabel())
 	case ui.StreamInfo:
 		m.addBlock(roleInfo, ev.Text)
+	case ui.StreamThinkingBudget:
+		// The reasoning this interrupted is still buffered, and the buffer is
+		// what makes busyLabel() say "Thinking…" and keeps the thinking box on
+		// screen. Retire it, or the display contradicts the notice we are about
+		// to print.
+		m.thinking = ""
+		m.addBlock(roleInfo, ev.Text)
+		m.setWorkingLabel(m.busyLabel())
 	case ui.StreamClearScrollback:
 		m.clearScrollbackBlocks()
 	case ui.StreamScrollback:

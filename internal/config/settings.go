@@ -92,6 +92,15 @@ type ProviderModelConfig struct {
 	// ShowThinking overrides the provider/global thinking-box visibility for
 	// this model only. Nil inherits the provider instance value.
 	ShowThinking *bool `json:"showThinking,omitempty"`
+	// ThinkingBudgetTokens caps the tokens this model may spend reasoning in a
+	// single round. It is advertised to the provider on every request; servers
+	// that understand it (llama.cpp reasoning_budget_tokens, Gemini
+	// ThinkingBudget) enforce it themselves. Nil or non-positive means unset.
+	ThinkingBudgetTokens *int `json:"thinkingBudgetTokens,omitempty"`
+	// HardThinkingBudget enforces ThinkingBudgetTokens client-side for servers
+	// that ignore the advertised budget: the round is cut short and re-issued
+	// with thinking suppressed. Nil is false.
+	HardThinkingBudget *bool `json:"hardThinkingBudget,omitempty"`
 	// ReasoningSupported and ReasoningMandatory cache a model's reasoning
 	// capability as discovered from the provider's models list (currently only
 	// OpenRouter reports this). They are written by
@@ -116,6 +125,18 @@ type ProviderModelConfig struct {
 	// so we do not re-fetch the catalog on every save.
 	ReasoningProbed bool                       `json:"reasoningProbed,omitempty"`
 	Extra           map[string]json.RawMessage `json:"-"`
+}
+
+// IsEmpty reports whether every field is at its zero value, meaning the entry
+// carries no user pin and no discovered capability and can be dropped from
+// providers.<id>.models rather than persisted as an empty object.
+func (c ProviderModelConfig) IsEmpty() bool {
+	return c.Personality == "" && c.PromptMode == "" && c.Temperature == nil &&
+		c.ContextLimit == nil && c.ReasoningEffort == "" && c.ShowThinking == nil &&
+		c.ThinkingBudgetTokens == nil && c.HardThinkingBudget == nil &&
+		c.ReasoningSupported == nil && c.ReasoningMandatory == nil &&
+		len(c.ReasoningEfforts) == 0 && c.ReasoningDefaultEffort == "" &&
+		!c.ReasoningProbed && c.Extra == nil
 }
 
 // UnmarshalJSON decodes the known per-model fields and preserves unknown keys.
@@ -153,6 +174,16 @@ func (c *ProviderModelConfig) UnmarshalJSON(data []byte) error {
 			}
 		case "showThinking":
 			if err := json.Unmarshal(val, &c.ShowThinking); err != nil {
+				return err
+			}
+		case "thinkingBudgetTokens":
+			var n int
+			if err := json.Unmarshal(val, &n); err != nil {
+				return err
+			}
+			c.ThinkingBudgetTokens = &n
+		case "hardThinkingBudget":
+			if err := json.Unmarshal(val, &c.HardThinkingBudget); err != nil {
 				return err
 			}
 		case "reasoningSupported":
@@ -229,6 +260,20 @@ func (c ProviderModelConfig) MarshalJSON() ([]byte, error) {
 			return nil, err
 		}
 		obj["showThinking"] = b
+	}
+	if c.ThinkingBudgetTokens != nil {
+		b, err := json.Marshal(*c.ThinkingBudgetTokens)
+		if err != nil {
+			return nil, err
+		}
+		obj["thinkingBudgetTokens"] = b
+	}
+	if c.HardThinkingBudget != nil {
+		b, err := json.Marshal(*c.HardThinkingBudget)
+		if err != nil {
+			return nil, err
+		}
+		obj["hardThinkingBudget"] = b
 	}
 	if c.ReasoningSupported != nil {
 		b, err := json.Marshal(*c.ReasoningSupported)

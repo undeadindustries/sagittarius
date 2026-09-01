@@ -845,6 +845,21 @@ func SetModelConfig(settings *config.Settings, providerID, model, key, value str
 			return err
 		}
 		mc.ShowThinking = b
+	case "thinkingBudgetTokens":
+		n, err := parseInt(key, value)
+		if err != nil {
+			return err
+		}
+		if n != nil && *n < 0 {
+			return fmt.Errorf("set model config: %s must not be negative", key)
+		}
+		mc.ThinkingBudgetTokens = n
+	case "hardThinkingBudget":
+		b, err := parseBool(key, value)
+		if err != nil {
+			return err
+		}
+		mc.HardThinkingBudget = b
 	default:
 		return fmt.Errorf("set model config: unsupported key %q", key)
 	}
@@ -905,6 +920,10 @@ func ClearModelConfig(settings *config.Settings, providerID, model, key string) 
 		mc.ReasoningEffort = ""
 	case "showThinking":
 		mc.ShowThinking = nil
+	case "thinkingBudgetTokens":
+		mc.ThinkingBudgetTokens = nil
+	case "hardThinkingBudget":
+		mc.HardThinkingBudget = nil
 	}
 	cfg, err := ensureProviderInstance(settings, providerID)
 	if err != nil {
@@ -913,10 +932,7 @@ func ClearModelConfig(settings *config.Settings, providerID, model, key string) 
 	if cfg.Models == nil {
 		cfg.Models = make(map[string]config.ProviderModelConfig)
 	}
-	if mc.Temperature == nil && mc.ContextLimit == nil && mc.ReasoningEffort == "" &&
-		mc.ShowThinking == nil && mc.Personality == "" && mc.PromptMode == "" && mc.Extra == nil &&
-		mc.ReasoningSupported == nil && mc.ReasoningMandatory == nil &&
-		len(mc.ReasoningEfforts) == 0 && mc.ReasoningDefaultEffort == "" && !mc.ReasoningProbed {
+	if mc.IsEmpty() {
 		delete(cfg.Models, model)
 	} else {
 		cfg.Models[model] = mc
@@ -946,6 +962,12 @@ func ModelConfigValues(settings *config.Settings, providerID, model string) map[
 	}
 	if mc.ShowThinking != nil {
 		out["showThinking"] = strconv.FormatBool(*mc.ShowThinking)
+	}
+	if mc.ThinkingBudgetTokens != nil {
+		out["thinkingBudgetTokens"] = strconv.Itoa(*mc.ThinkingBudgetTokens)
+	}
+	if mc.HardThinkingBudget != nil {
+		out["hardThinkingBudget"] = strconv.FormatBool(*mc.HardThinkingBudget)
 	}
 	return out
 }
