@@ -28,7 +28,7 @@ func TestInspectDenialsNameTheExit(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			allowed, reason := inspectModeAllow(tc.tool, tc.args)
+			allowed, reason := inspectModeAllow(tc.tool, tc.args, nil)
 			if allowed {
 				t.Fatalf("%s allowed under the inspect gate", tc.tool)
 			}
@@ -58,7 +58,7 @@ func TestInspectAllowsReadOnlyWork(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if allowed, reason := inspectModeAllow(tc.tool, tc.args); !allowed {
+			if allowed, reason := inspectModeAllow(tc.tool, tc.args, nil); !allowed {
 				t.Fatalf("%s denied under the inspect gate: %s", tc.tool, reason)
 			}
 		})

@@ -137,10 +137,12 @@ Notes:
 
 - Detached `gopls mcp` sees saved files only, so the agent must write changes
   before asking for diagnostics.
-- Tools appear as `mcp_gopls_*` and, like all MCP tools, are available in `agent`
-  and `debug` modes but blocked in `plan`/`ask`.
-- `trust: true` is reasonable for read-only LSP tools; keep `trust: false` for
-  MCP servers that can mutate files.
+- Tools appear as `mcp_gopls_*` and are available in `agent` and `debug` modes;
+  in `plan`/`ask` they need a read-only mark like any other MCP tool (see
+  [tools/mcp-server.md](tools/mcp-server.md#mcp-tools-in-read-only-modes)).
+- `trust: true` is reasonable for read-only LSP tools, and it also lets their
+  `readOnlyHint` annotations be honored; keep `trust: false` for MCP servers
+  that can mutate files.
 
 Sagittarius does not embed a language server or linters. This keeps the binary
 small and lets each project own its toolchain — the same trade-off OpenCode

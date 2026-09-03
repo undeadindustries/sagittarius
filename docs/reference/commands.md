@@ -430,9 +430,9 @@ again.
 ### `/readonly`
 
 - **Description:** Set a durable, session-wide read-only inspection posture.
-  While it is on, file writes, `edit`, `save_memory`, MCP tools, and any shell
-  command the read-only classifier scores as mutating are denied by the
-  scheduler, whatever the interaction mode says. Read-only shell commands
+  While it is on, file writes, `edit`, `save_memory`, MCP tools that are not
+  marked read-only, and any shell command the read-only classifier scores as
+  mutating are denied by the scheduler, whatever the interaction mode says. Read-only shell commands
   (`systemctl status`, `journalctl`, `nginx -t`, SQL `SELECT`) still run;
   unrecognized ones prompt for confirmation. The posture survives `--resume`
   and never expires on its own.
@@ -539,8 +539,11 @@ See also: [MCP server configuration](../tools/mcp-server.md).
   interactive view with two sections: built-in Sagittarius tools (read-only,
   labeled **not editable**) and MCP tools grouped by server. For MCP tools,
   Space toggles enable/disable, which persists each server's `includeTools` /
-  `excludeTools` filter and reloads the registry. The footer links to the `/mcp`
-  wizard for server management.
+  `excludeTools` filter and reloads the registry. `a` marks an MCP tool as
+  read-only, adding it to the server's `readOnlyTools` allowlist so it can run
+  in `ask` mode, `plan` mode, and the `/readonly` posture; a tool the server
+  itself declares `readOnlyHint` on shows as `read-only (declared)` and is not
+  editable here. The footer links to the `/mcp` wizard for server management.
 - **`find_symbol`:** One of the built-in tools, this locates symbol definitions
   and references across source files using a syntax-aware parser (no persistent
   index). It is on by default; disable it with `sagittarius.symbols.enabled: false`

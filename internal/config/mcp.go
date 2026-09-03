@@ -24,6 +24,14 @@ type MCPServerConfig struct {
 	IncludeTools []string          `json:"includeTools,omitempty"`
 	ExcludeTools []string          `json:"excludeTools,omitempty"`
 	Disabled     *bool             `json:"disabled,omitempty"`
+	// ReadOnlyTools names tools this server may run in read-only modes (ask,
+	// plan, and the /readonly posture). It is an allowlist, not a denylist: a
+	// server added later must not silently gain access to a mode whose whole
+	// promise is that nothing changes. Tools whose MCP annotations declare
+	// readOnlyHint are admitted without being listed here, but only from a
+	// trusted server — the MCP spec is explicit that annotations are hints and
+	// must not drive tool-use decisions for servers you have not vouched for.
+	ReadOnlyTools []string `json:"readOnlyTools,omitempty"`
 }
 
 // MCPServers returns configured MCP servers from settings Raw passthrough.
@@ -102,6 +110,26 @@ func (s *Settings) SetMCPServerDisabled(name string, disabled bool) error {
 		return fmt.Errorf("mcp server %q not found", name)
 	}
 	cfg.Disabled = &disabled
+	servers[name] = cfg
+	return s.writeMCPServers(servers)
+}
+
+// SetMCPServerReadOnlyTools replaces the list of tools a server may run in
+// read-only modes. An empty slice clears the allowlist, returning every tool on
+// that server to annotation-only admission.
+func (s *Settings) SetMCPServerReadOnlyTools(name string, readOnly []string) error {
+	if s == nil {
+		return fmt.Errorf("set mcp server read-only tools: nil settings")
+	}
+	servers, err := s.MCPServers()
+	if err != nil {
+		return err
+	}
+	cfg, ok := servers[name]
+	if !ok {
+		return fmt.Errorf("mcp server %q not found", name)
+	}
+	cfg.ReadOnlyTools = normalizeToolList(readOnly)
 	servers[name] = cfg
 	return s.writeMCPServers(servers)
 }

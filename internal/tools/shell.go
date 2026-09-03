@@ -35,6 +35,14 @@ const backgroundStartGrace = 750 * time.Millisecond
 // synchronously as before; only genuinely long-lived processes are backgrounded.
 const defaultAutoBackgroundAfter = 30 * time.Second
 
+// NestedAgentEnvVar marks a process started by the shell tool so a nested
+// sagittarius can tell it is running inside a tool call. Commands run in a PTY,
+// which makes stdin and stdout TTYs unconditionally, so the usual terminal
+// detection would happily start a second interactive TUI painting over its
+// parent's alt-screen and never exiting. The entry point in cmd/sagittarius
+// refuses the interactive path when this is set.
+const NestedAgentEnvVar = "SAGITTARIUS_TOOL_CHILD"
+
 type shellTool struct {
 	ws *Workspace
 	// autoBackgroundAfter is the foreground auto-background threshold. A field
@@ -182,7 +190,7 @@ func (t *shellTool) run(ctx context.Context, command string, explicitBackground 
 
 	cmd := exec.Command("bash", "-c", wrappedCommand)
 	cmd.Dir = t.ws.Root()
-	cmd.Env = os.Environ()
+	cmd.Env = append(os.Environ(), NestedAgentEnvVar+"=1")
 
 	f, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 24, Cols: 80})
 	if err != nil {
@@ -276,7 +284,7 @@ func (t *shellTool) run(ctx context.Context, command string, explicitBackground 
 	if grace <= 0 {
 		select {
 		case err = <-waitErr:
-			<-ioDone
+			waitDrain(ioDone, logPath)
 			isDone.Store(true)
 			if tailCancel != nil {
 				tailCancel()
@@ -293,7 +301,7 @@ func (t *shellTool) run(ctx context.Context, command string, explicitBackground 
 			}
 			_ = syscall.Kill(-pid, syscall.SIGKILL)
 			_ = f.Close()
-			<-ioDone
+			waitDrain(ioDone, logPath)
 			_ = os.Remove(logPath)
 			return nil, ctx.Err()
 		}
@@ -304,7 +312,7 @@ func (t *shellTool) run(ctx context.Context, command string, explicitBackground 
 
 	select {
 	case err = <-waitErr:
-		<-ioDone // wait for remaining output to flush
+		waitDrain(ioDone, logPath) // wait for remaining output to flush
 		isDone.Store(true)
 		if tailCancel != nil {
 			tailCancel()
@@ -324,14 +332,14 @@ func (t *shellTool) run(ctx context.Context, command string, explicitBackground 
 		}
 		_ = syscall.Kill(-pid, syscall.SIGKILL)
 		_ = f.Close()
-		<-ioDone
+		waitDrain(ioDone, logPath)
 		_ = os.Remove(logPath)
 		return nil, ctx.Err()
 	case <-timer.C:
 		// Prefer a concurrent exit over backgrounding when both are ready.
 		select {
 		case err = <-waitErr:
-			<-ioDone
+			waitDrain(ioDone, logPath)
 			isDone.Store(true)
 			if tailCancel != nil {
 				tailCancel()
@@ -352,6 +360,28 @@ func (t *shellTool) run(ctx context.Context, command string, explicitBackground 
 			}
 			return backgroundedResult(pid, logPath, explicitBackground, grace, storedErr(&logWriteErr)), nil
 		}
+	}
+}
+
+// waitDrain waits for the PTY drain goroutine to publish its remaining output,
+// giving up after drainStopTimeout. The drain normally ends the moment the PTY
+// master is closed, but a read already blocked on a master that the runtime
+// poller never registered does not return on Close; waiting for it without a
+// deadline strands the agent turn, which cannot be recovered from the UI. The
+// abandoned goroutine ends on its own whenever that read finally returns.
+func waitDrain(ioDone <-chan struct{}, logPath string) {
+	waitDrainFor(ioDone, logPath, drainStopTimeout)
+}
+
+// waitDrainFor is waitDrain with an injectable deadline so tests need not sleep
+// for the production timeout.
+func waitDrainFor(ioDone <-chan struct{}, logPath string, timeout time.Duration) {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-ioDone:
+	case <-timer.C:
+		slog.Warn("shell: PTY drain did not finish; abandoning it", "path", logPath)
 	}
 }
 

@@ -42,11 +42,47 @@ func projectChecksFixRequested(args map[string]any) bool {
 	return err == nil && fix
 }
 
+// ReadOnlyHinter is implemented by tools that can vouch for themselves as
+// non-mutating. Built-ins are covered by readOnlyBuiltinTools, so in practice
+// this exists for MCP tools, whose behavior is only knowable from the server's
+// own annotations plus what the user has vouched for in settings.
+type ReadOnlyHinter interface {
+	ReadOnlyHint() bool
+}
+
+// toolIsReadOnly reports whether tool declares itself safe in read-only modes.
+// A nil tool answers false: callers that cannot resolve the tool (declaration
+// filtering before registration, hook-rewrite revalidation) must not be able to
+// admit an MCP tool by accident.
+func toolIsReadOnly(tool Tool) bool {
+	hinter, ok := tool.(ReadOnlyHinter)
+	return ok && hinter.ReadOnlyHint()
+}
+
+// mcpDenyHint names the way to admit an MCP tool to read-only modes. A deny
+// with no remedy is what taught models to invent bad advice (see AD-107).
+const mcpDenyHint = " — add it to the server's readOnlyTools in settings, " +
+	"or trust the server if it declares readOnlyHint, then run /mcp reload"
+
 // InteractionModeAllow reports whether a tool call is permitted for the active
 // interaction mode. workspace may be nil only when checking declaration
-// visibility (no path validation).
+// visibility (no path validation). Prefer InteractionModeAllowTool where the
+// resolved tool is at hand: without it an MCP tool cannot present its
+// read-only annotation and is denied in ask and plan mode.
 func InteractionModeAllow(
 	mode modes.Mode,
+	toolName string,
+	args map[string]any,
+	ws *Workspace,
+) (allowed bool, reason string) {
+	return InteractionModeAllowTool(mode, nil, toolName, args, ws)
+}
+
+// InteractionModeAllowTool is InteractionModeAllow with the resolved tool, so a
+// read-only MCP tool can be admitted to a read-only mode. tool may be nil.
+func InteractionModeAllowTool(
+	mode modes.Mode,
+	tool Tool,
 	toolName string,
 	args map[string]any,
 	ws *Workspace,
@@ -55,9 +91,9 @@ func InteractionModeAllow(
 	case modes.ModeAgent, modes.ModeDebug:
 		return true, ""
 	case modes.ModeAsk:
-		return askModeAllow(canonicalToolName(toolName), args)
+		return askModeAllow(canonicalToolName(toolName), args, tool)
 	case modes.ModePlan:
-		return planModeAllow(canonicalToolName(toolName), args, ws)
+		return planModeAllow(canonicalToolName(toolName), args, ws, tool)
 	default:
 		return true, ""
 	}
@@ -69,6 +105,14 @@ func ToolVisibleInMode(mode modes.Mode, toolName string) bool {
 	return allowed
 }
 
+// ToolValueVisibleInMode is ToolVisibleInMode for a resolved tool, so a
+// read-only MCP tool is declared to the model in ask and plan mode rather than
+// being offered and then denied on use.
+func ToolValueVisibleInMode(mode modes.Mode, tool Tool) bool {
+	allowed, _ := InteractionModeAllowTool(mode, tool, tool.Name(), nil, nil)
+	return allowed
+}
+
 func canonicalToolName(name string) string {
 	if canonical, ok := legacyAliases[name]; ok {
 		return canonical
@@ -76,7 +120,7 @@ func canonicalToolName(name string) string {
 	return name
 }
 
-func askModeAllow(name string, args map[string]any) (bool, string) {
+func askModeAllow(name string, args map[string]any, tool Tool) (bool, string) {
 	if name == ProjectChecksToolName && projectChecksFixRequested(args) {
 		return false, "ask mode: run_project_checks fix mode rewrites files and is not allowed; run check-only (fix=false) instead"
 	}
@@ -90,7 +134,10 @@ func askModeAllow(name string, args map[string]any) (bool, string) {
 		return false, "ask mode: shell commands are not allowed; use read_file, grep_search, list_directory, find_symbol, google_web_search, or web_fetch instead"
 	default:
 		if strings.HasPrefix(name, "mcp_") {
-			return false, "ask mode: MCP tools are not available in read-only Q&A mode"
+			if toolIsReadOnly(tool) {
+				return true, ""
+			}
+			return false, "ask mode: MCP tool " + name + " is not marked read-only" + mcpDenyHint
 		}
 		return false, fmt.Sprintf("ask mode: tool %q is not allowed", name)
 	}
@@ -99,11 +146,11 @@ func askModeAllow(name string, args map[string]any) (bool, string) {
 // grillModeAllow enforces the grill-mode read-only gate: everything askModeAllow
 // permits is allowed, plus ask_user itself (the interrogation mechanism), so
 // the agent can keep asking questions while writes/shell stay blocked.
-func grillModeAllow(name string, args map[string]any) (bool, string) {
+func grillModeAllow(name string, args map[string]any, tool Tool) (bool, string) {
 	if name == AskUserToolName {
 		return true, ""
 	}
-	if allowed, reason := askModeAllow(name, args); !allowed {
+	if allowed, reason := askModeAllow(name, args, tool); !allowed {
 		return false, "grill mode: " + strings.TrimPrefix(reason, "ask mode: ")
 	}
 	return true, ""
@@ -115,7 +162,7 @@ func grillModeAllow(name string, args map[string]any) (bool, string) {
 // advice (restart the process, switch modes) that does not work.
 const readOnlyExit = " — run /readonly off to allow changes"
 
-func inspectModeAllow(name string, args map[string]any) (bool, string) {
+func inspectModeAllow(name string, args map[string]any, tool Tool) (bool, string) {
 	if name == AskUserToolName {
 		return true, ""
 	}
@@ -145,7 +192,10 @@ func inspectModeAllow(name string, args map[string]any) (bool, string) {
 		return true, ""
 	default:
 		if strings.HasPrefix(name, "mcp_") {
-			return false, "inspect mode: MCP tools are not available because they cannot be verified as read-only" + readOnlyExit
+			if toolIsReadOnly(tool) {
+				return true, ""
+			}
+			return false, "inspect mode: MCP tool " + name + " is not marked read-only" + mcpDenyHint + readOnlyExit
 		}
 		return false, fmt.Sprintf("inspect mode: tool %q is not allowed", name) + readOnlyExit
 	}
@@ -179,7 +229,7 @@ func shellInspectAllow(name string, args map[string]any) (bool, string) {
 	return true, ""
 }
 
-func planModeAllow(name string, args map[string]any, ws *Workspace) (bool, string) {
+func planModeAllow(name string, args map[string]any, ws *Workspace, tool Tool) (bool, string) {
 	if name == ProjectChecksToolName && projectChecksFixRequested(args) {
 		return false, "plan mode: run_project_checks fix mode rewrites files and is not allowed; run check-only (fix=false) instead"
 	}
@@ -203,7 +253,10 @@ func planModeAllow(name string, args map[string]any, ws *Workspace) (bool, strin
 		return false, "plan mode: shell commands are not allowed; switch to agent mode to run commands"
 	default:
 		if strings.HasPrefix(name, "mcp_") {
-			return false, "plan mode: MCP tools are not available until you switch to agent mode"
+			if toolIsReadOnly(tool) {
+				return true, ""
+			}
+			return false, "plan mode: MCP tool " + name + " is not marked read-only" + mcpDenyHint
 		}
 		return false, fmt.Sprintf("plan mode: tool %q is not allowed", name)
 	}

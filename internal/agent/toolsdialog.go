@@ -52,10 +52,12 @@ func (d *toolsDialogDeps) ServerTools(ctx context.Context) []toolsdialog.ServerG
 		group := toolsdialog.ServerGroup{Server: g.Server, Status: string(g.Status), Err: g.Err}
 		for _, t := range g.Tools {
 			group.Tools = append(group.Tools, toolsdialog.ServerTool{
-				Name:        t.Name,
-				WireName:    t.WireName,
-				Description: t.Description,
-				Enabled:     t.Enabled,
+				Name:             t.Name,
+				WireName:         t.WireName,
+				Description:      t.Description,
+				Enabled:          t.Enabled,
+				ReadOnly:         t.ReadOnly,
+				ReadOnlyFromHint: t.ReadOnlyFromHint,
 			})
 		}
 		out = append(out, group)
@@ -87,6 +89,43 @@ func (d *toolsDialogDeps) SetToolEnabled(ctx context.Context, server, tool strin
 	// connections are unchanged, so rebuild the registry from the cached tool
 	// set instead of forcing a full reconnect.
 	return d.app.rebuildToolRegistry()
+}
+
+// SetToolReadOnly adds or removes one MCP tool from its server's readOnlyTools
+// allowlist. Unlike an include/exclude filter toggle, this cannot be served from
+// the cached tool set: each DiscoveredTool resolves its read-only state once at
+// construction (the same lifetime as trust), so the servers are reloaded to pick
+// the change up.
+func (d *toolsDialogDeps) SetToolReadOnly(ctx context.Context, server, tool string, readOnly bool) error {
+	if d.app.deps.Settings == nil {
+		return fmt.Errorf("settings not loaded")
+	}
+	if err := d.app.persistGlobal(func(s *config.Settings) error {
+		servers, err := s.MCPServers()
+		if err != nil {
+			return err
+		}
+		cfg, ok := servers[server]
+		if !ok {
+			return fmt.Errorf("server %q is not settings-managed; edit its source to change tools", server)
+		}
+		return s.SetMCPServerReadOnlyTools(server, toggleReadOnlyTool(cfg.ReadOnlyTools, tool, readOnly))
+	}); err != nil {
+		return err
+	}
+	_, err := d.app.deps.Hooks.ReloadMCP(ctx)
+	return err
+}
+
+// toggleReadOnlyTool returns the readOnlyTools list with tool added or removed.
+func toggleReadOnlyTool(current []string, tool string, readOnly bool) []string {
+	set := toStringSet(current)
+	if readOnly {
+		set[tool] = struct{}{}
+	} else {
+		delete(set, tool)
+	}
+	return setToSlice(set)
 }
 
 func (d *toolsDialogDeps) ReloadTools(ctx context.Context) error {

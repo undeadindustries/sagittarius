@@ -146,7 +146,12 @@ tool list sent to the model:
 | `google_web_search`, `web_fetch`, `run_project_checks` | yes | yes | yes |
 | `write_file` | yes | `docs/plans/` only | no |
 | `run_shell_command` | yes | no | no |
-| MCP tools | yes | no | no |
+| MCP tools | yes | read-only marked only | read-only marked only |
+
+An MCP tool counts as read-only marked when a trusted server declares
+`readOnlyHint` on it, or when you list it in that server's `readOnlyTools`
+(press `a` in `/tools`). See
+[tools/mcp-server.md](tools/mcp-server.md#mcp-tools-in-read-only-modes).
 
 Blocked calls return an error function response so the model can retry or explain
 the restriction. Built-in system-prompt suffixes reinforce these rules; optional

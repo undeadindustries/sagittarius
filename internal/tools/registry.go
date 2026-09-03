@@ -214,8 +214,7 @@ func (r *Registry) ListDeclarationsForMode(mode modes.Mode) []provider.ToolDecla
 	}
 	out := make([]provider.ToolDeclaration, 0, len(r.order))
 	for _, tool := range r.order {
-		name := tool.Name()
-		if ToolVisibleInMode(mode, name) {
+		if ToolValueVisibleInMode(mode, tool) {
 			out = append(out, tool.Declaration())
 		}
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strings"
 	"sync/atomic"
 
@@ -20,6 +21,10 @@ type DiscoveredTool struct {
 	serverName string
 	toolName   string
 	trust      bool
+	// readOnly reports that this tool is safe in read-only modes. Resolved once
+	// at construction from the server config and the tool's own annotations,
+	// the same lifetime as trust; changing either setting needs /mcp reload.
+	readOnly bool
 	// prune is owned by the Manager and shared by every discovered tool, so a
 	// live settings toggle applies without rediscovery. Nil means never prune.
 	prune *atomic.Bool
@@ -35,6 +40,12 @@ func (t *DiscoveredTool) Name() string { return t.wireName }
 
 // RequiresConfirmation reports whether user confirmation is needed before execution.
 func (t *DiscoveredTool) RequiresConfirmation() bool { return !t.trust }
+
+// ReadOnlyHint reports whether this tool may run in ask mode, plan mode, and the
+// /readonly posture. It satisfies the optional read-only interface the tool
+// scheduler probes, so an MCP tool that modifies nothing is no longer denied
+// alongside one that does.
+func (t *DiscoveredTool) ReadOnlyHint() bool { return t.readOnly }
 
 // Declaration returns the provider tool schema.
 func (t *DiscoveredTool) Declaration() provider.ToolDeclaration {
@@ -123,8 +134,35 @@ func newDiscoveredTool(client *Client, tool *sdkmcp.Tool, prune *atomic.Bool) *D
 		serverName: client.cfg.Name,
 		toolName:   tool.Name,
 		trust:      client.cfg.Trust,
+		readOnly:   toolIsReadOnly(tool, client.cfg),
 		prune:      prune,
 	}
+}
+
+// toolIsReadOnly decides whether an MCP tool may run in a read-only mode.
+//
+// An explicit readOnlyTools entry always wins: it is the user vouching for a
+// tool directly, and it is the only route for the many servers that ship no
+// annotations at all (the SDK types readOnlyHint as a plain bool, so "omitted"
+// and "declared false" are indistinguishable and both must fail closed).
+//
+// Otherwise the server's own readOnlyHint is honored, but only when the server
+// is trusted. The MCP spec states that annotations are hints which "are not
+// guaranteed to provide a faithful description of tool behavior" and that
+// clients "should never make tool use decisions based on ToolAnnotations
+// received from untrusted servers", so an untrusted server cannot talk its way
+// into ask mode by asserting its own harmlessness.
+func toolIsReadOnly(tool *sdkmcp.Tool, cfg ServerConfig) bool {
+	if tool == nil {
+		return false
+	}
+	if slices.Contains(cfg.ReadOnlyTools, tool.Name) {
+		return true
+	}
+	if !cfg.Trust {
+		return false
+	}
+	return tool.Annotations != nil && tool.Annotations.ReadOnlyHint
 }
 
 func normalizeSchema(raw any) (map[string]any, bool) {

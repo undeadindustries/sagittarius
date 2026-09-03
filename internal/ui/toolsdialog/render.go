@@ -21,7 +21,8 @@ func (m Model) View() string {
 	if m.errMsg != "" {
 		b.WriteString("\n\n" + m.th.Error.Render(m.wrap("✗ "+m.errMsg)))
 	}
-	b.WriteString("\n\n" + overlay.Hints(m.th, "↑/↓ move • Space toggle MCP tool • Enter activate • r reload • Esc close"))
+	b.WriteString("\n\n" + overlay.Hints(m.th,
+		"↑/↓ move • Space toggle MCP tool • a allow in read-only modes • Enter activate • r reload • Esc close"))
 
 	return overlay.Frame(m.th, m.width, overlay.DefaultMinWidth, b.String())
 }
@@ -57,7 +58,7 @@ func (m Model) body() string {
 			if r.enabled {
 				box = "[x]"
 			}
-			b.WriteString(m.renderRow(box+" "+r.text, i == m.cursor) + "\n")
+			b.WriteString(m.renderRow(box+" "+r.text+readOnlyBadge(r), i == m.cursor) + "\n")
 		case rowAction:
 			if i > start {
 				b.WriteString("\n")
@@ -72,6 +73,20 @@ func (m Model) body() string {
 }
 
 const lockGlyph = "·"
+
+// readOnlyBadge labels a tool that may run in ask mode, plan mode, and the
+// /readonly posture, naming which of the two routes admitted it so the user can
+// tell their own allowlist entry from the server's annotation.
+func readOnlyBadge(r row) string {
+	switch {
+	case r.readOnlyFromHint:
+		return "  read-only (declared)"
+	case r.readOnly:
+		return "  read-only"
+	default:
+		return ""
+	}
+}
 
 func (m Model) renderRow(label string, selected bool) string {
 	return overlay.Row(m.th, label, selected)

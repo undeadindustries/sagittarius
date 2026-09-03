@@ -22,11 +22,13 @@ const (
 )
 
 type row struct {
-	kind    rowKind
-	text    string
-	server  string
-	tool    string
-	enabled bool
+	kind             rowKind
+	text             string
+	server           string
+	tool             string
+	enabled          bool
+	readOnly         bool
+	readOnlyFromHint bool
 }
 
 // Model is the /tools inventory overlay driven by the parent Bubble Tea model.
@@ -112,11 +114,13 @@ func (m *Model) rebuild() {
 		}
 		for _, t := range g.Tools {
 			rows = append(rows, row{
-				kind:    rowMCPTool,
-				text:    t.Name,
-				server:  g.Server,
-				tool:    t.Name,
-				enabled: t.Enabled,
+				kind:             rowMCPTool,
+				text:             t.Name,
+				server:           g.Server,
+				tool:             t.Name,
+				enabled:          t.Enabled,
+				readOnly:         t.ReadOnly,
+				readOnlyFromHint: t.ReadOnlyFromHint,
 			})
 		}
 	}
@@ -176,6 +180,8 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, nil
 	case "r":
 		return m.reload()
+	case "a":
+		return m.toggleReadOnly()
 	case " ", "space":
 		return m.toggle()
 	case "enter":
@@ -216,6 +222,42 @@ func (m Model) toggle() (Model, tea.Cmd) {
 		m.rebuild()
 		return m, nil
 	}
+	return m, nil
+}
+
+// toggleReadOnly adds or removes the selected MCP tool from its server's
+// readOnlyTools allowlist, which controls whether it can run in ask mode, plan
+// mode, and the /readonly posture.
+func (m Model) toggleReadOnly() (Model, tea.Cmd) {
+	r, ok := m.current()
+	if !ok {
+		return m, nil
+	}
+	if r.kind != rowMCPTool {
+		m.info = "Only MCP tools have a read-only setting."
+		m.errMsg = ""
+		return m, nil
+	}
+	// A tool the server itself declares read-only is already admitted; listing
+	// it would be redundant, and un-listing it could not revoke the server's
+	// own annotation, so the row would lie about what the toggle did.
+	if r.readOnlyFromHint {
+		m.info = fmt.Sprintf("%s declares readOnlyHint on a trusted server; already allowed.", r.tool)
+		m.errMsg = ""
+		return m, nil
+	}
+	want := !r.readOnly
+	if err := m.deps.SetToolReadOnly(m.ctx, r.server, r.tool, want); err != nil {
+		m.errMsg = err.Error()
+		return m, nil
+	}
+	if want {
+		m.info = fmt.Sprintf("%s allowed in ask, plan, and /readonly.", r.tool)
+	} else {
+		m.info = fmt.Sprintf("%s restricted to agent and debug modes.", r.tool)
+	}
+	m.errMsg = ""
+	m.rebuild()
 	return m, nil
 }
 

@@ -65,6 +65,48 @@ the credentials layer (never written to `settings.json`). Per-tool enable and
 disable lives in `/tools`, which persists each server's `includeTools` /
 `excludeTools` filter.
 
+## MCP tools in read-only modes
+
+`agent` and `debug` modes run any enabled MCP tool. The read-only modes — `ask`,
+`plan`, and the `/readonly` posture — admit an MCP tool only when it is marked
+read-only, because nothing else about a remote tool tells us whether calling it
+changes something. There are two ways to mark one:
+
+1. **The server declares it.** A tool whose MCP annotations set `readOnlyHint`
+   is admitted automatically, but only from a server you have set
+   `"trust": true` on. The MCP specification is explicit that annotations are
+   hints which "are not guaranteed to provide a faithful description of tool
+   behavior" and that clients "should never make tool use decisions based on
+   ToolAnnotations received from untrusted servers", so an untrusted server
+   cannot talk its way into `ask` mode by asserting its own harmlessness.
+2. **You vouch for it.** Add the tool to the server's `readOnlyTools` list.
+   Press `a` on the tool's row in `/tools`, or edit `settings.json` directly.
+   This works regardless of trust or annotations, and is the only route for the
+   many servers that ship no annotations at all.
+
+```json
+{
+  "mcpServers": {
+    "math": {
+      "command": "mcp-server-calculator",
+      "readOnlyTools": ["calculate", "convert"]
+    }
+  }
+}
+```
+
+`readOnlyTools` is an allowlist rather than a blocklist on purpose: a server you
+add next month must not gain access to a mode whose whole promise is that
+nothing changes, just because you have not gotten around to excluding it. In
+`/tools` an admitted tool is labeled `read-only`, or `read-only (declared)` when
+the server's own annotation carried it — the declared kind is not editable
+there, since removing it from your allowlist could not revoke the server's
+annotation.
+
+A tool's read-only state is resolved when the server connects, the same as
+`trust`, so run `/mcp reload` after hand-editing `readOnlyTools`. The `a` key in
+`/tools` reloads for you.
+
 ## Go code intelligence (gopls)
 
 For Go projects you can add language-server intelligence (diagnostics,
@@ -85,10 +127,12 @@ server. This needs `gopls` v0.20+ on your `PATH`
 }
 ```
 
-Its tools appear as `mcp_gopls_*` and, like all MCP tools, are available in
-`agent`/`debug` modes but blocked in `plan`/`ask`. Detached `gopls mcp` sees
-saved files only, so write changes before requesting diagnostics. `trust: true`
-is reasonable for read-only LSP tools; keep it `false` for write-capable servers.
+Its tools appear as `mcp_gopls_*` and are available in `agent`/`debug` modes;
+in `plan`/`ask` they need a read-only mark like any other MCP tool (see above).
+Detached `gopls mcp` sees saved files only, so write changes before requesting
+diagnostics. `trust: true` is reasonable for read-only LSP tools — and it also
+lets their `readOnlyHint` annotations be honored — but keep it `false` for
+write-capable servers.
 See [code-quality.md](../code-quality.md) for the broader verify workflow.
 
 ## Extensions

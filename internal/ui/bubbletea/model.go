@@ -92,9 +92,19 @@ type streamEventMsg struct {
 	event ui.StreamEvent
 }
 
-// turnDrainDoneMsg signals that a force-abandoned stream channel has fully
-// drained so a new turn may start on the shared Runner.
-type turnDrainDoneMsg struct{}
+// turnDrainDoneMsg signals that a force-abandoned stream channel has drained so
+// a new turn may start on the shared Runner. stalled reports that the drain gave
+// up rather than seeing the channel close, so the producer is still running.
+type turnDrainDoneMsg struct{ stalled bool }
+
+// abandonDrainTimeout bounds how long a force-abandoned stream is drained before
+// the composer is released regardless. A turn goroutine wedged in a tool call
+// never closes its channel, which used to hold turnInFlight forever and leave a
+// session that looks idle but rejects every message with no way out. Releasing
+// early is safe because Runner.RunTurn's turnActive compare-and-swap is the
+// authoritative overlap guard: a real overlap returns a recoverable error
+// instead of corrupting history.
+const abandonDrainTimeout = 3 * time.Second
 
 // clipboardResultMsg carries the outcome of an async clipboard copy started by
 // copyToClipboard, so the blocking copy runs off the UI goroutine.
@@ -504,8 +514,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case streamEventMsg:
 		return m.handleStreamGen(msg.gen, msg.event)
 	case turnDrainDoneMsg:
-		m.turnInFlight = false
-		return m, nil
+		return m.finishTurnDrain(msg)
 	case clipboardResultMsg:
 		return m, m.handleClipboardResult(msg)
 	case thinkingSavedMsg:
@@ -620,8 +629,7 @@ func (m *model) updateOverlay(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case streamEventMsg:
 		return m.handleStreamGen(msg.gen, msg.event)
 	case turnDrainDoneMsg:
-		m.turnInFlight = false
-		return m, nil
+		return m.finishTurnDrain(msg)
 	case tea.QuitMsg:
 		return m, m.beginQuit()
 	}
@@ -1939,6 +1947,7 @@ func (m *model) forceAbandonTurn() tea.Cmd {
 		m.queue = nil
 		m.addBlock(roleInfo, "Queued messages discarded after force stop.")
 	}
+	m.addBlock(roleInfo, "Stopped waiting for the turn.")
 	ch := m.stream
 	m.stream = nil
 	if ch == nil {
@@ -1946,6 +1955,19 @@ func (m *model) forceAbandonTurn() tea.Cmd {
 		return nil
 	}
 	return drainStreamCmd(ch)
+}
+
+// finishTurnDrain releases the composer once a force-abandoned stream has
+// drained. A stalled drain says so plainly: the previous turn is still holding
+// the Runner, so the next message may bounce until its tool call unwinds. The
+// flag is cleared either way — an honest, self-clearing error beats a session
+// that silently refuses every message.
+func (m *model) finishTurnDrain(msg turnDrainDoneMsg) (tea.Model, tea.Cmd) {
+	m.turnInFlight = false
+	if msg.stalled {
+		m.addBlock(roleInfo, "The stopped turn is still finishing a tool call. Your next message may report \"a turn is already in progress\" until it unwinds.")
+	}
+	return m, nil
 }
 
 // clearTurn releases the per-turn cancel function and resets the elapsed clock
@@ -2880,10 +2902,32 @@ func waitConcurrentStream(events <-chan ui.StreamEvent, gen uint64) tea.Cmd {
 }
 
 func drainStreamCmd(ch <-chan ui.StreamEvent) tea.Cmd {
+	return drainStreamCmdFor(ch, abandonDrainTimeout)
+}
+
+// drainStreamCmdFor is drainStreamCmd with an injectable deadline so tests need
+// not sleep for the production timeout.
+func drainStreamCmdFor(ch <-chan ui.StreamEvent, timeout time.Duration) tea.Cmd {
 	return func() tea.Msg {
-		for range ch {
+		timer := time.NewTimer(timeout)
+		defer timer.Stop()
+		for {
+			select {
+			case _, ok := <-ch:
+				if !ok {
+					return turnDrainDoneMsg{}
+				}
+			case <-timer.C:
+				// Keep consuming in the background so the wedged producer can
+				// still make progress if its tool call ever unwinds; the
+				// goroutine ends when the channel closes.
+				go func() {
+					for range ch {
+					}
+				}()
+				return turnDrainDoneMsg{stalled: true}
+			}
 		}
-		return turnDrainDoneMsg{}
 	}
 }
 

@@ -43,10 +43,11 @@ func (stubMCPDeps) ProjectAvailable() bool                          { return fal
 
 type stubToolsDeps struct{}
 
-func (stubToolsDeps) BuiltinTools() []toolsdialog.BuiltinTool                    { return nil }
-func (stubToolsDeps) ServerTools(context.Context) []toolsdialog.ServerGroup      { return nil }
-func (stubToolsDeps) SetToolEnabled(context.Context, string, string, bool) error { return nil }
-func (stubToolsDeps) ReloadTools(context.Context) error                          { return nil }
+func (stubToolsDeps) BuiltinTools() []toolsdialog.BuiltinTool                     { return nil }
+func (stubToolsDeps) ServerTools(context.Context) []toolsdialog.ServerGroup       { return nil }
+func (stubToolsDeps) SetToolEnabled(context.Context, string, string, bool) error  { return nil }
+func (stubToolsDeps) SetToolReadOnly(context.Context, string, string, bool) error { return nil }
+func (stubToolsDeps) ReloadTools(context.Context) error                           { return nil }
 
 type stubModelsDeps struct{}
 

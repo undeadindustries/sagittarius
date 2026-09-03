@@ -21,6 +21,13 @@ type ServerTool struct {
 	WireName    string // qualified mcp_{server}_{tool} name
 	Description string
 	Enabled     bool
+	// ReadOnly reports that the tool may run in ask mode, plan mode, and the
+	// /readonly posture.
+	ReadOnly bool
+	// ReadOnlyFromHint distinguishes a tool admitted by the server's own
+	// readOnlyHint annotation from one the user listed explicitly. Only the
+	// latter is editable here; the former is the server's declaration.
+	ReadOnlyFromHint bool
 }
 
 // ServerGroup groups an MCP server's tools with its connection status.
@@ -40,6 +47,9 @@ type Deps interface {
 	// SetToolEnabled enables or disables one MCP tool on a server, persisting the
 	// include/exclude filter and reloading the runner registry.
 	SetToolEnabled(ctx context.Context, server, tool string, enabled bool) error
+	// SetToolReadOnly adds or removes one MCP tool from its server's
+	// readOnlyTools allowlist, persisting the change and reloading the registry.
+	SetToolReadOnly(ctx context.Context, server, tool string, readOnly bool) error
 	// ReloadTools re-discovers MCP tools and refreshes the registry.
 	ReloadTools(ctx context.Context) error
 }

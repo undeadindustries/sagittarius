@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -234,6 +235,12 @@ type ToolInfo struct {
 	WireName    string // qualified mcp_{server}_{tool} name
 	Description string
 	Enabled     bool // passes the server's include/exclude filter
+	// ReadOnly reports that the tool may run in ask mode, plan mode, and the
+	// /readonly posture.
+	ReadOnly bool
+	// ReadOnlyFromHint means ReadOnly came from the server's own readOnlyHint
+	// annotation rather than the user's readOnlyTools allowlist.
+	ReadOnlyFromHint bool
 }
 
 // ServerToolInventory groups a server's tools with its connection status.
@@ -274,7 +281,7 @@ func (m *Manager) ToolInventory(ctx context.Context) []ServerToolInventory {
 				if err != nil {
 					inv.Err = err.Error()
 				} else {
-					infos := toolInfos(st.Name, all, st.Config.IncludeTools, st.Config.ExcludeTools)
+					infos := toolInfos(st.Name, all, st.Config)
 					sort.Slice(infos, func(a, b int) bool {
 						return infos[a].Name < infos[b].Name
 					})
@@ -293,9 +300,9 @@ func (m *Manager) ToolInventory(ctx context.Context) []ServerToolInventory {
 	return out
 }
 
-func toolInfos(server string, tools []*sdkmcp.Tool, include, exclude []string) []ToolInfo {
-	includeSet := toSet(include)
-	excludeSet := toSet(exclude)
+func toolInfos(server string, tools []*sdkmcp.Tool, cfg ServerConfig) []ToolInfo {
+	includeSet := toSet(cfg.IncludeTools)
+	excludeSet := toSet(cfg.ExcludeTools)
 	out := make([]ToolInfo, 0, len(tools))
 	for _, tool := range tools {
 		enabled := true
@@ -305,11 +312,16 @@ func toolInfos(server string, tools []*sdkmcp.Tool, include, exclude []string) [
 		if _, blocked := excludeSet[tool.Name]; blocked {
 			enabled = false
 		}
+		readOnly := toolIsReadOnly(tool, cfg)
 		out = append(out, ToolInfo{
 			Name:        tool.Name,
 			WireName:    FormatToolName(server, tool.Name),
 			Description: tool.Description,
 			Enabled:     enabled,
+			ReadOnly:    readOnly,
+			// Declared means the server's own annotation carried it, not the
+			// user's allowlist — the inventory UI must not offer to edit it.
+			ReadOnlyFromHint: readOnly && !slices.Contains(cfg.ReadOnlyTools, tool.Name),
 		})
 	}
 	return out

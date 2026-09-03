@@ -10,10 +10,12 @@ import (
 )
 
 type fakeDeps struct {
-	builtins []BuiltinTool
-	groups   []ServerGroup
-	toggles  []toggleCall
-	reloaded int
+	builtins     []BuiltinTool
+	groups       []ServerGroup
+	toggles      []toggleCall
+	readOnlySets []toggleCall
+	reloaded     int
+	readOnlyErr  error
 }
 
 type toggleCall struct {
@@ -42,6 +44,24 @@ func (f *fakeDeps) SetToolEnabled(_ context.Context, server, tool string, enable
 	return nil
 }
 
+func (f *fakeDeps) SetToolReadOnly(_ context.Context, server, tool string, readOnly bool) error {
+	if f.readOnlyErr != nil {
+		return f.readOnlyErr
+	}
+	f.readOnlySets = append(f.readOnlySets, toggleCall{server, tool, readOnly})
+	for gi := range f.groups {
+		if f.groups[gi].Server != server {
+			continue
+		}
+		for ti := range f.groups[gi].Tools {
+			if f.groups[gi].Tools[ti].Name == tool {
+				f.groups[gi].Tools[ti].ReadOnly = readOnly
+			}
+		}
+	}
+	return nil
+}
+
 func (f *fakeDeps) ReloadTools(context.Context) error {
 	f.reloaded++
 	return nil
@@ -61,6 +81,119 @@ func newFake() *fakeDeps {
 				{Name: "danger", WireName: "mcp_demo_danger", Enabled: false},
 			}},
 		},
+	}
+}
+
+// findRow returns the index of the first MCP tool row for tool, so a test can
+// place the cursor without depending on the built-in section's length.
+func findRow(t *testing.T, m Model, tool string) int {
+	t.Helper()
+	for i, r := range m.rows {
+		if r.kind == rowMCPTool && r.tool == tool {
+			return i
+		}
+	}
+	t.Fatalf("no MCP tool row for %q", tool)
+	return -1
+}
+
+// TestReadOnlyToggleVouchesForTool covers the "a" key: marking an MCP tool
+// read-only is how a calculator or docs-search server becomes usable in ask
+// mode without opening every tool on that server.
+func TestReadOnlyToggleVouchesForTool(t *testing.T) {
+	f := newFake()
+	m := New(context.Background(), f)
+	m.cursor = findRow(t, m, "echo")
+
+	m, _ = m.Update(keyRunes("a"))
+	if len(f.readOnlySets) != 1 {
+		t.Fatalf("SetToolReadOnly calls = %d, want 1", len(f.readOnlySets))
+	}
+	got := f.readOnlySets[0]
+	if got.server != "demo" || got.tool != "echo" || !got.enabled {
+		t.Fatalf("SetToolReadOnly(%+v), want demo/echo/true", got)
+	}
+	if !strings.Contains(m.info, "ask") {
+		t.Fatalf("info = %q, want it to name ask mode", m.info)
+	}
+
+	// Toggling again revokes it, so the allowlist is not a one-way door.
+	m.cursor = findRow(t, m, "echo")
+	m, _ = m.Update(keyRunes("a"))
+	if len(f.readOnlySets) != 2 || f.readOnlySets[1].enabled {
+		t.Fatalf("second toggle = %+v, want read-only revoked", f.readOnlySets)
+	}
+}
+
+// TestReadOnlyToggleLeavesDeclaredToolsAlone guards against a lying UI: a tool
+// the server itself declares read-only cannot be revoked from our settings, so
+// the toggle must explain that instead of pretending to act.
+func TestReadOnlyToggleLeavesDeclaredToolsAlone(t *testing.T) {
+	f := newFake()
+	f.groups[0].Tools[0].ReadOnly = true
+	f.groups[0].Tools[0].ReadOnlyFromHint = true
+	m := New(context.Background(), f)
+	m.cursor = findRow(t, m, "echo")
+
+	m, _ = m.Update(keyRunes("a"))
+	if len(f.readOnlySets) != 0 {
+		t.Fatalf("SetToolReadOnly called %d times for a server-declared tool, want 0", len(f.readOnlySets))
+	}
+	if !strings.Contains(m.info, "readOnlyHint") {
+		t.Fatalf("info = %q, want it to explain the server declared it", m.info)
+	}
+}
+
+// TestReadOnlyToggleOnBuiltinIsRejected keeps the key from silently doing
+// nothing on a row it cannot affect.
+func TestReadOnlyToggleOnBuiltinIsRejected(t *testing.T) {
+	f := newFake()
+	m := New(context.Background(), f)
+	m.cursor = m.firstSelectable() // first row is a built-in
+
+	m, _ = m.Update(keyRunes("a"))
+	if len(f.readOnlySets) != 0 {
+		t.Fatalf("SetToolReadOnly called for a built-in row, want 0 calls")
+	}
+	if !strings.Contains(m.info, "Only MCP tools") {
+		t.Fatalf("info = %q, want it to say only MCP tools have the setting", m.info)
+	}
+}
+
+// TestReadOnlyToggleSurfacesError ensures a failed persist is reported rather
+// than leaving the row looking changed.
+func TestReadOnlyToggleSurfacesError(t *testing.T) {
+	f := newFake()
+	f.readOnlyErr = fmt.Errorf("server %q is not settings-managed", "demo")
+	m := New(context.Background(), f)
+	m.cursor = findRow(t, m, "echo")
+
+	m, _ = m.Update(keyRunes("a"))
+	if !strings.Contains(m.errMsg, "not settings-managed") {
+		t.Fatalf("errMsg = %q, want the persist failure surfaced", m.errMsg)
+	}
+}
+
+// TestReadOnlyBadgeNamesProvenance covers the row label, which is the only place
+// a user can see why a tool is allowed.
+func TestReadOnlyBadgeNamesProvenance(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		row  row
+		want string
+	}{
+		{name: "declared", row: row{readOnly: true, readOnlyFromHint: true}, want: "  read-only (declared)"},
+		{name: "allowlisted", row: row{readOnly: true}, want: "  read-only"},
+		{name: "neither", row: row{}, want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := readOnlyBadge(tc.row); got != tc.want {
+				t.Fatalf("readOnlyBadge() = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

@@ -605,6 +605,86 @@ func TestShellExecuteUserWaitsPastAutoBackground(t *testing.T) {
 	}
 }
 
+// TestWaitDrainFor covers the bounded PTY-drain wait. Closing a PTY master does
+// not reliably interrupt a read already blocked on it, and waiting for that read
+// without a deadline stranded the whole agent turn: the tool never returned, the
+// stream never closed, and the composer rejected every later message with no way
+// to recover short of restarting the session.
+func TestWaitDrainFor(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name  string
+		drain func() <-chan struct{}
+	}{
+		{
+			name: "returns as soon as the drain finishes",
+			drain: func() <-chan struct{} {
+				ch := make(chan struct{})
+				close(ch)
+				return ch
+			},
+		},
+		{
+			name:  "gives up when the drain never finishes",
+			drain: func() <-chan struct{} { return make(chan struct{}) },
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				waitDrainFor(tc.drain(), "drain.log", 50*time.Millisecond)
+			}()
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("waitDrainFor blocked past its deadline")
+			}
+		})
+	}
+}
+
+// TestShellChildCarriesNestedAgentMarker pins the environment marker the CLI
+// entry point reads to refuse a nested interactive session. Without it a bare
+// `sagittarius` run as a tool call sees the tool's own PTY, decides it is
+// interactive, and relaunches the full UI inside the parent turn.
+func TestShellChildCarriesNestedAgentMarker(t *testing.T) {
+	t.Parallel()
+	tool := newTestShellTool(t)
+
+	res, err := tool.Execute(context.Background(), map[string]any{
+		ShellParamCommand: `echo "$` + NestedAgentEnvVar + `"`,
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if got, _ := res["output"].(string); got != "1" {
+		t.Fatalf("%s = %q in the child environment, want %q", NestedAgentEnvVar, got, "1")
+	}
+}
+
+// TestShellUserChildCarriesNestedAgentMarker covers the `!` / `/run` path too: a
+// TUI nested inside the parent's alt-screen corrupts the display even with Tab
+// PTY focus, so a user-typed command gets the same marker.
+func TestShellUserChildCarriesNestedAgentMarker(t *testing.T) {
+	t.Parallel()
+	tool := newTestShellTool(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	res, err := tool.ExecuteUser(ctx, `echo "$`+NestedAgentEnvVar+`"`, nil, nil)
+	if err != nil {
+		t.Fatalf("ExecuteUser: %v", err)
+	}
+	if got, _ := res["output"].(string); got != "1" {
+		t.Fatalf("%s = %q in the child environment, want %q", NestedAgentEnvVar, got, "1")
+	}
+}
+
 func TestShellUserStdinEcho(t *testing.T) {
 	t.Parallel()
 	tool := newTestShellTool(t)

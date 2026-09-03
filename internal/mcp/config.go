@@ -25,7 +25,10 @@ type ServerConfig struct {
 	Description  string
 	IncludeTools []string
 	ExcludeTools []string
-	Disabled     bool
+	// ReadOnlyTools names tools the user has vouched for as safe in read-only
+	// modes, regardless of what the server's annotations claim (or omit).
+	ReadOnlyTools []string
+	Disabled      bool
 }
 
 // FromSettings converts a config.MCPServerConfig into a runtime ServerConfig.
@@ -43,22 +46,23 @@ func FromSettings(name string, cfg config.MCPServerConfig) ServerConfig {
 		disabled = *cfg.Disabled
 	}
 	return ServerConfig{
-		Name:         name,
-		Command:      cfg.Command,
-		Args:         append([]string(nil), cfg.Args...),
-		Env:          copyStringMap(cfg.Env),
-		Cwd:          cfg.Cwd,
-		URL:          cfg.URL,
-		HTTPURL:      cfg.HTTPURL,
-		Headers:      copyStringMap(cfg.Headers),
-		TCP:          cfg.TCP,
-		Type:         cfg.Type,
-		Timeout:      timeout,
-		Trust:        trust,
-		Description:  cfg.Description,
-		IncludeTools: append([]string(nil), cfg.IncludeTools...),
-		ExcludeTools: append([]string(nil), cfg.ExcludeTools...),
-		Disabled:     disabled,
+		Name:          name,
+		Command:       cfg.Command,
+		Args:          append([]string(nil), cfg.Args...),
+		Env:           copyStringMap(cfg.Env),
+		Cwd:           cfg.Cwd,
+		URL:           cfg.URL,
+		HTTPURL:       cfg.HTTPURL,
+		Headers:       copyStringMap(cfg.Headers),
+		TCP:           cfg.TCP,
+		Type:          cfg.Type,
+		Timeout:       timeout,
+		Trust:         trust,
+		Description:   cfg.Description,
+		IncludeTools:  append([]string(nil), cfg.IncludeTools...),
+		ExcludeTools:  append([]string(nil), cfg.ExcludeTools...),
+		ReadOnlyTools: append([]string(nil), cfg.ReadOnlyTools...),
+		Disabled:      disabled,
 	}
 }
 

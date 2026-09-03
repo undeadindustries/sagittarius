@@ -822,14 +822,18 @@ func (s *Scheduler) validateHookRewrite(name string, args map[string]any) (Error
 }
 
 func (s *Scheduler) interactionModeAllow(toolName string, args map[string]any) (bool, string) {
+	// Resolved so an MCP tool can present its read-only annotation to the gates.
+	// A miss is fine: every gate treats a nil tool as not read-only, and an
+	// unknown tool is reported separately by the caller.
+	tool, _ := s.registry.Lookup(toolName)
 	if s.readOnlyPolicy != nil {
 		switch s.readOnlyPolicy() {
 		case PolicyStrict:
-			if allowed, reason := grillModeAllow(canonicalToolName(toolName), args); !allowed {
+			if allowed, reason := grillModeAllow(canonicalToolName(toolName), args, tool); !allowed {
 				return false, reason
 			}
 		case PolicyInspect:
-			if allowed, reason := inspectModeAllow(canonicalToolName(toolName), args); !allowed {
+			if allowed, reason := inspectModeAllow(canonicalToolName(toolName), args, tool); !allowed {
 				return false, reason
 			}
 		case PolicyShellInspect:
@@ -841,7 +845,7 @@ func (s *Scheduler) interactionModeAllow(toolName string, args map[string]any) (
 	if s.mode == nil {
 		return true, ""
 	}
-	return InteractionModeAllow(s.mode(), toolName, args, s.workspace)
+	return InteractionModeAllowTool(s.mode(), tool, toolName, args, s.workspace)
 }
 
 // formatToolSummary returns a short, single-line argument detail for a tool

@@ -164,6 +164,40 @@ func TestRunSlashModeShow(t *testing.T) {
 	}
 }
 
+// TestRunRefusesNestedInteractiveSession guards against the agent relaunching
+// its own TUI. The shell tool runs commands in a PTY, so terminal detection says
+// "interactive" inside a tool call and a bare `sagittarius` used to start a
+// second full-screen session that blocked the parent turn until the
+// auto-background threshold and then lingered as an orphan.
+func TestRunRefusesNestedInteractiveSession(t *testing.T) {
+	t.Setenv("SAGITTARIUS_HOME", t.TempDir())
+	t.Setenv(tools.NestedAgentEnvVar, "1")
+
+	stderr := captureStderr(t, func() {
+		if code := run(nil); code != 2 {
+			t.Fatalf("run = %d, want 2", code)
+		}
+	})
+	if !strings.Contains(stderr, "inside a sagittarius tool call") {
+		t.Fatalf("stderr = %q, want the nested-tool-call refusal", stderr)
+	}
+	if !strings.Contains(stderr, "-p") {
+		t.Fatalf("stderr = %q, want it to point at the headless flag", stderr)
+	}
+}
+
+// TestRunAllowsHeadlessInsideToolCall pins the other half of the guard: a tool
+// call may still run sagittarius headlessly, which is the supported way for an
+// agent to invoke its own binary.
+func TestRunAllowsHeadlessInsideToolCall(t *testing.T) {
+	t.Setenv("SAGITTARIUS_HOME", t.TempDir())
+	t.Setenv(tools.NestedAgentEnvVar, "1")
+
+	if code := run([]string{"-v"}); code != 0 {
+		t.Fatalf("run(-v) = %d, want 0 with the nested marker set", code)
+	}
+}
+
 func TestRunRejectsSlashWithPrompt(t *testing.T) {
 	t.Setenv("SAGITTARIUS_HOME", t.TempDir())
 	stderr := captureStderr(t, func() {

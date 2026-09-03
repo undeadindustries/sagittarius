@@ -30,6 +30,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/slash"
 	"github.com/undeadindustries/sagittarius/internal/snapshot"
 	"github.com/undeadindustries/sagittarius/internal/storage"
+	"github.com/undeadindustries/sagittarius/internal/tools"
 	"github.com/undeadindustries/sagittarius/internal/ui"
 	"github.com/undeadindustries/sagittarius/internal/ui/bubbletea"
 	"github.com/undeadindustries/sagittarius/internal/version"
@@ -210,6 +211,21 @@ func run(args []string) int {
 	if query != "" {
 		opts.interactive = false
 		return runHeadless(query, opts, fmt_)
+	}
+
+	// Every headless path has returned by now, so an invocation reaching here is
+	// asking for an interactive session — which can never work inside a tool
+	// call. Commands run in a PTY, so stdin and stdout are TTYs and the usual
+	// terminal detection happily says "interactive"; the child would then paint a
+	// full alt-screen TUI over its parent's, block the turn until the
+	// auto-background threshold, and survive as an orphaned headless TUI. The
+	// check does not consult shouldRunInteractive: a nested run deserves this
+	// message rather than the generic "requires a terminal" even when its output
+	// happens to be piped.
+	if os.Getenv(tools.NestedAgentEnvVar) != "" {
+		fmt.Fprintln(os.Stderr, "sagittarius: refusing to start an interactive session inside a sagittarius tool call")
+		fmt.Fprintln(os.Stderr, "  try: sagittarius -p \"your prompt\"")
+		return 2
 	}
 
 	// With --resume but no prompt: open interactive mode on the resumed session.

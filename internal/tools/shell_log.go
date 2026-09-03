@@ -20,6 +20,13 @@ const (
 	maxZeroReads     = 8
 	staleArtifactAge = 24 * time.Hour
 
+	// drainStopTimeout bounds how long run waits for the PTY drain goroutine
+	// after the child has exited or been killed. Closing a PTY master does not
+	// reliably interrupt a goroutine already blocked in Read when the fd is not
+	// registered with the runtime poller, and an unbounded wait there strands
+	// the whole agent turn.
+	drainStopTimeout = 2 * time.Second
+
 	shellLogPattern = "sagittarius-shell-*.log"
 	jobsPidPattern  = "sagittarius-jobs-*.pid"
 

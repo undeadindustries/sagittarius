@@ -144,3 +144,44 @@ func TestSetMCPServerDisabledAndToolFilter(t *testing.T) {
 		t.Fatal("expected error for missing server")
 	}
 }
+
+// TestSetMCPServerReadOnlyTools covers the allowlist that admits an MCP tool to
+// ask mode, plan mode, and the /readonly posture: it must round-trip through
+// settings.json, normalize like the other tool lists, and clear cleanly so a
+// user can revoke access.
+func TestSetMCPServerReadOnlyTools(t *testing.T) {
+	t.Parallel()
+	s := &Settings{Raw: map[string]json.RawMessage{}}
+	if err := s.SetMCPServer("demo", MCPServerConfig{Command: "echo"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	if err := s.SetMCPServerReadOnlyTools("demo", []string{"evaluate", "evaluate", " convert "}); err != nil {
+		t.Fatalf("SetMCPServerReadOnlyTools() error = %v", err)
+	}
+	servers, _ := s.MCPServers()
+	got := servers["demo"].ReadOnlyTools
+	want := []string{"convert", "evaluate"}
+	if len(got) != len(want) {
+		t.Fatalf("readOnlyTools = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("readOnlyTools[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+
+	// Clearing must drop the key entirely rather than persist an empty array,
+	// so the server returns to annotation-only admission.
+	if err := s.SetMCPServerReadOnlyTools("demo", nil); err != nil {
+		t.Fatalf("clear error = %v", err)
+	}
+	servers, _ = s.MCPServers()
+	if len(servers["demo"].ReadOnlyTools) != 0 {
+		t.Fatalf("readOnlyTools = %v, want empty after clear", servers["demo"].ReadOnlyTools)
+	}
+
+	if err := s.SetMCPServerReadOnlyTools("missing", []string{"x"}); err == nil {
+		t.Fatal("expected error for missing server")
+	}
+}
