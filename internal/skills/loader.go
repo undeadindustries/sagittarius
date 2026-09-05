@@ -44,9 +44,9 @@ func LoadFromDir(dir string) ([]Definition, error) {
 		return nil, fmt.Errorf("read skills dir %q: %w", dir, err)
 	}
 	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
+		// Deliberately no entry.IsDir() filter: os.ReadDir reports a directory
+		// symlink as ModeSymlink, so IsDir would skip a linked skill directory.
+		// The Stat below follows links and fails on non-directories anyway.
 		candidate := filepath.Join(dir, entry.Name(), "SKILL.md")
 		if _, err := os.Stat(candidate); err == nil {
 			files = append(files, candidate)

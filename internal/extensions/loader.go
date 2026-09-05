@@ -162,9 +162,10 @@ func discoverInstalledExtensions() ([]Extension, error) {
 	}
 	var out []Extension
 	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
+		// Deliberately no entry.IsDir() filter: os.ReadDir reports a directory
+		// symlink as ModeSymlink, so IsDir would skip a linked extension.
+		// loadExtensionDir rejects anything without a readable manifest, which
+		// is what extensionsFromSettings already relies on.
 		ext, err := loadExtensionDir(filepath.Join(root, entry.Name()))
 		if err != nil {
 			continue
