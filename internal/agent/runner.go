@@ -1016,7 +1016,7 @@ func (r *Runner) runAgentLoop(ctx context.Context, userInput string, out chan<- 
 outerLoop:
 	for {
 		for round := 0; uncapped || round < maxRounds; round++ {
-			r.prepareContext(ctx)
+			r.prepareContext(ctx, out)
 			if !r.pinned() {
 				r.refreshModelFromMode()
 			}
@@ -1219,7 +1219,12 @@ outerLoop:
 // the top of every tool round, so it acts as both the pre-turn and post-tool
 // hook. Defenses degrade gracefully: on error the runner proceeds with whatever
 // history PrepareTurn returns. A nil ContextManager makes this a no-op.
-func (r *Runner) prepareContext(ctx context.Context) {
+//
+// out, when non-nil, receives one line naming a compression failure. A rejected
+// summarizer request (a malformed replayed tool call, an over-window
+// summarizer prompt) used to be a slog line only, so the user saw a session
+// that simply stopped shrinking and then started failing.
+func (r *Runner) prepareContext(ctx context.Context, out chan<- ui.StreamEvent) {
 	mgr := r.contextManager()
 	if mgr == nil {
 		return
@@ -1242,6 +1247,20 @@ func (r *Runner) prepareContext(ctx context.Context) {
 	r.historyMu.Unlock()
 	if err != nil {
 		// PrepareTurn already logged; proceed with the (best-effort) history.
+		// The latch means this fires once: after it, Compress takes the
+		// truncation-only path and returns no error.
+		if out != nil {
+			ev := ui.StreamEvent{
+				Type: ui.StreamInfo,
+				Text: fmt.Sprintf("Context compression failed: %v. Falling back to truncation for this session.\n", err),
+			}
+			// Never block a cancelled turn on a consumer that has stopped
+			// reading; the failure is already in the log.
+			select {
+			case <-ctx.Done():
+			case out <- ev:
+			}
+		}
 		return
 	}
 	r.syncContextGauge()
@@ -2094,6 +2113,31 @@ func (r *Runner) syncContextGauge() {
 	if tok > 0 {
 		r.metrics.setContextTokens(tok)
 	}
+}
+
+// ContextFitNotice returns one line describing an over-window history, or ""
+// when the conversation fits the live model, the history is empty, or the
+// provider manages context server-side. Fitting stays lazy — the next turn
+// compresses or truncates — so a switch tells the user what is coming instead of
+// blocking on a summarizer call.
+func (r *Runner) ContextFitNotice() string {
+	budget := r.contextManager().BudgetLimit()
+	if budget <= 0 {
+		return ""
+	}
+	model := r.Model()
+	r.historyMu.RLock()
+	msgs := r.history
+	r.historyMu.RUnlock()
+	if len(msgs) == 0 {
+		return ""
+	}
+	tokens := estimateMessageTokens(msgs)
+	if tokens <= budget {
+		return ""
+	}
+	return fmt.Sprintf("History is about %s tokens; %s's usable window is about %s. It will be compressed or truncated on your next turn.",
+		ui.CompactCount(tokens), model, ui.CompactCount(budget))
 }
 
 // refreshContextGaugeAfterCompress updates the footer gauge from compression

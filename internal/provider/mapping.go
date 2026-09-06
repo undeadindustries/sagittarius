@@ -364,13 +364,12 @@ func messageToOpenAIMessages(msg Message, legacyCounter *int, legacyIDs map[stri
 			// (e.g. old session JSONL saved before the CallID fix) can fall back
 			// to the correct id rather than producing a bogus "call_<name>" string.
 			legacyIDs[part.FunctionCall.Name] = append(legacyIDs[part.FunctionCall.Name], rawID)
-			args, _ := json.Marshal(part.FunctionCall.Args)
 			toolCalls = append(toolCalls, openAIToolCall{
 				ID:   rawID,
 				Type: "function",
 				Function: openAIFunctionCall{
 					Name:      part.FunctionCall.Name,
-					Arguments: string(args),
+					Arguments: marshalToolCallArgs(part.FunctionCall.Args),
 				},
 			})
 		case part.Text != "":

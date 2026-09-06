@@ -470,6 +470,9 @@ func (a *App) cycleModel(ctx context.Context, step int) (<-chan ui.StreamEvent, 
 		a.status.Right = providerModelLabel(a.providerDisplay, model)
 		a.statusMu.Unlock()
 		out <- ui.StreamEvent{Type: ui.StreamInfo, Text: msg + "\n"}
+		if notice := a.contextFitNotice(); notice != "" {
+			out <- ui.StreamEvent{Type: ui.StreamInfo, Text: notice + "\n"}
+		}
 		out <- ui.StreamEvent{Type: ui.StreamDone}
 	}()
 	return out, nil
@@ -1339,6 +1342,22 @@ func (h *appHooks) ReadOnlyActive() bool {
 		return false
 	}
 	return h.app.runner.ReadOnlyActive()
+}
+
+func (h *appHooks) ContextFitNotice() string {
+	if h.app == nil {
+		return ""
+	}
+	return h.app.contextFitNotice()
+}
+
+// contextFitNotice reports an over-window conversation after a model or mode
+// switch, or "" when there is nothing to say (including before a runner exists).
+func (a *App) contextFitNotice() string {
+	if a == nil || a.runner == nil {
+		return ""
+	}
+	return a.runner.ContextFitNotice()
 }
 
 // completeGrillAfterSpec flips a summarizing grill session to StatusComplete

@@ -63,9 +63,15 @@ type mockHooks struct {
 	setModeCalls []modes.Mode
 	// savedTag and savedForce record the last SaveCheckpoint call so /chat save
 	// argument parsing can be asserted directly.
-	savedTag       string
-	savedForce     bool
-	readOnly       bool
+	savedTag   string
+	savedForce bool
+	readOnly   bool
+	// contextFitNotice is the canned over-window warning appended to mode and
+	// model switch messages.
+	contextFitNotice string
+	// activeModels backs AllActiveModels so "/model {provider}/{model}" can
+	// resolve a pair.
+	activeModels   []provider.ProviderModelPair
 	goal           *goal.Goal
 	evaluatorLabel string
 	trustedHook    string
@@ -83,6 +89,8 @@ func (m *mockHooks) SetReadOnly(enabled bool) error {
 }
 
 func (m *mockHooks) ReadOnlyActive() bool { return m.readOnly }
+
+func (m *mockHooks) ContextFitNotice() string { return m.contextFitNotice }
 
 func (m *mockHooks) ReloadSystemInstruction(context.Context) error {
 	m.reloadCalls++
@@ -204,7 +212,7 @@ func (m *mockHooks) SelectCurrentModel(context.Context, string, string) (string,
 	return "gpt-4o-mini", nil
 }
 
-func (m *mockHooks) AllActiveModels() []provider.ProviderModelPair { return nil }
+func (m *mockHooks) AllActiveModels() []provider.ProviderModelPair { return m.activeModels }
 
 func (m *mockHooks) ProjectSystemPromptPresetID() string { return "" }
 
@@ -501,6 +509,64 @@ func TestTopLevelModeShortcuts(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestSwitchAppendsContextFitNotice covers both switch paths that report to the
+// scrollback. A mode override or a model pick can land a long Gemini
+// conversation on a smaller local model; the fit itself happens on the next
+// turn, so the switch has to say so or the user only learns about it from the
+// provider's rejection.
+func TestSwitchAppendsContextFitNotice(t *testing.T) {
+	t.Parallel()
+
+	const notice = "History is about 246k tokens; qwen's usable window is about 111k. It will be compressed or truncated on your next turn."
+
+	t.Run("mode switch", func(t *testing.T) {
+		t.Parallel()
+		deps, _, hooks := testDeps(t, nil)
+		hooks.contextFitNotice = notice
+		p := slash.NewProcessor()
+
+		result := p.Process(context.Background(), "/plan", deps)
+		if !result.Handled || len(result.Messages) == 0 {
+			t.Fatalf("expected a handled result with a message, got %+v", result)
+		}
+		if !strings.Contains(result.Messages[0], notice) {
+			t.Fatalf("mode switch message = %q, want it to include the fit notice", result.Messages[0])
+		}
+	})
+
+	t.Run("model pick", func(t *testing.T) {
+		t.Parallel()
+		deps, _, hooks := testDeps(t, nil)
+		hooks.contextFitNotice = notice
+		hooks.activeModels = []provider.ProviderModelPair{
+			{ProviderID: "gx10-01", DisplayID: "gx10-01", Model: "qwen"},
+		}
+		p := slash.NewProcessor()
+
+		result := p.Process(context.Background(), "/model gx10-01/qwen", deps)
+		if !result.Handled || len(result.Messages) == 0 {
+			t.Fatalf("expected a handled result with a message, got %+v", result)
+		}
+		if !strings.Contains(result.Messages[0], notice) {
+			t.Fatalf("model pick message = %q, want it to include the fit notice", result.Messages[0])
+		}
+	})
+
+	t.Run("silent when history fits", func(t *testing.T) {
+		t.Parallel()
+		deps, _, _ := testDeps(t, nil)
+		p := slash.NewProcessor()
+
+		result := p.Process(context.Background(), "/plan", deps)
+		if len(result.Messages) == 0 {
+			t.Fatalf("expected a message, got %+v", result)
+		}
+		if strings.Contains(result.Messages[0], "usable window") {
+			t.Fatalf("message = %q, want no fit notice when history fits", result.Messages[0])
+		}
+	})
 }
 
 // TestTopLevelModeShortcutsRejectArgs asserts /agent, /plan, /ask, /debug

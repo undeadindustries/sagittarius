@@ -53,6 +53,24 @@ and are not yet user-configurable.
 Compression and summarization always use the **active provider model**; there is
 no separate summarizer/compressor model setting.
 
+### Switching models mid-conversation
+
+Every one of these knobs is resolved against the model that is active right
+now, including `contextLimit`. Switching model (`/model`, `Ctrl+/`) or entering
+a mode whose override names a different model re-resolves the window
+immediately, whether or not the provider changed.
+
+The conversation is fitted lazily: nothing is compressed at the moment you
+switch. The next turn applies the usual defenses — masking, compression, then
+truncation — against the new window. When the history is already larger than
+the destination model's usable window, the switch prints one line saying so, so
+a long conversation moving to a smaller model is not a surprise on the next
+prompt.
+
+Compression that fails is also reported in the conversation rather than only in
+`~/.sagittarius/logs/sagittarius.log`. After a failure the session falls back to
+truncation for the rest of its life; the failure is stated once.
+
 ## Thinking budget (`providers.<id>.models.<model>.*`)
 
 Caps how long a model may reason before it has to act. Both keys are per-model

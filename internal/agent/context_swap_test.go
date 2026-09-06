@@ -117,14 +117,14 @@ func TestRunnerSwapsContextManager(t *testing.T) {
 
 	runner.history = cloneMessages(history)
 	runner.SetContextManager(masking)
-	runner.prepareContext(context.Background())
+	runner.prepareContext(context.Background(), nil)
 	if after := contextmgmt.EstimateTokens(flattenPartsForTest(runner.history)); after >= before {
 		t.Fatalf("masking manager should reduce tokens: before=%d after=%d", before, after)
 	}
 
 	runner.history = cloneMessages(history)
 	runner.SetContextManager(nil)
-	runner.prepareContext(context.Background())
+	runner.prepareContext(context.Background(), nil)
 	if after := contextmgmt.EstimateTokens(flattenPartsForTest(runner.history)); after != before {
 		t.Fatalf("nil manager must pass through unchanged: before=%d after=%d", before, after)
 	}

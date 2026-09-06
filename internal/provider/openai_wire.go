@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"regexp"
 	"strings"
 
@@ -284,6 +285,30 @@ func functionMatchToToolCall(funcName, paramsBody string, idIndex int) openAIToo
 			Arguments: string(argJSON),
 		},
 	}
+}
+
+// emptyToolCallArguments is the wire value for a tool call carrying no
+// arguments. Gemini-native history stores a no-argument call with a nil Args
+// map, and json.Marshal of a nil map is the literal "null", which strict
+// endpoints reject ("Assistant tool call function.arguments must be a JSON
+// object") — poisoning every later request that replays that turn, including
+// the summarizer's.
+const emptyToolCallArguments = "{}"
+
+// marshalToolCallArgs serializes tool-call arguments for the OpenAI wire
+// formats. A nil, empty, or unserializable map yields an empty JSON object so
+// the request stays well formed; a marshal failure is logged rather than
+// discarded.
+func marshalToolCallArgs(args map[string]any) string {
+	if len(args) == 0 {
+		return emptyToolCallArguments
+	}
+	b, err := json.Marshal(args)
+	if err != nil {
+		slog.Warn("provider: tool call arguments not serializable; sending empty object", "error", err)
+		return emptyToolCallArguments
+	}
+	return string(b)
 }
 
 func patchToolUserTransitionForMistral(messages []OpenAIMessage, modelID string) []OpenAIMessage {

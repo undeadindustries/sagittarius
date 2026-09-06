@@ -147,7 +147,7 @@ Interactive shortcuts, headless flags, and slash commands for the same features 
 | **Mouse-wheel scroll** | `Alt+M` (per session; off again on next launch) | `/mouse` (`on`, `off`, `toggle`, `show`) |
 | **Background processes** | `Ctrl+B` | — |
 | **Scroll conversation** | `PgUp` / `PgDn`, `Shift+Up` / `Shift+Down`; macOS: `Fn+Up` / `Fn+Down` on compact keyboards | — |
-| **Prompt history** | `Up` / `Down`, `Ctrl+P` / `Ctrl+N` (at input line boundaries) | — |
+| **Prompt history** | `Up` / `Down`, `Ctrl+P` / `Ctrl+N` (at input line boundaries). A recalled slash command loads without its menu, so the arrows keep stepping through history; press `Tab` to open the menu for it | — |
 | **New line in input** | `Alt+Enter`, `Shift+Enter`, `Ctrl+J` (`Enter` submits) | — |
 | **Cancel in-flight turn** | `Esc` | — |
 | **Quit** | `Ctrl+C` when idle; `/quit` | — |

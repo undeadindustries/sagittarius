@@ -186,6 +186,9 @@ func (m Model) handleApplyResult(msg applyResultMsg) (Model, tea.Cmd) {
 	m.curProvider = msg.providerID
 	m.curModel = msg.model
 	m.status = fmt.Sprintf("Model → %s/%s. (%s)", msg.displayID, msg.model, msg.scope)
+	if notice := m.deps.ContextFitNotice(); notice != "" {
+		m.status += "\n" + notice
+	}
 	m.info = m.status
 	m.errMsg = ""
 	return m, nil

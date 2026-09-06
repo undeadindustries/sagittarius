@@ -201,12 +201,11 @@ func messageToResponsesInput(msg Message, legacyCounter *int, legacyIDs map[stri
 				*legacyCounter++
 				legacyIDs[part.FunctionCall.Name] = append(legacyIDs[part.FunctionCall.Name], rawID)
 			}
-			args, _ := json.Marshal(part.FunctionCall.Args)
 			items = append(items, responsesInputItem{
 				Type:      "function_call",
 				CallID:    safeResponsesCallID(rawID),
 				Name:      part.FunctionCall.Name,
-				Arguments: string(args),
+				Arguments: marshalToolCallArgs(part.FunctionCall.Args),
 			})
 		case part.Text != "":
 			textParts = append(textParts, part.Text)

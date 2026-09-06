@@ -13,8 +13,18 @@ type ManagerConfig struct {
 	// Enabled gates every defense. False (e.g. gemini / openai-responses) makes
 	// PrepareTurn a pure pass-through.
 	Enabled bool
-	// ContextLimit is the local model context window in tokens.
+	// ContextLimit is the local model context window in tokens. It seeds the
+	// window and is the value used whenever ContextLimitFn is nil or returns a
+	// non-positive number.
 	ContextLimit int
+	// ContextLimitFn, when set, resolves the window of the *live* model on every
+	// read. A manager outlives a model change: an interaction-mode override can
+	// route to a different model without rebuilding it, and the rebuild that a
+	// provider switch does trigger happens before the new mode is applied. A
+	// limit captured at construction is therefore the wrong window in both
+	// cases, which is how a large-window conversation reached a small-window
+	// model unfitted. A non-positive result falls back to ContextLimit.
+	ContextLimitFn func() int
 	// SessionID keys adaptive state and offload directories.
 	SessionID string
 	// OutputDir is the base directory for offloaded tool output.
@@ -134,11 +144,22 @@ func (m *Manager) Enabled() bool {
 	return m != nil && m.cfg.Enabled
 }
 
-// ContextLimit returns the configured context window in tokens, or 0 when the
+// ContextLimit returns the live context window in tokens, or 0 when the
 // manager is nil/disabled. The TUI footer uses it to show a usage percentage.
 func (m *Manager) ContextLimit() int {
 	if m == nil || !m.cfg.Enabled {
 		return 0
+	}
+	return m.contextLimit()
+}
+
+// contextLimit resolves the window of the model that is active right now. It
+// assumes the manager is enabled; every caller checks that first.
+func (m *Manager) contextLimit() int {
+	if m.cfg.ContextLimitFn != nil {
+		if limit := m.cfg.ContextLimitFn(); limit > 0 {
+			return limit
+		}
 	}
 	return m.cfg.ContextLimit
 }
@@ -152,7 +173,7 @@ func (m *Manager) BudgetLimit() int {
 	if m == nil || !m.cfg.Enabled {
 		return 0
 	}
-	limit := m.cfg.ContextLimit
+	limit := m.contextLimit()
 	if limit <= 0 {
 		return 0
 	}
@@ -284,7 +305,7 @@ func (m *Manager) applyEjection(history []Message) []Message {
 	// Only eject under real budget pressure. With headroom, retaining write_file
 	// content keeps the model's recent writes visible and avoids needlessly
 	// mutating its prior tool calls.
-	if m.cfg.ContextLimit > 0 {
+	if m.contextLimit() > 0 {
 		historyTokens := EstimateTokens(flattenParts(history))
 		if float64(historyTokens) < ejectionTriggerFraction*float64(m.BudgetLimit()) {
 			return history

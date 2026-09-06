@@ -769,6 +769,10 @@ func (d *modelPickDialogDeps) CurrentModel() string {
 	return endpoint.Model
 }
 
+func (d *modelPickDialogDeps) ContextFitNotice() string {
+	return d.app.contextFitNotice()
+}
+
 func (d *modelPickDialogDeps) SelectCurrentModel(ctx context.Context, providerID, model string, scope config.SettingScope) error {
 	docs := d.app.docs
 	if docs == nil {

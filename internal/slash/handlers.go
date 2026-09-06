@@ -149,6 +149,9 @@ func handleModelPick(ctx *Context) Result {
 	if resolved != "" && resolved != model {
 		msg += fmt.Sprintf(" (mode override active: using %s)", resolved)
 	}
+	if notice := ctx.Deps.Hooks.ContextFitNotice(); notice != "" {
+		msg += "\n" + notice
+	}
 	return InfoResult(msg)
 }
 

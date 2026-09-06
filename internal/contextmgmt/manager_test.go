@@ -191,6 +191,51 @@ func TestManagerBudgetLimitUsesSafetyFactor(t *testing.T) {
 	}
 }
 
+// TestManagerContextLimitFollowsLiveModel proves the window is re-resolved on
+// every read. A manager outlives a model switch, so a limit captured at
+// construction is how a large-window conversation reached a small-window model
+// with the wrong budget.
+func TestManagerContextLimitFollowsLiveModel(t *testing.T) {
+	t.Parallel()
+	limit := 262_144
+	m := NewManager(ManagerConfig{
+		Enabled:        true,
+		ContextLimit:   limit,
+		ContextLimitFn: func() int { return limit },
+	})
+	if got := m.ContextLimit(); got != 262_144 {
+		t.Fatalf("ContextLimit = %d, want 262144", got)
+	}
+	limit = 131_000
+	if got := m.ContextLimit(); got != 131_000 {
+		t.Fatalf("ContextLimit after model switch = %d, want 131000", got)
+	}
+	if got := m.BudgetLimit(); got != 111_350 {
+		t.Fatalf("BudgetLimit after model switch = %d, want 111350", got)
+	}
+}
+
+// TestManagerContextLimitFallsBackToSeed pins the fallback: a resolver that
+// cannot determine a window (unknown model, nil model accessor) must not
+// disable the defenses by reporting 0.
+func TestManagerContextLimitFallsBackToSeed(t *testing.T) {
+	t.Parallel()
+	cases := map[string]func() int{
+		"nil fn":   nil,
+		"zero":     func() int { return 0 },
+		"negative": func() int { return -1 },
+	}
+	for name, fn := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			m := NewManager(ManagerConfig{Enabled: true, ContextLimit: 32_768, ContextLimitFn: fn})
+			if got := m.ContextLimit(); got != 32_768 {
+				t.Fatalf("ContextLimit = %d, want 32768", got)
+			}
+		})
+	}
+}
+
 func TestManagerLatchesSummarizerError(t *testing.T) {
 	t.Parallel()
 	calls := 0

@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/undeadindustries/sagittarius/internal/ui"
 )
 
 func TestInputHistoryNavigateUpDown(t *testing.T) {
@@ -131,5 +133,149 @@ func TestModelMultilineArrowsMoveBetweenLines(t *testing.T) {
 	}
 	if got := m.input.Value(); got != "line1\nline2\nline3" {
 		t.Fatalf("multi-line Up should not change the text, got %q", got)
+	}
+}
+
+// newSlashHistoryModel builds a composer wired to the slash completer, with an
+// older plain prompt and a newer slash command in history.
+func newSlashHistoryModel() *model {
+	m := newModel(ui.Options{ThemeName: "greyscale"}, suggestApp(), NewTerminal(ui.Options{}))
+	m.width = 80
+	m.height = 24
+	m.syncInputLayout()
+	m.history.record("older prompt")
+	m.history.record("/settings")
+	return m
+}
+
+func TestModelUpStepsPastRecalledSlashCommand(t *testing.T) {
+	t.Parallel()
+	m := newSlashHistoryModel()
+
+	m.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	if got := m.input.Value(); got != "/settings" {
+		t.Fatalf("first Up = %q, want /settings", got)
+	}
+	if len(m.suggestions) != 0 {
+		t.Fatalf("recalling a slash command should not open the menu, got %d suggestions", len(m.suggestions))
+	}
+
+	m.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	if got := m.input.Value(); got != "older prompt" {
+		t.Fatalf("second Up = %q, want older prompt", got)
+	}
+}
+
+func TestModelDownStepsPastRecalledSlashCommand(t *testing.T) {
+	t.Parallel()
+	m := newSlashHistoryModel()
+
+	// Walk back to the oldest prompt, then come forward through the slash entry.
+	m.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	m.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	if got := m.input.Value(); got != "older prompt" {
+		t.Fatalf("setup: input = %q, want older prompt", got)
+	}
+
+	// The recalled prompt loads with the cursor at the start, so the first Down
+	// only moves the cursor to the line end (see TestModelDownMovesToLineEnd).
+	m.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	m.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	if got := m.input.Value(); got != "/settings" {
+		t.Fatalf("Down onto the slash entry = %q, want /settings", got)
+	}
+	if len(m.suggestions) != 0 {
+		t.Fatalf("recalling a slash command should not open the menu, got %d suggestions", len(m.suggestions))
+	}
+
+	m.handleKey(tea.KeyMsg{Type: tea.KeyDown})
+	if got := m.input.Value(); got != "" {
+		t.Fatalf("Down past the slash entry = %q, want the empty draft", got)
+	}
+}
+
+func TestModelBusyUpStepsPastRecalledSlashCommand(t *testing.T) {
+	t.Parallel()
+	m := newSlashHistoryModel()
+	m.busy = true
+
+	m.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	if got := m.input.Value(); got != "/settings" {
+		t.Fatalf("first Up = %q, want /settings", got)
+	}
+	m.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	if got := m.input.Value(); got != "older prompt" {
+		t.Fatalf("second Up = %q, want older prompt", got)
+	}
+}
+
+func TestModelCtrlPStepsPastRecalledSlashCommand(t *testing.T) {
+	t.Parallel()
+	m := newSlashHistoryModel()
+
+	m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlP})
+	if got := m.input.Value(); got != "/settings" {
+		t.Fatalf("first Ctrl+P = %q, want /settings", got)
+	}
+	m.handleKey(tea.KeyMsg{Type: tea.KeyCtrlP})
+	if got := m.input.Value(); got != "older prompt" {
+		t.Fatalf("second Ctrl+P = %q, want older prompt", got)
+	}
+}
+
+func TestModelTabOpensMenuForRecalledSlash(t *testing.T) {
+	t.Parallel()
+	m := newSlashHistoryModel()
+
+	m.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	if len(m.suggestions) != 0 {
+		t.Fatalf("setup: menu should be closed, got %d suggestions", len(m.suggestions))
+	}
+
+	m.handleKey(tea.KeyMsg{Type: tea.KeyTab})
+	if len(m.suggestions) == 0 {
+		t.Fatal("Tab on a recalled slash command should open the completion menu")
+	}
+	if got := m.input.Value(); got != "/settings" {
+		t.Fatalf("Tab should not change the text, got %q", got)
+	}
+
+	m.handleKey(tea.KeyMsg{Type: tea.KeyTab})
+	if got := m.input.Value(); got != "/provider " {
+		t.Fatalf("second Tab should accept the first suggestion, got %q", got)
+	}
+}
+
+func TestModelBusyTabOpensMenuForRecalledSlash(t *testing.T) {
+	t.Parallel()
+	m := newSlashHistoryModel()
+	m.busy = true
+
+	m.handleKey(tea.KeyMsg{Type: tea.KeyUp})
+	m.handleKey(tea.KeyMsg{Type: tea.KeyTab})
+	if len(m.suggestions) == 0 {
+		t.Fatal("Tab on a recalled slash command should open the menu while busy")
+	}
+}
+
+func TestModelBusyTabOnEmptyInputStillEntersPtyFocus(t *testing.T) {
+	t.Parallel()
+	m := newSlashHistoryModel()
+	m.busy = true
+	m.ptyToolCallID = "call-1"
+
+	m.handleKey(tea.KeyMsg{Type: tea.KeyTab})
+	if !m.ptyFocus {
+		t.Fatal("Tab on an empty input should still focus the PTY")
+	}
+}
+
+func TestModelTypingStillOpensSlashMenu(t *testing.T) {
+	t.Parallel()
+	m := newSlashHistoryModel()
+
+	typeRunes(m, "/se")
+	if len(m.suggestions) == 0 {
+		t.Fatal("typing a slash command should open the completion menu")
 	}
 }

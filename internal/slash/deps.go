@@ -150,6 +150,12 @@ type Hooks interface {
 	SetReadOnly(enabled bool) error
 	ReadOnlyActive() bool
 
+	// ContextFitNotice returns one line warning that the conversation no longer
+	// fits the live model's window, or "" when it fits. A mode or model switch
+	// can land a large history on a smaller model; the fit itself happens on the
+	// next turn, so this only reports what is coming.
+	ContextFitNotice() string
+
 	// ToolkitChecklist hooks
 	ToolkitReport() string
 	ToolkitDismiss() error

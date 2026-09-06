@@ -1361,6 +1361,10 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.acceptSuggestion(idx)
 				return m, nil
 			}
+			if m.inputIsSlashLine() {
+				m.refreshSuggestions()
+				return m, nil
+			}
 			if m.ptyToolCallID != "" {
 				m.enterPtyFocus()
 				return m, nil
@@ -1473,6 +1477,12 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				idx = 0
 			}
 			m.acceptSuggestion(idx)
+			return m, nil
+		}
+		// A slash line with no menu is typically one recalled from history,
+		// which deliberately leaves the menu closed; Tab opens it.
+		if m.inputIsSlashLine() {
+			m.refreshSuggestions()
 			return m, nil
 		}
 	case "esc":
@@ -1792,13 +1802,19 @@ func (m *model) handleHistoryDown() (tea.Model, tea.Cmd) {
 // applyHistoryEntry replaces the input with a history entry and positions the
 // cursor at the start (Up) or end (Down), matching gemini-cli's default cursor
 // placement when browsing history.
+//
+// The completion menu is closed rather than refreshed: opening it for a
+// recalled slash command would hand the arrow keys to the menu, so the next Up
+// could never reach the entry behind it. Completions are driven by keystrokes
+// (applyInputKey refreshes after every edit) and by Tab, never by a
+// programmatic load.
 func (m *model) applyHistoryEntry(text string, pos cursorPos) {
 	m.input.SetValue(text)
 	if pos == cursorStart {
 		m.inputCursorToBegin()
 	}
 	m.syncInputLayout()
-	m.refreshSuggestions()
+	m.clearSuggestions()
 }
 
 // inputCursorToBegin moves the textarea cursor to the very beginning (row 0,
@@ -1813,6 +1829,12 @@ func (m *model) inputCursorToBegin() {
 		m.input.CursorUp()
 	}
 	m.input.CursorStart()
+}
+
+// inputIsSlashLine reports whether the composer holds a slash command, i.e.
+// whether refreshSuggestions would consult the slash completer.
+func (m *model) inputIsSlashLine() bool {
+	return strings.HasPrefix(m.input.Value(), "/")
 }
 
 // refreshSuggestions recomputes the completion list from the current input.

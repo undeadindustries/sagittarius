@@ -32,4 +32,8 @@ type Deps interface {
 	SelectCurrentModel(ctx context.Context, providerID, model string, scope config.SettingScope) error
 	// ProjectAvailable reports whether the project scope is writable.
 	ProjectAvailable() bool
+	// ContextFitNotice returns one line warning that the conversation no longer
+	// fits the newly-selected model's window, or "" when it fits. Called after
+	// SelectCurrentModel so it sees the model the user just picked.
+	ContextFitNotice() string
 }

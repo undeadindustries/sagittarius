@@ -43,6 +43,10 @@ const (
 // once, so compression tracks the live model: passing Runner.CompressionModel
 // keeps the summarizer aligned with user turns across mode switches and honors a
 // sagittarius.compression.model override (AD-015 active-model rule, AD-022).
+// The context window is resolved from modelFn on every read for the same
+// reason: a model change that does not rebuild this manager (a same-provider
+// mode override), or one applied after the rebuild (a cross-provider mode
+// override), would otherwise leave the previous model's window in force.
 //
 // recordFn, when non-nil, is called after each compression with the provider id,
 // model id, mode, token counts, and optional cost so the runner can track
@@ -72,8 +76,14 @@ func NewContextManager(
 	}
 
 	return contextmgmt.NewManager(contextmgmt.ManagerConfig{
-		Enabled:                   true,
-		ContextLimit:              cm.ContextLimit,
+		Enabled:      true,
+		ContextLimit: cm.ContextLimit,
+		ContextLimitFn: func() int {
+			if modelFn == nil {
+				return 0
+			}
+			return provider.ResolveContextManagement(settings, modelFn()).ContextLimit
+		},
 		SessionID:                 sessionID,
 		OnWillCompress:            onWillCompressFn,
 		MaskingEnabled:            cm.MaskingEnabled,

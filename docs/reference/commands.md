@@ -130,7 +130,7 @@ These work in the interactive TUI in addition to the slash commands above.
 | `Alt+M` | Toggle mouse-wheel scrolling (see below) |
 | `Ctrl+B` | Open the background process viewer |
 | `PgUp` / `PgDn` / `Shift+Up` / `Shift+Down` | Scroll the conversation |
-| `Up` / `Down` / `Ctrl+P` / `Ctrl+N` | Navigate prompt history (at the input boundaries) |
+| `Up` / `Down` / `Ctrl+P` / `Ctrl+N` | Navigate prompt history (at the input boundaries). Recalling a slash command does not open its completion menu, so the arrows keep moving through history; `Tab` opens the menu for the recalled line |
 | `Esc` | Cancel the in-flight turn (second `Esc` force-stops) |
 | `Ctrl+C` | Cancel the turn, or quit when idle |
 
@@ -264,6 +264,10 @@ and resets to off on the next launch.
 - **Autocomplete:** Tab-completes `{Provider}/{Model}` pairs.
 - **`Ctrl+/`:** Cycles globally across all active models (wraps around). The status
   bar shows the resolved model after each cycle.
+- **Context:** The new model's context window applies immediately. The
+  conversation is fitted on the next turn, not at the switch, so when the
+  history is already too large for it you get one line telling you it will be
+  compressed or truncated.
 
 ### `/models`
 
@@ -322,6 +326,10 @@ again.
   aliases for `/mode <name>` — the same switch, one word instead of two. Prefer
   them when you already know which mode you want; `/mode` remains for checking
   the current mode or scripting the explicit `set` form.
+- **Context:** A mode whose override names a different model switches windows
+  too, and reports the same one-line warning when the conversation no longer
+  fits. This applies to `Alt+1..4` and `Ctrl+Shift+M`, which route through the
+  same switch.
 - **See also:** `/modes` to assign a `{Provider}/{Model}` override per mode
   rather than switch which mode is active.
 

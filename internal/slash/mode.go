@@ -168,6 +168,9 @@ func setInteractionMode(ctx *Context, mode modes.Mode) Result {
 	if lifted {
 		msg += " Read-only posture lifted."
 	}
+	if notice := ctx.Deps.Hooks.ContextFitNotice(); notice != "" {
+		msg += "\n" + notice
+	}
 	return InfoResult(msg)
 }
 
