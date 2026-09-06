@@ -52,6 +52,11 @@ Entries use service name `sagittarius-provider-<providerId>` and account
 `<providerId>`. The layout follows the gemini-cli fork's scheme, but the
 Sagittarius service prefix is distinct, so keys are not shared with gemini-cli.
 
+Non-provider secrets get their own service prefix so a web-search key can never
+be resolved as a chat credential: MCP bearer tokens use
+`sagittarius-mcp-<server>` and the Brave Search key uses
+`sagittarius-search-brave`.
+
 **Requirements on Linux:** `libsecret` and a running Secret Service (D-Bus).
 Headless servers, WSL without a keyring, SSH sessions, and containers often
 lack Secret Service. In those cases Sagittarius falls back automatically unless
@@ -85,8 +90,8 @@ system keychain.
 
 ### Environment variables
 
-`GEMINI_API_KEY`, `GOOGLE_API_KEY`, and provider-specific vars (e.g.
-`OPENAI_API_KEY`) override stored keys. Env vars are visible to all processes
+`GEMINI_API_KEY`, `GOOGLE_API_KEY`, provider-specific vars (e.g.
+`OPENAI_API_KEY`), and `BRAVE_API_KEY` override stored keys. Env vars are visible to all processes
 in the same user session and may appear in shell history or process listings.
 Prefer the keychain for interactive use; use env vars for automation when the
 host environment is already trusted.

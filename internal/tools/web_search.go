@@ -4,16 +4,16 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 
+	"github.com/undeadindustries/sagittarius/internal/credentials"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 	"github.com/undeadindustries/sagittarius/internal/web"
 )
 
 // newGoogleWebSearchTool implements the google_web_search tool using a cascade:
-// Gemini native grounding first, then Brave Search API if BRAVE_API_KEY is set,
-// falling back to DuckDuckGo HTML search.
+// Gemini native grounding first, then the Brave Search API when a key is
+// configured, falling back to DuckDuckGo HTML search.
 func newGoogleWebSearchTool(client *provider.GeminiUtilityClient) *webSearchTool {
 	return &webSearchTool{utilityClient: client}
 }
@@ -51,8 +51,11 @@ func (w *webSearchTool) Declaration() provider.ToolDeclaration {
 	}
 }
 
-func resolveBraveAPIKey() string {
-	return strings.TrimSpace(os.Getenv("BRAVE_API_KEY"))
+// resolveBraveAPIKey reads BRAVE_API_KEY, then the secure store written by
+// /settings. A lookup failure is reported so the caller can log it before
+// falling through to the key-free backend.
+func resolveBraveAPIKey(ctx context.Context) (string, error) {
+	return credentials.ResolveBraveAPIKey(ctx)
 }
 
 func (w *webSearchTool) Execute(ctx context.Context, args map[string]interface{}) (map[string]interface{}, error) {
@@ -76,8 +79,12 @@ func (w *webSearchTool) Execute(ctx context.Context, args map[string]interface{}
 		}, nil
 	}
 
-	// 2. Brave Search API (if BRAVE_API_KEY is configured in env)
-	if braveKey := resolveBraveAPIKey(); braveKey != "" {
+	// 2. Brave Search API (BRAVE_API_KEY, or a key stored via /settings)
+	braveKey, err := resolveBraveAPIKey(ctx)
+	if err != nil {
+		slog.Debug("web search: brave key lookup failed", "error", err)
+	}
+	if braveKey != "" {
 		hits, err := web.SearchBrave(ctx, query, braveKey)
 		if err == nil {
 			return map[string]interface{}{

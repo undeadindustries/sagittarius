@@ -274,7 +274,7 @@ Sagittarius includes built-in web search (`google_web_search`) and web fetch (`w
 
 - **Web search cascade:**
   1. **Google Search grounding:** Used when a Gemini API key is configured. Provides cited prose and source links.
-  2. **Brave Search API:** Used when `BRAVE_API_KEY` is set in the environment. Returns structured organic search results.
+  2. **Brave Search API:** Used when a Brave key is configured, either via `BRAVE_API_KEY` or stored in the keychain from `/settings` → Secrets. Returns structured organic search results.
   3. **DuckDuckGo HTML search:** Key-free fallback that returns organic results without requiring any API keys.
 - **Web fetch:** Downloads and extracts clean text from URLs with SSRF protection (blocking private networks and localhost) and sliding-window rate limiting.
 

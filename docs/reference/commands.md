@@ -358,16 +358,23 @@ again.
   - **Bool** — Enter or Space toggles the value in-place.
   - **Enum** — Enter cycles through the allowed choices.
   - **String / Int** — Enter opens a text editor; Esc cancels; Enter again saves.
+  - **Secret** — Enter opens a masked editor. The stored value is never shown or
+    prefilled; the row reports only whether a key is present. `Ctrl+L` removes it.
   - `Ctrl+L` — Clears the key from the selected scope only; the other scope or
     the built-in default takes over.
 - **Categories:** General (`sagittarius.maxToolRounds`: default 100, `0` = no cap; interactive sessions show a Continue prompt at the cap), UI (`ui.theme`,
   `ui.showThinking`, `ui.hideBanner`), Security (`security.projectBoundary.enforce`),
   Snapshots (`sagittarius.snapshots.*`), Verify (`sagittarius.edit.enabled`
 `sagittarius.verify.*`),
-  Symbols (`sagittarius.symbols.*`).
+  Symbols (`sagittarius.symbols.*`), Secrets (Brave Search API key).
 - **Persistence:** Changes are saved immediately to the target scope file and take
   effect in the current session. Provider API keys and definitions are always global
   (edit them in `/providers`).
+- **Secrets are not settings.** The Secrets section writes to the credentials
+  layer (OS keychain, or the encrypted file fallback), never to a settings
+  document, so the scope radio does not apply to it. An environment variable
+  still wins over a stored key, and the row says so when one is set — see
+  [web tools](../web-tools.md#brave-search-api-key).
 
 ### `/memory`
 

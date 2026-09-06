@@ -6,7 +6,7 @@ Sagittarius supports first-class web search and web fetch tools, available to ev
 
 1. **`google_web_search`**: Searches the web for up-to-date information. It cascades across available backends:
    - **Gemini Google Search Grounding** (preferred when a Gemini API key is configured): Returns cited prose with source links.
-   - **Brave Search API** (when `BRAVE_API_KEY` is set in the environment): Returns structured organic search results.
+   - **Brave Search API** (when a Brave key is configured — see [Brave Search API key](#brave-search-api-key)): Returns structured organic search results.
    - **DuckDuckGo Organic HTML Search** (key-free fallback): Returns organic search results without requiring any API keys.
 2. **`web_fetch`**: Fetches content from specified HTTP/HTTPS URLs. It attempts to use Gemini's `URLContext` for optimal extraction and summarization, falling back to a custom, SSRF-protected and rate-limited HTTP fetcher with heuristic HTML-to-text conversion if needed.
 
@@ -38,6 +38,26 @@ You can customize the web tools in your `settings.json`:
 
 All of these resolve project-over-global and are re-read when settings are saved, so a `/settings` change takes effect without restarting.
 
+## Brave Search API key
+
+The Brave key is a secret, so it is never stored in `settings.json`. It resolves
+the same way a provider API key does:
+
+1. The `BRAVE_API_KEY` environment variable.
+2. The OS keychain, or the encrypted file fallback when no keychain is available.
+
+Set it from the TUI under `/settings` → **Secrets** → **Brave Search API key**.
+The input is masked, the stored value is never displayed or written to any
+settings document, and the row shows only whether a key is present. `Ctrl+L`
+removes a stored key.
+
+An environment variable always wins. When `BRAVE_API_KEY` is set, the row says
+so, because a key you store there would be shadowed and the search would keep
+using the environment value.
+
+Get a key from [Brave Search API](https://brave.com/search/api/). Without one,
+search still works — it falls back to DuckDuckGo.
+
 ## Security and Confirmation
 
 - **SSRF Protection**: The built-in HTTP fetcher automatically blocks access to localhost, private IP ranges (RFC1918), and loopback addresses to prevent Server-Side Request Forgery.
@@ -49,5 +69,5 @@ All of these resolve project-over-global and are re-read when settings are saved
 
 ## Fallback Behavior
 
-- **`google_web_search`**: When a Gemini utility client is configured, searches execute via Gemini GoogleSearch grounding with citations. If no Gemini key is configured, the tool checks `BRAVE_API_KEY` in the environment; if present, it calls the Brave Search API. If Brave is not configured or errors, it falls back to DuckDuckGo HTML organic search.
+- **`google_web_search`**: When a Gemini utility client is configured, searches execute via Gemini GoogleSearch grounding with citations. If no Gemini key is configured, the tool resolves a Brave key from the environment or the secure store; if present, it calls the Brave Search API. If Brave is not configured or errors, it falls back to DuckDuckGo HTML organic search.
 - **`web_fetch`**: If a Gemini API key is missing (or if `directWebFetch` is true), the tool falls back to a Go-native HTTP client. This client resolves the URL, enforces SSRF protections, handles retries with exponential backoff for rate limits (HTTP 429) and server errors (HTTP 5xx), and converts the raw HTML response into readable plain text, preserving basic hyperlinks.

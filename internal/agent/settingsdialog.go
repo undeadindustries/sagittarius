@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/undeadindustries/sagittarius/internal/config"
+	"github.com/undeadindustries/sagittarius/internal/credentials"
 	"github.com/undeadindustries/sagittarius/internal/goal"
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/tools"
@@ -24,11 +25,53 @@ type settingsDialogDeps struct{ baseDialogDeps }
 
 func (d *settingsDialogDeps) docs() *config.Documents { return d.app.docs }
 
+// braveAPIKeySetting is the /settings row for the Brave Search key. It is a
+// credential, not a settings.json field: the dotted key only addresses the row
+// and its value is routed to the credentials layer. No config namespace is
+// named, so hand-writing it into settings.json cannot look like it would work.
+const braveAPIKeySetting = "secrets.braveApiKey"
+
 // ListSettings returns the curated settings list with values drawn from the
 // given scope (not merged). DefinedHere is true when the key exists in that
 // scope's file; MergedValue is the other-scope raw value when inherited.
 func (d *settingsDialogDeps) ListSettings(scope config.SettingScope) []settingsdialog.SettingEntry {
 	return listSettings(d.docs(), scope)
+}
+
+// SecretStatus describes a credential row without returning the secret. The
+// settings dialog calls this from a background command, because reading the OS
+// keychain can block for seconds.
+func (d *settingsDialogDeps) SecretStatus(ctx context.Context, key string) (string, error) {
+	if key != braveAPIKeySetting {
+		return "", fmt.Errorf("unknown secret key %q", key)
+	}
+	status, err := credentials.BraveAPIKeyStatus(ctx)
+	return describeBraveKey(status, err), err
+}
+
+// describeBraveKey renders a key's provenance. The environment variable wins at
+// resolution, so a stored key it shadows has to say so — otherwise editing the
+// row here would appear to do nothing.
+//
+// A failed store read must not render as "not set": a locked or absent keyring
+// is a different problem from an unconfigured key, and reporting absence would
+// invite the user to re-enter a key that is already there. An env var is
+// authoritative on its own, so it still answers even when the store is unreadable.
+func describeBraveKey(status credentials.BraveKeyStatus, err error) string {
+	switch {
+	case status.EnvSet && err != nil:
+		return "set via " + credentials.EnvBraveAPIKey + " (env wins; stored key unreadable)"
+	case status.EnvSet && status.Stored:
+		return "set via " + credentials.EnvBraveAPIKey + " (env wins; a stored key is ignored)"
+	case status.EnvSet:
+		return "set via " + credentials.EnvBraveAPIKey
+	case err != nil:
+		return "unknown (secure storage unreadable)"
+	case status.Stored:
+		return "stored securely"
+	default:
+		return "not set"
+	}
 }
 
 func listSettings(docs *config.Documents, scope config.SettingScope) []settingsdialog.SettingEntry {
@@ -120,6 +163,14 @@ func listSettings(docs *config.Documents, scope config.SettingScope) []settingsd
 			DefaultValue: "false",
 			Kind:         settingsdialog.KindBool,
 		}, uiBool(scopeSettings, "escapeAtOnPaste"), uiBool(global, "escapeAtOnPaste"), uiBool(project, "escapeAtOnPaste")),
+
+		{Label: "Secrets", Kind: settingsdialog.KindHeader},
+		{
+			Key:         braveAPIKeySetting,
+			Label:       "Brave Search API key",
+			Description: "Key for the Brave Search backend of google_web_search. Stored in the OS keychain (encrypted file fallback), never in settings.json. " + credentials.EnvBraveAPIKey + " overrides it.",
+			Kind:        settingsdialog.KindSecret,
+		},
 
 		{Label: "Security", Kind: settingsdialog.KindHeader},
 		row(settingsdialog.SettingEntry{
@@ -298,8 +349,13 @@ func listSettings(docs *config.Documents, scope config.SettingScope) []settingsd
 	}
 }
 
-// SetValue persists a single setting key to the given scope.
+// SetValue persists a single setting key to the given scope. Credential keys
+// bypass the settings document entirely and go to secure storage, which has no
+// scope, so the requested scope is deliberately ignored for them.
 func (d *settingsDialogDeps) SetValue(ctx context.Context, scope config.SettingScope, key, value string) error {
+	if key == braveAPIKeySetting {
+		return credentials.SetBraveAPIKey(ctx, value)
+	}
 	docs := d.docs()
 	if docs == nil {
 		return fmt.Errorf("settings not loaded")
@@ -316,8 +372,12 @@ func (d *settingsDialogDeps) SetValue(ctx context.Context, scope config.SettingS
 	return nil
 }
 
-// ClearValue removes a setting from the given scope's file.
+// ClearValue removes a setting from the given scope's file, or deletes a
+// credential from secure storage.
 func (d *settingsDialogDeps) ClearValue(ctx context.Context, scope config.SettingScope, key string) error {
+	if key == braveAPIKeySetting {
+		return credentials.DeleteBraveAPIKey(ctx)
+	}
 	docs := d.docs()
 	if docs == nil {
 		return fmt.Errorf("settings not loaded")

@@ -61,7 +61,9 @@ func (m Model) renderEntry(e SettingEntry, selected bool) string {
 		val += dim.Render(suffix)
 	}
 	row := fmt.Sprintf("%s%-30s %s", star, label, val)
-	if e.MergedValue != "" && e.MergedValue != e.Value {
+	// A secret has no scope value to compare against; its whole state is the
+	// status text settingDisplay already returned.
+	if e.Kind != KindSecret && e.MergedValue != "" && e.MergedValue != e.Value {
 		row += dim.Render(fmt.Sprintf("  [effective: %s]", e.MergedValue))
 	}
 	if e.ReadOnly {
@@ -78,7 +80,11 @@ func (m Model) viewEdit() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Edit: %s\n\n", e.Label)
 	b.WriteString(m.input.View())
-	b.WriteString("\n\n" + overlay.Hints(m.th, "Enter save • Esc cancel"))
+	hint := "Enter save • Esc cancel"
+	if e.Kind == KindSecret {
+		hint = "Enter save to secure storage • Esc cancel • input hidden"
+	}
+	b.WriteString("\n\n" + overlay.Hints(m.th, hint))
 	return b.String()
 }
 
@@ -101,6 +107,12 @@ const (
 )
 
 func settingDisplay(e SettingEntry, scope config.SettingScope) (value, suffix string) {
+	if e.Kind == KindSecret {
+		if e.StatusText == "" {
+			return statusChecking, ""
+		}
+		return e.StatusText, ""
+	}
 	if e.DefinedHere {
 		return e.Value, ""
 	}

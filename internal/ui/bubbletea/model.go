@@ -703,7 +703,7 @@ func (m *model) updateOverlay(msg tea.Msg) (tea.Model, tea.Cmd) {
 			openTools := next.OpenTools()
 			m.closeOverlay(next.Status())
 			if openTools {
-				m.openDialog(ui.DialogTools)
+				cmd = tea.Batch(cmd, m.openDialog(ui.DialogTools))
 			}
 			return m, cmd
 		}
@@ -717,7 +717,7 @@ func (m *model) updateOverlay(msg tea.Msg) (tea.Model, tea.Cmd) {
 			openServers := next.OpenServers()
 			m.closeOverlay(next.Status())
 			if openServers {
-				m.openDialog(ui.DialogMCP)
+				cmd = tea.Batch(cmd, m.openDialog(ui.DialogMCP))
 			}
 			return m, cmd
 		}
@@ -786,7 +786,10 @@ func (m *model) openOnboarding() {
 	m.onboardingOverlay = &o
 }
 
-func (m *model) openDialog(kind ui.DialogKind) {
+// openDialog installs the overlay for kind. The returned command is non-nil
+// only for dialogs that need background work at open (the settings browser
+// probes secret rows off the Update goroutine); callers must run it.
+func (m *model) openDialog(kind ui.DialogKind) tea.Cmd {
 	ctx := m.ctx
 	if ctx == nil {
 		ctx = context.Background()
@@ -796,7 +799,7 @@ func (m *model) openDialog(kind ui.DialogKind) {
 		host, ok := m.app.(providerDialogHost)
 		if !ok {
 			m.addBlock(roleInfo, "Providers dialog is unavailable in this session.")
-			return
+			return nil
 		}
 		o := providersdialog.New(ctx, host.ProviderDialogDeps())
 		o = o.SetTheme(m.th)
@@ -806,7 +809,7 @@ func (m *model) openDialog(kind ui.DialogKind) {
 		host, ok := m.app.(modelsDialogHost)
 		if !ok {
 			m.addBlock(roleInfo, "Models settings dialog is unavailable in this session.")
-			return
+			return nil
 		}
 		o := modelsdialog.New(ctx, host.ModelsDialogDeps())
 		o = o.SetTheme(m.th)
@@ -816,7 +819,7 @@ func (m *model) openDialog(kind ui.DialogKind) {
 		host, ok := m.app.(modelPickDialogHost)
 		if !ok {
 			m.addBlock(roleInfo, "Model picker is unavailable in this session.")
-			return
+			return nil
 		}
 		o := modelpickdialog.New(ctx, host.ModelPickDialogDeps())
 		o = o.SetTheme(m.th)
@@ -826,7 +829,7 @@ func (m *model) openDialog(kind ui.DialogKind) {
 		host, ok := m.app.(modesDialogHost)
 		if !ok {
 			m.addBlock(roleInfo, "Modes dialog is unavailable in this session.")
-			return
+			return nil
 		}
 		o := modesdialog.New(ctx, host.ModesDialogDeps())
 		o = o.SetTheme(m.th)
@@ -836,7 +839,7 @@ func (m *model) openDialog(kind ui.DialogKind) {
 		host, ok := m.app.(systemPromptDialogHost)
 		if !ok {
 			m.addBlock(roleInfo, "System prompt picker is unavailable in this session.")
-			return
+			return nil
 		}
 		o := systempromptdialog.New(ctx, host.SystemPromptDialogDeps())
 		o = o.SetTheme(m.th)
@@ -846,7 +849,7 @@ func (m *model) openDialog(kind ui.DialogKind) {
 		host, ok := m.app.(mcpDialogHost)
 		if !ok {
 			m.addBlock(roleInfo, "MCP server wizard is unavailable in this session.")
-			return
+			return nil
 		}
 		o := mcpdialog.New(ctx, host.MCPDialogDeps())
 		o = o.SetTheme(m.th)
@@ -856,7 +859,7 @@ func (m *model) openDialog(kind ui.DialogKind) {
 		host, ok := m.app.(toolsDialogHost)
 		if !ok {
 			m.addBlock(roleInfo, "Tool inventory is unavailable in this session.")
-			return
+			return nil
 		}
 		o := toolsdialog.New(ctx, host.ToolsDialogDeps())
 		o = o.SetTheme(m.th)
@@ -866,12 +869,13 @@ func (m *model) openDialog(kind ui.DialogKind) {
 		host, ok := m.app.(settingsDialogHost)
 		if !ok {
 			m.addBlock(roleInfo, "Settings browser is unavailable in this session.")
-			return
+			return nil
 		}
-		o := settingsdialog.New(ctx, host.SettingsDialogDeps())
+		o, cmd := settingsdialog.New(ctx, host.SettingsDialogDeps())
 		o = o.SetTheme(m.th)
 		o = o.SetSize(m.width, m.height)
 		m.settingsOverlay = &o
+		return cmd
 	case ui.DialogBackground:
 		host, ok := m.app.(interface {
 			ListBackgroundProcesses() []bgproc.Process
@@ -880,12 +884,13 @@ func (m *model) openDialog(kind ui.DialogKind) {
 		})
 		if !ok {
 			m.addBlock(roleInfo, "Background processes are unavailable in this session.")
-			return
+			return nil
 		}
 		procs := host.ListBackgroundProcesses()
 		o := bgprocdialog.New(m.width, m.height, m.th, procs, host.BackgroundProcessOutput, host.KillBackgroundProcess)
 		m.bgProcOverlay = o
 	}
+	return nil
 }
 
 func (m *model) View() string {
@@ -1366,8 +1371,7 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			// do not corrupt the in-flight stream.
 			return m, nil
 		case "ctrl+b":
-			m.openDialog(ui.DialogBackground)
-			return m, nil
+			return m, m.openDialog(ui.DialogBackground)
 		case "up":
 			if len(m.suggestions) > 0 {
 				m.moveSuggestion(-1)
@@ -1431,8 +1435,7 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case "ctrl+b":
-		m.openDialog(ui.DialogBackground)
-		return m, nil
+		return m, m.openDialog(ui.DialogBackground)
 	case "up":
 		if len(m.suggestions) > 0 {
 			m.moveSuggestion(-1)
@@ -2093,7 +2096,12 @@ func (m *model) handleStreamGen(gen uint64, ev ui.StreamEvent) (tea.Model, tea.C
 		m.syncViewportContent()
 		return m, m.beginQuit()
 	case ui.StreamOpenDialog:
-		m.openDialog(ev.Dialog)
+		if cmd := m.openDialog(ev.Dialog); cmd != nil {
+			if m.stream != nil {
+				return m, tea.Batch(cmd, waitStream(m.stream, gen))
+			}
+			return m, cmd
+		}
 	case ui.StreamToolStart:
 		m.startToolCard(ev)
 		m.runningTool = ev.ToolName

@@ -19,6 +19,11 @@ const (
 	KindInt
 	KindString
 	KindEnum
+	// KindSecret is a credential held in the OS keychain (or the encrypted file
+	// fallback), never in settings.json. It is write-only from the dialog's
+	// side: the value is masked while typing, never read back into the editor,
+	// and never echoed in a status line.
+	KindSecret
 )
 
 // SettingEntry is one row in the settings list.
@@ -38,6 +43,10 @@ type SettingEntry struct {
 	Kind         SettingKind
 	Choices      []string // for KindEnum only
 	ReadOnly     bool     // show but do not allow editing
+	// StatusText describes a KindSecret row's state, e.g. "stored in keychain".
+	// It is filled in asynchronously by SecretStatus, because probing the
+	// keychain can block; until it arrives the row renders as checking.
+	StatusText string
 }
 
 // EffectiveValue is the value a toggle or cycle should flip: the scope value
@@ -63,6 +72,10 @@ type Deps interface {
 	// ClearValue removes a setting from the specified scope only, so it falls
 	// back to the other scope or the built-in default.
 	ClearValue(ctx context.Context, scope config.SettingScope, key string) error
+	// SecretStatus describes whether a KindSecret key is configured, without
+	// returning the secret. It reads the OS keychain, which can block for
+	// seconds, so the dialog only ever calls it from a tea.Cmd (AD-062).
+	SecretStatus(ctx context.Context, key string) (string, error)
 	// ProjectAvailable reports whether the project scope is writable.
 	ProjectAvailable() bool
 }
