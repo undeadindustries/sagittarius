@@ -35,6 +35,7 @@ type Catalog struct {
 	webUtilityClient   *provider.GeminiUtilityClient
 	spillDir           string
 	scriptToolEnabled  bool
+	scratchpadEnabled  bool
 }
 
 // CatalogConfig configures tool catalog assembly.
@@ -69,6 +70,9 @@ type CatalogConfig struct {
 	// them here is what makes a live /settings toggle rebuild the registry.
 	ResearchSubagentsEnabled bool
 	CodingSubagentsEnabled   bool
+	// ScratchpadEnabled is change-detection state for the same reason: the
+	// update_scratchpad tool needs a *Runner, so the runner registers it.
+	ScratchpadEnabled bool
 }
 
 // ResearchSubagentsEnabled reports the catalog's current research-subagent
@@ -132,6 +136,7 @@ func NewCatalog(cfg CatalogConfig) (*Catalog, error) {
 		webUtilityClient:   webUtilityClient,
 		spillDir:           cfg.SpillDir,
 		scriptToolEnabled:  cfg.ScriptToolEnabled,
+		scratchpadEnabled:  cfg.ScratchpadEnabled,
 	}, nil
 }
 
@@ -168,6 +173,7 @@ type builtinToggles struct {
 	webDirectFetch     bool
 	webMaxFetchBytes   int
 	scriptToolEnabled  bool
+	scratchpadEnabled  bool
 }
 
 func (c *Catalog) resolveToggles(s *config.Settings) builtinToggles {
@@ -184,6 +190,7 @@ func (c *Catalog) resolveToggles(s *config.Settings) builtinToggles {
 		webDirectFetch:     directFetch,
 		webMaxFetchBytes:   config.WebMaxFetchBytes(s, nil, directFetch),
 		scriptToolEnabled:  config.ScriptToolEnabled(s, nil),
+		scratchpadEnabled:  config.ScratchpadEnabled(s, nil),
 	}
 }
 
@@ -200,6 +207,7 @@ func (c *Catalog) toggles() builtinToggles {
 		webDirectFetch:     c.webDirectFetch,
 		webMaxFetchBytes:   c.webMaxFetchBytes,
 		scriptToolEnabled:  c.scriptToolEnabled,
+		scratchpadEnabled:  c.scratchpadEnabled,
 	}
 }
 
@@ -215,6 +223,7 @@ func (c *Catalog) applyToggles(t builtinToggles) {
 	c.webDirectFetch = t.webDirectFetch
 	c.webMaxFetchBytes = t.webMaxFetchBytes
 	c.scriptToolEnabled = t.scriptToolEnabled
+	c.scratchpadEnabled = t.scratchpadEnabled
 }
 
 // BuildRegistry assembles the current registry without reconnecting MCP servers.

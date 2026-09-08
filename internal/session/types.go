@@ -90,6 +90,11 @@ type MetadataRecord struct {
 	// ReadOnly follows the Constraints pointer pattern: nil = no change,
 	// non-nil = explicitly set to on or off.
 	ReadOnly *bool `json:"readOnly,omitempty"`
+	// Scratchpad follows the same pointer pattern: nil = this $set line did not
+	// touch the scratchpad, non-nil pointer to "" = the model or user cleared
+	// it. A plain string cannot distinguish those, so a clear would be lost on
+	// the next merge (see applyMetaUpdate).
+	Scratchpad *string `json:"scratchpad,omitempty"`
 }
 
 // SetRecord carries a $set metadata update appended mid-session.
@@ -124,7 +129,11 @@ type ConversationRecord struct {
 	// before AD-107 may also carry a readOnlyConversational key; it is ignored
 	// on load, so an inferred lock never survives a resume.
 	ReadOnly *bool
-	Messages []MessageRecord
+	// Scratchpad holds the model's working-memory note (see internal/agent's
+	// Runner.Scratchpad), or "" when none was ever set. As with Constraints the
+	// pointer indirection exists only for the $set merge, not for consumers.
+	Scratchpad string
+	Messages   []MessageRecord
 }
 
 // SessionInfo is the display/selection view of a session (used for listing).

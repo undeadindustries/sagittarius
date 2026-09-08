@@ -41,6 +41,12 @@ var builtinArgAliases = map[string]map[string][]string{
 	ListDirectoryToolName: {
 		ParamDirPath: {"path", "directory", "dir", "folder"},
 	},
+	UpdateScratchpadToolName: {
+		ScratchpadParamContent: {"text", "note", "notes", "scratchpad", "value", "body"},
+	},
+	SearchSessionToolName: {
+		SearchSessionParamQuery: {"q", "search", "pattern", "term", "text"},
+	},
 }
 
 // NormalizeToolArgs renames known alternate argument keys onto the canonical

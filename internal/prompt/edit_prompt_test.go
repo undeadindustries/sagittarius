@@ -28,7 +28,7 @@ func TestEditGuidanceGatedByEditEnabled(t *testing.T) {
 			opts := Options{
 				EditEnabled: tt.editEnabled,
 			}
-			got := liteToolUsage(opts.SymbolsEnabled, opts.EditEnabled)
+			got := liteToolUsage(opts.SymbolsEnabled, opts.EditEnabled, opts.ScratchpadEnabled)
 			if !strings.Contains(got, tt.wantPhrase) {
 				t.Errorf("liteToolUsage() missing phrase %q", tt.wantPhrase)
 			}
@@ -57,7 +57,7 @@ func TestEditGuidanceGatedByEditEnabled(t *testing.T) {
 				}
 			}
 
-			gotFullOps := fullOperationalGuidelines(opts.EditEnabled, false)
+			gotFullOps := fullOperationalGuidelines(opts.EditEnabled, false, false)
 			if tt.editEnabled {
 				if !strings.Contains(gotFullOps, "then `write_file` or `edit`.") {
 					t.Errorf("fullOperationalGuidelines() missing edit phrase")
@@ -72,7 +72,7 @@ func TestEditGuidanceGatedByEditEnabled(t *testing.T) {
 }
 
 func TestProgrammerBackgroundShell(t *testing.T) {
-	out := fullOperationalGuidelines(false, false)
+	out := fullOperationalGuidelines(false, false, false)
 	if !strings.Contains(out, "is_background") {
 		t.Error("programmer operational guidelines should teach is_background")
 	}

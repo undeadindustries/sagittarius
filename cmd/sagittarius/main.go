@@ -881,6 +881,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		WebFetchEnabled:          webFetchEnabled,
 		SpillDir:                 spillDir,
 		ScriptToolEnabled:        config.ScriptToolEnabled(settings, nil),
+		ScratchpadEnabled:        config.ScratchpadEnabled(settings, nil),
 	})
 	if err != nil {
 		return nil, nil, nil, "", "", err
@@ -894,6 +895,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 	var initialGrill *grill.Snapshot
 	var initialConstraints []string
 	var initialReadOnly *bool
+	var initialScratchpad string
 
 	projectRoot := wd
 	if projectRoot == "" {
@@ -928,6 +930,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		initialGrill = result.Record.Grill
 		initialConstraints = result.Record.Constraints
 		initialReadOnly = result.Record.ReadOnly
+		initialScratchpad = result.Record.Scratchpad
 		mgr, mgrErr := session.NewManagerForResume(projectRoot, sessID, result)
 		if mgrErr != nil {
 			slog.Warn("session recording disabled: cannot open recorder for resumed session", "err", mgrErr)
@@ -1008,6 +1011,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		InitialGrill:         initialGrill,
 		InitialConstraints:   initialConstraints,
 		InitialReadOnly:      initialReadOnly,
+		InitialScratchpad:    initialScratchpad,
 		Settings:             settings,
 		InitialMode:          initialMode,
 		ModelPinned:          modelPinned,

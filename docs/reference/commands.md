@@ -442,6 +442,32 @@ again.
   - **Description:** Remove every standing constraint.
   - **Usage:** `/constraints clear`
 
+### `/scratchpad`
+
+- **Description:** Show or discard the model's working-memory note. The model
+  writes it with the `update_scratchpad` tool; the note is carried in the system
+  prompt rather than in the conversation, so it survives context compression
+  when ordinary messages do not. Use this to see what the model is currently
+  holding on to on a long task.
+- **No `set` sub-command, deliberately.** The block is framed to the model as its
+  own notes rather than as an instruction from you, and that framing is what
+  keeps it from being read as a directive or echoed back in a reply. Standing
+  text of your own is `/constraints`.
+- **See also:** `docs/working-memory.md` for the token cost and the
+  `sagittarius.scratchpadEnabled` toggle; `search_session` for recovering an
+  exact detail the note does not hold.
+
+#### Sub-commands
+
+- **`show`**
+  - **Description:** Print the current note and its length. Also the bare
+    `/scratchpad` behavior.
+  - **Usage:** `/scratchpad show` (runs mid-turn, unlike most slash commands)
+- **`clear`**
+  - **Description:** Discard the note. It is gone from the next request's system
+    prompt.
+  - **Usage:** `/scratchpad clear`
+
 ### `/readonly`
 
 - **Description:** Set a durable, session-wide read-only inspection posture.

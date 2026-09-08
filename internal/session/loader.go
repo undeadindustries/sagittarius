@@ -56,8 +56,17 @@ func LoadSession(filePath string) (*ConversationRecord, error) {
 		Grill:         meta.Grill,
 		Constraints:   derefConstraints(meta.Constraints),
 		ReadOnly:      meta.ReadOnly,
+		Scratchpad:    derefString(meta.Scratchpad),
 		Messages:      messages,
 	}, nil
+}
+
+// derefString flattens a pointer-indirected metadata string for consumers.
+func derefString(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }
 
 // derefConstraints converts the pointer-indirected wire representation back
@@ -368,6 +377,9 @@ func applyMetaUpdate(dst, src *MetadataRecord) {
 	}
 	if src.ReadOnly != nil {
 		dst.ReadOnly = src.ReadOnly
+	}
+	if src.Scratchpad != nil {
+		dst.Scratchpad = src.Scratchpad
 	}
 	if len(src.SessionGrants) > 0 {
 		for _, g := range src.SessionGrants {

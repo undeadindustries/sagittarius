@@ -280,6 +280,10 @@ Sagittarius includes built-in web search (`google_web_search`) and web fetch (`w
 
 See [docs/web-tools.md](docs/web-tools.md) for full configuration details.
 
+## Working memory
+
+Long conversations get compressed, and compression is lossy: an exact path or decision from two hundred turns ago survives only as a summary. Two tools close that gap. `update_scratchpad` lets the model keep a short note in the system prompt, where compression cannot reach it, and `search_session` scans this session's full transcript for an exact detail that is no longer in context. `/scratchpad` shows or clears the note. See [docs/working-memory.md](docs/working-memory.md) for the token cost and the `sagittarius.scratchpadEnabled` toggle.
+
 ## Code quality
 
 Sagittarius keeps code IDE-clean by running each project's own lint, format, type-check, and test tooling. It does not bundle linters. The built-in `run_project_checks` tool auto-detects the stack and runs its checks, and Go projects can opt into `gopls` code intelligence over MCP. See [docs/code-quality.md](docs/code-quality.md).

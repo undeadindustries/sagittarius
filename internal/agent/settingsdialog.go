@@ -306,6 +306,13 @@ func listSettings(docs *config.Documents, scope config.SettingScope) []settingsd
 			DefaultValue: fmtBool(config.ScriptToolEnabled(nil, nil)),
 			Kind:         settingsdialog.KindBool,
 		}, scriptEnabled(scopeSettings), scriptEnabled(global), scriptEnabled(project)),
+		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.scratchpadEnabled",
+			Label:        "Scratchpad (update_scratchpad)",
+			Description:  "Let the model keep a short working note that survives context compression. Costs about 1k tokens per request once it has written one (default on)",
+			DefaultValue: fmtBool(config.ScratchpadEnabled(nil, nil)),
+			Kind:         settingsdialog.KindBool,
+		}, scratchpadEnabled(scopeSettings), scratchpadEnabled(global), scratchpadEnabled(project)),
 		{Label: "Sessions", Kind: settingsdialog.KindHeader},
 		row(settingsdialog.SettingEntry{
 			Key:          "sagittarius.sessions.autoTitle",
@@ -599,6 +606,15 @@ func applySettingValue(s *config.Settings, key, value string) error {
 			s.Sagittarius = &config.SagittariusSettings{}
 		}
 		s.Sagittarius.ScriptToolEnabled = &b
+	case "sagittarius.scratchpadEnabled":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("must be true/false: %w", err)
+		}
+		if s.Sagittarius == nil {
+			s.Sagittarius = &config.SagittariusSettings{}
+		}
+		s.Sagittarius.ScratchpadEnabled = &b
 	case "sagittarius.subagents.enabled":
 		b, err := strconv.ParseBool(value)
 		if err != nil {
@@ -776,6 +792,10 @@ func clearSettingValue(s *config.Settings, key string) error {
 	case "sagittarius.scriptToolEnabled":
 		if s.Sagittarius != nil {
 			s.Sagittarius.ScriptToolEnabled = nil
+		}
+	case "sagittarius.scratchpadEnabled":
+		if s.Sagittarius != nil {
+			s.Sagittarius.ScratchpadEnabled = nil
 		}
 	case "sagittarius.subagents.enabled":
 		if s.Sagittarius != nil && s.Sagittarius.Subagents != nil {
@@ -1100,6 +1120,13 @@ func subagentClassSlot(s *config.Settings, key string) *config.SagittariusSubage
 func scriptEnabled(s *config.Settings) string {
 	if sag := sagOf(s); sag != nil {
 		return fmtPtrBool(sag.ScriptToolEnabled)
+	}
+	return ""
+}
+
+func scratchpadEnabled(s *config.Settings) string {
+	if sag := sagOf(s); sag != nil {
+		return fmtPtrBool(sag.ScratchpadEnabled)
 	}
 	return ""
 }

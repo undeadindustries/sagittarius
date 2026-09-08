@@ -107,6 +107,10 @@ type RunnerConfig struct {
 	// constraints.go) from a resumed session, so a "do not touch X yet" limit
 	// set before --resume survives across the restart.
 	InitialConstraints []string
+	// InitialScratchpad pre-populates the model's working-memory note (see
+	// scratchpad.go) from a resumed session, so a note written before --resume
+	// is still in the system prompt on the first turn after it.
+	InitialScratchpad string
 	// InitialReadOnly seeds the standing session read-only posture.
 	InitialReadOnly *bool
 	// VerboseLog, when non-nil, receives a full timestamped transcript of every
@@ -282,6 +286,13 @@ type Runner struct {
 	// compression, unlike a plain history message. See constraints.go.
 	constraintsMu sync.RWMutex
 	constraints   []string
+
+	// scratchpadMu guards scratchpad, the model's own working-memory note. It
+	// lives outside history for the same reason constraints do: history is
+	// masked, compressed, and truncated, and this text exists precisely to
+	// survive all three. See scratchpad.go.
+	scratchpadMu sync.RWMutex
+	scratchpad   string
 
 	// verboseLog is the optional --log-verbose transcript sink; nil-safe (see
 	// verboselog.go) so hot-path call sites never need to check for nil.
@@ -500,6 +511,9 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 	if len(cfg.InitialConstraints) > 0 {
 		runner.constraints = append([]string(nil), cfg.InitialConstraints...)
 	}
+	if cfg.InitialScratchpad != "" {
+		runner.scratchpad = sanitizeScratchpad(cfg.InitialScratchpad)
+	}
 	if cfg.InitialReadOnly != nil {
 		runner.readOnlyPosture = *cfg.InitialReadOnly
 	}
@@ -508,6 +522,7 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		registerGoalTools(runner, registry)
 		registerGrillTools(runner, registry)
 		registerSubagentTools(runner, registry, cfg.Settings)
+		registerWorkingMemoryTools(runner, registry, cfg.Settings)
 		registry.Register(newSaveMemoryTool(runner))
 	}
 
@@ -1488,6 +1503,10 @@ func (r *Runner) rebuildBasePrompt() {
 		EditEnabled:    containsString(toolNames, tools.EditToolName),
 		SymbolsEnabled: containsString(toolNames, tools.FindSymbolToolName),
 		MemoryEnabled:  containsString(toolNames, tools.SaveMemoryToolName),
+		// Resolved from the live registry rather than settings so a /settings
+		// toggle or a subagent's OmitSessionTools registry cannot leave the
+		// prompt teaching a tool the model has no way to call (AD-074, AD-078).
+		ScratchpadEnabled: containsString(toolNames, tools.UpdateScratchpadToolName),
 	})
 
 	if memory = strings.TrimSpace(memory); memory != "" {
@@ -1517,6 +1536,11 @@ func (r *Runner) applyModeSystemSuffix() {
 	// A subagent's charter tells it what it is and what it may touch. It comes
 	// before constraints so a standing constraint still has the last word.
 	suffix = appendDirective(suffix, r.subagentCharter)
+	// The scratchpad is the model's own note, so it sits below the charter (which
+	// says what the model is) and above constraints (which outrank everything).
+	if pad := r.Scratchpad(); pad != "" && r.scratchpadToolRegistered() {
+		suffix = appendDirective(suffix, renderScratchpadDirective(pad))
+	}
 	// Standing session constraints go last (highest recency) in the suffix,
 	// which is itself appended after systemBase (personality prompt + memory),
 	// so they are the final text the model reads and outrank the mode suffix,

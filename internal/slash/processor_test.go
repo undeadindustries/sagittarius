@@ -57,6 +57,9 @@ type mockHooks struct {
 	// with a stateful in-memory slice, so /constraints command tests can
 	// assert real add/list/clear behavior.
 	constraints []string
+	// scratchpad backs Scratchpad()/ClearScratchpad() so /scratchpad tests can
+	// assert real show/clear behavior.
+	scratchpad string
 	// setModeCalls records every mode passed to SetInteractionMode, so tests
 	// can assert the top-level /agent, /plan, /ask, /debug shortcuts invoke
 	// the same hook as their "/mode <name>" equivalents.
@@ -141,6 +144,15 @@ func (m *mockHooks) ListConstraints() []string {
 
 func (m *mockHooks) ClearConstraints() error {
 	m.constraints = nil
+	return nil
+}
+
+func (m *mockHooks) Scratchpad() string {
+	return m.scratchpad
+}
+
+func (m *mockHooks) ClearScratchpad() error {
+	m.scratchpad = ""
 	return nil
 }
 
@@ -1030,6 +1042,73 @@ func TestConstraintsClear(t *testing.T) {
 	}
 	if len(result.Messages) != 1 || !strings.Contains(result.Messages[0], "Cleared") {
 		t.Errorf("messages = %#v, want a cleared confirmation", result.Messages)
+	}
+}
+
+func TestScratchpadShowEmpty(t *testing.T) {
+	t.Parallel()
+	deps, _, _ := testDeps(t, nil)
+	p := slash.NewProcessor()
+
+	result := p.Process(context.Background(), "/scratchpad", deps)
+
+	if result.Err != nil {
+		t.Fatalf("show error: %v", result.Err)
+	}
+	if len(result.Messages) != 1 || !strings.Contains(result.Messages[0], "empty") {
+		t.Errorf("messages = %#v, want an empty-scratchpad message", result.Messages)
+	}
+}
+
+func TestScratchpadShowContent(t *testing.T) {
+	t.Parallel()
+	deps, _, hooks := testDeps(t, nil)
+	hooks.scratchpad = "resume the backfill at offset 41200"
+	p := slash.NewProcessor()
+
+	result := p.Process(context.Background(), "/scratchpad show", deps)
+
+	if result.Err != nil {
+		t.Fatalf("show error: %v", result.Err)
+	}
+	if len(result.Messages) != 1 || !strings.Contains(result.Messages[0], "offset 41200") {
+		t.Errorf("messages = %#v, want the note echoed back", result.Messages)
+	}
+}
+
+func TestScratchpadClear(t *testing.T) {
+	t.Parallel()
+	deps, _, hooks := testDeps(t, nil)
+	hooks.scratchpad = "stale note"
+	p := slash.NewProcessor()
+
+	result := p.Process(context.Background(), "/scratchpad clear", deps)
+
+	if result.Err != nil {
+		t.Fatalf("clear error: %v", result.Err)
+	}
+	if hooks.scratchpad != "" {
+		t.Fatalf("scratchpad = %q, want cleared", hooks.scratchpad)
+	}
+	if len(result.Messages) != 1 || !strings.Contains(result.Messages[0], "cleared") {
+		t.Errorf("messages = %#v, want a cleared confirmation", result.Messages)
+	}
+}
+
+// TestScratchpadClearWhenEmpty avoids writing a redundant session-JSONL line and
+// a confirmation that implies something was discarded.
+func TestScratchpadClearWhenEmpty(t *testing.T) {
+	t.Parallel()
+	deps, _, _ := testDeps(t, nil)
+	p := slash.NewProcessor()
+
+	result := p.Process(context.Background(), "/scratchpad clear", deps)
+
+	if result.Err != nil {
+		t.Fatalf("clear error: %v", result.Err)
+	}
+	if len(result.Messages) != 1 || !strings.Contains(result.Messages[0], "already empty") {
+		t.Errorf("messages = %#v, want an already-empty message", result.Messages)
 	}
 }
 

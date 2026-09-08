@@ -1649,6 +1649,10 @@ func isConcurrentSafeSlash(line string) bool {
 	return l == "/goal pause" || l == "/goal status" || l == "/stats" ||
 		l == "/grill pause" || l == "/grill status" ||
 		l == "/constraints list" ||
+		// Reading the scratchpad mid-turn is the point: it shows what the model
+		// is currently holding on to. Clearing it mid-turn is not, so only the
+		// read is admitted.
+		l == "/scratchpad" || l == "/scratchpad show" ||
 		l == "/chat debug" ||
 		strings.HasPrefix(l, "/stats ")
 }

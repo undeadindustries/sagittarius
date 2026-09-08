@@ -104,6 +104,9 @@ type Options struct {
 	EditEnabled    bool
 	SymbolsEnabled bool
 	MemoryEnabled  bool
+	// ScratchpadEnabled reports whether update_scratchpad is registered, so the
+	// prompt only teaches a tool the model can actually call.
+	ScratchpadEnabled bool
 }
 
 // Build returns the system prompt base (without user memory or mode suffix,
@@ -134,9 +137,44 @@ func renderIdentity(id Identity, roleNoun, helpClause string) string {
 	return who + " " + helpClause + "\n\n" + selfID
 }
 
+// The two working-memory rules, worded once and rendered in each persona's own
+// list style below. Both counter the same failure: compression rewrites history
+// to prose, so an exact path or decision from 200 turns ago is simply gone, and
+// a model that does not know that will guess or ask the user to repeat itself.
+var (
+	scratchpadRule = "`" + tools.UpdateScratchpadToolName + "` keeps a short note outside the " +
+		"conversation, so it survives context compression when ordinary messages do not. On a long " +
+		"task, record the plan, the step you are on, and exact paths, ids, and decisions there. It " +
+		"replaces the whole note, and you always see the current one in this prompt."
+	sessionSearchRule = "If an exact earlier detail is no longer in context, call `" +
+		tools.SearchSessionToolName + "` to find it in the transcript rather than guessing or " +
+		"asking the user to repeat themselves."
+)
+
+// workingMemoryGuidance renders the rules as bold-lead paragraphs, the lite
+// prompts' style. The scratchpad half is gated on registration; search_session
+// is unconditional because it is registered unconditionally.
+func workingMemoryGuidance(scratchpadEnabled bool) string {
+	paragraphs := []string{"**Recover, don't guess.** " + sessionSearchRule}
+	if scratchpadEnabled {
+		paragraphs = append([]string{"**Working memory.** " + scratchpadRule}, paragraphs...)
+	}
+	return strings.Join(paragraphs, "\n\n")
+}
+
+// workingMemoryBullets renders the same rules as list items, the full prompts'
+// style. No trailing newline, so it composes with join like every other line.
+func workingMemoryBullets(scratchpadEnabled bool) string {
+	bullets := []string{"- **Recover, Don't Guess:** " + sessionSearchRule}
+	if scratchpadEnabled {
+		bullets = append([]string{"- **Working Memory:** " + scratchpadRule}, bullets...)
+	}
+	return strings.Join(bullets, "\n")
+}
+
 // Shared condensed sections used by programmer lite and stub personalities.
 
-func liteToolUsage(symbolsEnabled, editEnabled bool) string {
+func liteToolUsage(symbolsEnabled, editEnabled, scratchpadEnabled bool) string {
 	search := "**Search before reading.** Use `" + tools.GrepToolName + "` to find specific strings or patterns and `" + tools.ListDirectoryToolName + "` to explore directories. Do not read entire files unless necessary — target specific line ranges with `" + tools.ReadFileToolName + "`."
 	if symbolsEnabled {
 		search += " When you know a symbol name (function, type, class) and want its definition or call sites, prefer `" + tools.FindSymbolToolName + "` over `" + tools.GrepToolName + "`."
@@ -160,6 +198,8 @@ func liteToolUsage(symbolsEnabled, editEnabled bool) string {
 		"**No Diff Format:** NEVER send unified-diff lines (`+` / `-` prefixes) or UI diff previews to `write_file`. It is not a patch tool — send the entire file body.",
 		"",
 		"**Prefer editing over creating.** Do not create new files when you can update existing ones. Do not create documentation files unless explicitly asked.",
+		"",
+		workingMemoryGuidance(scratchpadEnabled),
 		"",
 		toolInvocationMandate(editEnabled),
 	)

@@ -68,6 +68,8 @@ type RuntimeConfig struct {
 	SpillDir string
 	// ScriptToolEnabled toggles registration of run_script (default false).
 	ScriptToolEnabled bool
+	// ScratchpadEnabled toggles registration of update_scratchpad (default true).
+	ScratchpadEnabled bool
 }
 
 // NewRuntime constructs and performs an initial tool catalog reload.
@@ -106,6 +108,7 @@ func NewRuntime(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 		WebFetchEnabled:    cfg.WebFetchEnabled,
 		SpillDir:           cfg.SpillDir,
 		ScriptToolEnabled:  cfg.ScriptToolEnabled,
+		ScratchpadEnabled:  cfg.ScratchpadEnabled,
 
 		ResearchSubagentsEnabled: cfg.ResearchSubagentsEnabled,
 		CodingSubagentsEnabled:   cfg.CodingSubagentsEnabled,

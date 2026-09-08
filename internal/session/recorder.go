@@ -345,6 +345,23 @@ func (r *Recorder) SetConstraints(constraints []string) error {
 	return r.appendLineLocked(set)
 }
 
+// SetScratchpad records a change to the model's working-memory note. The
+// pointer is always non-nil, including for a clear, so applyMetaUpdate can tell
+// "cleared" from "this line did not touch it".
+func (r *Recorder) SetScratchpad(text string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.disabled {
+		return nil
+	}
+	set := SetRecord{
+		Set: &MetadataRecord{
+			Scratchpad: &text,
+		},
+	}
+	return r.appendLineLocked(set)
+}
+
 // SetReadOnly records a change to the durable read-only posture.
 func (r *Recorder) SetReadOnly(enabled bool) error {
 	r.mu.Lock()

@@ -120,7 +120,10 @@ type SagittariusSettings struct {
 	// limits to be preferred over manual pins.
 	ContextLimitPreferDiscovered *bool `json:"contextLimitPreferDiscovered,omitempty"`
 	// ScriptToolEnabled toggles the run_script batch tool (default off).
-	ScriptToolEnabled *bool                      `json:"scriptToolEnabled,omitempty"`
+	ScriptToolEnabled *bool `json:"scriptToolEnabled,omitempty"`
+	// ScratchpadEnabled toggles the update_scratchpad working-memory tool
+	// (default on).
+	ScratchpadEnabled *bool                      `json:"scratchpadEnabled,omitempty"`
 	Extra             map[string]json.RawMessage `json:"-"`
 }
 

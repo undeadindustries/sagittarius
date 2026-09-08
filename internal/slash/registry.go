@@ -133,6 +133,7 @@ func (r *Registry) registerBuiltins() {
 		debugCommand(),
 		memoryCommand(),
 		constraintsCommand(),
+		scratchpadCommand(),
 		readOnlyCommand(),
 		skillsCommand(),
 		mcpCommand(),

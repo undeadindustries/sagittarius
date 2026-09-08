@@ -146,6 +146,13 @@ type Hooks interface {
 	ListConstraints() []string
 	ClearConstraints() error
 
+	// /scratchpad read and wipe hooks for the model's working-memory note. There
+	// is no setter: the block is framed to the model as its own notes, so the
+	// user's channel for standing text is /constraints. See
+	// internal/agent/scratchpad.go.
+	Scratchpad() string
+	ClearScratchpad() error
+
 	// /readonly durable session-wide posture hooks.
 	SetReadOnly(enabled bool) error
 	ReadOnlyActive() bool

@@ -909,6 +909,10 @@ func formatToolResult(name string, result map[string]any, writeDiff string) (tex
 		if path, ok := result["path"].(string); ok {
 			return fmt.Sprintf("Saved to %s", path), nil, false
 		}
+	case UpdateScratchpadToolName:
+		return formatScratchpadResult(result), nil, false
+	case SearchSessionToolName:
+		return formatSessionSearchResult(result), nil, false
 	case CodeTaskToolName:
 		return formatCodeTaskResult(result), nil, false
 	}
@@ -975,6 +979,39 @@ func formatFindSymbolResult(result map[string]any) string {
 		return header
 	}
 	return appendSpillHint(header+"\n"+capLines(matches, toolResultMaxLines), result)
+}
+
+// formatScratchpadResult renders an update_scratchpad result. The note itself is
+// echoed so the user can see what the model chose to remember without running
+// /scratchpad show.
+func formatScratchpadResult(result map[string]any) string {
+	note := strings.TrimSpace(asString(result["content"]))
+	if note == "" {
+		return "Scratchpad cleared"
+	}
+	runes, _ := intValue(result["runes"])
+	header := fmt.Sprintf("Scratchpad updated (%d runes)", runes)
+	if truncated, ok := result["truncated"].(bool); ok && truncated {
+		header += " [truncated to fit]"
+	}
+	return capLines(header+"\n"+note, toolResultMaxLines)
+}
+
+// formatSessionSearchResult renders a search_session result.
+func formatSessionSearchResult(result map[string]any) string {
+	count, _ := intValue(result["count"])
+	if count == 0 {
+		return "no matches in this session"
+	}
+	header := fmt.Sprintf("%d match(es)", count)
+	if truncated, ok := result["truncated"].(bool); ok && truncated {
+		header += " [more exist; showing the most recent]"
+	}
+	matches := asString(result["matches"])
+	if matches == "" {
+		return header
+	}
+	return capLines(header+"\n"+matches, toolResultMaxLines)
 }
 
 // formatShellResult renders a run_shell_command result: the tail of the captured

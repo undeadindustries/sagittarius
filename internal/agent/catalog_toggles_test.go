@@ -94,12 +94,13 @@ func TestRefreshBuiltinTogglesEditTool(t *testing.T) {
 // credentials or on a default changing underneath the test.
 func TestRefreshBuiltinTogglesNoopWhenUnchanged(t *testing.T) {
 	off, on := false, true
-	cat := newToggleCatalog(t, CatalogConfig{SymbolsEnabled: true, SymbolsPreferGopls: true, EditEnabled: true, ResearchSubagentsEnabled: false, CodingSubagentsEnabled: false})
+	cat := newToggleCatalog(t, CatalogConfig{SymbolsEnabled: true, SymbolsPreferGopls: true, EditEnabled: true, ResearchSubagentsEnabled: false, CodingSubagentsEnabled: false, ScratchpadEnabled: true})
 
 	same := &config.Settings{
 		Sagittarius: &config.SagittariusSettings{
-			Symbols: &config.SagittariusSymbolsConfig{Enabled: &on, PreferGopls: &on},
-			Web:     &config.SagittariusWebConfig{SearchEnabled: &off, FetchEnabled: &off},
+			Symbols:           &config.SagittariusSymbolsConfig{Enabled: &on, PreferGopls: &on},
+			Web:               &config.SagittariusWebConfig{SearchEnabled: &off, FetchEnabled: &off},
+			ScratchpadEnabled: &on,
 		},
 	}
 	if changed := cat.RefreshBuiltinToggles(same); changed {
@@ -160,6 +161,68 @@ func TestRefreshBuiltinTogglesScriptTool(t *testing.T) {
 	}
 	if _, ok := cat.BuildRegistry().Lookup(tools.ScriptToolName); ok {
 		t.Errorf("%s should be gone after disable", tools.ScriptToolName)
+	}
+}
+
+// TestRefreshBuiltinTogglesScratchpad guards the AD-085 dead-toggle class: the
+// update_scratchpad tool is registered by the runner (it needs a *Runner), so
+// the catalog tracks the setting purely to make a live /settings change report
+// a difference. Without that, the toggle would persist and rebuild the runner
+// while the tool stayed registered until a restart.
+func TestRefreshBuiltinTogglesScratchpad(t *testing.T) {
+	cat := newToggleCatalog(t, CatalogConfig{ScratchpadEnabled: true})
+
+	off, on := false, true
+	if changed := cat.RefreshBuiltinToggles(&config.Settings{
+		Sagittarius: &config.SagittariusSettings{ScratchpadEnabled: &off},
+	}); !changed {
+		t.Fatal("disabling the scratchpad should report a change so the registry rebuilds")
+	}
+	if cat.scratchpadEnabled {
+		t.Error("catalog still reports the scratchpad enabled after the toggle")
+	}
+
+	if changed := cat.RefreshBuiltinToggles(&config.Settings{
+		Sagittarius: &config.SagittariusSettings{ScratchpadEnabled: &on},
+	}); !changed {
+		t.Fatal("re-enabling the scratchpad should report a change")
+	}
+	if !cat.scratchpadEnabled {
+		t.Error("catalog does not report the scratchpad enabled after re-enabling")
+	}
+}
+
+// TestSetRegistryHonorsLiveScratchpadSetting closes the other half of the loop:
+// refreshBuiltinToolToggles rebuilds and calls SetRegistry, which must consult
+// the live settings snapshot rather than whatever was true at construction.
+func TestSetRegistryHonorsLiveScratchpadSetting(t *testing.T) {
+	t.Parallel()
+
+	runner, err := NewRunner(RunnerConfig{
+		Generator:   &fakeGenerator{},
+		Model:       "test-model",
+		WorkDir:     t.TempDir(),
+		Interactive: false,
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	if _, ok := runner.Registry().Lookup(tools.UpdateScratchpadToolName); !ok {
+		t.Fatal("update_scratchpad should be registered by default")
+	}
+
+	ws, err := tools.NewWorkspace(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	runner.SetSettings(&config.Settings{
+		Sagittarius: &config.SagittariusSettings{ScratchpadEnabled: &off},
+	})
+	runner.SetRegistry(tools.NewBuiltinRegistry(ws))
+
+	if _, ok := runner.Registry().Lookup(tools.UpdateScratchpadToolName); ok {
+		t.Error("update_scratchpad survived a rebuild with scratchpadEnabled=false")
 	}
 }
 

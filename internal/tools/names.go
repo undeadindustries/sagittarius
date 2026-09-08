@@ -3,20 +3,22 @@ package tools
 // Wire names and parameter keys match the frozen gemini-cli fork (base-declarations.ts).
 
 const (
-	ReadFileToolName        = "read_file"
-	WriteFileToolName       = "write_file"
-	ListDirectoryToolName   = "list_directory"
-	ShellToolName           = "run_shell_command"
-	GrepToolName            = "grep_search"
-	FindSymbolToolName      = "find_symbol"
-	ProjectChecksToolName   = "run_project_checks"
-	GoogleWebSearchToolName = "google_web_search"
-	WebFetchToolName        = "web_fetch"
-	EditToolName            = "edit"
-	TaskToolName            = "task"
-	CodeTaskToolName        = "code_task"
-	SaveMemoryToolName      = "save_memory"
-	ScriptToolName          = "run_script"
+	ReadFileToolName         = "read_file"
+	WriteFileToolName        = "write_file"
+	ListDirectoryToolName    = "list_directory"
+	ShellToolName            = "run_shell_command"
+	GrepToolName             = "grep_search"
+	FindSymbolToolName       = "find_symbol"
+	ProjectChecksToolName    = "run_project_checks"
+	GoogleWebSearchToolName  = "google_web_search"
+	WebFetchToolName         = "web_fetch"
+	EditToolName             = "edit"
+	TaskToolName             = "task"
+	CodeTaskToolName         = "code_task"
+	SaveMemoryToolName       = "save_memory"
+	ScriptToolName           = "run_script"
+	UpdateScratchpadToolName = "update_scratchpad"
+	SearchSessionToolName    = "search_session"
 	// AskUserToolName is the grill-mode structured question tool (registered by
 	// internal/agent, not NewBuiltinRegistry, but its name must be known here so
 	// the scheduler's read-only gate can special-case it).
@@ -46,6 +48,12 @@ const (
 
 	SaveMemoryParamText  = "text"
 	SaveMemoryParamScope = "scope"
+
+	ScratchpadParamContent = "content"
+
+	SearchSessionParamQuery      = "query"
+	SearchSessionParamMaxResults = "max_results"
+	SearchSessionParamRole       = "role"
 
 	GrepParamIncludePattern    = "include_pattern"
 	GrepParamExcludePattern    = "exclude_pattern"

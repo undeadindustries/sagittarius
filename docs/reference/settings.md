@@ -115,6 +115,17 @@ validated; unknown keys pass through untouched.
 |-----|------|---------|---------|
 | `scriptToolEnabled` | bool | `false` | Register the `run_script` tool so the model can batch read-only operations (grep, read, list, find_symbol) in one turn instead of one LLM hop per tool. Mutating tools, shell, nested `run_script`, and confirmation-gated tools are rejected. Live-toggled from `/settings`. |
 
+### Working memory (`sagittarius.scratchpadEnabled`)
+
+| Key | Type | Default | Purpose |
+|-----|------|---------|---------|
+| `scratchpadEnabled` | bool | `true` | Register the `update_scratchpad` tool, letting the model keep a short note in the system prompt where context compression cannot reach it. Capped at 4,096 characters, which costs about 1,000 tokens on every request once populated — that cost is the only reason this toggle exists. Live-toggled from `/settings`. |
+
+The companion `search_session` tool, which scans this session's transcript for an
+exact detail compression has summarized away, has no setting: it is always
+registered because it costs one tool declaration and reads a file the session is
+already writing. See `docs/working-memory.md`.
+
 ### Subagents (`sagittarius.subagents.*`)
 
 | Key | Type | Default | Purpose |

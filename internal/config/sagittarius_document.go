@@ -27,6 +27,7 @@ var reservedSagittariusKeys = map[string]struct{}{
 	"maxToolRounds":                {},
 	"contextLimitPreferDiscovered": {},
 	"scriptToolEnabled":            {},
+	"scratchpadEnabled":            {},
 }
 
 var reservedSagittariusModeKeys = map[string]struct{}{
@@ -1023,6 +1024,12 @@ func unmarshalSagittarius(raw json.RawMessage) (*SagittariusSettings, error) {
 				return nil, fmt.Errorf("decode sagittarius.scriptToolEnabled: %w", err)
 			}
 			s.ScriptToolEnabled = &b
+		case "scratchpadEnabled":
+			var b bool
+			if err := json.Unmarshal(val, &b); err != nil {
+				return nil, fmt.Errorf("decode sagittarius.scratchpadEnabled: %w", err)
+			}
+			s.ScratchpadEnabled = &b
 		default:
 			if _, reserved := reservedSagittariusKeys[key]; reserved {
 				continue
@@ -1178,6 +1185,9 @@ func marshalSagittarius(s *SagittariusSettings) (json.RawMessage, error) {
 		return nil, err
 	}
 	if err := add("scriptToolEnabled", s.ScriptToolEnabled); err != nil {
+		return nil, err
+	}
+	if err := add("scratchpadEnabled", s.ScratchpadEnabled); err != nil {
 		return nil, err
 	}
 	for key, val := range s.Extra {

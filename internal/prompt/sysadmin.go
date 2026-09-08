@@ -30,7 +30,7 @@ func sysadminFull(opts Options) string {
 		sysadminCoreMandates(),
 		sysadminThisSystem(opts),
 		sysadminPrimaryWorkflow(),
-		sysadminOperationalGuidelines(opts.Interactive, opts.SymbolsEnabled, opts.EditEnabled),
+		sysadminOperationalGuidelines(opts.Interactive, opts.SymbolsEnabled, opts.EditEnabled, opts.ScratchpadEnabled),
 	}
 	if opts.IsGitRepo {
 		sections = append(sections, liteGit())
@@ -121,7 +121,7 @@ func sysadminPrimaryWorkflow() string {
 	)
 }
 
-func sysadminOperationalGuidelines(interactive, symbolsEnabled, editEnabled bool) string {
+func sysadminOperationalGuidelines(interactive, symbolsEnabled, editEnabled, scratchpadEnabled bool) string {
 	shellSafety := "- Avoid commands that prompt (`git rebase -i`, bare `passwd`, `fdisk`). Use non-interactive forms, or tell the user the step needs their input."
 	if interactive {
 		shellSafety = "- Avoid commands that prompt (`git rebase -i`, bare `passwd`, `fdisk`). Use non-interactive forms, or tell the user the step needs their input.\n- Ask the user before running commands with significant side effects."
@@ -166,6 +166,7 @@ func sysadminOperationalGuidelines(interactive, symbolsEnabled, editEnabled bool
 		"- Read before you write: never edit a config file you have not read in full this session.",
 		"- `"+tools.WriteFileToolName+"` overwrites the entire file. Always supply complete content — never placeholders, elision, or diff-format lines.",
 		"- If a tool call is declined or cancelled, respect it immediately. Do not re-attempt it or route around it with a different command."+findSymbolBullet,
+		workingMemoryBullets(scratchpadEnabled),
 		"",
 		toolInvocationMandate(editEnabled),
 	)
@@ -213,6 +214,7 @@ func sysadminLite(opts Options) string {
 		"",
 		"## Tool Usage",
 		"- Read before modifying. Do not use placeholders or diff-format lines in `write_file`."+findSymbolBullet,
+		workingMemoryBullets(opts.ScratchpadEnabled),
 		"",
 		toolInvocationMandate(opts.EditEnabled),
 	)

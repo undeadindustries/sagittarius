@@ -1330,6 +1330,22 @@ func (h *appHooks) ClearConstraints() error {
 	return h.app.runner.ClearConstraints()
 }
 
+// Scratchpad returns the model's working-memory note (see /scratchpad show).
+func (h *appHooks) Scratchpad() string {
+	if h.app == nil || h.app.runner == nil {
+		return ""
+	}
+	return h.app.runner.Scratchpad()
+}
+
+// ClearScratchpad discards the model's working-memory note.
+func (h *appHooks) ClearScratchpad() error {
+	if h.app == nil || h.app.runner == nil {
+		return fmt.Errorf("runner not available")
+	}
+	return h.app.runner.ClearScratchpad()
+}
+
 func (h *appHooks) SetReadOnly(enabled bool) error {
 	if h.app == nil || h.app.runner == nil {
 		return fmt.Errorf("runner not available")
@@ -2106,6 +2122,7 @@ func (r *Runner) SetRegistry(registry *tools.Registry) {
 	registerGoalTools(r, registry)
 	registerGrillTools(r, registry)
 	registerSubagentTools(r, registry, r.settingsSnapshot())
+	registerWorkingMemoryTools(r, registry, r.settingsSnapshot())
 	registry.Register(newSaveMemoryTool(r))
 
 	r.regMu.Lock()

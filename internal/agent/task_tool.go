@@ -99,3 +99,19 @@ func stringArg(args map[string]any, key string) (string, error) {
 	}
 	return s, nil
 }
+
+// presentStringArg requires the key to be present and a string but allows the
+// empty value, mirroring the tools package helper of the same name. Use it where
+// an empty string is a meaningful instruction (clearing the scratchpad) rather
+// than a missing argument.
+func presentStringArg(args map[string]any, key string) (string, error) {
+	raw, ok := args[key]
+	if !ok {
+		return "", fmt.Errorf("missing required parameter %q", key)
+	}
+	s, ok := raw.(string)
+	if !ok {
+		return "", fmt.Errorf("parameter %q must be a string", key)
+	}
+	return s, nil
+}
