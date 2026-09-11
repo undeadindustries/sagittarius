@@ -1,5 +1,7 @@
 package ui
 
+import "context"
+
 // StreamEventType identifies a streaming UI update from the agent loop.
 type StreamEventType int
 
@@ -152,6 +154,13 @@ type StreamEvent struct {
 	AskRecommended int
 	// AskReply is set for StreamAskUser; the TUI sends the user's answer here.
 	AskReply chan AskAnswer
+}
+
+// SidebarAsker answers a question without disturbing the in-flight turn.
+// Implemented by *agent.App. The hub does not implement it, so Google Chat
+// keeps its existing queued-input behavior during a wait.
+type SidebarAsker interface {
+	AskSidebar(ctx context.Context, question string) (<-chan StreamEvent, error)
 }
 
 // ConfirmDecision is the user's answer to a tool confirmation prompt.

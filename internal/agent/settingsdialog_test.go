@@ -290,6 +290,51 @@ func TestClearSettingValueUIEscapeAtOnPasteRemovesKey(t *testing.T) {
 	}
 }
 
+func TestApplySettingValueGoogleChat(t *testing.T) {
+	s := &config.Settings{}
+
+	if err := applySettingValue(s, "sagittarius.chat.googleChat.enabled", "true"); err != nil {
+		t.Fatalf("apply enabled: %v", err)
+	}
+	if err := applySettingValue(s, "sagittarius.chat.googleChat.spaceId", "spaces/DM123"); err != nil {
+		t.Fatalf("apply spaceId: %v", err)
+	}
+	if err := applySettingValue(s, "sagittarius.chat.googleChat.authorizedUsers", "users/1, rob@undeadindustries.com"); err != nil {
+		t.Fatalf("apply authorizedUsers: %v", err)
+	}
+	if err := applySettingValue(s, "sagittarius.chat.googleChat.maxResultRunes", "1500"); err != nil {
+		t.Fatalf("apply maxResultRunes: %v", err)
+	}
+
+	gc := s.Sagittarius.Chat.GoogleChat
+	if gc == nil || gc.Enabled == nil || !*gc.Enabled {
+		t.Errorf("enabled was not set")
+	}
+	if gc.SpaceID != "spaces/DM123" {
+		t.Errorf("spaceId = %q, want spaces/DM123", gc.SpaceID)
+	}
+	if len(gc.AuthorizedUsers) != 2 || gc.AuthorizedUsers[0] != "users/1" || gc.AuthorizedUsers[1] != "rob@undeadindustries.com" {
+		t.Errorf("authorizedUsers = %v", gc.AuthorizedUsers)
+	}
+	if gc.MaxResultRunes == nil || *gc.MaxResultRunes != 1500 {
+		t.Errorf("maxResultRunes = %v", gc.MaxResultRunes)
+	}
+
+	// Test clear
+	if err := clearSettingValue(s, "sagittarius.chat.googleChat.enabled"); err != nil {
+		t.Fatalf("clear enabled: %v", err)
+	}
+	if gc.Enabled != nil {
+		t.Errorf("enabled was not cleared")
+	}
+	if err := clearSettingValue(s, "sagittarius.chat.googleChat.spaceId"); err != nil {
+		t.Fatalf("clear spaceId: %v", err)
+	}
+	if gc.SpaceID != "" {
+		t.Errorf("spaceId was not cleared")
+	}
+}
+
 func loadEmptyDocs(t *testing.T) *config.Documents {
 	t.Helper()
 	t.Setenv("SAGITTARIUS_HOME", t.TempDir())

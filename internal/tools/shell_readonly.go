@@ -226,7 +226,7 @@ func classifySegment(tokens []string) (ShellVerdict, string) {
 	case "psql", "mysql", "sqlite3":
 		v, reason = classifySQL(args)
 
-	case "ls", "cat", "tail", "head", "less", "more", "grep", "rg", "ag", "ack", "stat", "file", "wc", "du", "df", "free", "uptime", "top", "htop", "ps", "pgrep", "netstat", "ss", "lsof", "ip", "ifconfig", "ping", "traceroute", "dig", "host", "nslookup", "whoami", "id", "groups", "pwd", "date", "cal", "echo", "printf", "dmesg", "journalctl":
+	case "ls", "cat", "tail", "head", "less", "more", "grep", "rg", "ag", "ack", "stat", "file", "wc", "du", "df", "free", "uptime", "top", "htop", "ps", "pgrep", "netstat", "ss", "lsof", "ip", "ifconfig", "ping", "traceroute", "dig", "host", "nslookup", "whoami", "id", "groups", "pwd", "date", "cal", "echo", "printf", "dmesg", "journalctl", "test", "[":
 		v, reason = VerdictReadOnly, ""
 
 	default:

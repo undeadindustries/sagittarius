@@ -12,6 +12,9 @@ func TestClassifyShellReadOnly(t *testing.T) {
 		// Read-only built-ins
 		{"ls -l /tmp", VerdictReadOnly},
 		{"cat /etc/passwd", VerdictReadOnly},
+		{"test -f /tmp/done", VerdictReadOnly},
+		{"[ -f /tmp/done ]", VerdictReadOnly},
+		{"kill -0 1234", VerdictMutating},
 		{"journalctl -u nginx --since '1 hour ago'", VerdictReadOnly},
 		{"systemctl status sshd", VerdictReadOnly},
 		{"systemctl is-active docker", VerdictReadOnly},

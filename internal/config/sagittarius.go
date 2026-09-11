@@ -123,8 +123,29 @@ type SagittariusSettings struct {
 	ScriptToolEnabled *bool `json:"scriptToolEnabled,omitempty"`
 	// ScratchpadEnabled toggles the update_scratchpad working-memory tool
 	// (default on).
-	ScratchpadEnabled *bool                      `json:"scratchpadEnabled,omitempty"`
-	Extra             map[string]json.RawMessage `json:"-"`
+	ScratchpadEnabled *bool `json:"scratchpadEnabled,omitempty"`
+	// Chat configures external chat integrations (Google Chat, etc.).
+	Chat  *SagittariusChatConfig     `json:"chat,omitempty"`
+	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// SagittariusChatConfig configures external chat platform bridges.
+type SagittariusChatConfig struct {
+	GoogleChat *SagittariusGoogleChatConfig `json:"googleChat,omitempty"`
+	Extra      map[string]json.RawMessage   `json:"-"`
+}
+
+// SagittariusGoogleChatConfig configures the Google Chat bridge.
+type SagittariusGoogleChatConfig struct {
+	Enabled         *bool                      `json:"enabled,omitempty"`
+	SpaceID         string                     `json:"spaceId,omitempty"`
+	AuthorizedUsers []string                   `json:"authorizedUsers,omitempty"`
+	ProjectID       string                     `json:"projectId,omitempty"`
+	SubscriptionID  string                     `json:"subscriptionId,omitempty"`
+	CredentialsFile string                     `json:"credentialsFile,omitempty"`
+	MaxResultRunes  *int                       `json:"maxResultRunes,omitempty"`
+	ConfirmTimeout  *int                       `json:"confirmTimeout,omitempty"`
+	Extra           map[string]json.RawMessage `json:"-"`
 }
 
 // SagittariusUpdateConfig configures the self-update feature.

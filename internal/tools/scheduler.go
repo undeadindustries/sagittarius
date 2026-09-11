@@ -862,6 +862,13 @@ func formatToolSummary(toolName string, args map[string]any) string {
 		if cmd, err := stringArg(args, ShellParamCommand); err == nil {
 			return truncateOneLine(cmd, 72)
 		}
+	case WaitUntilToolName:
+		if desc := optionalStringArg(args, WaitUntilParamDescription); desc != "" {
+			return truncateOneLine(desc, 72)
+		}
+		if cmd, err := stringArg(args, WaitUntilParamCommand); err == nil {
+			return truncateOneLine(cmd, 72)
+		}
 	}
 	return ""
 }
@@ -915,6 +922,8 @@ func formatToolResult(name string, result map[string]any, writeDiff string) (tex
 		return formatSessionSearchResult(result), nil, false
 	case CodeTaskToolName:
 		return formatCodeTaskResult(result), nil, false
+	case WaitUntilToolName:
+		return formatWaitUntilResult(result), waitUntilExitCode(result), false
 	}
 
 	// MCP tools (and any other tool) carry their payload under "result".
@@ -922,6 +931,44 @@ func formatToolResult(name string, result map[string]any, writeDiff string) (tex
 		return capLines(stringifyResult(v), toolResultMaxLines), nil, false
 	}
 	return "ok", nil, false
+}
+
+func formatWaitUntilResult(result map[string]any) string {
+	status := asString(result["status"])
+	elapsed := asString(result["elapsed"])
+	checks, hasChecks := intValue(result["checks"])
+	switch status {
+	case "ready":
+		if hasChecks && elapsed != "" {
+			return fmt.Sprintf("Ready after %s (%d checks)", elapsed, checks)
+		}
+		return "Ready"
+	case "timeout":
+		if elapsed != "" {
+			return fmt.Sprintf("Timed out after %s", elapsed)
+		}
+		return "Timed out"
+	case "canceled":
+		return "Canceled"
+	}
+	if text := strings.TrimSpace(asString(result["output"])); text != "" {
+		return capLines(text, toolResultMaxLines)
+	}
+	return "ok"
+}
+
+func waitUntilExitCode(result map[string]any) *int {
+	switch v := result["exit_code"].(type) {
+	case int:
+		return &v
+	case int64:
+		n := int(v)
+		return &n
+	case float64:
+		n := int(v)
+		return &n
+	}
+	return nil
 }
 
 // formatCodeTaskResult renders a coding subagent's card: what it wrote, any
@@ -1124,6 +1171,10 @@ func formatConfirmSummary(toolName string, args map[string]any) string {
 	case SaveMemoryToolName:
 		if text, ok := args[SaveMemoryParamText].(string); ok {
 			return fmt.Sprintf("remember: %s", text)
+		}
+	case WaitUntilToolName:
+		if cmd, ok := args[WaitUntilParamCommand]; ok {
+			return fmt.Sprintf("wait until %v", cmd)
 		}
 	case CodeTaskToolName:
 		// The lease is the whole decision the user is being asked to make, so it

@@ -47,6 +47,12 @@ var builtinArgAliases = map[string]map[string][]string{
 	SearchSessionToolName: {
 		SearchSessionParamQuery: {"q", "search", "pattern", "term", "text"},
 	},
+	WaitUntilToolName: {
+		WaitUntilParamCommand:     {"cmd", "shell_command", "check", "shell"},
+		WaitUntilParamInterval:    {"interval", "every"},
+		WaitUntilParamTimeout:     {"timeout", "timeout_sec", "max_seconds"},
+		WaitUntilParamDescription: {"desc", "label", "reason"},
+	},
 }
 
 // NormalizeToolArgs renames known alternate argument keys onto the canonical

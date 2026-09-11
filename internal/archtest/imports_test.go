@@ -105,6 +105,39 @@ func TestAgentAndSlashHaveNoCharm(t *testing.T) {
 	}
 }
 
+// TestGoogleChatLeafBoundary asserts that internal/googlechat is a strict leaf
+// package and never imports internal/agent or internal/ui.
+func TestGoogleChatLeafBoundary(t *testing.T) {
+	root := moduleRoot(t)
+	fset := token.NewFileSet()
+	dir := filepath.Join(root, "internal", "googlechat")
+
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		f, err := parser.ParseFile(fset, path, nil, parser.ImportsOnly)
+		if err != nil {
+			t.Errorf("parse %s: %v", path, err)
+			return nil
+		}
+		for _, imp := range f.Imports {
+			ipath := strings.Trim(imp.Path.Value, `"`)
+			if strings.Contains(ipath, "/internal/agent") || strings.Contains(ipath, "/internal/ui") {
+				rel, _ := filepath.Rel(root, path)
+				t.Errorf("internal/googlechat must not import %s (found in %s)", ipath, filepath.ToSlash(rel))
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk internal/googlechat: %v", err)
+	}
+}
+
 func allowedCharmFile(rel string) bool {
 	for _, dir := range charmAllowedDirs {
 		if strings.HasPrefix(rel, dir) {

@@ -39,6 +39,7 @@ var readOnlyBuiltinTools = map[string]bool{
 	// is the line these two stay on the safe side of.
 	UpdateScratchpadToolName: true,
 	SearchSessionToolName:    true,
+	WaitUntilToolName:        true,
 }
 
 // projectChecksFixRequested reports whether a run_project_checks call asks for

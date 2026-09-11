@@ -19,6 +19,7 @@ const (
 	ScriptToolName           = "run_script"
 	UpdateScratchpadToolName = "update_scratchpad"
 	SearchSessionToolName    = "search_session"
+	WaitUntilToolName        = "wait_until"
 	// AskUserToolName is the grill-mode structured question tool (registered by
 	// internal/agent, not NewBuiltinRegistry, but its name must be known here so
 	// the scheduler's read-only gate can special-case it).
@@ -73,6 +74,11 @@ const (
 
 	ShellParamCommand      = "command"
 	ShellParamIsBackground = "is_background"
+
+	WaitUntilParamCommand     = "command"
+	WaitUntilParamInterval    = "interval_seconds"
+	WaitUntilParamTimeout     = "timeout_seconds"
+	WaitUntilParamDescription = "description"
 
 	ListDirParamIgnore = "ignore"
 

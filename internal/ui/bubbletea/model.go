@@ -312,6 +312,10 @@ type model struct {
 	history *inputHistory
 	queue   []string
 
+	// sidebarCancel cancels an in-flight mid-wait question. Esc while this is
+	// set cancels only the question, not the wait.
+	sidebarCancel context.CancelFunc
+
 	// overlay holds the active providers wizard. When non-nil it takes over
 	// input and rendering until it reports Done.
 	overlay *providersdialog.Model
@@ -511,6 +515,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m, cmd := m.handleStream(msg.event)
 		return m, tea.Batch(cmd, waitConcurrentStream(msg.ch, msg.gen))
+	case sidebarStreamEventMsg:
+		return m.handleSidebarStream(msg)
 	case streamEventMsg:
 		return m.handleStreamGen(msg.gen, msg.event)
 	case turnDrainDoneMsg:
@@ -1331,6 +1337,10 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.busy {
 		switch msg.String() {
 		case "esc":
+			if m.sidebarCancel != nil {
+				m.cancelSidebar()
+				return m, nil
+			}
 			if m.turnCancel != nil {
 				m.cancelTurn()
 			} else if m.turnCanceled {
@@ -1637,6 +1647,11 @@ func (m *model) handleBusyEnter() (tea.Model, tea.Cmd) {
 		m.addBlock(roleInfo, "Slash commands cannot be queued; wait for the current turn to finish.")
 		return m, nil
 	}
+	if m.hasRunningWait() {
+		if _, ok := m.app.(ui.SidebarAsker); ok {
+			return m.startSidebarAsk(display, line)
+		}
+	}
 	m.enqueueMessage(display)
 	m.input.SetValue("")
 	m.clearSuggestions()
@@ -1694,6 +1709,102 @@ func (m *model) handleBusyTab() (tea.Model, tea.Cmd) {
 
 // enqueueMessage appends a message to the pending queue and records it in the
 // prompt history so Up recalls it like a submitted prompt.
+func (m *model) hasRunningWait() bool {
+	if m.activeCard != nil && m.activeCard.toolName == wireWaitUntil && m.activeCard.phase == toolRunning {
+		return true
+	}
+	for _, c := range m.cardByID {
+		if c != nil && c.toolName == wireWaitUntil && c.phase == toolRunning {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *model) startSidebarAsk(display, line string) (tea.Model, tea.Cmd) {
+	if m.sidebarCancel != nil {
+		m.addBlock(roleInfo, "A question is already being answered.")
+		return m, nil
+	}
+	asker, ok := m.app.(ui.SidebarAsker)
+	if !ok {
+		m.enqueueMessage(display)
+		m.input.SetValue("")
+		m.clearSuggestions()
+		m.syncInputLayout()
+		return m, nil
+	}
+	m.history.record(line)
+	m.input.SetValue("")
+	m.pastes = newPasteStore()
+	m.clearSuggestions()
+	m.syncInputLayout()
+	m.addBlock(roleUser, display)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.sidebarCancel = cancel
+	return m, func() tea.Msg {
+		events, err := asker.AskSidebar(ctx, line)
+		if err != nil {
+			return sidebarStreamEventMsg{event: ui.StreamEvent{Type: ui.StreamError, Err: err}, done: true}
+		}
+		ev, ok := <-events
+		if !ok {
+			return sidebarStreamEventMsg{done: true}
+		}
+		return sidebarStreamEventMsg{event: ev, ch: events}
+	}
+}
+
+func (m *model) handleSidebarStream(msg sidebarStreamEventMsg) (tea.Model, tea.Cmd) {
+	if msg.done {
+		m.finishSidebar()
+		if msg.event.Type == ui.StreamError {
+			if msg.event.Err != nil {
+				m.addBlock(roleError, msg.event.Err.Error())
+			} else if msg.event.Text != "" {
+				m.addBlock(roleError, msg.event.Text)
+			}
+		}
+		return m, nil
+	}
+	switch msg.event.Type {
+	case ui.StreamTextDelta:
+		m.addResponseDelta(msg.event.Text)
+	case ui.StreamError:
+		if msg.event.Err != nil {
+			m.addBlock(roleError, msg.event.Err.Error())
+		} else if msg.event.Text != "" {
+			m.addBlock(roleError, msg.event.Text)
+		}
+	case ui.StreamDone:
+		m.finishSidebar()
+		return m, nil
+	case ui.StreamInfo:
+		m.addBlock(roleInfo, msg.event.Text)
+	}
+	if msg.ch == nil {
+		m.finishSidebar()
+		return m, nil
+	}
+	return m, waitSidebarStream(msg.ch)
+}
+
+func (m *model) cancelSidebar() {
+	if m.sidebarCancel == nil {
+		return
+	}
+	m.sidebarCancel()
+	m.sidebarCancel = nil
+	m.closeResponse()
+	m.addBlock(roleInfo, "Question canceled.")
+}
+
+func (m *model) finishSidebar() {
+	m.sidebarCancel = nil
+	m.closeResponse()
+}
+
 func (m *model) enqueueMessage(display string) {
 	m.queue = append(m.queue, display)
 	m.history.record(m.pastes.expand(display))
@@ -1949,6 +2060,10 @@ func (m *model) acceptSuggestion(i int) {
 // done event) and notes it in the scrollback. The spinner keeps running with
 // a "Canceling…" label until StreamDone drains or the user force-abandons.
 func (m *model) cancelTurn() {
+	if m.sidebarCancel != nil {
+		m.sidebarCancel()
+		m.sidebarCancel = nil
+	}
 	if m.turnCancel == nil {
 		return
 	}
@@ -1964,6 +2079,10 @@ func (m *model) cancelTurn() {
 // channel is detached and drained asynchronously so its writer goroutine can
 // unblock without leaking; turnInFlight stays true until that drain completes.
 func (m *model) forceAbandonTurn() tea.Cmd {
+	if m.sidebarCancel != nil {
+		m.sidebarCancel()
+		m.sidebarCancel = nil
+	}
 	m.busy = false
 	m.runningTool = ""
 	m.turnCanceled = false
@@ -2257,11 +2376,16 @@ func (m *model) refreshIdleStatus() {
 const (
 	inputPlaceholderIdle = "Type a message"
 	inputPlaceholderBusy = "Queue a message"
+	inputPlaceholderWait = "Ask a question while waiting"
 )
 
 // syncInputPlaceholder keeps the composer placeholder in step with the turn
 // state so an editable input during a running turn does not look idle.
 func (m *model) syncInputPlaceholder() {
+	if m.busy && m.hasRunningWait() {
+		m.input.Placeholder = inputPlaceholderWait
+		return
+	}
 	if m.busy {
 		m.input.Placeholder = inputPlaceholderBusy
 		return
@@ -2921,6 +3045,25 @@ type concurrentStreamEventMsg struct {
 	gen   uint64
 	event ui.StreamEvent
 	ch    <-chan ui.StreamEvent
+}
+
+type sidebarStreamEventMsg struct {
+	event ui.StreamEvent
+	ch    <-chan ui.StreamEvent
+	done  bool
+}
+
+func waitSidebarStream(events <-chan ui.StreamEvent) tea.Cmd {
+	return func() tea.Msg {
+		ev, ok := <-events
+		if !ok {
+			return sidebarStreamEventMsg{done: true}
+		}
+		if ev.Type == ui.StreamDone {
+			return sidebarStreamEventMsg{event: ev, done: true}
+		}
+		return sidebarStreamEventMsg{event: ev, ch: events}
+	}
 }
 
 func waitConcurrentStream(events <-chan ui.StreamEvent, gen uint64) tea.Cmd {

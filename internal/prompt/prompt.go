@@ -107,6 +107,9 @@ type Options struct {
 	// ScratchpadEnabled reports whether update_scratchpad is registered, so the
 	// prompt only teaches a tool the model can actually call.
 	ScratchpadEnabled bool
+	// WaitUntilEnabled reports whether wait_until is registered, so the prompt
+	// pairs is_background with a condition wait instead of teaching sleep.
+	WaitUntilEnabled bool
 }
 
 // Build returns the system prompt base (without user memory or mode suffix,
@@ -217,7 +220,7 @@ func liteWorkflow() string {
 	)
 }
 
-func liteShellSafety(interactive bool) string {
+func liteShellSafety(interactive bool, waitUntilEnabled bool) string {
 	lines := []string{
 		"## Shell Commands",
 		"",
@@ -227,10 +230,41 @@ func liteShellSafety(interactive bool) string {
 		"- Avoid interactive commands (e.g. `git rebase -i`); use non-interactive flags when available (`npm init -y`).",
 		"- For a process that must outlive the turn — dev server, watcher, tail — use `run_shell_command`'s `is_background` parameter rather than detaching; Sagittarius tracks and can kill those.",
 	}
+	if waitUntilEnabled {
+		lines = append(lines, waitUntilLiteBullet)
+	}
 	if interactive {
 		lines = append(lines, "- Ask the user before running commands with significant side effects.")
 	}
 	return join(lines...)
+}
+
+const waitUntilLiteBullet = "- To wait for a condition (file exists, service active, HTTP 200), call `" + tools.WaitUntilToolName + "` with a read-only check. Do not sleep. Start long work with `is_background: true`, then `" + tools.WaitUntilToolName + "`."
+
+const waitUntilFullBullet = "- **Wait for a condition:** After starting long-running work with `is_background`, call `" + tools.WaitUntilToolName + "` with a read-only check (`test -f`, `systemctl is-active`, `curl -sf`). Do not `sleep` and do not poll with `" + tools.ShellToolName + "` — a foreground sleep is auto-backgrounded at 30s and never wakes the turn."
+
+func backgroundProcessesBullet(waitUntilEnabled bool) string {
+	line := "- **Background Processes:** For a process that only needs to outlive the current turn — a dev server, a watcher, a tail — use `run_shell_command`'s `is_background` parameter instead of detaching. Sagittarius tracks those, captures their output, and can kill them by process group."
+	if !waitUntilEnabled {
+		return line
+	}
+	return line + "\n" + waitUntilFullBullet
+}
+
+func sysadminBackgroundBullet(waitUntilEnabled bool) string {
+	line := "- For a process that only needs to outlive the current turn — a dev server, a watcher, a tail — use `run_shell_command`'s `is_background` parameter instead of detaching. Sagittarius tracks those, captures their output, and can kill them by process group; a `screen`, `tmux`, or `systemd-run` job escapes that tracking, so reserve it for work that must survive this session."
+	if !waitUntilEnabled {
+		return line
+	}
+	return line + "\n" + waitUntilFullBullet
+}
+
+func sysadminLiteBackgroundBullet(waitUntilEnabled bool) string {
+	line := "- For turn-survival work (dev server), use `run_shell_command`'s `is_background` instead of detaching."
+	if !waitUntilEnabled {
+		return line
+	}
+	return line + "\n" + waitUntilLiteBullet
 }
 
 func liteGit() string {

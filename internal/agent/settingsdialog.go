@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/credentials"
@@ -313,6 +314,58 @@ func listSettings(docs *config.Documents, scope config.SettingScope) []settingsd
 			DefaultValue: fmtBool(config.ScratchpadEnabled(nil, nil)),
 			Kind:         settingsdialog.KindBool,
 		}, scratchpadEnabled(scopeSettings), scratchpadEnabled(global), scratchpadEnabled(project)),
+		{Label: "Google Chat", Kind: settingsdialog.KindHeader},
+		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.chat.googleChat.enabled",
+			Label:        "Google Chat bridge enabled",
+			Description:  "Enable the Google Chat DM bridge (default false; requires Pub/Sub pull and ADC)",
+			DefaultValue: "false",
+			Kind:         settingsdialog.KindBool,
+		}, gcEnabled(scopeSettings), gcEnabled(global), gcEnabled(project)),
+		row(settingsdialog.SettingEntry{
+			Key:         "sagittarius.chat.googleChat.spaceId",
+			Label:       "Google Chat space ID",
+			Description: "Resource name of the 1:1 DM space (e.g. spaces/AAAA...)",
+			Kind:        settingsdialog.KindString,
+		}, gcSpaceID(scopeSettings), gcSpaceID(global), gcSpaceID(project)),
+		row(settingsdialog.SettingEntry{
+			Key:         "sagittarius.chat.googleChat.authorizedUsers",
+			Label:       "Authorized users",
+			Description: "Comma-separated list of allowed user resource names or emails (e.g. users/12345, rob@undeadindustries.com)",
+			Kind:        settingsdialog.KindString,
+		}, gcAuthorizedUsers(scopeSettings), gcAuthorizedUsers(global), gcAuthorizedUsers(project)),
+		row(settingsdialog.SettingEntry{
+			Key:         "sagittarius.chat.googleChat.projectId",
+			Label:       "GCP project ID",
+			Description: "Google Cloud Project ID hosting the Pub/Sub subscription",
+			Kind:        settingsdialog.KindString,
+		}, gcProjectID(scopeSettings), gcProjectID(global), gcProjectID(project)),
+		row(settingsdialog.SettingEntry{
+			Key:         "sagittarius.chat.googleChat.subscriptionId",
+			Label:       "Pub/Sub subscription ID",
+			Description: "Pub/Sub pull subscription ID receiving Google Chat events",
+			Kind:        settingsdialog.KindString,
+		}, gcSubscriptionID(scopeSettings), gcSubscriptionID(global), gcSubscriptionID(project)),
+		row(settingsdialog.SettingEntry{
+			Key:         "sagittarius.chat.googleChat.credentialsFile",
+			Label:       "Credentials file path",
+			Description: "Optional path to service-account JSON credentials (empty falls back to ADC)",
+			Kind:        settingsdialog.KindString,
+		}, gcCredentialsFile(scopeSettings), gcCredentialsFile(global), gcCredentialsFile(project)),
+		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.chat.googleChat.maxResultRunes",
+			Label:        "Max result runes",
+			Description:  "Cap on tool execution output runes before posting to chat (default 2000)",
+			DefaultValue: strconv.Itoa(config.DefaultGoogleChatMaxResultRunes),
+			Kind:         settingsdialog.KindInt,
+		}, gcMaxResultRunes(scopeSettings), gcMaxResultRunes(global), gcMaxResultRunes(project)),
+		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.chat.googleChat.confirmTimeout",
+			Label:        "Confirmation timeout (sec)",
+			Description:  "Seconds before an interactive card approval times out and denies (default 300)",
+			DefaultValue: strconv.Itoa(config.DefaultGoogleChatConfirmTimeout),
+			Kind:         settingsdialog.KindInt,
+		}, gcConfirmTimeout(scopeSettings), gcConfirmTimeout(global), gcConfirmTimeout(project)),
 		{Label: "Sessions", Kind: settingsdialog.KindHeader},
 		row(settingsdialog.SettingEntry{
 			Key:          "sagittarius.sessions.autoTitle",
@@ -615,6 +668,42 @@ func applySettingValue(s *config.Settings, key, value string) error {
 			s.Sagittarius = &config.SagittariusSettings{}
 		}
 		s.Sagittarius.ScratchpadEnabled = &b
+	case "sagittarius.chat.googleChat.enabled":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("must be true/false: %w", err)
+		}
+		ensureGoogleChat(s).Enabled = &b
+	case "sagittarius.chat.googleChat.spaceId":
+		ensureGoogleChat(s).SpaceID = value
+	case "sagittarius.chat.googleChat.authorizedUsers":
+		parts := strings.Split(value, ",")
+		var users []string
+		for _, p := range parts {
+			trimmed := strings.TrimSpace(p)
+			if trimmed != "" {
+				users = append(users, trimmed)
+			}
+		}
+		ensureGoogleChat(s).AuthorizedUsers = users
+	case "sagittarius.chat.googleChat.projectId":
+		ensureGoogleChat(s).ProjectID = value
+	case "sagittarius.chat.googleChat.subscriptionId":
+		ensureGoogleChat(s).SubscriptionID = value
+	case "sagittarius.chat.googleChat.credentialsFile":
+		ensureGoogleChat(s).CredentialsFile = value
+	case "sagittarius.chat.googleChat.maxResultRunes":
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 0 {
+			return fmt.Errorf("must be a positive integer: %w", err)
+		}
+		ensureGoogleChat(s).MaxResultRunes = &n
+	case "sagittarius.chat.googleChat.confirmTimeout":
+		n, err := strconv.Atoi(value)
+		if err != nil || n < 0 {
+			return fmt.Errorf("must be a positive integer: %w", err)
+		}
+		ensureGoogleChat(s).ConfirmTimeout = &n
 	case "sagittarius.subagents.enabled":
 		b, err := strconv.ParseBool(value)
 		if err != nil {
@@ -796,6 +885,38 @@ func clearSettingValue(s *config.Settings, key string) error {
 	case "sagittarius.scratchpadEnabled":
 		if s.Sagittarius != nil {
 			s.Sagittarius.ScratchpadEnabled = nil
+		}
+	case "sagittarius.chat.googleChat.enabled":
+		if gc := gcOf(s); gc != nil {
+			gc.Enabled = nil
+		}
+	case "sagittarius.chat.googleChat.spaceId":
+		if gc := gcOf(s); gc != nil {
+			gc.SpaceID = ""
+		}
+	case "sagittarius.chat.googleChat.authorizedUsers":
+		if gc := gcOf(s); gc != nil {
+			gc.AuthorizedUsers = nil
+		}
+	case "sagittarius.chat.googleChat.projectId":
+		if gc := gcOf(s); gc != nil {
+			gc.ProjectID = ""
+		}
+	case "sagittarius.chat.googleChat.subscriptionId":
+		if gc := gcOf(s); gc != nil {
+			gc.SubscriptionID = ""
+		}
+	case "sagittarius.chat.googleChat.credentialsFile":
+		if gc := gcOf(s); gc != nil {
+			gc.CredentialsFile = ""
+		}
+	case "sagittarius.chat.googleChat.maxResultRunes":
+		if gc := gcOf(s); gc != nil {
+			gc.MaxResultRunes = nil
+		}
+	case "sagittarius.chat.googleChat.confirmTimeout":
+		if gc := gcOf(s); gc != nil {
+			gc.ConfirmTimeout = nil
 		}
 	case "sagittarius.subagents.enabled":
 		if s.Sagittarius != nil && s.Sagittarius.Subagents != nil {
@@ -1127,6 +1248,82 @@ func scriptEnabled(s *config.Settings) string {
 func scratchpadEnabled(s *config.Settings) string {
 	if sag := sagOf(s); sag != nil {
 		return fmtPtrBool(sag.ScratchpadEnabled)
+	}
+	return ""
+}
+
+func gcOf(s *config.Settings) *config.SagittariusGoogleChatConfig {
+	if sag := sagOf(s); sag != nil && sag.Chat != nil {
+		return sag.Chat.GoogleChat
+	}
+	return nil
+}
+
+func ensureGoogleChat(s *config.Settings) *config.SagittariusGoogleChatConfig {
+	if s.Sagittarius == nil {
+		s.Sagittarius = &config.SagittariusSettings{}
+	}
+	if s.Sagittarius.Chat == nil {
+		s.Sagittarius.Chat = &config.SagittariusChatConfig{}
+	}
+	if s.Sagittarius.Chat.GoogleChat == nil {
+		s.Sagittarius.Chat.GoogleChat = &config.SagittariusGoogleChatConfig{}
+	}
+	return s.Sagittarius.Chat.GoogleChat
+}
+
+func gcEnabled(s *config.Settings) string {
+	if gc := gcOf(s); gc != nil {
+		return fmtPtrBool(gc.Enabled)
+	}
+	return ""
+}
+
+func gcSpaceID(s *config.Settings) string {
+	if gc := gcOf(s); gc != nil {
+		return gc.SpaceID
+	}
+	return ""
+}
+
+func gcAuthorizedUsers(s *config.Settings) string {
+	if gc := gcOf(s); gc != nil && len(gc.AuthorizedUsers) > 0 {
+		return strings.Join(gc.AuthorizedUsers, ", ")
+	}
+	return ""
+}
+
+func gcProjectID(s *config.Settings) string {
+	if gc := gcOf(s); gc != nil {
+		return gc.ProjectID
+	}
+	return ""
+}
+
+func gcSubscriptionID(s *config.Settings) string {
+	if gc := gcOf(s); gc != nil {
+		return gc.SubscriptionID
+	}
+	return ""
+}
+
+func gcCredentialsFile(s *config.Settings) string {
+	if gc := gcOf(s); gc != nil {
+		return gc.CredentialsFile
+	}
+	return ""
+}
+
+func gcMaxResultRunes(s *config.Settings) string {
+	if gc := gcOf(s); gc != nil && gc.MaxResultRunes != nil {
+		return strconv.Itoa(*gc.MaxResultRunes)
+	}
+	return ""
+}
+
+func gcConfirmTimeout(s *config.Settings) string {
+	if gc := gcOf(s); gc != nil && gc.ConfirmTimeout != nil {
+		return strconv.Itoa(*gc.ConfirmTimeout)
 	}
 	return ""
 }

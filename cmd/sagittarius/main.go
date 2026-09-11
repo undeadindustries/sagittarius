@@ -21,6 +21,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/credentials"
 	"github.com/undeadindustries/sagittarius/internal/goal"
+	gcapi "github.com/undeadindustries/sagittarius/internal/googlechat"
 	"github.com/undeadindustries/sagittarius/internal/grill"
 	"github.com/undeadindustries/sagittarius/internal/hooks"
 	"github.com/undeadindustries/sagittarius/internal/modes"
@@ -33,6 +34,8 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/tools"
 	"github.com/undeadindustries/sagittarius/internal/ui"
 	"github.com/undeadindustries/sagittarius/internal/ui/bubbletea"
+	"github.com/undeadindustries/sagittarius/internal/ui/googlechat"
+	"github.com/undeadindustries/sagittarius/internal/ui/hub"
 	"github.com/undeadindustries/sagittarius/internal/version"
 )
 
@@ -83,6 +86,8 @@ func run(args []string) int {
 	worktreeFlag := fs.String("worktree", "", "start in an isolated git worktree (experimental; requires experimental.worktrees: true in settings)")
 	worktreeShort := fs.String("w", "", "shorthand for --worktree")
 	readOnlyFlag := fs.Bool("read-only", false, "force the agent into a read-only inspection posture")
+	googleChatFlag := fs.Bool("google-chat", false, "attach Google Chat bridge alongside TUI")
+	googleChatOnlyFlag := fs.Bool("google-chat-only", false, "run headless Google Chat bridge without TUI")
 
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -191,10 +196,34 @@ func run(args []string) int {
 		modeOverride:  modeOverride,
 		logVerbose:    *logVerbose,
 		readOnly:      readOnlyFlag,
+		googleChat:    *googleChatFlag,
+	}
+
+	googleChat := *googleChatFlag
+	googleChatOnly := *googleChatOnlyFlag
+
+	// Check the resolved approval mode, not just the --yolo flags:
+	// --approval-mode=yolo is the same policy and must be refused too,
+	// especially on the --google-chat-only daemon path, which has no later
+	// approval-mode check.
+	if (googleChat || googleChatOnly) && approvalMode == agent.ApprovalYolo {
+		fmt.Fprintln(os.Stderr, "sagittarius: yolo approval (--yolo or --approval-mode=yolo) is refused when Google Chat is enabled (interactive approval cards required for remote safety)")
+		return 2
+	}
+
+	if (googleChat || googleChatOnly) && os.Getenv(tools.NestedAgentEnvVar) != "" {
+		fmt.Fprintln(os.Stderr, "sagittarius: refusing to start Google Chat bridge inside a sagittarius tool call")
+		return 2
 	}
 
 	if *selfUpdate {
 		return runSelfUpdate()
+	}
+
+	// --google-chat-only: run headless Google Chat bridge without requiring a TTY.
+	if googleChatOnly {
+		opts.interactive = true
+		return runGoogleChatOnly(*debug || *debugShort, opts)
 	}
 
 	// --slash: run a single slash command headlessly and exit. Mutually
@@ -750,11 +779,115 @@ func runInteractive(screenReader bool, debug bool, opts runnerOptions) int {
 		InitialScrollback:         historyToScrollback(runner.History()),
 	})
 
+	resolvedChat := config.ResolveGoogleChat(docs.Global, docs.Project)
+	if opts.googleChat || resolvedChat.Enabled {
+		if opts.approvalMode == agent.ApprovalYolo {
+			fmt.Fprintln(os.Stderr, "sagittarius: yolo approval (--yolo or --approval-mode=yolo) is refused when Google Chat is enabled (interactive approval cards required for remote safety)")
+			return 2
+		}
+		gcUI, gcErr := buildGoogleChatUI(ctx, docs)
+		if gcErr != nil {
+			writeStartupError(gcErr)
+			return 1
+		}
+		compositeUI := hub.New(
+			hub.Child{UI: termUI, Attribution: "(via Terminal) "},
+			hub.Child{UI: gcUI, Attribution: "(via Google Chat) "},
+		)
+		defer compositeUI.Close()
+		if err := compositeUI.Run(ctx, app); err != nil {
+			if ctx.Err() != nil {
+				return 0
+			}
+			slog.Error("interactive session failed", "error", err)
+			return 1
+		}
+		return 0
+	}
+
 	if err := termUI.Run(ctx, app); err != nil {
 		if ctx.Err() != nil {
 			return 0
 		}
 		slog.Error("interactive session failed", "error", err)
+		return 1
+	}
+	return 0
+}
+
+func buildGoogleChatUI(ctx context.Context, docs *config.Documents) (*googlechat.UI, error) {
+	chatCfg := config.ResolveGoogleChat(docs.Global, docs.Project)
+	if chatCfg.ProjectID == "" || chatCfg.SubscriptionID == "" || chatCfg.SpaceID == "" {
+		return nil, fmt.Errorf("google chat: projectId, subscriptionId, and spaceId are required in settings (sagittarius.chat.googleChat)")
+	}
+	if len(chatCfg.AuthorizedUsers) == 0 {
+		return nil, fmt.Errorf("google chat: authorizedUsers cannot be empty")
+	}
+
+	httpClient, err := gcapi.NewOAuthHTTPClient(ctx, chatCfg.CredentialsFile)
+	if err != nil {
+		return nil, fmt.Errorf("google chat auth: %w", err)
+	}
+
+	client := gcapi.NewRESTClient(httpClient, "")
+	subscriber := gcapi.NewPubSubSubscriber(chatCfg.ProjectID, chatCfg.SubscriptionID, chatCfg.CredentialsFile)
+
+	return googlechat.New(googlechat.Config{
+		SpaceID:         chatCfg.SpaceID,
+		AuthorizedUsers: chatCfg.AuthorizedUsers,
+		MaxResultRunes:  chatCfg.MaxResultRunes,
+		ConfirmTimeout:  time.Duration(chatCfg.ConfirmTimeout) * time.Second,
+		Client:          client,
+		Subscriber:      subscriber,
+	}), nil
+}
+
+func runGoogleChatOnly(debug bool, opts runnerOptions) int {
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer cancel()
+
+	runner, docs, runtime, sessID, baseProviderID, err := buildRunner(ctx, opts)
+	if err != nil {
+		writeStartupError(err)
+		return 1
+	}
+	defer func() { _ = runtime.Close() }()
+	defer func() { _ = runner.Close() }()
+
+	endpoint, endpointErr := provider.ResolveEndpointConfig(docs.Merged())
+	if endpointErr != nil {
+		writeStartupError(endpointErr)
+		return 1
+	}
+
+	providerLabel := config.ProviderDisplayID(endpoint.ProviderID)
+	app := agent.NewApp(agent.AppConfig{
+		Runner:         runner,
+		Runtime:        runtime,
+		ProviderLabel:  providerLabel,
+		Model:          runner.Model(),
+		Loader:         docs.Loader(),
+		Settings:       docs.Global,
+		Documents:      docs,
+		SessionID:      sessID,
+		BaseProviderID: baseProviderID,
+	})
+
+	gcUI, err := buildGoogleChatUI(ctx, docs)
+	if err != nil {
+		writeStartupError(err)
+		return 1
+	}
+
+	compositeUI := hub.New(hub.Child{UI: gcUI, Attribution: "(via Google Chat) "})
+	defer compositeUI.Close()
+
+	slog.Info("sagittarius google chat bridge started", "space", docs.Merged().Sagittarius.Chat.GoogleChat.SpaceID)
+	if err := compositeUI.Run(ctx, app); err != nil {
+		if ctx.Err() != nil {
+			return 0
+		}
+		slog.Error("google chat bridge exited with error", "error", err)
 		return 1
 	}
 	return 0
@@ -774,6 +907,7 @@ type runnerOptions struct {
 	// transcript written to disk for bug reports (see openVerboseChatLog).
 	logVerbose bool
 	readOnly   *bool
+	googleChat bool
 }
 
 // buildRunner constructs a Runner, optionally loading a resumed session.

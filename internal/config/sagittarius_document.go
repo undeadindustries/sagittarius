@@ -28,6 +28,7 @@ var reservedSagittariusKeys = map[string]struct{}{
 	"contextLimitPreferDiscovered": {},
 	"scriptToolEnabled":            {},
 	"scratchpadEnabled":            {},
+	"chat":                         {},
 }
 
 var reservedSagittariusModeKeys = map[string]struct{}{
@@ -1030,6 +1031,12 @@ func unmarshalSagittarius(raw json.RawMessage) (*SagittariusSettings, error) {
 				return nil, fmt.Errorf("decode sagittarius.scratchpadEnabled: %w", err)
 			}
 			s.ScratchpadEnabled = &b
+		case "chat":
+			c, err := unmarshalChatConfig(val)
+			if err != nil {
+				return nil, err
+			}
+			s.Chat = c
 		default:
 			if _, reserved := reservedSagittariusKeys[key]; reserved {
 				continue
@@ -1189,6 +1196,13 @@ func marshalSagittarius(s *SagittariusSettings) (json.RawMessage, error) {
 	}
 	if err := add("scratchpadEnabled", s.ScratchpadEnabled); err != nil {
 		return nil, err
+	}
+	if s.Chat != nil {
+		b, err := marshalChatConfig(s.Chat)
+		if err != nil {
+			return nil, err
+		}
+		obj["chat"] = b
 	}
 	for key, val := range s.Extra {
 		obj[key] = val
@@ -1449,6 +1463,176 @@ func marshalSessionsConfig(c *SagittariusSessionsConfig) (json.RawMessage, error
 			return nil, err
 		}
 		obj["autoTitle"] = b
+	}
+	for key, val := range c.Extra {
+		obj[key] = val
+	}
+	if len(obj) == 0 {
+		return json.RawMessage("{}"), nil
+	}
+	return json.Marshal(obj)
+}
+
+func unmarshalChatConfig(raw json.RawMessage) (*SagittariusChatConfig, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, fmt.Errorf("decode sagittarius.chat: %w", err)
+	}
+	c := &SagittariusChatConfig{Extra: make(map[string]json.RawMessage)}
+	for key, val := range obj {
+		switch key {
+		case "googleChat":
+			gc, err := unmarshalGoogleChatConfig(val)
+			if err != nil {
+				return nil, err
+			}
+			c.GoogleChat = gc
+		default:
+			c.Extra[key] = val
+		}
+	}
+	if len(c.Extra) == 0 {
+		c.Extra = nil
+	}
+	return c, nil
+}
+
+func marshalChatConfig(c *SagittariusChatConfig) (json.RawMessage, error) {
+	if c == nil {
+		return nil, nil
+	}
+	obj := make(map[string]json.RawMessage)
+	if c.GoogleChat != nil {
+		b, err := marshalGoogleChatConfig(c.GoogleChat)
+		if err != nil {
+			return nil, err
+		}
+		obj["googleChat"] = b
+	}
+	for key, val := range c.Extra {
+		obj[key] = val
+	}
+	if len(obj) == 0 {
+		return json.RawMessage("{}"), nil
+	}
+	return json.Marshal(obj)
+}
+
+func unmarshalGoogleChatConfig(raw json.RawMessage) (*SagittariusGoogleChatConfig, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &obj); err != nil {
+		return nil, fmt.Errorf("decode sagittarius.chat.googleChat: %w", err)
+	}
+	c := &SagittariusGoogleChatConfig{Extra: make(map[string]json.RawMessage)}
+	for key, val := range obj {
+		switch key {
+		case "enabled":
+			var b bool
+			if err := json.Unmarshal(val, &b); err != nil {
+				return nil, fmt.Errorf("decode enabled: %w", err)
+			}
+			c.Enabled = &b
+		case "spaceId":
+			var s string
+			if err := json.Unmarshal(val, &s); err != nil {
+				return nil, fmt.Errorf("decode spaceId: %w", err)
+			}
+			c.SpaceID = s
+		case "authorizedUsers":
+			var users []string
+			if err := json.Unmarshal(val, &users); err != nil {
+				return nil, fmt.Errorf("decode authorizedUsers: %w", err)
+			}
+			c.AuthorizedUsers = users
+		case "projectId":
+			var s string
+			if err := json.Unmarshal(val, &s); err != nil {
+				return nil, fmt.Errorf("decode projectId: %w", err)
+			}
+			c.ProjectID = s
+		case "subscriptionId":
+			var s string
+			if err := json.Unmarshal(val, &s); err != nil {
+				return nil, fmt.Errorf("decode subscriptionId: %w", err)
+			}
+			c.SubscriptionID = s
+		case "credentialsFile":
+			var s string
+			if err := json.Unmarshal(val, &s); err != nil {
+				return nil, fmt.Errorf("decode credentialsFile: %w", err)
+			}
+			c.CredentialsFile = s
+		case "maxResultRunes":
+			var n int
+			if err := json.Unmarshal(val, &n); err != nil {
+				return nil, fmt.Errorf("decode maxResultRunes: %w", err)
+			}
+			c.MaxResultRunes = &n
+		case "confirmTimeout":
+			var n int
+			if err := json.Unmarshal(val, &n); err != nil {
+				return nil, fmt.Errorf("decode confirmTimeout: %w", err)
+			}
+			c.ConfirmTimeout = &n
+		default:
+			c.Extra[key] = val
+		}
+	}
+	if len(c.Extra) == 0 {
+		c.Extra = nil
+	}
+	return c, nil
+}
+
+func marshalGoogleChatConfig(c *SagittariusGoogleChatConfig) (json.RawMessage, error) {
+	if c == nil {
+		return nil, nil
+	}
+	obj := make(map[string]json.RawMessage)
+	add := func(key string, v any) error {
+		if isEmptyValue(v) {
+			return nil
+		}
+		b, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		obj[key] = b
+		return nil
+	}
+	if err := add("enabled", c.Enabled); err != nil {
+		return nil, err
+	}
+	if err := add("spaceId", c.SpaceID); err != nil {
+		return nil, err
+	}
+	if len(c.AuthorizedUsers) > 0 {
+		b, err := json.Marshal(c.AuthorizedUsers)
+		if err != nil {
+			return nil, err
+		}
+		obj["authorizedUsers"] = b
+	}
+	if err := add("projectId", c.ProjectID); err != nil {
+		return nil, err
+	}
+	if err := add("subscriptionId", c.SubscriptionID); err != nil {
+		return nil, err
+	}
+	if err := add("credentialsFile", c.CredentialsFile); err != nil {
+		return nil, err
+	}
+	if err := add("maxResultRunes", c.MaxResultRunes); err != nil {
+		return nil, err
+	}
+	if err := add("confirmTimeout", c.ConfirmTimeout); err != nil {
+		return nil, err
 	}
 	for key, val := range c.Extra {
 		obj[key] = val

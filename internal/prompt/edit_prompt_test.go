@@ -57,7 +57,7 @@ func TestEditGuidanceGatedByEditEnabled(t *testing.T) {
 				}
 			}
 
-			gotFullOps := fullOperationalGuidelines(opts.EditEnabled, false, false)
+			gotFullOps := fullOperationalGuidelines(opts.EditEnabled, false, false, false)
 			if tt.editEnabled {
 				if !strings.Contains(gotFullOps, "then `write_file` or `edit`.") {
 					t.Errorf("fullOperationalGuidelines() missing edit phrase")
@@ -72,7 +72,7 @@ func TestEditGuidanceGatedByEditEnabled(t *testing.T) {
 }
 
 func TestProgrammerBackgroundShell(t *testing.T) {
-	out := fullOperationalGuidelines(false, false, false)
+	out := fullOperationalGuidelines(false, false, false, false)
 	if !strings.Contains(out, "is_background") {
 		t.Error("programmer operational guidelines should teach is_background")
 	}
@@ -80,7 +80,7 @@ func TestProgrammerBackgroundShell(t *testing.T) {
 		t.Error("programmer operational guidelines should not teach bare & backgrounding")
 	}
 
-	liteOut := liteShellSafety(false)
+	liteOut := liteShellSafety(false, false)
 	if !strings.Contains(liteOut, "is_background") {
 		t.Error("liteShellSafety should teach is_background")
 	}

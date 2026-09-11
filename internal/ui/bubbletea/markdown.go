@@ -103,7 +103,7 @@ func renderCodeLine(line string, width int, th theme.Theme) []string {
 // renderProseLine handles headings, bullets, and paragraphs with inline styling.
 func renderProseLine(line string, width int, th theme.Theme) []string {
 	if m := mdHeading.FindStringSubmatch(line); m != nil {
-		return wrapStyled(m[2], width, th.Title)
+		return wrapStyled(renderMathInProse(m[2]), width, th.Title)
 	}
 	prefix := ""
 	body := line
@@ -111,6 +111,7 @@ func renderProseLine(line string, width int, th theme.Theme) []string {
 		prefix = m[1] + "• "
 		body = m[2]
 	}
+	body = renderMathInProse(body)
 	pw := lipgloss.Width(prefix)
 	wrapped := strings.Split(wrapText(body, max(width-pw, 1)), "\n")
 	out := make([]string, 0, len(wrapped))
@@ -277,8 +278,27 @@ func collectTable(lines []string, i int) (tableBlock, int) {
 	}, k
 }
 
+// applyMathToTable rewrites LaTeX in headers and cells before width
+// measurement so column budgets match the glyphs the user will see.
+func applyMathToTable(tbl tableBlock) tableBlock {
+	headers := make([]string, len(tbl.headers))
+	for i, h := range tbl.headers {
+		headers[i] = renderMathInProse(h)
+	}
+	rows := make([][]string, len(tbl.rows))
+	for i, row := range tbl.rows {
+		cells := make([]string, len(row))
+		for j, c := range row {
+			cells[j] = renderMathInProse(c)
+		}
+		rows[i] = cells
+	}
+	return tableBlock{headers: headers, aligns: tbl.aligns, rows: rows}
+}
+
 // renderTable formats a tableBlock into aligned, width-constrained lines.
 func renderTable(tbl tableBlock, width int, th theme.Theme) []string {
+	tbl = applyMathToTable(tbl)
 	numCols := len(tbl.headers)
 	if numCols == 0 {
 		return nil

@@ -30,7 +30,7 @@ func sysadminFull(opts Options) string {
 		sysadminCoreMandates(),
 		sysadminThisSystem(opts),
 		sysadminPrimaryWorkflow(),
-		sysadminOperationalGuidelines(opts.Interactive, opts.SymbolsEnabled, opts.EditEnabled, opts.ScratchpadEnabled),
+		sysadminOperationalGuidelines(opts.Interactive, opts.SymbolsEnabled, opts.EditEnabled, opts.ScratchpadEnabled, opts.WaitUntilEnabled),
 	}
 	if opts.IsGitRepo {
 		sections = append(sections, liteGit())
@@ -121,7 +121,7 @@ func sysadminPrimaryWorkflow() string {
 	)
 }
 
-func sysadminOperationalGuidelines(interactive, symbolsEnabled, editEnabled, scratchpadEnabled bool) string {
+func sysadminOperationalGuidelines(interactive, symbolsEnabled, editEnabled, scratchpadEnabled, waitUntilEnabled bool) string {
 	shellSafety := "- Avoid commands that prompt (`git rebase -i`, bare `passwd`, `fdisk`). Use non-interactive forms, or tell the user the step needs their input."
 	if interactive {
 		shellSafety = "- Avoid commands that prompt (`git rebase -i`, bare `passwd`, `fdisk`). Use non-interactive forms, or tell the user the step needs their input.\n- Ask the user before running commands with significant side effects."
@@ -150,7 +150,7 @@ func sysadminOperationalGuidelines(interactive, symbolsEnabled, editEnabled, scr
 		"## Long-Running and Remote-Safe Execution",
 		"- Assume the user may be connected over SSH and that the connection can drop at any moment. Anything that must not die mid-write — package upgrades, database migrations, large `rsync` or `dd`, filesystem work, long builds — runs detached from this session so a lost connection cannot leave the system half-changed: `systemd-run --unit=<name> --collect` where systemd is available, otherwise `setsid`, `nohup`, `screen -dmS <name>`, or `tmux new -d -s <name>`.",
 		"- Always tee a detached job's output to a log file, and tell the user the log path and the reattach command. A detached session's output is invisible to your tools: without the log you cannot report progress or diagnose a failure.",
-		"- For a process that only needs to outlive the current turn — a dev server, a watcher, a tail — use `run_shell_command`'s `is_background` parameter instead of detaching. Sagittarius tracks those, captures their output, and can kill them by process group; a `screen`, `tmux`, or `systemd-run` job escapes that tracking, so reserve it for work that must survive this session.",
+		sysadminBackgroundBullet(waitUntilEnabled),
 		"- Never end a turn leaving the system in a transient state. If a long job is still running, say so, with the log path and how to check on it.",
 		"",
 		"## Scripting",
@@ -209,7 +209,7 @@ func sysadminLite(opts Options) string {
 		"",
 		"## Shell Commands",
 		"- For session-survival work (upgrades, large rsync), use `systemd-run`, `screen`, or `tmux`, and tee to a log file.",
-		"- For turn-survival work (dev server), use `run_shell_command`'s `is_background` instead of detaching.",
+		sysadminLiteBackgroundBullet(opts.WaitUntilEnabled),
 		"- Scripts: `set -euo pipefail` and quote every expansion. No system-level `pip install` (PEP 668) — use a venv or distro packages.",
 		"",
 		"## Tool Usage",

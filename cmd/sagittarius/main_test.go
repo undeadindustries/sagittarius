@@ -438,3 +438,28 @@ func TestRunHeadlessJSONEmitsToolEvents(t *testing.T) {
 		}
 	}
 }
+
+func TestGoogleChatCLIGuards(t *testing.T) {
+	// 1. Refuse yolo approval when chat is enabled, in both spellings
+	if code := run([]string{"--google-chat", "--yolo"}); code != 2 {
+		t.Errorf("run(--google-chat, --yolo) = %d, want 2", code)
+	}
+	if code := run([]string{"--google-chat-only", "-y"}); code != 2 {
+		t.Errorf("run(--google-chat-only, -y) = %d, want 2", code)
+	}
+	if code := run([]string{"--google-chat", "--approval-mode=yolo"}); code != 2 {
+		t.Errorf("run(--google-chat, --approval-mode=yolo) = %d, want 2", code)
+	}
+	if code := run([]string{"--google-chat-only", "--approval-mode=yolo"}); code != 2 {
+		t.Errorf("run(--google-chat-only, --approval-mode=yolo) = %d, want 2", code)
+	}
+
+	// 2. Refuse nested agent child invocation
+	t.Setenv(tools.NestedAgentEnvVar, "1")
+	if code := run([]string{"--google-chat"}); code != 2 {
+		t.Errorf("run(--google-chat) inside child = %d, want 2", code)
+	}
+	if code := run([]string{"--google-chat-only"}); code != 2 {
+		t.Errorf("run(--google-chat-only) inside child = %d, want 2", code)
+	}
+}

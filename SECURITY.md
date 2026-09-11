@@ -159,3 +159,35 @@ this flag.
 
 A separate, related feature records local file changes for review and rollback;
 see [docs/snapshots-and-undo.md](docs/snapshots-and-undo.md).
+
+---
+
+## Google Chat bridge threat model
+
+When Sagittarius connects to Google Chat (`--google-chat` or `--google-chat-only`),
+the agent can be instructed remotely. Several architectural defenses prevent
+unauthorized or accidental execution:
+
+- **No open listening ports or webhooks:** Communication is strictly outbound
+  over HTTPS and inbound via a Google Cloud Pub/Sub pull subscription.
+- **1:1 Direct Messages only:** Group spaces are rejected outright
+  (`singleUserBotDm` check). The bot will never accept commands in multi-user
+  spaces.
+- **Strict sender authorization:** Every incoming message and interactive card
+  click is checked against an `authorizedUsers` allowlist matching the Google
+  resource name (`users/<id>`) and verified email address. Unlisted users are
+  dropped silently with no execution.
+- **No unattended YOLO mode:** Running with `--yolo`, `-y`, or
+  `--approval-mode=yolo` is rejected at startup when Google Chat is enabled.
+  Destructive operations (`write_file`, mutating shell commands) always present
+  interactive confirmation cards.
+- **Fail-closed confirmation timeout:** Interactive approval cards expire after
+  `confirmTimeout` seconds (default 300s) and automatically send `ConfirmDeny`.
+- **Tool output redaction & length cap:** Output from tools is scrubbed of
+  private keys, API tokens, and Authorization Bearer headers, and capped to
+  `maxResultRunes` (default 2000 runes) before posting to Google Chat.
+- **Service account credentials:** The JSON key path is configured via
+  `credentialsFile` with restrictive file permissions (`0600`); the private
+  key is never stored in `settings.json`. Falling back to Application Default
+  Credentials (ADC) is supported.
+

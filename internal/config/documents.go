@@ -596,6 +596,7 @@ func mergeSagittarius(global, project *SagittariusSettings) *SagittariusSettings
 	merged.Symbols = mergeSymbolsConfig(global.Symbols, project.Symbols)
 	merged.Update = mergeUpdateConfig(global.Update, project.Update)
 	merged.Sessions = mergeSessionsConfig(global.Sessions, project.Sessions)
+	merged.Chat = mergeChatConfig(global.Chat, project.Chat)
 	// Web, Tools, Compression, Subagents: global-only in Phase 1.
 	return &merged
 }
@@ -752,6 +753,41 @@ func mergeSessionsConfig(global, project *SagittariusSessionsConfig) *Sagittariu
 	}
 	merged := *global
 	merged.AutoTitle = overlayPtr(global.AutoTitle, project.AutoTitle)
+	merged.Extra = mergeRaw(global.Extra, project.Extra)
+	return &merged
+}
+
+func mergeChatConfig(global, project *SagittariusChatConfig) *SagittariusChatConfig {
+	if project == nil {
+		return global
+	}
+	if global == nil {
+		return project
+	}
+	merged := *global
+	merged.GoogleChat = mergeGoogleChatConfig(global.GoogleChat, project.GoogleChat)
+	merged.Extra = mergeRaw(global.Extra, project.Extra)
+	return &merged
+}
+
+func mergeGoogleChatConfig(global, project *SagittariusGoogleChatConfig) *SagittariusGoogleChatConfig {
+	if project == nil {
+		return global
+	}
+	if global == nil {
+		return project
+	}
+	merged := *global
+	merged.Enabled = overlayPtr(global.Enabled, project.Enabled)
+	merged.SpaceID = overlayStr(global.SpaceID, project.SpaceID)
+	if len(project.AuthorizedUsers) > 0 {
+		merged.AuthorizedUsers = project.AuthorizedUsers
+	}
+	merged.ProjectID = overlayStr(global.ProjectID, project.ProjectID)
+	merged.SubscriptionID = overlayStr(global.SubscriptionID, project.SubscriptionID)
+	merged.CredentialsFile = overlayStr(global.CredentialsFile, project.CredentialsFile)
+	merged.MaxResultRunes = overlayPtr(global.MaxResultRunes, project.MaxResultRunes)
+	merged.ConfirmTimeout = overlayPtr(global.ConfirmTimeout, project.ConfirmTimeout)
 	merged.Extra = mergeRaw(global.Extra, project.Extra)
 	return &merged
 }

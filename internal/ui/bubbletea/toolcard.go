@@ -75,6 +75,7 @@ const (
 	wireCodeTask      = "code_task"
 	wireScratchpad    = "update_scratchpad"
 	wireSessionSearch = "search_session"
+	wireWaitUntil     = "wait_until"
 	wireContinueAgent = "continue_agent"
 	wireMCPPrefix     = "mcp_"
 	wireMCPSeparator  = "_"
@@ -124,6 +125,8 @@ func toolDisplayName(name string) string {
 		return "Scratchpad"
 	case wireSessionSearch:
 		return "Search conversation"
+	case wireWaitUntil:
+		return "Wait"
 	default:
 		return name
 	}

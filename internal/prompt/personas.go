@@ -78,7 +78,7 @@ func personaPrompt(p personaProfile, opts Options) string {
 	if !lite {
 		sections = append(sections, liteWorkflow())
 	}
-	sections = append(sections, liteShellSafety(opts.Interactive))
+	sections = append(sections, liteShellSafety(opts.Interactive, opts.WaitUntilEnabled))
 	if !lite && opts.IsGitRepo {
 		sections = append(sections, liteGit())
 	}

@@ -143,13 +143,20 @@ func (m *model) statusRowParts() (left, right string) {
 	}
 
 	nWorking := 0
+	waiting := false
 	for _, c := range m.cardByID {
 		if (c.toolName == wireTask || c.toolName == wireCodeTask) && c.phase == toolRunning {
 			nWorking++
 		}
+		if c.toolName == wireWaitUntil && c.phase == toolRunning {
+			waiting = true
+		}
 	}
 	if nWorking > 0 {
 		right = prependStatus(right, fmt.Sprintf("%d Working", nWorking))
+	}
+	if waiting {
+		right = prependStatus(right, "Ask while waiting")
 	}
 	return left, right
 }

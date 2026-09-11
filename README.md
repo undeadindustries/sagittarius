@@ -158,6 +158,8 @@ Interactive shortcuts, headless flags, and slash commands for the same features 
 | **List / delete sessions** | — | `--list-sessions`; `--delete-session` (id or index) |
 | **Debug logging** | — | `--debug`, `-d` (writes to `~/.sagittarius/logs/sagittarius.log` in the TUI) |
 | **Full chat transcript for bug reports** | — | `--log-verbose` (every request/response/tool result to `~/.sagittarius/logs/chat-verbose-<session>.log`; works with or without `--debug`) |
+| **Google Chat bridge (TUI + DM)** | — | `--google-chat` (attaches 1:1 Google Chat DM alongside the TUI; see [docs/google-chat.md](docs/google-chat.md)) |
+| **Google Chat daemon (no TTY)** | — | `--google-chat-only` (runs headless bridge under systemd or screen) |
 | **Screen-reader TUI** | — | `--screen-reader` |
 | **Version** | — | `--version`, `-v` |
 | **Git worktree** (stub) | — | `--worktree`, `-w` |

@@ -158,6 +158,21 @@ The judge is a read-only sub-runner (ask-mode tools, 6 tool-round cap) with its 
 |-----|------|---------|---------|
 | `autoTitle` | string | `prompt` | Automatic session titling after your first full exchange. `prompt` applies the proposed title and shows a one-time `Named "…" — Ctrl+E rename` hint on the status row (Ctrl+E opens a rename editor, Enter on an empty input dismisses, everything else stays passive). `auto` applies the title silently. `off` disables titling entirely and leaves the first-message fallback. `/chat rename` always overrides manually. |
 
+### Google Chat Bridge (`sagittarius.chat.googleChat.*`)
+
+| Key | Type | Default | Purpose |
+|-----|------|---------|---------|
+| `enabled` | bool | `false` | Enable the Google Chat bridge for remote access via 1:1 direct messages. |
+| `spaceId` | string | empty | Target 1:1 DM space resource name (e.g. `spaces/AAAA...`). |
+| `authorizedUsers` | string[] | `[]` | List of authorized user resource names (`users/<id>`) and/or emails. Messages and button clicks from unlisted users are dropped silently. |
+| `projectId` | string | empty | GCP project ID hosting the Cloud Pub/Sub topic and subscription. |
+| `subscriptionId` | string | empty | Pub/Sub pull subscription ID. |
+| `credentialsFile` | string | empty | Path to GCP service account JSON key file (falls back to ADC if empty). |
+| `maxResultRunes` | int | `2000` | Character limit for tool execution output before posting to chat. |
+| `confirmTimeout` | int (seconds) | `300` | Timeout before an interactive tool approval card automatically fails closed and sends a deny. |
+
+See [google-chat.md](../google-chat.md) for Google Cloud Console setup and architecture details.
+
 ### Example
 
 ```json
@@ -165,6 +180,18 @@ The judge is a read-only sub-runner (ask-mode tools, 6 tool-round cap) with its 
   "sagittarius": {
     "sessions": {
       "autoTitle": "auto"
+    },
+    "chat": {
+      "googleChat": {
+        "enabled": false,
+        "spaceId": "spaces/DM_SPACE_ID",
+        "authorizedUsers": ["users/123456789", "rob@example.com"],
+        "projectId": "my-gcp-project",
+        "subscriptionId": "sagittarius-sub",
+        "credentialsFile": "~/.sagittarius/google-chat-key.json",
+        "maxResultRunes": 2000,
+        "confirmTimeout": 300
+      }
     }
   }
 }

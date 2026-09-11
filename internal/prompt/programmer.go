@@ -21,7 +21,7 @@ func programmerLite(opts Options) string {
 		liteToolUsage(opts.SymbolsEnabled, opts.EditEnabled, opts.ScratchpadEnabled),
 		liteWorkflow(),
 		liteEditRules(),
-		liteShellSafety(opts.Interactive),
+		liteShellSafety(opts.Interactive, opts.WaitUntilEnabled),
 	}
 	if opts.IsGitRepo {
 		sections = append(sections, liteGit())
@@ -52,7 +52,7 @@ func programmerFull(opts Options) string {
 		fullPreamble(opts),
 		fullCoreMandates(),
 		fullPrimaryWorkflow(opts.Interactive, opts.SymbolsEnabled, opts.EditEnabled),
-		fullOperationalGuidelines(opts.EditEnabled, opts.MemoryEnabled, opts.ScratchpadEnabled),
+		fullOperationalGuidelines(opts.EditEnabled, opts.MemoryEnabled, opts.ScratchpadEnabled, opts.WaitUntilEnabled),
 	}
 	if opts.IsGitRepo {
 		sections = append(sections, liteGit())
@@ -129,7 +129,7 @@ func fullPrimaryWorkflow(interactive, symbolsEnabled, editEnabled bool) string {
 	)
 }
 
-func fullOperationalGuidelines(editEnabled, memoryEnabled, scratchpadEnabled bool) string {
+func fullOperationalGuidelines(editEnabled, memoryEnabled, scratchpadEnabled, waitUntilEnabled bool) string {
 	var writeRules string
 	if editEnabled {
 		writeRules = "- **Read Before Write:** Never modify a file you have not read. Use `" + tools.ReadFileToolName + "` first, then `" + tools.WriteFileToolName + "` or `" + tools.EditToolName + "`.\n" +
@@ -164,7 +164,7 @@ func fullOperationalGuidelines(editEnabled, memoryEnabled, scratchpadEnabled boo
 		writeRules,
 		"- **Explain Critical Commands:** Before running commands with `"+tools.ShellToolName+"` that modify the file system or system state, briefly explain the command's purpose and impact.",
 		"- **Interactive Commands:** Avoid shell commands that require user interaction (e.g. `git rebase -i`). Prefer non-interactive forms (`npm init -y` instead of `npm init`) when available.",
-		"- **Background Processes:** For a process that only needs to outlive the current turn — a dev server, a watcher, a tail — use `run_shell_command`'s `is_background` parameter instead of detaching. Sagittarius tracks those, captures their output, and can kill them by process group.",
+		backgroundProcessesBullet(waitUntilEnabled),
 		"- **Confirmation Protocol:** If a tool call is declined or cancelled, respect the decision immediately. Do not re-attempt or negotiate unless the user explicitly directs you to.",
 		memory+workingMemoryBullets(scratchpadEnabled),
 		toolInvocationMandate(editEnabled),

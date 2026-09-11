@@ -309,6 +309,15 @@ type Runner struct {
 	systemPromptOverride     string
 	maxToolRoundsOverride    *int
 	evaluatorSelfJudgeWarned sync.Once
+
+	// sidebarMu guards pendingSidebar and sidebarCancel. It is never held
+	// across the child's network call, and it is not historyMu: injecting a
+	// user message while wait_until's tool_calls are still unpaired would
+	// break AD-052 positional pairing.
+	sidebarMu      sync.Mutex
+	pendingSidebar []sidebarExchange
+	sidebarCancel  context.CancelFunc
+	sidebarWg      sync.WaitGroup
 }
 
 // LoadedMemoryFiles returns the AGENTS.md paths that contributed to the system
@@ -523,6 +532,7 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		registerGrillTools(runner, registry)
 		registerSubagentTools(runner, registry, cfg.Settings)
 		registerWorkingMemoryTools(runner, registry, cfg.Settings)
+		registerWaitUntilTool(runner, registry)
 		registry.Register(newSaveMemoryTool(runner))
 	}
 
@@ -990,6 +1000,8 @@ func (r *Runner) RunHeadless(ctx context.Context, prompt string, out io.Writer) 
 // that just finished rather than the first one in the session.
 func (r *Runner) runAgentLoop(ctx context.Context, userInput string, out chan<- ui.StreamEvent) {
 	defer func() {
+		r.cancelSidebar(sidebarCancelWait)
+		r.flushPendingSidebar()
 		r.turnActive.Store(false)
 		close(out)
 	}()
@@ -1185,6 +1197,7 @@ outerLoop:
 			}
 			r.metrics.recordTools(len(toolCalls), countToolFailures(responses))
 			r.appendFunctionResponses(responses)
+			r.flushPendingSidebar()
 			if config.VerifySuggestAfterWrite(r.settingsSnapshot(), nil) && !verifyHinted && containsSuccessfulWrite(responses) {
 				verifyHinted = true
 				out <- ui.StreamEvent{Type: ui.StreamInfo, Text: verifyReminder}
@@ -1507,6 +1520,7 @@ func (r *Runner) rebuildBasePrompt() {
 		// toggle or a subagent's OmitSessionTools registry cannot leave the
 		// prompt teaching a tool the model has no way to call (AD-074, AD-078).
 		ScratchpadEnabled: containsString(toolNames, tools.UpdateScratchpadToolName),
+		WaitUntilEnabled:  containsString(toolNames, tools.WaitUntilToolName),
 	})
 
 	if memory = strings.TrimSpace(memory); memory != "" {

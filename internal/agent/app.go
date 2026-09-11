@@ -68,6 +68,7 @@ var (
 	_ ui.MetricsProvider        = (*App)(nil)
 	_ ui.ComposerStatusProvider = (*App)(nil)
 	_ ui.BangInputWriter        = (*App)(nil)
+	_ ui.SidebarAsker           = (*App)(nil)
 )
 
 // App adapts Runner to ui.App for interactive TUI sessions.
@@ -301,6 +302,15 @@ func (a *App) SetShowThinking(on bool) error {
 // lastRequest is stored before the provider stream starts.
 func (a *App) ExportRequestDebug() (string, error) {
 	return (&appHooks{app: a}).WriteRequestDebug()
+}
+
+// AskSidebar implements ui.SidebarAsker: it answers a mid-wait question on a
+// read-only child runner without disturbing the in-flight parent turn.
+func (a *App) AskSidebar(ctx context.Context, question string) (<-chan ui.StreamEvent, error) {
+	if a == nil || a.runner == nil {
+		return nil, fmt.Errorf("sidebar is unavailable in this session")
+	}
+	return a.runner.AskSidebar(ctx, question)
 }
 
 // CycleTheme implements ui.ThemeController: it toggles the TUI color theme
@@ -2123,6 +2133,7 @@ func (r *Runner) SetRegistry(registry *tools.Registry) {
 	registerGrillTools(r, registry)
 	registerSubagentTools(r, registry, r.settingsSnapshot())
 	registerWorkingMemoryTools(r, registry, r.settingsSnapshot())
+	registerWaitUntilTool(r, registry)
 	registry.Register(newSaveMemoryTool(r))
 
 	r.regMu.Lock()
