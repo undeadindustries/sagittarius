@@ -11,6 +11,14 @@ const (
 	SagittariusDir = ".sagittarius"
 
 	settingsFileName = "settings.json"
+
+	// AgentsFileName is the user-authored standards document read into the
+	// system prompt. The memory subsystem never writes it.
+	AgentsFileName = "AGENTS.md"
+
+	// MemoryFileName is the Sagittarius-owned file /memory add and the
+	// save_memory tool append to.
+	MemoryFileName = "MEMORY.md"
 )
 
 // ResolveHome returns the effective home directory.
@@ -41,13 +49,30 @@ func ResolveSettingsPath() (string, error) {
 	return filepath.Join(dir, settingsFileName), nil
 }
 
-// ResolveGlobalAgentsPath returns ~/.sagittarius/AGENTS.md, the global memory file.
+// ResolveGlobalAgentsPath returns ~/.sagittarius/AGENTS.md, the global
+// user-authored standards file. The memory subsystem never writes this path.
 func ResolveGlobalAgentsPath() (string, error) {
 	dir, err := ResolveSagittariusDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "AGENTS.md"), nil
+	return filepath.Join(dir, AgentsFileName), nil
+}
+
+// ResolveGlobalMemoryPath returns ~/.sagittarius/MEMORY.md, the global
+// write target for /memory add and save_memory.
+func ResolveGlobalMemoryPath() (string, error) {
+	dir, err := ResolveSagittariusDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, MemoryFileName), nil
+}
+
+// ProjectMemoryPath returns <workDir>/.sagittarius/MEMORY.md, the
+// project-scope write target for /memory add --project and save_memory.
+func ProjectMemoryPath(workDir string) string {
+	return filepath.Join(ProjectSagittariusDir(workDir), MemoryFileName)
 }
 
 // ProjectSagittariusDir returns <workDir>/.sagittarius.

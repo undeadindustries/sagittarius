@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/undeadindustries/sagittarius/internal/agents"
 	"github.com/undeadindustries/sagittarius/internal/config"
@@ -300,19 +301,30 @@ func parseScope(s string) (config.SettingScope, error) {
 // (which imports internal/slash to implement Hooks), keeping the two
 // packages decoupled.
 type MemoryEntry struct {
-	Scope config.SettingScope
-	Path  string
-	Text  string
+	Scope  config.SettingScope
+	Path   string
+	Text   string
+	Date   time.Time
+	Legacy bool
+}
+
+// MemoryUsage is the rune usage of one memory source file.
+type MemoryUsage struct {
+	Scope    config.SettingScope
+	Path     string
+	Runes    int
+	MaxRunes int
+	Legacy   bool
 }
 
 func memoryCommand() Command {
 	return Command{
 		Name:        "memory",
-		Description: "Manage project memory (AGENTS.md)",
+		Description: "Manage MEMORY.md facts (never writes AGENTS.md)",
 		SubCommands: []Command{
 			{
 				Name:        "add",
-				Description: "Add a memory entry: /memory add [--project] <text> (default global)",
+				Description: "Add a memory entry: /memory add [--project] <text> (default global MEMORY.md)",
 				Handler:     handleMemoryAdd,
 			},
 			{
@@ -326,6 +338,11 @@ func memoryCommand() Command {
 				Handler:     handleMemoryRemove,
 			},
 			{
+				Name:        "compact",
+				Description: "Preview a model-driven merge of MEMORY.md: /memory compact [--project]|apply|abort",
+				Handler:     handleMemoryCompact,
+			},
+			{
 				Name:        "reload",
 				Description: "Reload memory files into the system prompt",
 				Handler:     handleMemoryReload,
@@ -335,8 +352,7 @@ func memoryCommand() Command {
 }
 
 // handleMemoryAdd adds text as a new memory entry. Global scope is the
-// default (matching gemini-cli's save_memory); "--project" as the first
-// token switches to the project's AGENTS.md instead.
+// default; "--project" as the first token switches to the project's MEMORY.md.
 func handleMemoryAdd(ctx *Context) Result {
 	if ctx.Deps.Hooks == nil {
 		return InfoResult("Memory unavailable.")
@@ -373,18 +389,72 @@ func handleMemoryList(ctx *Context) Result {
 	if ctx.Deps.Hooks == nil {
 		return InfoResult("Memory unavailable.")
 	}
-	entries, err := ctx.Deps.Hooks.ListMemories()
+	entries, usage, err := ctx.Deps.Hooks.ListMemories()
 	if err != nil {
 		return ErrorResult(fmt.Errorf("list memory: %w", err))
 	}
 	if len(entries) == 0 {
 		return InfoResult("No memory entries. Add one with /memory add <text>.")
 	}
-	lines := make([]string, 0, len(entries))
+	lines := make([]string, 0, len(entries)+len(usage)+1)
 	for i, e := range entries {
-		lines = append(lines, fmt.Sprintf("%d. [%s] %s", i+1, e.Scope, e.Text))
+		scope := e.Scope.String()
+		if e.Legacy {
+			scope += ", legacy"
+		}
+		if e.Date.IsZero() {
+			lines = append(lines, fmt.Sprintf("%d. [%s] %s", i+1, scope, e.Text))
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("%d. [%s] (%s) %s", i+1, scope, e.Date.Format("2006-01-02"), e.Text))
+	}
+	if len(usage) > 0 {
+		lines = append(lines, "")
+		for _, u := range usage {
+			lines = append(lines, formatMemoryUsage(u))
+		}
 	}
 	return InfoResult(strings.Join(lines, "\n"))
+}
+
+func formatMemoryUsage(u MemoryUsage) string {
+	label := u.Scope.String()
+	if u.Legacy {
+		return fmt.Sprintf("%s (legacy %s): %s runes (not capped)", label, filepathBase(u.Path), formatInt(u.Runes))
+	}
+	if u.MaxRunes == 0 {
+		return fmt.Sprintf("%s: %s runes (unlimited)", label, formatInt(u.Runes))
+	}
+	pct := 0
+	if u.MaxRunes > 0 {
+		pct = u.Runes * 100 / u.MaxRunes
+	}
+	return fmt.Sprintf("%s: %s / %s runes (%d%%)", label, formatInt(u.Runes), formatInt(u.MaxRunes), pct)
+}
+
+func filepathBase(path string) string {
+	if i := strings.LastIndex(path, "/"); i >= 0 {
+		return path[i+1:]
+	}
+	return path
+}
+
+func formatInt(n int) string {
+	s := strconv.Itoa(n)
+	if n < 1000 {
+		return s
+	}
+	var b strings.Builder
+	pre := len(s) % 3
+	if pre == 0 {
+		pre = 3
+	}
+	b.WriteString(s[:pre])
+	for i := pre; i < len(s); i += 3 {
+		b.WriteByte(',')
+		b.WriteString(s[i : i+3])
+	}
+	return b.String()
 }
 
 func handleMemoryRemove(ctx *Context) Result {
@@ -401,6 +471,44 @@ func handleMemoryRemove(ctx *Context) Result {
 		return ErrorResult(fmt.Errorf("remove memory: %w", err))
 	}
 	return InfoResult(fmt.Sprintf("Removed: %s", removed))
+}
+
+// handleMemoryCompact previews, applies, or discards a model-driven merge of
+// MEMORY.md. A bare call (optionally "--project") only previews: compaction
+// deletes entries, and deletion stays a deliberate user action.
+func handleMemoryCompact(ctx *Context) Result {
+	if ctx.Deps.Hooks == nil {
+		return InfoResult("Memory unavailable.")
+	}
+	args := strings.TrimSpace(ctx.Args)
+
+	switch args {
+	case "apply":
+		path, err := ctx.Deps.Hooks.ApplyMemoryCompact(ctx.Ctx)
+		if err != nil {
+			return ErrorResult(fmt.Errorf("apply compaction: %w", err))
+		}
+		return InfoResult(fmt.Sprintf("Compacted %s", path))
+	case "abort":
+		if err := ctx.Deps.Hooks.AbortMemoryCompact(); err != nil {
+			return ErrorResult(fmt.Errorf("abort compaction: %w", err))
+		}
+		return InfoResult("Compaction discarded. Nothing was written.")
+	}
+
+	scope := config.ScopeGlobal
+	if rest, cut := cutLeadingFlag(args, "--project"); cut {
+		scope = config.ScopeProject
+		args = rest
+	}
+	if args != "" {
+		return InfoResult("Usage: /memory compact [--project] | /memory compact apply | /memory compact abort")
+	}
+	preview, err := ctx.Deps.Hooks.PreviewMemoryCompact(ctx.Ctx, scope)
+	if err != nil {
+		return ErrorResult(fmt.Errorf("compact memory: %w", err))
+	}
+	return InfoResult(preview)
 }
 
 func skillsCommand() Command {

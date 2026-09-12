@@ -35,7 +35,7 @@ var readOnlyBuiltinTools = map[string]bool{
 	// The working-memory tools touch nothing outside the session: the
 	// scratchpad is runner state plus a session-JSONL line, and search_session
 	// only reads the file this session is already writing. save_memory is
-	// deliberately absent from this map (it rewrites AGENTS.md on disk), which
+	// deliberately absent from this map (it writes MEMORY.md on disk), which
 	// is the line these two stay on the safe side of.
 	UpdateScratchpadToolName: true,
 	SearchSessionToolName:    true,

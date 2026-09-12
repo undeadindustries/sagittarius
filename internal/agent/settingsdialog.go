@@ -375,6 +375,14 @@ func listSettings(docs *config.Documents, scope config.SettingScope) []settingsd
 			Kind:         settingsdialog.KindEnum,
 			Choices:      []string{"prompt", "auto", "off"},
 		}, sessAutoTitle(scopeSettings), sessAutoTitle(global), sessAutoTitle(project)),
+		{Label: "Memory", Kind: settingsdialog.KindHeader},
+		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.memory.maxRunes",
+			Label:        "Memory cap (runes per file)",
+			Description:  "Ceiling for each MEMORY.md, which is sent on every request (0 = unlimited). Nothing is ever deleted to make room; an add at the ceiling is refused",
+			DefaultValue: strconv.Itoa(config.DefaultMemoryMaxRunes),
+			Kind:         settingsdialog.KindInt,
+		}, memMaxRunes(scopeSettings), memMaxRunes(global), memMaxRunes(project)),
 		{Label: "Edit Tool", Kind: settingsdialog.KindHeader},
 		row(settingsdialog.SettingEntry{
 			Key:          "sagittarius.edit.enabled",
@@ -471,6 +479,21 @@ func applySettingValue(s *config.Settings, key, value string) error {
 			s.Sagittarius = &config.SagittariusSettings{}
 		}
 		s.Sagittarius.MaxToolRounds = &n
+	case "sagittarius.memory.maxRunes":
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("memory.maxRunes must be an integer: %w", err)
+		}
+		if n < 0 {
+			return fmt.Errorf("memory.maxRunes must be >= 0 (0 = unlimited)")
+		}
+		if s.Sagittarius == nil {
+			s.Sagittarius = &config.SagittariusSettings{}
+		}
+		if s.Sagittarius.Memory == nil {
+			s.Sagittarius.Memory = &config.SagittariusMemoryConfig{}
+		}
+		s.Sagittarius.Memory.MaxRunes = &n
 	case "sagittarius.contextLimitPreferDiscovered":
 		b, err := strconv.ParseBool(value)
 		if err != nil {
@@ -822,6 +845,10 @@ func clearSettingValue(s *config.Settings, key string) error {
 		if s.Sagittarius != nil {
 			s.Sagittarius.MaxToolRounds = nil
 		}
+	case "sagittarius.memory.maxRunes":
+		if s.Sagittarius != nil && s.Sagittarius.Memory != nil {
+			s.Sagittarius.Memory.MaxRunes = nil
+		}
 	case "sagittarius.contextLimitPreferDiscovered":
 		if s.Sagittarius != nil {
 			s.Sagittarius.ContextLimitPreferDiscovered = nil
@@ -1019,6 +1046,13 @@ func sagOf(s *config.Settings) *config.SagittariusSettings {
 func sagMaxRounds(s *config.Settings) string {
 	if sag := sagOf(s); sag != nil {
 		return fmtPtrInt(sag.MaxToolRounds)
+	}
+	return ""
+}
+
+func memMaxRunes(s *config.Settings) string {
+	if sag := sagOf(s); sag != nil && sag.Memory != nil {
+		return fmtPtrInt(sag.Memory.MaxRunes)
 	}
 	return ""
 }

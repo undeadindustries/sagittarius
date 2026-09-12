@@ -386,28 +386,45 @@ again.
 
 ### `/memory`
 
-- **Description:** Manage project memory files (`AGENTS.md`). Added memories live under
-  one `## Sagittarius Added Memories` heading appended to the target file; everything
-  else in the file is left untouched. A model-callable, confirmation-gated `save_memory`
-  tool wraps the same `add` path (append-only — deletion is a user-only action here).
+- **Description:** Manage recorded facts in `MEMORY.md`. **The memory subsystem never
+  writes `AGENTS.md`.** `AGENTS.md` is your standards document — hand-authored, reviewed,
+  committed, and read by other AGENTS.md-aware tools — so nothing here touches it. To put
+  a rule in `AGENTS.md`, ask for that directly and it goes through the ordinary
+  confirmation-gated file tools with a reviewable diff. A model-callable,
+  confirmation-gated `save_memory` tool wraps the same `add` path (append-only — deletion
+  is a user-only action).
+- **Cost:** every `MEMORY.md` is injected into the system prompt on **every request**, so
+  it is capped per file by `sagittarius.memory.maxRunes` (default 8192, `0` = unlimited).
+  Nothing is ever truncated or evicted to make room: an add at the ceiling is refused and
+  tells you how to free space.
 
 #### Sub-commands
 
 - **`add [--project] <text>`**
-  - **Description:** Append one memory entry. Defaults to the global
-    `~/.sagittarius/AGENTS.md` (matching gemini-cli's `save_memory` target); `--project`
-    targets the current repository's `AGENTS.md` instead (the same file `/init`
-    populates). Reloads the system prompt so it applies to the very next turn.
+  - **Description:** Append one dated entry. Defaults to the global
+    `~/.sagittarius/MEMORY.md`; `--project` targets the current repository's
+    `.sagittarius/MEMORY.md`. Reloads the system prompt so it applies to the very next
+    turn. Past 75% of the cap it still succeeds but warns.
   - **Usage:** `/memory add prefers pnpm over npm`, `/memory add --project CI takes about 40 minutes`
 - **`list`**
-  - **Description:** List every saved entry, numbered continuously with global entries
-    first then project, e.g. `1. [global]  Prefers pnpm over npm in this repo.`
+  - **Description:** List every entry, numbered continuously — global `MEMORY.md` first,
+    then project, then any leftover `## Sagittarius Added Memories` sections in `AGENTS.md`
+    from before the split (labeled `legacy`, still listable and removable, never written
+    again). Ends with per-file rune usage against the cap.
   - **Usage:** `/memory list`
 - **`remove <n>`**
   - **Description:** Delete entry `n` (from `/memory list`'s numbering) and echo back the
     removed text. Re-reads the file fresh, so a hand-edit since the last `/memory list`
-    is respected. Removing a file's last entry also removes its now-empty heading.
+    is respected. Removing a legacy section's last entry also removes its now-empty heading.
   - **Usage:** `/memory remove 2`
+- **`compact [--project]`**
+  - **Description:** Ask a model to merge duplicates, consolidate related facts, and drop
+    superseded ones, then show the result as a diff. **Nothing is written** until you
+    accept. Prefers `sagittarius.goal.evaluatorModel` when set and names the model it
+    used. The reply is sanitized like any other add, a date the file never contained is
+    not honored, and an empty, unparseable, or over-aggressive result aborts and leaves
+    the file untouched. Not callable by the model.
+  - **Usage:** `/memory compact`, `/memory compact apply`, `/memory compact abort`
 - **`reload`**
   - **Description:** Re-read memory files into the system prompt.
   - **Usage:** `/memory reload`
@@ -426,8 +443,8 @@ again.
   tool-invocation mandate, and survive `--resume`. They never expire on their
   own — clear them when the restriction lifts.
 - **See also:** `/memory add --project` for a restriction that should outlive the
-  session (it writes to `AGENTS.md`); `/mode plan` or `/mode ask` for a
-  tool-level read-only gate rather than an instruction.
+  session (it writes to `.sagittarius/MEMORY.md`, never `AGENTS.md`); `/mode plan`
+  or `/mode ask` for a tool-level read-only gate rather than an instruction.
 
 #### Sub-commands
 

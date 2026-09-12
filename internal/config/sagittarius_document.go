@@ -28,6 +28,7 @@ var reservedSagittariusKeys = map[string]struct{}{
 	"contextLimitPreferDiscovered": {},
 	"scriptToolEnabled":            {},
 	"scratchpadEnabled":            {},
+	"memory":                       {},
 	"chat":                         {},
 }
 
@@ -1031,6 +1032,12 @@ func unmarshalSagittarius(raw json.RawMessage) (*SagittariusSettings, error) {
 				return nil, fmt.Errorf("decode sagittarius.scratchpadEnabled: %w", err)
 			}
 			s.ScratchpadEnabled = &b
+		case "memory":
+			mc, err := unmarshalMemoryConfig(val)
+			if err != nil {
+				return nil, err
+			}
+			s.Memory = mc
 		case "chat":
 			c, err := unmarshalChatConfig(val)
 			if err != nil {
@@ -1196,6 +1203,13 @@ func marshalSagittarius(s *SagittariusSettings) (json.RawMessage, error) {
 	}
 	if err := add("scratchpadEnabled", s.ScratchpadEnabled); err != nil {
 		return nil, err
+	}
+	if s.Memory != nil {
+		b, err := marshalMemoryConfig(s.Memory)
+		if err != nil {
+			return nil, err
+		}
+		obj["memory"] = b
 	}
 	if s.Chat != nil {
 		b, err := marshalChatConfig(s.Chat)
@@ -1450,6 +1464,52 @@ func unmarshalSessionsConfig(data []byte) (*SagittariusSessionsConfig, error) {
 		c.Extra = nil
 	}
 	return &c, nil
+}
+
+func unmarshalMemoryConfig(data []byte) (*SagittariusMemoryConfig, error) {
+	var c SagittariusMemoryConfig
+	c.Extra = make(map[string]json.RawMessage)
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("decode sagittarius.memory: %w", err)
+	}
+	for key, val := range raw {
+		switch key {
+		case "maxRunes":
+			var n int
+			if err := json.Unmarshal(val, &n); err != nil {
+				return nil, fmt.Errorf("decode sagittarius.memory.maxRunes: %w", err)
+			}
+			c.MaxRunes = &n
+		default:
+			c.Extra[key] = val
+		}
+	}
+	if len(c.Extra) == 0 {
+		c.Extra = nil
+	}
+	return &c, nil
+}
+
+func marshalMemoryConfig(c *SagittariusMemoryConfig) (json.RawMessage, error) {
+	if c == nil {
+		return nil, nil
+	}
+	obj := make(map[string]json.RawMessage)
+	if c.MaxRunes != nil {
+		b, err := json.Marshal(*c.MaxRunes)
+		if err != nil {
+			return nil, err
+		}
+		obj["maxRunes"] = b
+	}
+	for key, val := range c.Extra {
+		obj[key] = val
+	}
+	if len(obj) == 0 {
+		return json.RawMessage("{}"), nil
+	}
+	return json.Marshal(obj)
 }
 
 func marshalSessionsConfig(c *SagittariusSessionsConfig) (json.RawMessage, error) {

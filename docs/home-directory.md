@@ -106,15 +106,49 @@ so the project file can never leak into the global one.
 
 For snapshots and undo specifically see [snapshots-and-undo.md](snapshots-and-undo.md).
 
-## Memory files: AGENTS.md
+## Standards files: AGENTS.md
 
-Sagittarius uses `AGENTS.md` for system-prompt memory, never `GEMINI.md`.
+Sagittarius reads `AGENTS.md` into the system prompt, never `GEMINI.md`.
 
-- Global memory: `~/.sagittarius/AGENTS.md` (optional; read if present).
-- Project memory: `AGENTS.md` files discovered by walking up from your working
-  directory to the home boundary. Outer files come first, inner files last.
+- Global standards: `~/.sagittarius/AGENTS.md` (optional; read if present).
+- Project standards: `AGENTS.md` files discovered by walking up from your working
+  directory to the home boundary, inclusive of the home directory itself. Outer
+  files come first, inner files last.
 
-Create these files yourself; Sagittarius does not generate them.
+**These files are yours.** Write them by hand, or generate one with `/init`. The
+memory subsystem (`/memory add`, the `save_memory` tool) never writes them — see
+`MEMORY.md` below. Asking Sagittarius to "put this rule in AGENTS.md" still works
+and goes through the ordinary confirmation-gated file tools, which show you a diff.
+
+`.agents/` is **skills only** (`~/.agents/skills/`, `<repo>/.agents/skills/`).
+Putting an `AGENTS.md` at `~/.agents/AGENTS.md` has no effect; that path is not
+read.
+
+## Memory files: MEMORY.md
+
+Facts recorded across sessions live in a separate, Sagittarius-owned file so a
+machine-appended log never lands in your standards document.
+
+- Global memory: `~/.sagittarius/MEMORY.md`
+- Project memory: `<repo>/.sagittarius/MEMORY.md`
+
+Format is a flat list of dated bullets, e.g. `- (2026-09-12) deploy target is
+gs://foo-prod`. An undated bullet is still valid, so you can hand-edit freely.
+Both files are injected after the `AGENTS.md` sections and carry a header marking
+them as reference material, so a recorded fact never outranks an authored standard.
+
+Because they are sent on **every request**, each file is capped by
+`sagittarius.memory.maxRunes` (default 8192 runes, `0` = unlimited, set per scope
+in `/settings` → Memory). Nothing is truncated or evicted automatically: an add at
+the ceiling is refused and names `/memory list`, `/memory remove <n>`, and
+`/memory compact` as the ways to free space. `/memory list` shows usage against
+the cap.
+
+Entries added before this split still live under a `## Sagittarius Added Memories`
+heading inside an `AGENTS.md`. They are left exactly where they are — still read,
+still listed by `/memory list` (labeled `legacy`), still removable by
+`/memory remove` — and never extended. There is no migration; moving your file
+content uninvited is the behavior this separation exists to stop.
 
 ## Environment variables
 

@@ -125,12 +125,19 @@ You can define custom rules and instructions that the agent must follow. These a
 - **Global rules:** Create `~/.sagittarius/AGENTS.md`. The agent will apply these rules across all projects.
 - **Project rules:** Create an `AGENTS.md` file in the root of your project. The agent will read this file when run within the project directory.
 
-Beyond hand-written rules, the agent can also curate its own durable memory in a managed section of these same files:
+**`AGENTS.md` is yours alone.** The memory commands below never write it, so your standards file stays hand-authored and reviewable. Asking the agent to "add this rule to AGENTS.md" still works — that goes through the normal file tools and shows you a diff first. (`.agents/` is for skills only; an `AGENTS.md` there is not read.)
 
-- **`/memory add [--project] <text>`** — saves one fact or preference as a bullet under a `## Sagittarius Added Memories` heading (global by default; `--project` targets the current repo's `AGENTS.md` instead). Everything else in the file is left untouched.
-- **`/memory list`** — numbers every saved entry, global first then project, e.g. `1. [global] Prefers pnpm over npm in this repo.`
-- **`/memory remove <n>`** — deletes entry `n` from the numbered list and echoes back what was removed.
-- The model can also call a `save_memory` tool to save a fact itself — it always asks for confirmation first, and can only append (deleting a memory is a user-only action via `/memory remove`).
+### Memory
+
+Durable facts the agent learns live in a separate `MEMORY.md`, injected after your rules and marked as reference material so a learned fact never outranks a written standard:
+
+- **`/memory add [--project] <text>`** — appends one dated bullet to `~/.sagittarius/MEMORY.md` (or the repo's `.sagittarius/MEMORY.md` with `--project`).
+- **`/memory list`** — numbers every entry with its date and per-file usage against the cap. Entries left in an `AGENTS.md` by older versions are listed too, labeled `legacy`, and stay removable.
+- **`/memory remove <n>`** — deletes entry `n` and echoes back what was removed.
+- **`/memory compact`** — asks a model to merge duplicates and drop superseded facts, then shows a diff. Nothing is written until you accept.
+- The model can call a `save_memory` tool to record a fact itself — it always asks for confirmation, and can only append. Deleting is a user-only action.
+
+Because memory is sent on every request, each file is capped (`sagittarius.memory.maxRunes`, default 8192 runes, `0` = unlimited). Nothing is ever silently truncated or evicted: an add at the ceiling is refused and tells you how to free space.
 
 ## Quick reference
 

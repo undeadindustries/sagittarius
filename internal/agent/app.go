@@ -665,36 +665,44 @@ func (h *appHooks) ReloadSystemInstruction(ctx context.Context) error {
 	return h.app.runner.ReloadSystemInstruction()
 }
 
-// AddMemory appends text to scope's AGENTS.md and reloads the system
-// instruction so it applies to the very next turn.
+// AddMemory appends text to scope's MEMORY.md and reloads the system
+// instruction so it applies to the very next turn. It never writes AGENTS.md.
 func (h *appHooks) AddMemory(ctx context.Context, text string, scope config.SettingScope) (string, error) {
 	if h.app == nil || h.app.runner == nil {
 		return "", fmt.Errorf("runner not available")
 	}
-	path, err := AddMemory(scope, h.app.runner.WorkDir(), text)
+	result, err := AddMemory(scope, h.app.runner.WorkDir(), text, memoryMaxRunes(h.app.runner))
 	if err != nil {
 		return "", err
 	}
 	if err := h.ReloadSystemInstruction(ctx); err != nil {
-		return "", fmt.Errorf("memory saved to %s, but reload failed: %w", path, err)
+		return "", fmt.Errorf("memory saved to %s, but reload failed: %w", result.Path, err)
 	}
-	return path, nil
+	if result.Warning != "" {
+		return result.Path + "\n" + result.Warning, nil
+	}
+	return result.Path, nil
 }
 
-// ListMemories returns every managed-section entry across both scopes.
-func (h *appHooks) ListMemories() ([]slash.MemoryEntry, error) {
+// ListMemories returns every memory entry across MEMORY.md and leftover
+// AGENTS.md sections, plus per-file rune usage.
+func (h *appHooks) ListMemories() ([]slash.MemoryEntry, []slash.MemoryUsage, error) {
 	if h.app == nil || h.app.runner == nil {
-		return nil, fmt.Errorf("runner not available")
+		return nil, nil, fmt.Errorf("runner not available")
 	}
-	entries, err := ListMemories(h.app.runner.WorkDir())
+	entries, stats, err := ListMemories(h.app.runner.WorkDir(), memoryMaxRunes(h.app.runner))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	out := make([]slash.MemoryEntry, len(entries))
 	for i, e := range entries {
-		out[i] = slash.MemoryEntry{Scope: e.Scope, Path: e.Path, Text: e.Text}
+		out[i] = slash.MemoryEntry{Scope: e.Scope, Path: e.Path, Text: e.Text, Date: e.Date, Legacy: e.Legacy}
 	}
-	return out, nil
+	usage := make([]slash.MemoryUsage, len(stats))
+	for i, s := range stats {
+		usage[i] = slash.MemoryUsage{Scope: s.Scope, Path: s.Path, Runes: s.Runes, MaxRunes: s.MaxRunes, Legacy: s.Legacy}
+	}
+	return out, usage, nil
 }
 
 // RemoveMemory deletes the given 1-based ListMemories entry and reloads the
@@ -711,6 +719,31 @@ func (h *appHooks) RemoveMemory(ctx context.Context, index int) (string, error) 
 		return "", fmt.Errorf("removed %q, but reload failed: %w", removed, err)
 	}
 	return removed, nil
+}
+
+// PreviewMemoryCompact asks a model to merge scope's MEMORY.md and returns the
+// proposal for review. Nothing is written.
+func (h *appHooks) PreviewMemoryCompact(ctx context.Context, scope config.SettingScope) (string, error) {
+	if h.app == nil || h.app.runner == nil {
+		return "", fmt.Errorf("runner not available")
+	}
+	return h.app.runner.PreviewMemoryCompact(ctx, scope)
+}
+
+// ApplyMemoryCompact writes the proposal PreviewMemoryCompact stored.
+func (h *appHooks) ApplyMemoryCompact(ctx context.Context) (string, error) {
+	if h.app == nil || h.app.runner == nil {
+		return "", fmt.Errorf("runner not available")
+	}
+	return h.app.runner.ApplyMemoryCompact(ctx)
+}
+
+// AbortMemoryCompact discards a pending proposal.
+func (h *appHooks) AbortMemoryCompact() error {
+	if h.app == nil || h.app.runner == nil {
+		return fmt.Errorf("runner not available")
+	}
+	return h.app.runner.AbortMemoryCompact()
 }
 
 func (h *appHooks) DiscoverModels(ctx context.Context) []provider.ModelInfo {

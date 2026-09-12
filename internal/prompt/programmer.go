@@ -143,7 +143,7 @@ func fullOperationalGuidelines(editEnabled, memoryEnabled, scratchpadEnabled, wa
 
 	memory := ""
 	if memoryEnabled {
-		memory = "- **Memory:** Use `" + tools.SaveMemoryToolName + "` to persist durable project facts, architectural decisions, or user preferences to `AGENTS.md`.\n"
+		memory = "- **Memory:** Use `" + tools.SaveMemoryToolName + "` to persist durable project facts, architectural decisions, or user preferences to `MEMORY.md`. Never use it to edit `AGENTS.md`; that file is the user's, and an explicit request to change it goes through the ordinary file tools.\n"
 	}
 
 	return join(

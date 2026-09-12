@@ -22,16 +22,23 @@ import (
 type Hooks interface {
 	RebuildRunner(ctx context.Context) (providerLabel, model string, err error)
 	ReloadSystemInstruction(ctx context.Context) error
-	// AddMemory appends text as a new managed-section bullet in scope's
-	// AGENTS.md (creating the file if needed) and reloads the system
-	// instruction, returning the resolved file path.
+	// AddMemory appends text as a new dated bullet in scope's MEMORY.md
+	// (creating the file if needed) and reloads the system instruction,
+	// returning the resolved file path (and any cap warning).
 	AddMemory(ctx context.Context, text string, scope config.SettingScope) (path string, err error)
-	// ListMemories returns every managed-section entry across both scopes,
-	// global first then project, in the order /memory remove indexes them.
-	ListMemories() ([]MemoryEntry, error)
+	// ListMemories returns every memory entry across MEMORY.md and leftover
+	// AGENTS.md sections, plus per-file rune usage, in /memory remove order.
+	ListMemories() (entries []MemoryEntry, usage []MemoryUsage, err error)
 	// RemoveMemory deletes the 1-based index-th entry in ListMemories order
 	// and reloads the system instruction, returning the removed text.
 	RemoveMemory(ctx context.Context, index int) (removed string, err error)
+	// PreviewMemoryCompact asks a model to merge scope's MEMORY.md and
+	// stores the proposal for ApplyMemoryCompact. Nothing is written.
+	PreviewMemoryCompact(ctx context.Context, scope config.SettingScope) (preview string, err error)
+	// ApplyMemoryCompact writes the stored compact proposal.
+	ApplyMemoryCompact(ctx context.Context) (path string, err error)
+	// AbortMemoryCompact discards a stored compact proposal.
+	AbortMemoryCompact() error
 	DiscoverModels(ctx context.Context) []provider.ModelInfo
 	SetProviderAPIKey(ctx context.Context, providerID, apiKey string) error
 	ReloadMCP(ctx context.Context) (string, error)

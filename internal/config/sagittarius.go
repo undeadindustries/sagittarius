@@ -124,6 +124,8 @@ type SagittariusSettings struct {
 	// ScratchpadEnabled toggles the update_scratchpad working-memory tool
 	// (default on).
 	ScratchpadEnabled *bool `json:"scratchpadEnabled,omitempty"`
+	// Memory configures the always-inject MEMORY.md tier.
+	Memory *SagittariusMemoryConfig `json:"memory,omitempty"`
 	// Chat configures external chat integrations (Google Chat, etc.).
 	Chat  *SagittariusChatConfig     `json:"chat,omitempty"`
 	Extra map[string]json.RawMessage `json:"-"`
@@ -264,6 +266,18 @@ const (
 	// first-message display fallback.
 	AutoTitleOff AutoTitlePolicy = "off"
 )
+
+// DefaultMemoryMaxRunes is the compiled-in ceiling for one MEMORY.md file
+// (~2k tokens). 0 in settings means unlimited.
+const DefaultMemoryMaxRunes = 8192
+
+// SagittariusMemoryConfig configures the always-inject MEMORY.md tier.
+type SagittariusMemoryConfig struct {
+	// MaxRunes caps one MEMORY.md file. Nil uses DefaultMemoryMaxRunes.
+	// 0 means no cap. Negative values are invalid.
+	MaxRunes *int                       `json:"maxRunes,omitempty"`
+	Extra    map[string]json.RawMessage `json:"-"`
+}
 
 // SagittariusSessionsConfig configures conversation session metadata.
 type SagittariusSessionsConfig struct {
@@ -442,5 +456,23 @@ func ValidateSagittariusSettings(s *SagittariusSettings) error {
 	if s.MaxToolRounds != nil && *s.MaxToolRounds < 0 {
 		return fmt.Errorf("sagittarius.maxToolRounds must be >= 0 (0 = unlimited), got %d", *s.MaxToolRounds)
 	}
+	if s.Memory != nil && s.Memory.MaxRunes != nil && *s.Memory.MaxRunes < 0 {
+		return fmt.Errorf("sagittarius.memory.maxRunes must be >= 0 (0 = unlimited), got %d", *s.Memory.MaxRunes)
+	}
 	return nil
+}
+
+// ResolveMemoryMaxRunes returns the effective MEMORY.md rune ceiling.
+// Nil falls back to DefaultMemoryMaxRunes. 0 means no cap. A negative pin
+// is treated as unset so a corrupt value cannot disable the cap;
+// ValidateSagittariusSettings rejects negatives on load.
+func ResolveMemoryMaxRunes(s *SagittariusSettings) int {
+	if s == nil || s.Memory == nil || s.Memory.MaxRunes == nil {
+		return DefaultMemoryMaxRunes
+	}
+	n := *s.Memory.MaxRunes
+	if n < 0 {
+		return DefaultMemoryMaxRunes
+	}
+	return n
 }

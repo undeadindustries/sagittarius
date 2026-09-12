@@ -105,18 +105,28 @@ func (m *mockHooks) DiscoverModels(context.Context) []provider.ModelInfo {
 }
 
 func (m *mockHooks) AddMemory(_ context.Context, text string, scope config.SettingScope) (string, error) {
-	path := "/tmp/AGENTS.md"
+	path := "/tmp/MEMORY.md"
 	if scope == config.ScopeProject {
-		path = filepath.Join(m.workDir, "AGENTS.md")
+		path = filepath.Join(m.workDir, ".sagittarius", "MEMORY.md")
 	}
 	m.memoryEntries = append(m.memoryEntries, slash.MemoryEntry{Scope: scope, Path: path, Text: text})
 	m.reloadCalls++ // mirrors appHooks.AddMemory reloading the system instruction
 	return path, nil
 }
 
-func (m *mockHooks) ListMemories() ([]slash.MemoryEntry, error) {
-	return m.memoryEntries, nil
+func (m *mockHooks) ListMemories() ([]slash.MemoryEntry, []slash.MemoryUsage, error) {
+	return m.memoryEntries, nil, nil
 }
+
+func (m *mockHooks) PreviewMemoryCompact(context.Context, config.SettingScope) (string, error) {
+	return "", fmt.Errorf("compact not stubbed")
+}
+
+func (m *mockHooks) ApplyMemoryCompact(context.Context) (string, error) {
+	return "", fmt.Errorf("compact not stubbed")
+}
+
+func (m *mockHooks) AbortMemoryCompact() error { return nil }
 
 func (m *mockHooks) RemoveMemory(_ context.Context, index int) (string, error) {
 	if index < 1 || index > len(m.memoryEntries) {
@@ -874,8 +884,8 @@ func TestMemoryListNumbersGlobalFirst(t *testing.T) {
 	t.Parallel()
 	deps, _, hooks := testDeps(t, nil)
 	hooks.memoryEntries = []slash.MemoryEntry{
-		{Scope: config.ScopeGlobal, Path: "/home/.sagittarius/AGENTS.md", Text: "global fact"},
-		{Scope: config.ScopeProject, Path: "/repo/AGENTS.md", Text: "project fact"},
+		{Scope: config.ScopeGlobal, Path: "/home/.sagittarius/MEMORY.md", Text: "global fact"},
+		{Scope: config.ScopeProject, Path: "/repo/.sagittarius/MEMORY.md", Text: "project fact"},
 	}
 	p := slash.NewProcessor()
 

@@ -25,8 +25,10 @@ func (t *saveMemoryTool) Name() string { return tools.SaveMemoryToolName }
 
 func (t *saveMemoryTool) Description() string {
 	return "Save a durable fact, preference, or instruction for future sessions. " +
-		"Appends one line to AGENTS.md (global by default, or the current project). " +
-		"Use sparingly, for things worth remembering across the whole conversation history, not one-off task details."
+		"Appends one dated line to MEMORY.md (global ~/.sagittarius/MEMORY.md by default, " +
+		"or the current project's .sagittarius/MEMORY.md). " +
+		"Use sparingly, for things worth remembering across the whole conversation history, not one-off task details. " +
+		"Do not use this to edit AGENTS.md; that file is user-authored."
 }
 
 func (t *saveMemoryTool) Declaration() provider.ToolDeclaration {
@@ -43,7 +45,7 @@ func (t *saveMemoryTool) Declaration() provider.ToolDeclaration {
 				tools.SaveMemoryParamScope: map[string]any{
 					"type":        "string",
 					"enum":        []string{"global", "project"},
-					"description": "Where to save it: \"global\" (default, applies to every project) or \"project\" (this repository only).",
+					"description": "Where to save it: \"global\" (default, ~/.sagittarius/MEMORY.md) or \"project\" (this repository's .sagittarius/MEMORY.md).",
 				},
 			},
 			"required": []string{tools.SaveMemoryParamText},
@@ -60,20 +62,37 @@ func (t *saveMemoryTool) Execute(ctx context.Context, args map[string]any) (map[
 	}
 	scope := parseMemoryScopeArg(args)
 
-	path, err := AddMemory(scope, t.runner.workDir, text)
+	maxRunes := memoryMaxRunes(t.runner)
+	result, err := AddMemory(scope, t.runner.workDir, text, maxRunes)
 	if err != nil {
 		return nil, fmt.Errorf("save memory: %w", err)
 	}
+	path := result.Path
 	if err := t.runner.ReloadSystemInstruction(); err != nil {
 		return nil, fmt.Errorf("memory saved to %s, but reload failed: %w", path, err)
 	}
 
-	return map[string]any{
+	out := map[string]any{
 		"status": "saved",
 		"path":   path,
 		"scope":  scope.String(),
 		"text":   text,
-	}, nil
+	}
+	if result.Warning != "" {
+		out["warning"] = result.Warning
+	}
+	return out, nil
+}
+
+func memoryMaxRunes(r *Runner) int {
+	if r == nil {
+		return config.DefaultMemoryMaxRunes
+	}
+	settings := r.settingsSnapshot()
+	if settings == nil {
+		return config.DefaultMemoryMaxRunes
+	}
+	return config.ResolveMemoryMaxRunes(settings.Sagittarius)
 }
 
 // parseMemoryScopeArg reads the optional "scope" argument, defaulting to

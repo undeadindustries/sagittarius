@@ -202,6 +202,70 @@ func TestResolveMaxToolRounds(t *testing.T) {
 	}
 }
 
+func TestResolveMemoryMaxRunes(t *testing.T) {
+	t.Parallel()
+
+	ptr := func(n int) *int { return &n }
+	cases := []struct {
+		name string
+		n    *int
+		want int
+	}{
+		{name: "nil settings", n: nil, want: DefaultMemoryMaxRunes},
+		{name: "zero is unlimited", n: ptr(0), want: 0},
+		{name: "positive cap", n: ptr(4096), want: 4096},
+		{name: "negative falls back", n: ptr(-1), want: DefaultMemoryMaxRunes},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var s *SagittariusSettings
+			if tc.n != nil {
+				s = &SagittariusSettings{Memory: &SagittariusMemoryConfig{MaxRunes: tc.n}}
+			}
+			if got := ResolveMemoryMaxRunes(s); got != tc.want {
+				t.Fatalf("ResolveMemoryMaxRunes = %d, want %d", got, tc.want)
+			}
+		})
+	}
+	if got := ResolveMemoryMaxRunes(nil); got != DefaultMemoryMaxRunes {
+		t.Fatalf("nil settings = %d, want %d", got, DefaultMemoryMaxRunes)
+	}
+}
+
+func TestValidateSagittariusSettingsMemoryMaxRunes(t *testing.T) {
+	t.Parallel()
+
+	if _, err := unmarshalSagittarius(json.RawMessage(`{"memory":{"maxRunes":0}}`)); err != nil {
+		t.Fatalf("0 should be valid (unlimited): %v", err)
+	}
+	if _, err := unmarshalSagittarius(json.RawMessage(`{"memory":{"maxRunes":4096}}`)); err != nil {
+		t.Fatalf("4096 should be valid: %v", err)
+	}
+	if _, err := unmarshalSagittarius(json.RawMessage(`{"memory":{"maxRunes":-1}}`)); err == nil {
+		t.Fatal("expected validation error for negative memory.maxRunes")
+	}
+}
+
+func TestMemoryMaxRunesRoundTrip(t *testing.T) {
+	t.Parallel()
+	n := 4096
+	raw, err := marshalSagittarius(&SagittariusSettings{Memory: &SagittariusMemoryConfig{MaxRunes: &n}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := unmarshalSagittarius(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Memory == nil || got.Memory.MaxRunes == nil || *got.Memory.MaxRunes != 4096 {
+		t.Fatalf("round-trip lost memory.maxRunes: %+v", got)
+	}
+	if _, leaked := got.Extra["memory"]; leaked {
+		t.Fatal("memory leaked into Extra: missing reserved key")
+	}
+}
+
 func TestValidateSagittariusSettingsMaxToolRounds(t *testing.T) {
 	t.Parallel()
 

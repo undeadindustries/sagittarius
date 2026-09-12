@@ -15,7 +15,7 @@ Two tools close that gap from opposite directions.
   every word the live history no longer does.
 
 Neither is durable across sessions. That is MemPalace's job (or `save_memory`,
-which appends a lasting fact to `AGENTS.md`). These two are for the task
+which appends a lasting fact to `MEMORY.md`). These two are for the task
 currently in progress.
 
 ## The scratchpad
@@ -101,7 +101,7 @@ outside session state you can inspect with `/scratchpad` and wipe with
 `/scratchpad clear`.
 
 `update_scratchpad` is deliberately **not** confirmation-gated, unlike
-`save_memory`. `save_memory` rewrites `AGENTS.md` on disk permanently; the
+`save_memory`. `save_memory` writes `MEMORY.md` on disk permanently; the
 scratchpad does not. Prompting for it would make it unusable on exactly the long
 unattended tasks it exists for.
 

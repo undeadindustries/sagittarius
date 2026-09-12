@@ -267,6 +267,10 @@ type Runner struct {
 	autoTitleMu       sync.Mutex
 	autoTitleDone     bool
 	titleAnnouncement string
+	// compactMu guards pendingCompact, the previewed MEMORY.md rewrite
+	// waiting for /memory compact apply.
+	compactMu      sync.Mutex
+	pendingCompact *compactProposal
 	// loadedMemoryFiles are the AGENTS.md paths that contributed to the system
 	// instruction, captured at construction for the welcome banner.
 	loadedMemoryFiles []string

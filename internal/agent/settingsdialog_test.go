@@ -184,6 +184,42 @@ func TestApplySettingValueMaxToolRounds(t *testing.T) {
 	}
 }
 
+func TestApplySettingValueMemoryMaxRunes(t *testing.T) {
+	s := &config.Settings{}
+
+	if err := applySettingValue(s, "sagittarius.memory.maxRunes", "4096"); err != nil {
+		t.Fatalf("apply 4096: %v", err)
+	}
+	if s.Sagittarius.Memory == nil || s.Sagittarius.Memory.MaxRunes == nil || *s.Sagittarius.Memory.MaxRunes != 4096 {
+		t.Fatalf("Memory.MaxRunes = %v, want 4096", s.Sagittarius.Memory)
+	}
+
+	// 0 is unlimited, not invalid (the AD-122 maxToolRounds convention).
+	if err := applySettingValue(s, "sagittarius.memory.maxRunes", "0"); err != nil {
+		t.Fatalf("apply 0: %v", err)
+	}
+	if *s.Sagittarius.Memory.MaxRunes != 0 {
+		t.Fatalf("Memory.MaxRunes = %v, want 0", *s.Sagittarius.Memory.MaxRunes)
+	}
+
+	if err := applySettingValue(s, "sagittarius.memory.maxRunes", "-1"); err == nil {
+		t.Fatal("expected error for a negative cap")
+	}
+	if *s.Sagittarius.Memory.MaxRunes != 0 {
+		t.Fatalf("rejected value mutated Memory.MaxRunes to %v", *s.Sagittarius.Memory.MaxRunes)
+	}
+
+	if err := clearSettingValue(s, "sagittarius.memory.maxRunes"); err != nil {
+		t.Fatalf("clear: %v", err)
+	}
+	if s.Sagittarius.Memory.MaxRunes != nil {
+		t.Fatalf("clear should unset the key, got %v", *s.Sagittarius.Memory.MaxRunes)
+	}
+	if got := config.ResolveMemoryMaxRunes(s.Sagittarius); got != config.DefaultMemoryMaxRunes {
+		t.Fatalf("after clear, resolver = %d, want the compiled-in default %d", got, config.DefaultMemoryMaxRunes)
+	}
+}
+
 func TestApplySettingValueDefaultModeRejectsUnknownValue(t *testing.T) {
 	s := &config.Settings{}
 
