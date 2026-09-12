@@ -684,8 +684,7 @@ func (h *appHooks) AddMemory(ctx context.Context, text string, scope config.Sett
 	return result.Path, nil
 }
 
-// ListMemories returns every memory entry across MEMORY.md and leftover
-// AGENTS.md sections, plus per-file rune usage.
+// ListMemories returns every MEMORY.md entry plus per-file rune usage.
 func (h *appHooks) ListMemories() ([]slash.MemoryEntry, []slash.MemoryUsage, error) {
 	if h.app == nil || h.app.runner == nil {
 		return nil, nil, fmt.Errorf("runner not available")
@@ -696,11 +695,11 @@ func (h *appHooks) ListMemories() ([]slash.MemoryEntry, []slash.MemoryUsage, err
 	}
 	out := make([]slash.MemoryEntry, len(entries))
 	for i, e := range entries {
-		out[i] = slash.MemoryEntry{Scope: e.Scope, Path: e.Path, Text: e.Text, Date: e.Date, Legacy: e.Legacy}
+		out[i] = slash.MemoryEntry{Scope: e.Scope, Path: e.Path, Text: e.Text, Date: e.Date}
 	}
 	usage := make([]slash.MemoryUsage, len(stats))
 	for i, s := range stats {
-		usage[i] = slash.MemoryUsage{Scope: s.Scope, Path: s.Path, Runes: s.Runes, MaxRunes: s.MaxRunes, Legacy: s.Legacy}
+		usage[i] = slash.MemoryUsage{Scope: s.Scope, Path: s.Path, Runes: s.Runes, MaxRunes: s.MaxRunes}
 	}
 	return out, usage, nil
 }

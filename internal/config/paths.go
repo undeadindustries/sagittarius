@@ -13,7 +13,8 @@ const (
 	settingsFileName = "settings.json"
 
 	// AgentsFileName is the user-authored standards document read into the
-	// system prompt. The memory subsystem never writes it.
+	// system prompt. The memory subsystem never touches it — not to read,
+	// write, or delete.
 	AgentsFileName = "AGENTS.md"
 
 	// MemoryFileName is the Sagittarius-owned file /memory add and the
@@ -50,7 +51,8 @@ func ResolveSettingsPath() (string, error) {
 }
 
 // ResolveGlobalAgentsPath returns ~/.sagittarius/AGENTS.md, the global
-// user-authored standards file. The memory subsystem never writes this path.
+// user-authored standards file. It is read into the system prompt; the memory
+// subsystem never touches it.
 func ResolveGlobalAgentsPath() (string, error) {
 	dir, err := ResolveSagittariusDir()
 	if err != nil {

@@ -386,13 +386,13 @@ again.
 
 ### `/memory`
 
-- **Description:** Manage recorded facts in `MEMORY.md`. **The memory subsystem never
-  writes `AGENTS.md`.** `AGENTS.md` is your standards document — hand-authored, reviewed,
-  committed, and read by other AGENTS.md-aware tools — so nothing here touches it. To put
-  a rule in `AGENTS.md`, ask for that directly and it goes through the ordinary
-  confirmation-gated file tools with a reviewable diff. A model-callable,
-  confirmation-gated `save_memory` tool wraps the same `add` path (append-only — deletion
-  is a user-only action).
+- **Description:** Manage recorded facts in `MEMORY.md`. **`/memory` never reads, creates,
+  edits, or deletes `AGENTS.md`.** `AGENTS.md` is your standards document — hand-authored,
+  reviewed, committed, and read by other AGENTS.md-aware tools — so nothing here touches
+  it in any direction. To put a rule in `AGENTS.md`, ask for that directly and it goes
+  through the ordinary confirmation-gated file tools with a reviewable diff. A
+  model-callable, confirmation-gated `save_memory` tool wraps the same `add` path
+  (append-only — deletion is a user-only action).
 - **Cost:** every `MEMORY.md` is injected into the system prompt on **every request**, so
   it is capped per file by `sagittarius.memory.maxRunes` (default 8192, `0` = unlimited).
   Nothing is ever truncated or evicted to make room: an add at the ceiling is refused and
@@ -408,14 +408,14 @@ again.
   - **Usage:** `/memory add prefers pnpm over npm`, `/memory add --project CI takes about 40 minutes`
 - **`list`**
   - **Description:** List every entry, numbered continuously — global `MEMORY.md` first,
-    then project, then any leftover `## Sagittarius Added Memories` sections in `AGENTS.md`
-    from before the split (labeled `legacy`, still listable and removable, never written
-    again). Ends with per-file rune usage against the cap.
+    then project. Ends with per-file rune usage against the cap. `AGENTS.md` is not
+    consulted, so memories left there by older versions do not appear; remove them by
+    hand if you want them gone.
   - **Usage:** `/memory list`
 - **`remove <n>`**
   - **Description:** Delete entry `n` (from `/memory list`'s numbering) and echo back the
     removed text. Re-reads the file fresh, so a hand-edit since the last `/memory list`
-    is respected. Removing a legacy section's last entry also removes its now-empty heading.
+    is respected.
   - **Usage:** `/memory remove 2`
 - **`compact [--project]`**
   - **Description:** Ask a model to merge duplicates, consolidate related facts, and drop

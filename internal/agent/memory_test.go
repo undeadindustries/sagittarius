@@ -211,72 +211,6 @@ func TestSplitLines(t *testing.T) {
 	}
 }
 
-func TestParseMemoryLines(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name        string
-		content     string
-		wantEntries []string
-		wantStart   int
-		wantEnd     int
-	}{
-		{
-			name:        "no section",
-			content:     "# Project\n\nSome instructions.\n",
-			wantEntries: nil,
-			wantStart:   3,
-			wantEnd:     3,
-		},
-		{
-			name:        "section with entries",
-			content:     "## Sagittarius Added Memories\n\n- one\n- two\n",
-			wantEntries: []string{"one", "two"},
-			wantStart:   0,
-			wantEnd:     4,
-		},
-		{
-			name:        "section followed by another heading",
-			content:     "## Sagittarius Added Memories\n\n- one\n\n## Next Section\ncontent\n",
-			wantEntries: []string{"one"},
-			wantStart:   0,
-			wantEnd:     4,
-		},
-		{
-			name:        "mixed bullet markers from hand-editing",
-			content:     "## Sagittarius Added Memories\n\n- dash\n* star\n+ plus\n",
-			wantEntries: []string{"dash", "star", "plus"},
-			wantStart:   0,
-			wantEnd:     5,
-		},
-		{
-			name:        "empty managed section",
-			content:     "## Sagittarius Added Memories\n",
-			wantEntries: nil,
-			wantStart:   0,
-			wantEnd:     1,
-		},
-		{
-			name:        "empty file",
-			content:     "",
-			wantEntries: nil,
-			wantStart:   0,
-			wantEnd:     0,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			entries, start, end := parseMemoryLines(splitLines(tt.content))
-			if !equalTexts(entries, tt.wantEntries) {
-				t.Errorf("entries = %#v, want %#v", entries, tt.wantEntries)
-			}
-			if start != tt.wantStart || end != tt.wantEnd {
-				t.Errorf("start,end = %d,%d, want %d,%d", start, end, tt.wantStart, tt.wantEnd)
-			}
-		})
-	}
-}
-
 func equalTexts(entries []memoryLine, want []string) bool {
 	if len(entries) != len(want) {
 		return false
@@ -290,69 +224,6 @@ func equalTexts(entries []memoryLine, want []string) bool {
 }
 
 func lineFor(text string) memoryLine { return memoryLine{Text: text} }
-
-func TestRenderMemoryFile_PreservesSurroundingContent(t *testing.T) {
-	t.Parallel()
-	original := "# My Project\n\nHand-written instructions.\nDo not touch this.\n"
-	lines := splitLines(original)
-	_, start, end := parseMemoryLines(lines)
-
-	got := renderMemoryFile(lines, start, end, []memoryLine{lineFor("first memory")})
-
-	want := "# My Project\n\nHand-written instructions.\nDo not touch this.\n\n" +
-		"## Sagittarius Added Memories\n\n- first memory\n"
-	if got != want {
-		t.Fatalf("renderMemoryFile:\ngot:\n%q\nwant:\n%q", got, want)
-	}
-}
-
-func TestRenderMemoryFile_PreservesContentAfterSection(t *testing.T) {
-	t.Parallel()
-	original := "## Sagittarius Added Memories\n\n- old\n\n## Other Section\n\nUnrelated content.\n"
-	lines := splitLines(original)
-	entries, start, end := parseMemoryLines(lines)
-	entries = append(entries, lineFor("new"))
-
-	got := renderMemoryFile(lines, start, end, entries)
-
-	want := "## Sagittarius Added Memories\n\n- old\n- new\n\n## Other Section\n\nUnrelated content.\n"
-	if got != want {
-		t.Fatalf("renderMemoryFile:\ngot:\n%q\nwant:\n%q", got, want)
-	}
-}
-
-func TestRenderMemoryFile_RemovesHeadingWhenEmptied(t *testing.T) {
-	t.Parallel()
-	original := "# My Project\n\nHand-written instructions.\n\n## Sagittarius Added Memories\n\n- only one\n"
-	lines := splitLines(original)
-	_, start, end := parseMemoryLines(lines)
-
-	got := renderMemoryFile(lines, start, end, nil)
-
-	want := "# My Project\n\nHand-written instructions.\n"
-	if got != want {
-		t.Fatalf("renderMemoryFile after removing last entry:\ngot:\n%q\nwant:\n%q", got, want)
-	}
-	if strings.Contains(got, memorySectionHeading) {
-		t.Fatalf("expected heading to be removed, got:\n%q", got)
-	}
-}
-
-func TestRenderMemoryFile_EmptyFileWithEntries(t *testing.T) {
-	t.Parallel()
-	got := renderMemoryFile(nil, 0, 0, []memoryLine{lineFor("only entry")})
-	want := "## Sagittarius Added Memories\n\n- only entry\n"
-	if got != want {
-		t.Fatalf("got %q, want %q", got, want)
-	}
-}
-
-func TestRenderMemoryFile_EmptyFileNoEntries(t *testing.T) {
-	t.Parallel()
-	if got := renderMemoryFile(nil, 0, 0, nil); got != "" {
-		t.Fatalf("expected empty result, got %q", got)
-	}
-}
 
 func TestMemoryFilePath(t *testing.T) {
 	// Not t.Parallel(): the "global" subtest uses t.Setenv.
@@ -402,11 +273,10 @@ func TestAddMemory_CreatesDatedBulletList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile: %v", err)
 	}
+	// The exact-match above is the assertion that MEMORY.md is a bare bullet
+	// list with no managed heading of any kind.
 	if want := "- (" + today() + ") prefers pnpm over npm\n"; string(data) != want {
 		t.Fatalf("content = %q, want %q", string(data), want)
-	}
-	if strings.Contains(string(data), memorySectionHeading) {
-		t.Fatalf("MEMORY.md should be a bare bullet list, got:\n%q", string(data))
 	}
 }
 
@@ -582,7 +452,7 @@ func TestAddMemory_CapIsPerFile(t *testing.T) {
 	}
 }
 
-func TestListMemories_OrdersMemoryThenLegacy(t *testing.T) {
+func TestListMemories_OrdersGlobalThenProject(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("SAGITTARIUS_HOME", home)
 	workDir := t.TempDir()
@@ -590,14 +460,12 @@ func TestListMemories_OrdersMemoryThenLegacy(t *testing.T) {
 	mustAdd(t, config.ScopeGlobal, workDir, "global one")
 	mustAdd(t, config.ScopeProject, workDir, "project one")
 	mustAdd(t, config.ScopeGlobal, workDir, "global two")
-	seedLegacySection(t, mustGlobalAgents(t), "legacy global")
-	seedLegacySection(t, filepath.Join(workDir, config.AgentsFileName), "legacy project")
 
 	entries, usage, err := ListMemories(workDir, noMemoryCap)
 	if err != nil {
 		t.Fatalf("ListMemories: %v", err)
 	}
-	wantTexts := []string{"global one", "global two", "project one", "legacy global", "legacy project"}
+	wantTexts := []string{"global one", "global two", "project one"}
 	if len(entries) != len(wantTexts) {
 		t.Fatalf("entries = %#v, want texts %#v", entries, wantTexts)
 	}
@@ -609,19 +477,40 @@ func TestListMemories_OrdersMemoryThenLegacy(t *testing.T) {
 	if entries[0].Scope != config.ScopeGlobal || entries[2].Scope != config.ScopeProject {
 		t.Errorf("scope labels wrong: %+v", entries)
 	}
-	if entries[2].Legacy {
-		t.Error("MEMORY.md entries must not be labeled legacy")
+	if len(usage) != 2 {
+		t.Fatalf("usage = %#v, want one entry per MEMORY.md file", usage)
 	}
-	if !entries[3].Legacy || !entries[4].Legacy {
-		t.Errorf("AGENTS.md entries must be labeled legacy: %+v", entries)
+}
+
+// TestListMemories_IgnoresAgentsFile is the load-bearing test for the rule
+// that /memory has nothing to do with AGENTS.md. A file carrying the old
+// managed heading must be invisible to the memory subsystem: not listed, not
+// counted in usage, and not reachable by a /memory remove index.
+func TestListMemories_IgnoresAgentsFile(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SAGITTARIUS_HOME", home)
+	workDir := t.TempDir()
+
+	mustAdd(t, config.ScopeProject, workDir, "real memory")
+	seedLegacySection(t, mustGlobalAgents(t), "old global entry")
+	seedLegacySection(t, filepath.Join(workDir, config.AgentsFileName), "old project entry")
+
+	entries, usage, err := ListMemories(workDir, noMemoryCap)
+	if err != nil {
+		t.Fatalf("ListMemories: %v", err)
 	}
-	if len(usage) != 4 {
-		t.Fatalf("usage = %#v, want one entry per contributing file", usage)
+	if len(entries) != 1 || entries[0].Text != "real memory" {
+		t.Fatalf("AGENTS.md content leaked into /memory list: %#v", entries)
 	}
-	for _, u := range usage {
-		if u.Legacy && u.MaxRunes != 0 {
-			t.Errorf("legacy usage must be reported uncapped, got %+v", u)
-		}
+	if len(usage) != 1 {
+		t.Fatalf("AGENTS.md was counted in memory usage: %#v", usage)
+	}
+	if usage[0].Path != config.ProjectMemoryPath(workDir) {
+		t.Fatalf("usage[0].Path = %q, want the project MEMORY.md", usage[0].Path)
+	}
+	// Index 2 would be the first AGENTS.md entry under the old behavior.
+	if _, err := RemoveMemory(workDir, 2); err == nil {
+		t.Fatal("RemoveMemory reached an AGENTS.md entry by index")
 	}
 }
 
@@ -685,74 +574,37 @@ func TestRemoveMemory_ByIndexAcrossScopes(t *testing.T) {
 	assertTexts(t, workDir, "global one", "project one")
 }
 
-// TestRemoveMemory_LegacyEntryByListedNumber proves a leftover AGENTS.md
-// memory is not stranded: it can be removed by the number /memory list
-// printed, and the removal leaves the rest of the file alone.
-func TestRemoveMemory_LegacyEntryByListedNumber(t *testing.T) {
+// TestMemoryLeavesAgentsFileByteIdentical drives all three mutating paths
+// against a project that has AGENTS.md files carrying the old managed
+// heading, and asserts both files are untouched to the byte afterwards.
+func TestMemoryLeavesAgentsFileByteIdentical(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("SAGITTARIUS_HOME", home)
 	workDir := t.TempDir()
 
-	mustAdd(t, config.ScopeGlobal, workDir, "new style")
-	agentsPath := filepath.Join(workDir, config.AgentsFileName)
-	original := "# Repo\n\nRun `make test`.\n\n" + memorySectionHeading + "\n\n- legacy one\n- legacy two\n"
-	if err := os.WriteFile(agentsPath, []byte(original), 0o644); err != nil {
-		t.Fatalf("seed AGENTS.md: %v", err)
+	globalAgents := mustGlobalAgents(t)
+	projectAgents := filepath.Join(workDir, config.AgentsFileName)
+	globalBody := "# Standards\n\nUse tabs.\n\n" + oldManagedHeading + "\n\n- old global entry\n"
+	projectBody := "# Repo\n\nRun `make test`.\n\n" + oldManagedHeading + "\n\n- old project entry\n"
+	if err := os.MkdirAll(filepath.Dir(globalAgents), 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(globalAgents, []byte(globalBody), 0o644); err != nil {
+		t.Fatalf("seed global AGENTS.md: %v", err)
+	}
+	if err := os.WriteFile(projectAgents, []byte(projectBody), 0o644); err != nil {
+		t.Fatalf("seed project AGENTS.md: %v", err)
 	}
 
-	entries, _, err := ListMemories(workDir, noMemoryCap)
-	if err != nil {
-		t.Fatalf("ListMemories: %v", err)
-	}
-	// 1 = "new style", 2 = "legacy one", 3 = "legacy two".
-	if len(entries) != 3 || entries[1].Text != "legacy one" {
-		t.Fatalf("unexpected list order: %#v", entries)
-	}
-
-	removed, err := RemoveMemory(workDir, 2)
-	if err != nil {
+	// add (both scopes), then remove — the only three paths that write.
+	mustAdd(t, config.ScopeGlobal, workDir, "brand new global")
+	mustAdd(t, config.ScopeProject, workDir, "brand new project")
+	if _, err := RemoveMemory(workDir, 1); err != nil {
 		t.Fatalf("RemoveMemory: %v", err)
 	}
-	if removed != "legacy one" {
-		t.Fatalf("removed = %q, want %q", removed, "legacy one")
-	}
 
-	data, err := os.ReadFile(agentsPath)
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-	if !strings.HasPrefix(string(data), "# Repo\n\nRun `make test`.\n") {
-		t.Fatalf("hand-written content was not preserved:\n%q", string(data))
-	}
-	if strings.Contains(string(data), "legacy one") {
-		t.Fatalf("removed entry still present:\n%q", string(data))
-	}
-	if !strings.Contains(string(data), "legacy two") {
-		t.Fatalf("sibling entry was lost:\n%q", string(data))
-	}
-}
-
-// TestAddMemory_DoesNotExtendLegacySection proves a new add lands in
-// MEMORY.md even when a legacy AGENTS.md section already exists.
-func TestAddMemory_DoesNotExtendLegacySection(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("SAGITTARIUS_HOME", home)
-	workDir := t.TempDir()
-
-	agentsPath := filepath.Join(workDir, config.AgentsFileName)
-	original := memorySectionHeading + "\n\n- legacy one\n"
-	if err := os.WriteFile(agentsPath, []byte(original), 0o644); err != nil {
-		t.Fatalf("seed AGENTS.md: %v", err)
-	}
-
-	result, err := AddMemory(config.ScopeProject, workDir, "brand new", noMemoryCap)
-	if err != nil {
-		t.Fatalf("AddMemory: %v", err)
-	}
-	if result.Path != config.ProjectMemoryPath(workDir) {
-		t.Fatalf("path = %q, want the project MEMORY.md", result.Path)
-	}
-	assertFileContent(t, agentsPath, original)
+	assertFileContent(t, globalAgents, globalBody)
+	assertFileContent(t, projectAgents, projectBody)
 }
 
 func TestRemoveMemory_EmptiesFileWhenLastEntryDeleted(t *testing.T) {
@@ -939,12 +791,18 @@ func mustGlobalAgents(t *testing.T) string {
 	return path
 }
 
+// oldManagedHeading is the section header memory used to append inside
+// AGENTS.md. Production code no longer knows this string at all; it lives
+// here only so these tests can prove the memory subsystem ignores a file
+// that still carries it.
+const oldManagedHeading = "## Sagittarius Added Memories"
+
 func seedLegacySection(t *testing.T, path, text string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatalf("MkdirAll: %v", err)
 	}
-	body := memorySectionHeading + "\n\n- " + text + "\n"
+	body := oldManagedHeading + "\n\n- " + text + "\n"
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatalf("seed %s: %v", path, err)
 	}

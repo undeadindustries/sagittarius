@@ -301,26 +301,24 @@ func parseScope(s string) (config.SettingScope, error) {
 // (which imports internal/slash to implement Hooks), keeping the two
 // packages decoupled.
 type MemoryEntry struct {
-	Scope  config.SettingScope
-	Path   string
-	Text   string
-	Date   time.Time
-	Legacy bool
+	Scope config.SettingScope
+	Path  string
+	Text  string
+	Date  time.Time
 }
 
-// MemoryUsage is the rune usage of one memory source file.
+// MemoryUsage is the rune usage of one MEMORY.md file.
 type MemoryUsage struct {
 	Scope    config.SettingScope
 	Path     string
 	Runes    int
 	MaxRunes int
-	Legacy   bool
 }
 
 func memoryCommand() Command {
 	return Command{
 		Name:        "memory",
-		Description: "Manage MEMORY.md facts (never writes AGENTS.md)",
+		Description: "Manage the facts Sagittarius remembers in MEMORY.md",
 		SubCommands: []Command{
 			{
 				Name:        "add",
@@ -399,9 +397,6 @@ func handleMemoryList(ctx *Context) Result {
 	lines := make([]string, 0, len(entries)+len(usage)+1)
 	for i, e := range entries {
 		scope := e.Scope.String()
-		if e.Legacy {
-			scope += ", legacy"
-		}
 		if e.Date.IsZero() {
 			lines = append(lines, fmt.Sprintf("%d. [%s] %s", i+1, scope, e.Text))
 			continue
@@ -419,9 +414,6 @@ func handleMemoryList(ctx *Context) Result {
 
 func formatMemoryUsage(u MemoryUsage) string {
 	label := u.Scope.String()
-	if u.Legacy {
-		return fmt.Sprintf("%s (legacy %s): %s runes (not capped)", label, filepathBase(u.Path), formatInt(u.Runes))
-	}
 	if u.MaxRunes == 0 {
 		return fmt.Sprintf("%s: %s runes (unlimited)", label, formatInt(u.Runes))
 	}
@@ -430,13 +422,6 @@ func formatMemoryUsage(u MemoryUsage) string {
 		pct = u.Runes * 100 / u.MaxRunes
 	}
 	return fmt.Sprintf("%s: %s / %s runes (%d%%)", label, formatInt(u.Runes), formatInt(u.MaxRunes), pct)
-}
-
-func filepathBase(path string) string {
-	if i := strings.LastIndex(path, "/"); i >= 0 {
-		return path[i+1:]
-	}
-	return path
 }
 
 func formatInt(n int) string {

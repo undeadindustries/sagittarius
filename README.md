@@ -125,14 +125,14 @@ You can define custom rules and instructions that the agent must follow. These a
 - **Global rules:** Create `~/.sagittarius/AGENTS.md`. The agent will apply these rules across all projects.
 - **Project rules:** Create an `AGENTS.md` file in the root of your project. The agent will read this file when run within the project directory.
 
-**`AGENTS.md` is yours alone.** The memory commands below never write it, so your standards file stays hand-authored and reviewable. Asking the agent to "add this rule to AGENTS.md" still works — that goes through the normal file tools and shows you a diff first. (`.agents/` is for skills only; an `AGENTS.md` there is not read.)
+**`AGENTS.md` is yours alone.** The memory commands below never read, write, or delete it, so your standards file stays hand-authored and reviewable. Asking the agent to "add this rule to AGENTS.md" still works — that goes through the normal file tools and shows you a diff first. (`.agents/` is for skills only; an `AGENTS.md` there is not read.)
 
 ### Memory
 
 Durable facts the agent learns live in a separate `MEMORY.md`, injected after your rules and marked as reference material so a learned fact never outranks a written standard:
 
 - **`/memory add [--project] <text>`** — appends one dated bullet to `~/.sagittarius/MEMORY.md` (or the repo's `.sagittarius/MEMORY.md` with `--project`).
-- **`/memory list`** — numbers every entry with its date and per-file usage against the cap. Entries left in an `AGENTS.md` by older versions are listed too, labeled `legacy`, and stay removable.
+- **`/memory list`** — numbers every entry with its date and per-file usage against the cap.
 - **`/memory remove <n>`** — deletes entry `n` and echoes back what was removed.
 - **`/memory compact`** — asks a model to merge duplicates and drop superseded facts, then shows a diff. Nothing is written until you accept.
 - The model can call a `save_memory` tool to record a fact itself — it always asks for confirmation, and can only append. Deleting is a user-only action.

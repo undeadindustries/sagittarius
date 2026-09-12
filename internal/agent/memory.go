@@ -13,10 +13,9 @@ import (
 )
 
 const (
-	memorySectionHeading = "## Sagittarius Added Memories"
-	memoryDateLayout     = "2006-01-02"
-	memoryWarnNumer      = 3
-	memoryWarnDenom      = 4
+	memoryDateLayout = "2006-01-02"
+	memoryWarnNumer  = 3
+	memoryWarnDenom  = 4
 )
 
 // memoryBlockFrame labels MEMORY.md content in the system prompt so the model
@@ -193,23 +192,21 @@ type memoryLine struct {
 	Text string
 }
 
-// MemoryEntry is one managed bullet paired with the scope and file it came
-// from, for /memory list.
+// MemoryEntry is one bullet paired with the scope and file it came from,
+// for /memory list.
 type MemoryEntry struct {
-	Scope  config.SettingScope
-	Path   string
-	Text   string
-	Date   time.Time
-	Legacy bool
+	Scope config.SettingScope
+	Path  string
+	Text  string
+	Date  time.Time
 }
 
-// MemoryFileStat is the rune usage of one memory source file, for /memory list.
+// MemoryFileStat is the rune usage of one MEMORY.md file, for /memory list.
 type MemoryFileStat struct {
 	Scope    config.SettingScope
 	Path     string
 	Runes    int
 	MaxRunes int
-	Legacy   bool
 }
 
 // MemoryCapError is returned when an add would push a MEMORY.md file past
@@ -232,9 +229,8 @@ type AddMemoryResult struct {
 }
 
 type memorySource struct {
-	Scope  config.SettingScope
-	Path   string
-	Legacy bool
+	Scope config.SettingScope
+	Path  string
 }
 
 func writeMemoryPath(scope config.SettingScope, workDir string) (string, error) {
@@ -247,12 +243,11 @@ func writeMemoryPath(scope config.SettingScope, workDir string) (string, error) 
 	return config.ResolveGlobalMemoryPath()
 }
 
+// memorySources lists the MEMORY.md files /memory reads and writes, global
+// first. AGENTS.md is deliberately absent: it is user-authored, and the
+// memory subsystem neither reads, edits, nor deletes it.
 func memorySources(workDir string) ([]memorySource, error) {
 	globalMem, err := config.ResolveGlobalMemoryPath()
-	if err != nil {
-		return nil, err
-	}
-	globalAgents, err := config.ResolveGlobalAgentsPath()
 	if err != nil {
 		return nil, err
 	}
@@ -261,14 +256,6 @@ func memorySources(workDir string) ([]memorySource, error) {
 	}
 	if strings.TrimSpace(workDir) != "" {
 		sources = append(sources, memorySource{Scope: config.ScopeProject, Path: config.ProjectMemoryPath(workDir)})
-	}
-	sources = append(sources, memorySource{Scope: config.ScopeGlobal, Path: globalAgents, Legacy: true})
-	if strings.TrimSpace(workDir) != "" {
-		sources = append(sources, memorySource{
-			Scope:  config.ScopeProject,
-			Path:   filepath.Join(workDir, config.AgentsFileName),
-			Legacy: true,
-		})
 	}
 	return sources, nil
 }
@@ -316,10 +303,8 @@ func AddMemory(scope config.SettingScope, workDir, text string, maxRunes int) (A
 	return result, nil
 }
 
-// ListMemories returns every entry across MEMORY.md files and leftover
-// AGENTS.md managed sections, global then project, MEMORY.md before legacy.
-// maxRunes is used only for usage reporting on MEMORY.md files (legacy
-// sections are reported uncapped).
+// ListMemories returns every entry across the MEMORY.md files, global then
+// project, with each file's rune usage against maxRunes.
 func ListMemories(workDir string, maxRunes int) ([]MemoryEntry, []MemoryFileStat, error) {
 	sources, err := memorySources(workDir)
 	if err != nil {
@@ -332,31 +317,24 @@ func ListMemories(workDir string, maxRunes int) ([]MemoryEntry, []MemoryFileStat
 		if err != nil {
 			return nil, nil, err
 		}
-		lines := parseSourceEntries(src, content)
-		for _, line := range lines {
-			entries = append(entries, MemoryEntry{
-				Scope:  src.Scope,
-				Path:   src.Path,
-				Text:   line.Text,
-				Date:   line.Date,
-				Legacy: src.Legacy,
-			})
-		}
-		if len(lines) == 0 && content == "" {
+		lines := parseMemoryOnlyFile(splitLines(content))
+		if len(lines) == 0 {
 			continue
 		}
-		stat := MemoryFileStat{
-			Scope:  src.Scope,
-			Path:   src.Path,
-			Runes:  utf8.RuneCountInString(content),
-			Legacy: src.Legacy,
+		for _, line := range lines {
+			entries = append(entries, MemoryEntry{
+				Scope: src.Scope,
+				Path:  src.Path,
+				Text:  line.Text,
+				Date:  line.Date,
+			})
 		}
-		if !src.Legacy {
-			stat.MaxRunes = maxRunes
-		}
-		if len(lines) > 0 {
-			stats = append(stats, stat)
-		}
+		stats = append(stats, MemoryFileStat{
+			Scope:    src.Scope,
+			Path:     src.Path,
+			Runes:    utf8.RuneCountInString(content),
+			MaxRunes: maxRunes,
+		})
 	}
 	return entries, stats, nil
 }
@@ -378,8 +356,7 @@ func RemoveMemory(workDir string, index int) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		fileLines := splitLines(content)
-		entries := parseSourceEntries(src, content)
+		entries := parseMemoryOnlyFile(splitLines(content))
 		if index > total+len(entries) {
 			total += len(entries)
 			continue
@@ -387,14 +364,7 @@ func RemoveMemory(workDir string, index int) (string, error) {
 		localIdx := index - total - 1
 		removed := entries[localIdx]
 		entries = append(entries[:localIdx:localIdx], entries[localIdx+1:]...)
-		var rendered string
-		if src.Legacy {
-			_, sectionStart, sectionEnd := parseMemoryLines(fileLines)
-			rendered = renderMemoryFile(fileLines, sectionStart, sectionEnd, entries)
-		} else {
-			rendered = renderMemoryOnlyFile(entries)
-		}
-		if err := writeFileAtomic(src.Path, rendered); err != nil {
+		if err := writeFileAtomic(src.Path, renderMemoryOnlyFile(entries)); err != nil {
 			return "", err
 		}
 		return removed.Text, nil
@@ -403,15 +373,6 @@ func RemoveMemory(workDir string, index int) (string, error) {
 		return "", fmt.Errorf("no memory entries found")
 	}
 	return "", fmt.Errorf("memory index %d out of range (1-%d)", index, total)
-}
-
-func parseSourceEntries(src memorySource, content string) []memoryLine {
-	lines := splitLines(content)
-	if src.Legacy {
-		entries, _, _ := parseMemoryLines(lines)
-		return entries
-	}
-	return parseMemoryOnlyFile(lines)
 }
 
 // sanitizeMemoryText collapses internal whitespace to single spaces, strips
@@ -433,36 +394,6 @@ func splitLines(content string) []string {
 		lines = lines[:len(lines)-1]
 	}
 	return lines
-}
-
-// parseMemoryLines locates the managed section inside an AGENTS.md and
-// returns its entries plus the [start,end) range it occupies.
-func parseMemoryLines(lines []string) (entries []memoryLine, sectionStart, sectionEnd int) {
-	start := -1
-	for i, line := range lines {
-		if strings.TrimSpace(line) == memorySectionHeading {
-			start = i
-			break
-		}
-	}
-	if start == -1 {
-		return nil, len(lines), len(lines)
-	}
-	end := len(lines)
-	for i := start + 1; i < len(lines); i++ {
-		if strings.HasPrefix(strings.TrimSpace(lines[i]), "#") {
-			end = i
-			break
-		}
-	}
-	for i := start + 1; i < end; i++ {
-		trimmed := strings.TrimSpace(lines[i])
-		if trimmed == "" {
-			continue
-		}
-		entries = append(entries, parseMemoryBullet(stripBulletPrefix(trimmed)))
-	}
-	return entries, start, end
 }
 
 func parseMemoryOnlyFile(lines []string) []memoryLine {
@@ -511,51 +442,6 @@ func renderMemoryOnlyFile(entries []memoryLine) string {
 		out = append(out, formatMemoryBullet(e))
 	}
 	return strings.Join(out, "\n") + "\n"
-}
-
-// renderMemoryFile rebuilds an AGENTS.md, replacing the managed-section
-// [sectionStart,sectionEnd) range. Lines outside that range are never altered.
-func renderMemoryFile(lines []string, sectionStart, sectionEnd int, entries []memoryLine) string {
-	before := trimTrailingBlank(lines[:sectionStart])
-	after := trimLeadingBlank(lines[sectionEnd:])
-
-	var out []string
-	out = append(out, before...)
-	if len(entries) > 0 {
-		if len(out) > 0 {
-			out = append(out, "")
-		}
-		out = append(out, memorySectionHeading, "")
-		for _, e := range entries {
-			out = append(out, formatMemoryBullet(e))
-		}
-	}
-	if len(after) > 0 {
-		if len(out) > 0 {
-			out = append(out, "")
-		}
-		out = append(out, after...)
-	}
-	if len(out) == 0 {
-		return ""
-	}
-	return strings.Join(out, "\n") + "\n"
-}
-
-func trimTrailingBlank(lines []string) []string {
-	end := len(lines)
-	for end > 0 && strings.TrimSpace(lines[end-1]) == "" {
-		end--
-	}
-	return lines[:end]
-}
-
-func trimLeadingBlank(lines []string) []string {
-	start := 0
-	for start < len(lines) && strings.TrimSpace(lines[start]) == "" {
-		start++
-	}
-	return lines[start:]
 }
 
 func readFileIfExists(path string) (string, error) {

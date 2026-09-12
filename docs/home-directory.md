@@ -116,9 +116,10 @@ Sagittarius reads `AGENTS.md` into the system prompt, never `GEMINI.md`.
   files come first, inner files last.
 
 **These files are yours.** Write them by hand, or generate one with `/init`. The
-memory subsystem (`/memory add`, the `save_memory` tool) never writes them — see
-`MEMORY.md` below. Asking Sagittarius to "put this rule in AGENTS.md" still works
-and goes through the ordinary confirmation-gated file tools, which show you a diff.
+memory subsystem does not touch them at all: `/memory` and the `save_memory` tool
+never read, create, edit, or delete an `AGENTS.md` — see `MEMORY.md` below. Asking
+Sagittarius to "put this rule in AGENTS.md" still works and goes through the
+ordinary confirmation-gated file tools, which show you a diff.
 
 `.agents/` is **skills only** (`~/.agents/skills/`, `<repo>/.agents/skills/`).
 Putting an `AGENTS.md` at `~/.agents/AGENTS.md` has no effect; that path is not
@@ -144,11 +145,18 @@ the ceiling is refused and names `/memory list`, `/memory remove <n>`, and
 `/memory compact` as the ways to free space. `/memory list` shows usage against
 the cap.
 
-Entries added before this split still live under a `## Sagittarius Added Memories`
-heading inside an `AGENTS.md`. They are left exactly where they are — still read,
-still listed by `/memory list` (labeled `legacy`), still removable by
-`/memory remove` — and never extended. There is no migration; moving your file
-content uninvited is the behavior this separation exists to stop.
+### Cleaning up entries added before the split
+
+Earlier versions appended memories under a `## Sagittarius Added Memories`
+heading inside an `AGENTS.md`. Those entries are left exactly where they are.
+There is no migration — moving your file content uninvited is the behavior this
+separation exists to stop.
+
+They are still part of your standards, since `AGENTS.md` is read on every
+request either way, but `/memory` no longer sees them: they will not appear in
+`/memory list` and `/memory remove` cannot reach them. Delete the heading and
+its bullets by hand when you want them gone, or copy any you want to keep into
+`MEMORY.md`. It is your file, so a text editor is the right tool.
 
 ## Environment variables
 
