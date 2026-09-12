@@ -27,8 +27,7 @@ func (t *saveMemoryTool) Description() string {
 	return "Save a durable fact, preference, or instruction for future sessions. " +
 		"Appends one dated line to MEMORY.md (global ~/.sagittarius/MEMORY.md by default, " +
 		"or the current project's .sagittarius/MEMORY.md). " +
-		"Use sparingly, for things worth remembering across the whole conversation history, not one-off task details. " +
-		"Do not use this to edit AGENTS.md; that file is user-authored."
+		"Use sparingly, for things worth remembering across the whole conversation history, not one-off task details."
 }
 
 func (t *saveMemoryTool) Declaration() provider.ToolDeclaration {
