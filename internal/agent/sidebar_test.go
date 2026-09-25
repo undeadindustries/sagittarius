@@ -74,6 +74,46 @@ func TestSidebarFlushPreservesToolPairing(t *testing.T) {
 	}
 }
 
+func TestSidebarMidTurnFlushEndsOnUser(t *testing.T) {
+	t.Parallel()
+	call := provider.ToolCall{ID: "call-wait-2", Name: tools.WaitUntilToolName}
+	result := provider.FunctionResponse{Name: tools.WaitUntilToolName, CallID: call.ID, Response: map[string]any{"status": "ready"}}
+
+	tests := []struct {
+		name       string
+		answer     string
+		wantResume bool
+	}{
+		{"answered exchange gets a resume message", "the tarball in /tmp/done", true},
+		{"unanswered exchange already ends on the user", "", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			runner, err := NewRunner(RunnerConfig{Generator: &fakeGenerator{}, Model: "test", WorkDir: t.TempDir()})
+			if err != nil {
+				t.Fatalf("NewRunner: %v", err)
+			}
+			runner.ReplaceHistory([]provider.Message{
+				{Role: provider.RoleUser, Parts: []provider.Part{{Text: "start the download"}}},
+				{Role: provider.RoleModel, Parts: []provider.Part{{FunctionCall: &call}}},
+			}, nil)
+			runner.bufferSidebar("what are we waiting for?", tc.answer)
+			runner.appendFunctionResponses([]provider.FunctionResponse{result})
+			runner.flushPendingSidebarMidTurn()
+
+			hist := runner.History()
+			last := hist[len(hist)-1]
+			if last.Role != provider.RoleUser {
+				t.Fatalf("history ends on role %q, want user", last.Role)
+			}
+			if gotResume := last.Parts[0].Text == sidebarResumeText; gotResume != tc.wantResume {
+				t.Fatalf("resume message present = %v, want %v (last = %q)", gotResume, tc.wantResume, last.Parts[0].Text)
+			}
+		})
+	}
+}
+
 func TestStripUnpairedTrailingToolCalls(t *testing.T) {
 	t.Parallel()
 	hist := []provider.Message{

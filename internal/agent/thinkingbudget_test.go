@@ -240,6 +240,59 @@ func TestThinkingBudgetCutRetriesWithSuppression(t *testing.T) {
 	}
 }
 
+// TestThinkingBudgetCutKeepsMandatoryReasoningOn covers models such as Opus 5.5
+// that reject reasoning.enabled=false: the retry must keep reasoning on at the
+// lowest advertised effort instead of suppressing it, and the notice must not
+// claim thinking was disabled.
+func TestThinkingBudgetCutKeepsMandatoryReasoningOn(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		efforts    string
+		wantEffort string
+	}{
+		{"lowest advertised effort is used", `["max","xhigh","high","medium","low"]`, "low"},
+		{"no advertised efforts keeps the resolved request", `[]`, ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			gen := &fakeGenerator{batches: [][]provider.StreamResponse{
+				reasoningBurst(),
+				{{TextDelta: "answer"}, {Done: true}},
+			}}
+			r := localBudgetRunner(t, gen, `{"thinkingBudgetTokens":1,"hardThinkingBudget":true,`+
+				`"reasoningSupported":true,"reasoningMandatory":true,"reasoningEfforts":`+tc.efforts+`}`)
+			events := collectEvents(t, mustRunTurn(t, r, "solve it"))
+
+			for _, ev := range events {
+				if ev.Type == ui.StreamThinkingBudget && strings.Contains(ev.Text, "thinking disabled") {
+					t.Errorf("notice claims thinking was disabled for a mandatory model: %q", ev.Text)
+				}
+			}
+			retry := gen.lastRequest()
+			if retry == nil {
+				t.Fatal("no retry request recorded")
+				return
+			}
+			if retry.SuppressThinking {
+				t.Fatal("retry set SuppressThinking on a model that cannot disable thinking")
+			}
+			var got provider.ReasoningRequest
+			if retry.Reasoning != nil {
+				got = *retry.Reasoning
+			}
+			if tc.wantEffort != "" && (got.Effort != tc.wantEffort || !got.Enabled) {
+				t.Fatalf("retry reasoning = %+v, want enabled at effort %q", got, tc.wantEffort)
+			}
+			if !strings.Contains(retry.Messages[len(retry.Messages)-1].Parts[0].Text, "Thinking budget reached") {
+				t.Error("retry is missing the cut note")
+			}
+		})
+	}
+}
+
 // TestThinkingBudgetCutNotPersistedToHistory guards the note's scope: it exists
 // for one retry request only. Leaving it in history would make every later
 // round tell the model its thinking was cut.

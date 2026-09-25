@@ -212,7 +212,26 @@ func (r *Runner) bufferSidebar(question, answer string) {
 	})
 }
 
+// sidebarResumeText follows a side exchange flushed mid-turn so the next
+// round's request ends on the user role instead of the side answer.
+const sidebarResumeText = "The side question above is answered. Continue the original task from where you left off."
+
+// flushPendingSidebar appends buffered side exchanges at turn end, where the
+// next turn's prompt follows them.
 func (r *Runner) flushPendingSidebar() {
+	r.flushSidebar(false)
+}
+
+// flushPendingSidebarMidTurn appends buffered side exchanges between tool
+// rounds. The loop sends another request right after, and one ending on the
+// side answer is rejected by Anthropic as prefill; trimming that answer
+// instead would leave the question last and the model would answer it again
+// rather than resume, so a short resume message closes the exchange.
+func (r *Runner) flushPendingSidebarMidTurn() {
+	r.flushSidebar(true)
+}
+
+func (r *Runner) flushSidebar(resume bool) {
 	r.sidebarMu.Lock()
 	pending := r.pendingSidebar
 	r.pendingSidebar = nil
@@ -234,6 +253,14 @@ func (r *Runner) flushPendingSidebar() {
 			})
 		}
 	}
+	last := r.history[len(r.history)-1]
+	resume = resume && last.Role == provider.RoleModel
+	if resume {
+		r.history = append(r.history, provider.Message{
+			Role:  provider.RoleUser,
+			Parts: []provider.Part{{Text: sidebarResumeText}},
+		})
+	}
 	r.historyMu.Unlock()
 
 	if r.sessionRecorder == nil {
@@ -244,6 +271,9 @@ func (r *Runner) flushPendingSidebar() {
 		if strings.TrimSpace(ex.answer) != "" {
 			r.sessionRecorder.RecordModelMessage(ex.answer, nil)
 		}
+	}
+	if resume {
+		r.sessionRecorder.RecordUserMessage(sidebarResumeText)
 	}
 }
 

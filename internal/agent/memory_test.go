@@ -211,20 +211,6 @@ func TestSplitLines(t *testing.T) {
 	}
 }
 
-func equalTexts(entries []memoryLine, want []string) bool {
-	if len(entries) != len(want) {
-		return false
-	}
-	for i := range entries {
-		if entries[i].Text != want[i] {
-			return false
-		}
-	}
-	return true
-}
-
-func lineFor(text string) memoryLine { return memoryLine{Text: text} }
-
 func TestMemoryFilePath(t *testing.T) {
 	// Not t.Parallel(): the "global" subtest uses t.Setenv.
 	t.Run("project requires workDir", func(t *testing.T) {

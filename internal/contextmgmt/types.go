@@ -33,11 +33,3 @@ func cloneHistory(history []Message) []Message {
 	copy(out, history)
 	return out
 }
-
-// concatHistory joins two history slices into a fresh slice.
-func concatHistory(a, b []Message) []Message {
-	out := make([]Message, 0, len(a)+len(b))
-	out = append(out, a...)
-	out = append(out, b...)
-	return out
-}

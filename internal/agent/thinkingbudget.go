@@ -3,8 +3,10 @@ package agent
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
+	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/contextmgmt"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 )
@@ -109,6 +111,45 @@ func thinkingCutNote(budget int, reasoning string) string {
 // carries one %d for the budget in tokens.
 const thinkingBudgetNotice = "Thinking budget of %d tokens used up. Stopped reasoning and " +
 	"asked the model to act on what it has (thinking disabled for the retry)."
+
+// thinkingBudgetNoticeMandatory replaces thinkingBudgetNotice for a model whose
+// reasoning cannot be turned off.
+const thinkingBudgetNoticeMandatory = "Thinking budget of %d tokens used up. Stopped reasoning and " +
+	"asked the model to act on what it has (this model cannot disable thinking, so the retry " +
+	"uses its lowest reasoning effort)."
+
+// reasoningEffortsLowToHigh orders every effort level any provider accepts, so
+// the lowest one a model supports can be picked without per-provider tables.
+var reasoningEffortsLowToHigh = []string{"minimal", "low", "medium", "high", "xhigh", "max"}
+
+// mandatoryThinkingRetryEffort reports whether the model rejects a request
+// with reasoning disabled, which is what the thinking-cut retry normally sends.
+// Opus 5.5 is the known case: OpenRouter discovery marks it mandatory, and the
+// provider answers reasoning.enabled=false with a 400, turning a budget cut
+// into a failed turn. For such a model the retry keeps reasoning on at the
+// lowest effort it accepts instead. effort is empty when mandatory is false or
+// when the model advertises no effort levels.
+func mandatoryThinkingRetryEffort(settings *config.Settings, providerID, model string) (effort string, mandatory bool) {
+	efforts, _, mandatory, _ := config.ModelReasoningOptions(settings, providerID, model)
+	if !mandatory {
+		return "", false
+	}
+	for _, level := range reasoningEffortsLowToHigh {
+		if slices.Contains(efforts, level) {
+			return level, true
+		}
+	}
+	return "", true
+}
+
+// thinkingBudgetNoticeFor returns the cut notice that matches what the retry
+// will actually send for this model.
+func thinkingBudgetNoticeFor(settings *config.Settings, providerID, model string, budget int) string {
+	if _, mandatory := mandatoryThinkingRetryEffort(settings, providerID, model); mandatory {
+		return fmt.Sprintf(thinkingBudgetNoticeMandatory, budget)
+	}
+	return fmt.Sprintf(thinkingBudgetNotice, budget)
+}
 
 // armThinkingCut stores the one-shot note that the next round's request will
 // carry in place of the reasoning it was cut out of.

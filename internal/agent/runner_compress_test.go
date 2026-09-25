@@ -134,6 +134,64 @@ func TestEnforceRequestBudgetTruncatesAndNotifies(t *testing.T) {
 	}
 }
 
+// TestEnforceRequestBudgetKeepsPromptAfterCompression is the reported Opus 5.5
+// failure: after compression the history opens with the summary and the canned
+// ack, and an over-budget recent turn used to be truncated down to exactly
+// those two, so the request ended on the assistant ack ("does not support
+// assistant message prefill") and the user's prompt was never sent.
+func TestEnforceRequestBudgetKeepsPromptAfterCompression(t *testing.T) {
+	t.Parallel()
+	body := strings.Repeat("alpha ", 80)
+	history := []provider.Message{
+		{Role: provider.RoleUser, Parts: []provider.Part{{Text: "summary of earlier work"}}},
+		{Role: provider.RoleModel, Parts: []provider.Part{{Text: "Got it. Thanks for the additional context!"}}},
+	}
+	for i := 0; i < 6; i++ {
+		history = append(history,
+			provider.Message{Role: provider.RoleUser, Parts: []provider.Part{{Text: body}}},
+			provider.Message{Role: provider.RoleModel, Parts: []provider.Part{{Text: body}}},
+		)
+	}
+	summarize := func(ctx context.Context, contents []contextmgmt.Message, systemInstruction string) (string, error) {
+		return "", fmt.Errorf("summarizer unavailable")
+	}
+	mgr := contextmgmt.NewManager(contextmgmt.ManagerConfig{
+		Enabled:              true,
+		ContextLimit:         400,
+		CompressionThreshold: 0.1,
+		PreserveFraction:     0.3,
+		Summarize:            summarize,
+	})
+	gen := &fakeGenerator{batches: [][]provider.StreamResponse{{{TextDelta: "ok"}, {Done: true}}}}
+	runner, err := NewRunner(RunnerConfig{Generator: gen, Model: "test-model", WorkDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	runner.ReplaceHistory(history, nil)
+	runner.SetContextManager(mgr)
+
+	const prompt = "what should we do next?"
+	got := collectEvents(t, mustRunTurn(t, runner, prompt))
+	dropped := false
+	for _, ev := range got {
+		if ev.Type == ui.StreamInfo && strings.Contains(ev.Text, "Dropped") {
+			dropped = true
+		}
+	}
+	if !dropped {
+		t.Fatalf("events = %#v, want a StreamInfo about dropped messages", got)
+	}
+	req := gen.lastRequest()
+	if req == nil {
+		t.Fatal("expected a generate request")
+		return
+	}
+	last := req.Messages[len(req.Messages)-1]
+	if last.Role != provider.RoleUser || last.Parts[0].Text != prompt {
+		t.Fatalf("request ends on %+v, want the user's prompt", last)
+	}
+}
+
 func TestEmptyModelReplyEmitsError(t *testing.T) {
 	t.Parallel()
 	gen := &fakeGenerator{batches: [][]provider.StreamResponse{{{Done: true}}}}
@@ -350,5 +408,50 @@ func TestRunnerContextOverflowRetry(t *testing.T) {
 	}
 	if !textFound {
 		t.Errorf("expected recovered response in events, got: %#v", got)
+	}
+	assertRetryShape(t, gen.reqs[len(gen.reqs)-1], "trigger turn")
+}
+
+// TestRunnerContextOverflowRetryCapsWhenNothingDroppable pins the fallback for
+// a history whose only large message is the current prompt. The old fallback
+// sliced history in half, which here started it on the canned model ack.
+func TestRunnerContextOverflowRetryCapsWhenNothingDroppable(t *testing.T) {
+	t.Parallel()
+	gen := &overflowRetryGenerator{}
+	runner, err := NewRunner(RunnerConfig{Generator: gen, Model: "test-model", WorkDir: t.TempDir()})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	runner.ReplaceHistory([]provider.Message{
+		{Role: provider.RoleUser, Parts: []provider.Part{{Text: "summary"}}},
+		{Role: provider.RoleModel, Parts: []provider.Part{{Text: "Got it."}}},
+	}, nil)
+
+	prompt := "analyze this:\n" + strings.Repeat("payload line that is far too large\n", 400)
+	drainEvents(t, mustRunTurn(t, runner, prompt))
+	if gen.calls != 2 {
+		t.Fatalf("generator calls = %d, want 2 (initial + retry)", gen.calls)
+	}
+	retry := gen.reqs[1]
+	if retry.Messages[0].Role != provider.RoleUser {
+		t.Fatalf("retry starts on role %q, want user", retry.Messages[0].Role)
+	}
+	last := retry.Messages[len(retry.Messages)-1]
+	if last.Role != provider.RoleUser || !strings.Contains(last.Parts[0].Text, "analyze this:") {
+		t.Fatalf("retry ends on role %q, want the (capped) user prompt", last.Role)
+	}
+	if len(last.Parts[0].Text) >= len(prompt) {
+		t.Errorf("retry prompt len = %d, want it capped below %d", len(last.Parts[0].Text), len(prompt))
+	}
+}
+
+func assertRetryShape(t *testing.T, req *provider.GenerateRequest, prompt string) {
+	t.Helper()
+	if req.Messages[0].Role != provider.RoleUser {
+		t.Errorf("retry starts on role %q, want user", req.Messages[0].Role)
+	}
+	last := req.Messages[len(req.Messages)-1]
+	if last.Role != provider.RoleUser || last.Parts[0].Text != prompt {
+		t.Errorf("retry ends on %+v, want the user's prompt %q", last, prompt)
 	}
 }

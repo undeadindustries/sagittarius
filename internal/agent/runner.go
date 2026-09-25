@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
@@ -1093,8 +1094,9 @@ outerLoop:
 					res := contextmgmt.TruncateHistoryToFit(r.history, target, contextmgmt.EstimateTokens)
 					if res.DroppedCount > 0 {
 						r.history = res.NewHistory
-					} else if len(r.history) > 2 {
-						r.history = r.history[len(r.history)/2:]
+					}
+					if res.NewTokenCount > target {
+						r.capOversizedHistoryLocked(target)
 					}
 					r.historyMu.Unlock()
 					if out != nil {
@@ -1123,7 +1125,7 @@ outerLoop:
 				r.recordAbortedRoundUsage(req, currentProvider, currentModel, currentMode, res.Reasoning)
 				out <- ui.StreamEvent{
 					Type: ui.StreamThinkingBudget,
-					Text: fmt.Sprintf(thinkingBudgetNotice, hardBudget),
+					Text: thinkingBudgetNoticeFor(r.settingsSnapshot(), currentProvider, currentModel, hardBudget),
 				}
 				// A cut produced neither an answer nor a tool call, so it is
 				// not a completed tool round. The for-loop increment would
@@ -1201,7 +1203,7 @@ outerLoop:
 			}
 			r.metrics.recordTools(len(toolCalls), countToolFailures(responses))
 			r.appendFunctionResponses(responses)
-			r.flushPendingSidebar()
+			r.flushPendingSidebarMidTurn()
 			if config.VerifySuggestAfterWrite(r.settingsSnapshot(), nil) && !verifyHinted && containsSuccessfulWrite(responses) {
 				verifyHinted = true
 				out <- ui.StreamEvent{Type: ui.StreamInfo, Text: verifyReminder}
@@ -1345,11 +1347,7 @@ func (r *Runner) enforceRequestBudget(req *provider.GenerateRequest, out chan<- 
 
 	cappedCount := 0
 	if res.NewTokenCount > target {
-		capRes, err := contextmgmt.CapOversizedMessages(r.history, target, contextmgmt.EstimateTokens, "", r.CurrentSessionID())
-		if err == nil && capRes.CappedCount > 0 {
-			r.history = capRes.NewHistory
-			cappedCount = capRes.CappedCount
-		}
+		cappedCount = r.capOversizedHistoryLocked(target)
 	}
 	r.historyMu.Unlock()
 
@@ -1377,6 +1375,21 @@ func (r *Runner) enforceRequestBudget(req *provider.GenerateRequest, out chan<- 
 	return r.buildGenerateRequest()
 }
 
+// capOversizedHistoryLocked is the last budget rung, for when dropping whole
+// turns cannot fit the window because the current turn itself is too large.
+// It returns how many messages were capped. Callers must hold historyMu.
+func (r *Runner) capOversizedHistoryLocked(target int) int {
+	capRes, err := contextmgmt.CapOversizedMessages(r.history, target, contextmgmt.EstimateTokens, "", r.CurrentSessionID())
+	if err != nil {
+		slog.Warn("context: capping oversized messages failed", "target_tokens", target, "error", err)
+		return 0
+	}
+	if capRes.CappedCount > 0 {
+		r.history = capRes.NewHistory
+	}
+	return capRes.CappedCount
+}
+
 func (r *Runner) buildGenerateRequest() *provider.GenerateRequest {
 	r.modelMu.RLock()
 	model := r.model
@@ -1387,6 +1400,11 @@ func (r *Runner) buildGenerateRequest() *provider.GenerateRequest {
 	r.historyMu.RLock()
 	messages := append([]provider.Message(nil), r.history...)
 	r.historyMu.RUnlock()
+	messages, trimmed := trimTrailingModelText(messages)
+	if trimmed > 0 {
+		slog.Warn("request: dropped trailing assistant text; a request must end on a user or tool message",
+			"count", trimmed, "provider", providerID, "model", model)
+	}
 	req := &provider.GenerateRequest{
 		Model:             model,
 		SystemInstruction: system,
@@ -1424,9 +1442,15 @@ func (r *Runner) buildGenerateRequest() *provider.GenerateRequest {
 			Role:  provider.RoleUser,
 			Parts: []provider.Part{{Text: note}},
 		})
-		req.SuppressThinking = true
 		req.IncludeThoughts = false
 		req.ThinkingBudgetTokens = 0
+		if effort, mandatory := mandatoryThinkingRetryEffort(settings, providerID, model); mandatory {
+			if effort != "" {
+				req.Reasoning = &provider.ReasoningRequest{Effort: effort, Enabled: true}
+			}
+		} else {
+			req.SuppressThinking = true
+		}
 	}
 	return req
 }
