@@ -48,7 +48,14 @@ func (t *codeTaskTool) maybeReview(ctx context.Context, desc string, child *suba
 		approval:    t.runner.approval,
 	})
 	if err != nil {
-		return nil, err
+		// The coding child has already written files; failing the whole
+		// hand-off here would hide files_changed and next_step from the
+		// parent. A reviewer that cannot start is reported, like one that
+		// fails mid-run. Only cancellation propagates.
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return map[string]any{"verdict": reviewVerdictError, "findings": "reviewer could not start: " + err.Error()}, nil
 	}
 
 	text, runErr := review.run(ctx, t.reviewPrompt(desc, child, filesChanged), sink)

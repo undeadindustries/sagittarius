@@ -40,6 +40,26 @@ func (r *Runner) claimSubagentAttempt(class config.SubagentClass, desc string, l
 	return n, maxAttempts, nil
 }
 
+// releaseSubagentAttempt gives back an attempt claimed for a child that never
+// started (routing pin, credential, or runner construction failed). The
+// budget exists to stop a model re-delegating work a child failed at; a
+// configuration failure is not such an attempt and must not consume one.
+// A no-op when the cap is disabled or the key holds no claims.
+func (r *Runner) releaseSubagentAttempt(class config.SubagentClass, desc string, lease []string) {
+	if config.ResolveSubagentMaxAttempts(r.sagittariusSettings(), config.DefaultSubagentMaxAttempts) == 0 {
+		return
+	}
+	key := subagentAttemptKey(class, desc, lease)
+	r.subagentAttemptsMu.Lock()
+	defer r.subagentAttemptsMu.Unlock()
+	switch n := r.subagentAttempts[key]; {
+	case n > 1:
+		r.subagentAttempts[key] = n - 1
+	case n == 1:
+		delete(r.subagentAttempts, key)
+	}
+}
+
 // resetSubagentAttempts wipes the delegation counts. Called on /clear and
 // session rotation so a new session starts every task fresh.
 func (r *Runner) resetSubagentAttempts() {

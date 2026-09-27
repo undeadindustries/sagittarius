@@ -88,6 +88,7 @@ func (t *taskTool) ExecuteStream(ctx context.Context, args map[string]any, sink 
 		approval:    t.runner.approval,
 	})
 	if err != nil {
+		t.runner.releaseSubagentAttempt(config.SubagentResearch, desc, nil)
 		return nil, err
 	}
 

@@ -139,10 +139,11 @@ func (t *codeTaskTool) ExecuteStream(ctx context.Context, args map[string]any, s
 		approval:    ApprovalYolo,
 	})
 	if err != nil {
+		t.runner.releaseSubagentAttempt(config.SubagentCoding, spec.description, spec.lease.Patterns)
 		return nil, err
 	}
 
-	text, runErr := child.run(ctx, spec.prompt, sink)
+	_, runErr := child.run(ctx, spec.prompt, sink)
 	if runErr != nil && ctx.Err() != nil {
 		return nil, runErr
 	}
@@ -152,11 +153,7 @@ func (t *codeTaskTool) ExecuteStream(ctx context.Context, args map[string]any, s
 	if via := subagentViaLabel(t.runner, child); via != "" {
 		result["via"] = via
 	}
-	if notice := t.parentRereadNotice(startedAt); notice != "" {
-		result["result"] = text + "\n\n" + notice
-		result["summary"] = result["result"]
-		result["stale_warnings"] = notice
-	}
+	appendRereadNotice(result, t.parentRereadNotice(startedAt))
 	// The reviewer pass runs last so its prompt sees the final hand-off
 	// shape: files_changed is already final, and the child's summary is what
 	// the reviewer will read back.
@@ -168,6 +165,25 @@ func (t *codeTaskTool) ExecuteStream(ctx context.Context, args map[string]any, s
 		}
 	}
 	return result, nil
+}
+
+// appendRereadNotice adds the stale-read notice to an already-built hand-off.
+// It extends the summary rather than rebuilding it: on a failed or
+// round-capped run the summary carries the failure message, and replacing it
+// with the child's (empty) final text would drop the one line explaining what
+// went wrong. A no-op for an empty notice.
+func appendRereadNotice(result map[string]any, notice string) {
+	if notice == "" {
+		return
+	}
+	summary, _ := result["summary"].(string)
+	merged := notice
+	if summary != "" {
+		merged = summary + "\n\n" + notice
+	}
+	result["summary"] = merged
+	result["result"] = merged
+	result["stale_warnings"] = notice
 }
 
 // parentRereadNotice tells the parent which files it had already read were
