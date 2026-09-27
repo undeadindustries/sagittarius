@@ -111,7 +111,9 @@ func TestCompleteSubcommandsStillWork(t *testing.T) {
 	reg := NewRegistry()
 	got := reg.Complete("/mcp ", Deps{})
 
-	for _, want := range []string{"list", "reload"} {
+	// "settings" opens the same wizard as bare /mcp; registering it makes the
+	// wizard discoverable from the dropdown, which is otherwise text-only.
+	for _, want := range []string{"list", "reload", "settings"} {
 		if !contains(got.Items, want) {
 			t.Errorf("/mcp subcommand completion missing %q (got %v)", want, labels(got.Items))
 		}

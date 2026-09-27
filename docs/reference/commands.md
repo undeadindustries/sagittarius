@@ -588,6 +588,11 @@ the model, use an [`@skill:<name>` mention](#skillname).
 - **`reload`**
   - **Description:** Reconnect MCP servers and rediscover tools.
   - **Usage:** `/mcp reload`
+- **`settings`**
+  - **Description:** Open the interactive MCP server manager (same as bare
+    `/mcp`). Registered so the wizard appears in the subcommand completion
+    dropdown and `/help`, which otherwise list only the text sub-commands.
+  - **Usage:** `/mcp settings`
 
 See also: [MCP server configuration](../tools/mcp-server.md).
 

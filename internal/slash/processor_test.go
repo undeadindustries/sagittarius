@@ -477,15 +477,23 @@ func TestProvidersOpensDialog(t *testing.T) {
 
 func TestMCPOpensDialog(t *testing.T) {
 	t.Parallel()
-	deps, _, _ := testDeps(t, nil)
-	p := slash.NewProcessor()
+	// "/mcp settings" exists so the wizard is discoverable from the
+	// subcommand completion dropdown, which otherwise lists only the text
+	// subcommands (list, reload).
+	for _, input := range []string{"/mcp", "/mcp settings"} {
+		t.Run(input, func(t *testing.T) {
+			t.Parallel()
+			deps, _, _ := testDeps(t, nil)
+			p := slash.NewProcessor()
 
-	result := p.Process(context.Background(), "/mcp", deps)
-	if !result.Handled {
-		t.Fatal("expected handled")
-	}
-	if result.OpenDialog != slash.DialogMCP {
-		t.Fatalf("OpenDialog = %q, want %q", result.OpenDialog, slash.DialogMCP)
+			result := p.Process(context.Background(), input, deps)
+			if !result.Handled {
+				t.Fatal("expected handled")
+			}
+			if result.OpenDialog != slash.DialogMCP {
+				t.Fatalf("OpenDialog = %q, want %q", result.OpenDialog, slash.DialogMCP)
+			}
+		})
 	}
 }
 

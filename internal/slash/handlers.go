@@ -531,6 +531,14 @@ func mcpCommand() Command {
 				Description: "Reload MCP servers and rediscover tools",
 				Handler:     handleMCPReload,
 			},
+			{
+				// Registered so the wizard appears in the subcommand
+				// completion dropdown and /help; bare /mcp already opens it,
+				// but an unregistered entry point is undiscoverable there.
+				Name:        "settings",
+				Description: "Open the interactive MCP server manager (same as bare /mcp)",
+				Handler:     handleMCP,
+			},
 		},
 		Handler: handleMCP,
 	}
