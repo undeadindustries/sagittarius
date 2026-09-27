@@ -548,7 +548,8 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 	}
 
 	policy := approvalToPolicy(mode)
-	scheduler := tools.NewScheduler(registry, policy, cfg.Interactive, nil, ws)
+	scheduler := tools.NewScheduler(registry, policy, cfg.Interactive, nil, ws,
+		tools.WithSubagentConcurrency(runner.subagentConcurrency))
 	runner.scheduler = scheduler
 	if !cfg.ModelPinned {
 		runner.refreshModelFromMode()
@@ -1737,11 +1738,21 @@ func (r *Runner) attachInteractionModeGate() {
 	)
 }
 
+// subagentConcurrency resolves the live fan-out cap for the scheduler option.
+// It reads the current settings snapshot on every call so a /settings change
+// applies to the very next batch with no rebuild.
+func (r *Runner) subagentConcurrency() int {
+	return config.ResolveSubagentMaxConcurrent(r.sagittariusSettings(), config.DefaultSubagentMaxConcurrent)
+}
+
 // schedulerOptions returns the project-boundary and snapshot options shared by
 // every scheduler the runner builds. A nil snapshot manager is passed as a nil
 // Snapshotter interface (not a typed-nil) so the scheduler's nil check works.
 func (r *Runner) schedulerOptions() []tools.SchedulerOption {
-	opts := []tools.SchedulerOption{tools.WithProjectBoundary(r.projectBoundary)}
+	opts := []tools.SchedulerOption{
+		tools.WithProjectBoundary(r.projectBoundary),
+		tools.WithSubagentConcurrency(r.subagentConcurrency),
+	}
 	if r.snap != nil {
 		opts = append(opts, tools.WithSnapshotter(r.snap))
 	}

@@ -13,6 +13,7 @@ import (
 
 	"golang.org/x/sync/errgroup"
 
+	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/diff"
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
@@ -25,12 +26,6 @@ import (
 // settings.json (0 = no cap). 100 matches gemini-cli's default; 10 was too low
 // for real agentic tasks that write multiple files.
 const MaxToolRounds = 100
-
-// maxConcurrentSubagents bounds the scheduler fan-out. Children each hold a
-// provider connection and a full agent loop, so this is a resource cap rather
-// than a correctness one — write collisions are prevented by lease overlap
-// denial, not by serialization.
-const maxConcurrentSubagents = 8
 
 // Scheduler executes tool calls from the agent loop.
 type Scheduler struct {
@@ -56,6 +51,10 @@ type Scheduler struct {
 	// fileState is shared with sibling schedulers so a write by one agent can
 	// be seen as staleness by another. nil-safe.
 	fileState *FileStateRegistry
+	// subagentConcurrency, when non-nil, is read at batch time for the
+	// subagent fan-out cap so a /settings change applies without a rebuild.
+	// A non-positive reading falls back to DefaultMaxConcurrentSubagents.
+	subagentConcurrency func() int
 
 	// sessionGrants records tools the user approved "for this session" so later
 	// invocations of the same tool skip confirmation. Guarded by mu.
@@ -139,6 +138,14 @@ func WithFileState(reg *FileStateRegistry) SchedulerOption {
 	return func(s *Scheduler) { s.fileState = reg }
 }
 
+// WithSubagentConcurrency installs a live reader for the subagent fan-out cap
+// (sagittarius.subagents.maxConcurrent, 1 = serial). Execute reads it at batch
+// time so a /settings change applies to the very next batch with no Runner or
+// registry rebuild (the AD-081 live-resolution pattern).
+func WithSubagentConcurrency(fn func() int) SchedulerOption {
+	return func(s *Scheduler) { s.subagentConcurrency = fn }
+}
+
 // NewScheduler constructs a scheduler for the given registry and policy.
 // When interactive is false (headless), confirmations are auto-approved or denied per policy.
 // mode and workspace enable interaction-mode tool restrictions (plan/ask read-only gates).
@@ -163,6 +170,19 @@ func NewScheduler(
 	return s
 }
 
+// subagentConcurrencyLimit resolves the fan-out cap at batch time. A missing
+// or non-positive reading means the default; there is deliberately no upper
+// clamp here — the settings layer validates the 1-16 range on load and the
+// resolver defends against out-of-range values at read time.
+func (s *Scheduler) subagentConcurrencyLimit() int {
+	if s != nil && s.subagentConcurrency != nil {
+		if n := s.subagentConcurrency(); n >= 1 {
+			return n
+		}
+	}
+	return config.DefaultSubagentMaxConcurrent
+}
+
 // Execute runs tool calls and returns function responses plus UI events.
 func (s *Scheduler) Execute(
 	ctx context.Context,
@@ -176,7 +196,7 @@ func (s *Scheduler) Execute(
 	conflict := leaseConflict(calls)
 
 	var eg errgroup.Group
-	eg.SetLimit(maxConcurrentSubagents)
+	eg.SetLimit(s.subagentConcurrencyLimit())
 
 	for i, call := range calls {
 		i, call := i, call
