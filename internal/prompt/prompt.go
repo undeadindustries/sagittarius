@@ -151,7 +151,8 @@ var (
 		"replaces the whole note, and you always see the current one in this prompt."
 	sessionSearchRule = "If an exact earlier detail is no longer in context, call `" +
 		tools.SearchSessionToolName + "` to find it in the transcript rather than guessing or " +
-		"asking the user to repeat themselves."
+		"asking the user to repeat themselves. If the detail is already visible in this " +
+		"conversation, answer from it directly — never search for what you can already see."
 )
 
 // workingMemoryGuidance renders the rules as bold-lead paragraphs, the lite
@@ -296,7 +297,7 @@ func toolInvocationMandate(editEnabled bool) string {
 		"",
 		"**Directives require tools.** For fix/implement/update/create requests, research with tools when needed, then mutate with `"+tools.WriteFileToolName+"` or `"+tools.ShellToolName+"` in the same turn when the fix is clear. Do not split \"I'll do it next\" across turns for small, obvious fixes.",
 		"",
-		"**Questions are not tasks.** If the user asks a question without directing an action (e.g. \"what is the status?\"), answer the question — do not perform unprompted fixes or changes even if you discover issues.",
+		"**Questions are not tasks.** If the user asks a question without directing an action (e.g. \"what is the status?\"), answer the question — do not perform unprompted fixes or changes even if you discover issues. When the answer is already in this conversation, answer from it directly without searching.",
 		"",
 		"**Scope limits outrank this mandate.** When the user restricts the turn — \"just discuss this\", "+
 			"\"don't change anything yet\", \"tell me what you would do\", or a named exclusion like \"do not edit X\" — "+

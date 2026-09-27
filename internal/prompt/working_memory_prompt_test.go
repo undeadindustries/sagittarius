@@ -56,6 +56,24 @@ func TestSessionSearchGuidanceIsUnconditional(t *testing.T) {
 	}
 }
 
+// TestSessionSearchRuleForbidsSearchingVisibleContext pins the AD-145 clause:
+// a captured session showed the model firing search tools for details that
+// were still present in the live history, so the rule must tell it to answer
+// from what it can already see instead of searching.
+func TestSessionSearchRuleForbidsSearchingVisibleContext(t *testing.T) {
+	t.Parallel()
+
+	const phrase = "never search for what you can already see"
+	for _, p := range allPersonalities {
+		for _, variant := range []Variant{VariantFull, VariantLite} {
+			out := Build(Options{Personality: p, Variant: variant, ScratchpadEnabled: true})
+			if got := strings.Count(out, phrase); got != 1 {
+				t.Errorf("%s/%s: phrase %q appears %d times, want exactly 1", p, variant, phrase, got)
+			}
+		}
+	}
+}
+
 // TestWorkingMemoryGuidanceNotDuplicated guards the AD-092 lesson: these rules
 // are worded once and rendered per style, so a persona that composes both a
 // shared section and its own must not state them twice.

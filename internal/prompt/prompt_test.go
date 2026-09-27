@@ -186,6 +186,9 @@ func TestScopeLimitClausePresentInEveryPersona(t *testing.T) {
 			if !strings.Contains(out, "do not perform unprompted fixes or changes") {
 				t.Errorf("%s %s: missing questions-are-not-tasks body", p, v)
 			}
+			if !strings.Contains(out, "answer from it directly without searching") {
+				t.Errorf("%s %s: missing answer-from-context clause (AD-145)", p, v)
+			}
 		}
 	}
 }
