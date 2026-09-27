@@ -54,3 +54,17 @@ func TestCodingSubagentCharterEmptyLease(t *testing.T) {
 		t.Errorf("empty lease must state the prohibition, got:\n%s", got)
 	}
 }
+
+func TestReviewSubagentCharterRulesAppearOnce(t *testing.T) {
+	got := ReviewSubagentCharter()
+	for _, phrase := range []string{
+		"You cannot modify anything.",
+		"Close with a verdict line.",
+		"VERDICT: PASS",
+		"VERDICT: FAIL",
+	} {
+		if n := strings.Count(got, phrase); n != 1 {
+			t.Errorf("phrase %q appears %d times, want exactly 1", phrase, n)
+		}
+	}
+}

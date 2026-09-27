@@ -146,7 +146,18 @@ func (t *codeTaskTool) ExecuteStream(ctx context.Context, args map[string]any, s
 	result["lease"] = spec.lease.Patterns
 	if notice := t.parentRereadNotice(startedAt); notice != "" {
 		result["result"] = text + "\n\n" + notice
+		result["summary"] = result["result"]
 		result["stale_warnings"] = notice
+	}
+	// The reviewer pass runs last so its prompt sees the final hand-off
+	// shape: files_changed is already final, and the child's summary is what
+	// the reviewer will read back.
+	if files, _ := result["files_changed"].([]string); len(files) > 0 {
+		if review, reviewErr := t.maybeReview(ctx, spec.description, child, files, sink); reviewErr != nil {
+			return nil, reviewErr
+		} else if review != nil {
+			result["review"] = review
+		}
 	}
 	return result, nil
 }
