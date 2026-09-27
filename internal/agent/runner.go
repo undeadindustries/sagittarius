@@ -248,9 +248,14 @@ type Runner struct {
 	// repoLocalMu guards repoLocalGrants, the session-lifetime memo of
 	// interactive repo-local tool approvals ("allow for this session"),
 	// mirroring Scheduler.sessionGrants.
-	repoLocalMu      sync.Mutex
-	repoLocalGrants  map[string]bool
-	goplsHintPending bool
+	repoLocalMu     sync.Mutex
+	repoLocalGrants map[string]bool
+	// subagentAttemptsMu guards subagentAttempts, the per-session count of
+	// delegations per task identity backing maxAttempts (see
+	// subagent_attempts.go). Reset on /clear and session rotation.
+	subagentAttemptsMu sync.Mutex
+	subagentAttempts   map[string]int
+	goplsHintPending   bool
 	// thinkingCutMu guards pendingThinkingCut, the one-shot note describing a
 	// round the thinking budget cut short. It is written by runAgentLoop and
 	// consumed by buildGenerateRequest on the very next round; a mutex rather
@@ -477,6 +482,7 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		editStats:             make(map[string]int),
 		nudgedPaths:           make(map[string]bool),
 		repoLocalGrants:       make(map[string]bool),
+		subagentAttempts:      make(map[string]int),
 		goplsHintPending:      needsGoplsHint(cfg.Settings, ws.Root()),
 		loadedMemoryFiles:     memoryFiles,
 		initialSessionGrants:  cfg.InitialSessionGrants,
@@ -2052,6 +2058,7 @@ func (r *Runner) ClearHistory() {
 	r.history = r.history[:0]
 	r.turnCounter = 0
 	r.hookTurnIndex = 0
+	r.resetSubagentAttempts()
 }
 
 // History returns a defensive copy of the current conversation history. The
@@ -2490,6 +2497,7 @@ func (r *Runner) Stats() ui.SessionStats {
 // when session recording is disabled.
 func (r *Runner) RotateSession() {
 	r.firstTurnOnce = sync.Once{}
+	r.resetSubagentAttempts()
 	if r.sessionRecorder != nil {
 		r.sessionRecorder.Rotate()
 

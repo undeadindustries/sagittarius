@@ -973,19 +973,58 @@ func waitUntilExitCode(result map[string]any) *int {
 
 // formatCodeTaskResult renders a coding subagent's card: what it wrote, any
 // staleness warning, then its report. The file list leads because a lease that
-// touched the wrong thing is the failure the user most needs to catch.
+// touched the wrong thing is the failure the user most needs to catch. A
+// non-completed hand-off status and a failed checks run are surfaced first so
+// they cannot hide below a long report.
 func formatCodeTaskResult(result map[string]any) string {
 	var parts []string
-	if written := stringSlice(result["files_written"]); len(written) > 0 {
-		parts = append(parts, fmt.Sprintf("Wrote %d file(s): %s", len(written), strings.Join(written, ", ")))
+	if status := asString(result["status"]); status != "" && status != "completed" {
+		head := "Subagent " + status
+		if n, ok := intValue(result["tool_calls"]); ok && n > 0 {
+			head += fmt.Sprintf(" after %d tool call(s)", n)
+		}
+		if attempt, ok := intValue(result["attempt"]); ok && attempt > 0 {
+			if max, mok := intValue(result["max_attempts"]); mok && max > 0 {
+				head += fmt.Sprintf(" (attempt %d of %d)", attempt, max)
+			}
+		}
+		parts = append(parts, head)
+	}
+	if written := stringSlice(result["files_written"]); len(written) == 0 {
+		written = stringSlice(result["files_changed"])
+		if len(written) > 0 {
+			parts = append(parts, fmt.Sprintf("Wrote %d file(s): %s", len(written), strings.Join(written, ", ")))
+		} else {
+			parts = append(parts, "No files written")
+		}
 	} else {
-		parts = append(parts, "No files written")
+		parts = append(parts, fmt.Sprintf("Wrote %d file(s): %s", len(written), strings.Join(written, ", ")))
+	}
+	if checks, ok := result["checks"].(map[string]any); ok {
+		if ran, _ := checks["ran"].(bool); ran {
+			if okFlag, _ := checks["ok"].(bool); okFlag {
+				parts = append(parts, "Checks passed")
+			} else {
+				parts = append(parts, "Checks FAILED")
+			}
+		}
+	}
+	if review, ok := result["review"].(map[string]any); ok {
+		if verdict, _ := review["verdict"].(string); verdict != "" {
+			parts = append(parts, fmt.Sprintf("Review: %s", strings.ToUpper(verdict)))
+		}
+		if findings := strings.TrimSpace(asString(review["findings"])); findings != "" {
+			parts = append(parts, findings)
+		}
 	}
 	if warn := asString(result["stale_warnings"]); warn != "" {
 		parts = append(parts, warn)
 	}
 	if text := strings.TrimSpace(asString(result["result"])); text != "" {
 		parts = append(parts, text)
+	}
+	if next := strings.TrimSpace(asString(result["next_step"])); next != "" {
+		parts = append(parts, next)
 	}
 	return capLines(strings.Join(parts, "\n"), toolResultMaxLines)
 }

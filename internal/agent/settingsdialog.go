@@ -294,6 +294,27 @@ func listSettings(docs *config.Documents, scope config.SettingScope) []settingsd
 			Kind:         settingsdialog.KindBool,
 		}, subCodingEnabled(scopeSettings), subCodingEnabled(global), subCodingEnabled(project)),
 		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.subagents.reviewer.enabled",
+			Label:        "Reviewer pass after code_task",
+			Description:  "After a coding subagent changes files, launch a read-only reviewer child with the diffs before returning. Doubles child inference cost; enable only if reviews earn it (default off)",
+			DefaultValue: fmtBool(config.ReviewSubagentsEnabled(nil, nil)),
+			Kind:         settingsdialog.KindBool,
+		}, subReviewerEnabled(scopeSettings), subReviewerEnabled(global), subReviewerEnabled(project)),
+		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.subagents.maxAttempts",
+			Label:        "Subagent max attempts",
+			Description:  "How many times the same task may be delegated per session before the parent must finish it directly (0 = unlimited, default 2)",
+			DefaultValue: strconv.Itoa(config.ResolveSubagentMaxAttempts(nil, config.DefaultSubagentMaxAttempts)),
+			Kind:         settingsdialog.KindInt,
+		}, subMaxAttempts(scopeSettings), subMaxAttempts(global), subMaxAttempts(project)),
+		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.subagents.maxConcurrent",
+			Label:        "Subagent max concurrent",
+			Description:  "How many subagents run at once (1 = serial, default 8)",
+			DefaultValue: strconv.Itoa(config.ResolveSubagentMaxConcurrent(nil, config.DefaultSubagentMaxConcurrent)),
+			Kind:         settingsdialog.KindInt,
+		}, subMaxConcurrent(scopeSettings), subMaxConcurrent(global), subMaxConcurrent(project)),
+		row(settingsdialog.SettingEntry{
 			Key:          "sagittarius.subagents.enabled",
 			Label:        "Subagents (deprecated alias)",
 			Description:  "Old single switch. It now only stands in for research subagents when the research row above is unset, and never enables coding subagents",
@@ -739,13 +760,43 @@ func applySettingValue(s *config.Settings, key, value string) error {
 			s.Sagittarius.Subagents = &config.SagittariusSubagents{}
 		}
 		s.Sagittarius.Subagents.Enabled = &b
-	case "sagittarius.subagents.research.enabled", "sagittarius.subagents.coding.enabled":
+	case "sagittarius.subagents.research.enabled", "sagittarius.subagents.coding.enabled", "sagittarius.subagents.reviewer.enabled":
 		b, err := strconv.ParseBool(value)
 		if err != nil {
 			return fmt.Errorf("enabled must be true/false: %w", err)
 		}
 		cls := subagentClassSlot(s, key)
 		cls.Enabled = &b
+	case "sagittarius.subagents.maxAttempts":
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("maxAttempts must be an integer: %w", err)
+		}
+		if n < 0 {
+			return fmt.Errorf("maxAttempts must be >= 0 (0 = unlimited)")
+		}
+		if s.Sagittarius == nil {
+			s.Sagittarius = &config.SagittariusSettings{}
+		}
+		if s.Sagittarius.Subagents == nil {
+			s.Sagittarius.Subagents = &config.SagittariusSubagents{}
+		}
+		s.Sagittarius.Subagents.MaxAttempts = &n
+	case "sagittarius.subagents.maxConcurrent":
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("maxConcurrent must be an integer: %w", err)
+		}
+		if n < config.MinSubagentMaxConcurrent || n > config.MaxSubagentMaxConcurrent {
+			return fmt.Errorf("maxConcurrent must be %d-%d", config.MinSubagentMaxConcurrent, config.MaxSubagentMaxConcurrent)
+		}
+		if s.Sagittarius == nil {
+			s.Sagittarius = &config.SagittariusSettings{}
+		}
+		if s.Sagittarius.Subagents == nil {
+			s.Sagittarius.Subagents = &config.SagittariusSubagents{}
+		}
+		s.Sagittarius.Subagents.MaxConcurrent = &n
 	case "sagittarius.edit.enabled":
 		b, err := strconv.ParseBool(value)
 		if err != nil {
@@ -956,6 +1007,18 @@ func clearSettingValue(s *config.Settings, key string) error {
 	case "sagittarius.subagents.coding.enabled":
 		if cls := existingSubagentClass(s, config.SubagentCoding); cls != nil {
 			cls.Enabled = nil
+		}
+	case "sagittarius.subagents.reviewer.enabled":
+		if cls := existingSubagentClass(s, config.SubagentReviewer); cls != nil {
+			cls.Enabled = nil
+		}
+	case "sagittarius.subagents.maxAttempts":
+		if s.Sagittarius != nil && s.Sagittarius.Subagents != nil {
+			s.Sagittarius.Subagents.MaxAttempts = nil
+		}
+	case "sagittarius.subagents.maxConcurrent":
+		if s.Sagittarius != nil && s.Sagittarius.Subagents != nil {
+			s.Sagittarius.Subagents.MaxConcurrent = nil
 		}
 	case "sagittarius.edit.enabled":
 		if s.Sagittarius != nil && s.Sagittarius.Edit != nil {
@@ -1237,6 +1300,27 @@ func subCodingEnabled(s *config.Settings) string {
 	return ""
 }
 
+func subReviewerEnabled(s *config.Settings) string {
+	if cls := existingSubagentClass(s, config.SubagentReviewer); cls != nil {
+		return fmtPtrBool(cls.Enabled)
+	}
+	return ""
+}
+
+func subMaxAttempts(s *config.Settings) string {
+	if sag := sagOf(s); sag != nil && sag.Subagents != nil {
+		return fmtPtrInt(sag.Subagents.MaxAttempts)
+	}
+	return ""
+}
+
+func subMaxConcurrent(s *config.Settings) string {
+	if sag := sagOf(s); sag != nil && sag.Subagents != nil {
+		return fmtPtrInt(sag.Subagents.MaxConcurrent)
+	}
+	return ""
+}
+
 // existingSubagentClass reads a class block without creating one, so a read
 // never marks the key as defined in this scope.
 func existingSubagentClass(s *config.Settings, class config.SubagentClass) *config.SagittariusSubagentClass {
@@ -1244,10 +1328,14 @@ func existingSubagentClass(s *config.Settings, class config.SubagentClass) *conf
 	if sag == nil || sag.Subagents == nil {
 		return nil
 	}
-	if class == config.SubagentCoding {
+	switch class {
+	case config.SubagentCoding:
 		return sag.Subagents.Coding
+	case config.SubagentReviewer:
+		return sag.Subagents.Reviewer
+	default:
+		return sag.Subagents.Research
 	}
-	return sag.Subagents.Research
 }
 
 // subagentClassSlot returns the class block for a settings key, creating the
@@ -1265,6 +1353,12 @@ func subagentClassSlot(s *config.Settings, key string) *config.SagittariusSubage
 			subs.Coding = &config.SagittariusSubagentClass{}
 		}
 		return subs.Coding
+	}
+	if key == "sagittarius.subagents.reviewer.enabled" {
+		if subs.Reviewer == nil {
+			subs.Reviewer = &config.SagittariusSubagentClass{}
+		}
+		return subs.Reviewer
 	}
 	if subs.Research == nil {
 		subs.Research = &config.SagittariusSubagentClass{}

@@ -65,6 +65,14 @@ func (t *taskTool) ExecuteStream(ctx context.Context, args map[string]any, sink 
 		return nil, err
 	}
 
+	// The attempt budget stops a delegation loop: a task that keeps coming
+	// back is refused before the child starts, with the refusal telling the
+	// parent to finish it directly.
+	attempt, maxAttempts, err := t.runner.claimSubagentAttempt(config.SubagentResearch, desc, nil)
+	if err != nil {
+		return nil, err
+	}
+
 	// ModeAsk is what makes the child read-only: the scheduler's ask gate
 	// denies everything outside readOnlyBuiltinTools, so no lease is needed.
 	child, err := t.runner.newSubagent(ctx, subagentSpec{
@@ -78,14 +86,13 @@ func (t *taskTool) ExecuteStream(ctx context.Context, args map[string]any, sink 
 		return nil, err
 	}
 
-	text, err := child.run(ctx, promptText, sink)
-	if err != nil {
-		return nil, err
+	// The child's report is read back from its runner inside
+	// buildSubagentResult; run's text return is superseded by the schema.
+	_, runErr := child.run(ctx, promptText, sink)
+	if runErr != nil && ctx.Err() != nil {
+		return nil, runErr
 	}
-	return map[string]any{
-		"status": "completed",
-		"result": text,
-	}, nil
+	return buildSubagentResult(child, config.SubagentResearch, runErr, attempt, maxAttempts), nil
 }
 
 func stringArg(args map[string]any, key string) (string, error) {

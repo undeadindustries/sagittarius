@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -39,7 +40,16 @@ type subagent struct {
 	runner *Runner
 	id     string
 	desc   string
+	// roundCapped is set when the child's turn ended by hitting max tool
+	// rounds rather than finishing. The tools report that as an incomplete
+	// hand-off (with whatever the child did manage) instead of an error.
+	roundCapped bool
 }
+
+// roundCapMarker is the terminal stream error a turn emits when the tool-round
+// cap stops it (see runAgentLoop). A child that ends this way did partial work;
+// the hand-off reports it as incomplete rather than failed.
+const roundCapMarker = "max tool rounds exceeded"
 
 // checkSubagentDepth refuses a second level of nesting. Depth 1 is a deliberate
 // limit: a tree of agents multiplies cost and makes a runaway loop hard to see.
@@ -138,6 +148,8 @@ func (s *subagent) run(ctx context.Context, prompt string, sink tools.ToolOutput
 	// A child reports a failed turn as a StreamError and then closes normally.
 	// Without capturing it the parent would be handed "(subagent finished
 	// without producing text)" and treat a dead child as a completed one.
+	// A round-cap error additionally arms roundCapped so the hand-off reports
+	// incomplete (with partial work) instead of failed.
 	var failure string
 	for {
 		select {
@@ -152,6 +164,9 @@ func (s *subagent) run(ctx context.Context, prompt string, sink tools.ToolOutput
 			}
 			if ev.Type == ui.StreamError && failure == "" {
 				failure = streamErrorText(ev)
+				if strings.Contains(failure, roundCapMarker) {
+					s.roundCapped = true
+				}
 			}
 			forwardSubagentProgress(ev, sink)
 		}

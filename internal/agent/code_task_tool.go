@@ -115,6 +115,14 @@ func (t *codeTaskTool) ExecuteStream(ctx context.Context, args map[string]any, s
 		return nil, err
 	}
 
+	// The attempt budget stops a delegation loop: a change that keeps coming
+	// back is refused before the child starts, with the refusal telling the
+	// parent to finish it directly.
+	attempt, maxAttempts, err := t.runner.claimSubagentAttempt(config.SubagentCoding, spec.description, spec.lease.Patterns)
+	if err != nil {
+		return nil, err
+	}
+
 	startedAt := time.Now()
 	child, err := t.runner.newSubagent(ctx, subagentSpec{
 		description: spec.description,
@@ -129,18 +137,13 @@ func (t *codeTaskTool) ExecuteStream(ctx context.Context, args map[string]any, s
 		return nil, err
 	}
 
-	text, err := child.run(ctx, spec.prompt, sink)
-	if err != nil {
-		return nil, err
+	text, runErr := child.run(ctx, spec.prompt, sink)
+	if runErr != nil && ctx.Err() != nil {
+		return nil, runErr
 	}
 
-	written := child.runner.writtenPaths()
-	result := map[string]any{
-		"status":        "completed",
-		"result":        text,
-		"lease":         spec.lease.Patterns,
-		"files_written": written,
-	}
+	result := buildSubagentResult(child, config.SubagentCoding, runErr, attempt, maxAttempts)
+	result["lease"] = spec.lease.Patterns
 	if notice := t.parentRereadNotice(startedAt); notice != "" {
 		result["result"] = text + "\n\n" + notice
 		result["stale_warnings"] = notice

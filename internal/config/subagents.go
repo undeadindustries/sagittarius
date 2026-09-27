@@ -291,6 +291,11 @@ func subagentSlotPinned(s *Settings, slot string) bool {
 // when sagittarius.subagents.maxAttempts is unset.
 const DefaultSubagentMaxAttempts = 2
 
+// DefaultSubagentMaxConcurrent caps sibling subagents running at once when
+// sagittarius.subagents.maxConcurrent is unset. It lives in config (not
+// internal/tools) so settingsdialog and the scheduler resolve one value.
+const DefaultSubagentMaxConcurrent = 8
+
 // ResolveSubagentMaxAttempts returns the effective delegation cap for one task
 // identity. Nil falls back to def (the compiled-in 2). 0 means no cap —
 // mirroring ResolveMaxToolRounds. A negative pin is treated as unset so a
