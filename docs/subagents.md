@@ -83,23 +83,98 @@ cover subagent work the same way they cover your own.
 
 ## Model routing
 
-Subagents use the live model unless you route them elsewhere:
+Subagents follow the live `{Provider}/{Model}` pair unless you pin them
+elsewhere. Pins are provider-qualified, so a research child can run on a local
+model while you work on a cloud one:
 
 ```json
 {
   "sagittarius": {
     "subagents": {
-      "coding": { "enabled": true, "model": "qwen/qwen3.8-coder" },
-      "research": { "enabled": true },
-      "default": { "model": "…" }
+      "default": { "provider": "openrouter", "model": "qwen/qwen3.8-coder" },
+      "coding": { "enabled": true, "provider": "local", "model": "qwen3.8-27b" },
+      "research": { "enabled": true }
     }
   }
 }
 ```
 
-Resolution is class model, then `subagents.default.model`, then the live model.
-This matters when the mode you are in routes to a model that handles tool calls
-poorly — pin the subagents to one that does not.
+Resolution is class pin, then `subagents.default`, then the live pair. This
+matters when the mode you are in routes to a model that handles tool calls
+poorly — pin the subagents to one that does not. A legacy model-only pin keeps
+working and resolves against the live provider.
+
+`/subagents` edits the five routing slots — default, research, coding,
+reviewer, utility — with the same `{Provider}/{Model}` picker `/model` uses
+(first row clears back to default). `R` resets every slot in the selected scope
+(two-step confirm); `Ctrl+L` clears one row. Headless:
+
+- `/subagents show` — list the five slots with their current pins.
+- `/subagents set <slot> <Provider/Model> [global|project]` — pin a slot.
+- `/subagents clear <slot> [global|project]` — clear one pin.
+- `/subagents reset [global|project]` — clear every pin in scope.
+
+The `utility` slot maps to the existing goal evaluator pair
+(`evaluatorProvider`/`evaluatorModel`), which already drives the `/goal` judge,
+auto-titles, and `/memory compact`. There are no new aux keys: one dialog routes
+all off-band model work.
+
+Pins are pruned like mode overrides: deactivate a model or remove a provider
+and any pin pointing at it is cleared on the next load. A pin that cannot build
+a generator (missing credential, bad endpoint) fails the tool call naming the
+slot and `/subagents` — it never silently falls back to the parent's model.
+
+Each child also gets the pinned model's context window, so a small local model
+gets masking and compression tuned to its own limits rather than the parent's.
+
+## Hand-off schema
+
+A child never reports in prose alone. The harness derives a structured result
+from the child's own transcript — files it actually wrote, checks it actually
+ran — so the parent can trust the fields without trusting the child's
+self-report:
+
+| Field | Source |
+|---|---|
+| `status` | `completed`, `failed`, or `incomplete` (hit max tool rounds with work done) |
+| `summary` | The child's final message |
+| `files_changed` | Workspace-relative files the child wrote (from the file registry) |
+| `checks` | `{ran, ok}` from the child's last `run_project_checks` response |
+| `tool_calls` | How many tool calls the child made |
+| `provider`, `model` | The child's resolved pair |
+| `attempt`, `max_attempts` | Delegation budget accounting (below) |
+| `next_step` | Follow-up instruction for coding results with changed files |
+| `review` | Reviewer verdict and findings, when the reviewer pass runs |
+
+`result` and `files_written` remain as aliases. A coding result whose files
+changed always carries a `next_step` telling the parent to verify itself: the
+child's shell is read-only, so tests are the parent's job whether the child ran
+checks or not.
+
+## Delegation budget
+
+Re-delegating the same task counts up. `sagittarius.subagents.maxAttempts`
+(default 2, `0` = unlimited) caps how many times one task identity — class plus
+description plus lease — may be delegated per session. Past the cap the launch
+is refused before any child starts, with a message telling the parent to finish
+the task directly. `/clear` and session rotation reset the counts.
+
+## Concurrency
+
+Sibling subagents run together. `sagittarius.subagents.maxConcurrent` (default
+8, range 1–16) caps the fan-out; `1` runs children serially, which also reads
+as "concurrency disabled". The setting applies live with no rebuild.
+
+## Reviewer pass
+
+`sagittarius.subagents.reviewer.enabled` (default off) adds a read-only review
+after a `code_task` child changes files. A reviewer child gets the sibling's
+summary, the changed-file list, and per-file diffs from the snapshot index (or
+reads the files itself when snapshotting is off), then reports findings plus a
+`VERDICT: PASS` / `VERDICT: FAIL` line the harness parses into
+`review: {verdict, findings}`. The reviewer never counts toward the attempt
+budget, and a reviewer failure is reported rather than fatal. Enable it only if
+reviews earn their tokens — a review pass roughly doubles child inference cost.
 
 ## When not to use them
 

@@ -354,6 +354,28 @@ again.
 - `/modes clear <agent|plan|ask|debug> [global|project]`
   — Remove the override for that mode from the specified scope.
 
+### `/subagents`
+
+- **Description:** Edit **subagent routing** — pin a `{Provider}/{Model}` pair
+  per slot or clear pins to restore default routing. See `docs/subagents.md`
+  for the full hand-off, budget, concurrency, and reviewer reference.
+- **Menu-first:** `/subagents` shows the five slots (`default`, `research`,
+  `coding`, `reviewer`, `utility`) with their current pins, or "default" when
+  unset. Selecting a slot opens the same model picker `/model` uses (first row
+  clears); `R` resets every slot in scope after a confirm, `Ctrl+L` clears one
+  row. The header shows which classes are switched on — switches live in
+  `/settings`, the dialog edits pins only.
+- **Scope:** Same "Apply to" scope row as `/modes`; pins default to **project**.
+
+#### Headless subagent-routing subcommands
+
+- `/subagents show` — List the five slots with their current pins.
+- `/subagents set <default|research|coding|reviewer|utility> <Provider/Model> [global|project]`
+  — Pin a slot (defaults to project).
+  Example: `--slash "/subagents set coding local/qwen3.8-27b project"`
+- `/subagents clear <slot> [global|project]` — Clear one pin.
+- `/subagents reset [global|project]` — Clear every pin in scope.
+
 ### `/settings`
 
 - **Description:** Browse and edit **global and project settings** in a curated
@@ -799,7 +821,8 @@ Implemented: `/about`, `/agent`, `/ask`, `/chat`, `/clear`, `/compress`,
 `/grill`, `/init`, `/memory add|list|remove|reload`, `/mcp` (list, reload, add/edit/remove wizard),
 `/mode` (show, switch), `/modes` (override, clear headlessly), `/model`, `/models`, `/mouse`, `/plan`, `/reasoning`,
 `/resume`, `/settings` (curated browser), `/skills` (list, reload), `/agents`
-(list, reload), `/stats`, `/system-prompt`, `/theme`, `/tools` (list, desc,
+(list, reload), `/stats`, `/subagents` (show, set, clear, reset headlessly),
+`/system-prompt`, `/theme`, `/tools` (list, desc,
 enable/disable), `/undo`, `activate_skill` tool, `ask_user` tool, `save_memory` tool,
 `run_script` tool (opt-in via `sagittarius.scriptToolEnabled`), `task` and
 `code_task` tools (opt-in via `sagittarius.subagents.research.enabled` and
