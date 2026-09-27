@@ -147,6 +147,10 @@ type StreamEvent struct {
 	// IsError marks a StreamToolResult as a failure (denied, boundary block,
 	// tool error, non-zero exit) so the card renders with the error icon/color.
 	IsError bool
+	// Badge is an optional dim "(badge)" label in the tool card border, set on
+	// StreamToolStart by tools implementing tools.StartBadger — e.g. a subagent
+	// routed to a different provider/model than the parent shows its pair.
+	Badge string
 	// AskQuestion is the question text for StreamAskUser.
 	AskQuestion string
 	// AskOptions are the selectable answers for StreamAskUser (2-4 entries);

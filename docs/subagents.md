@@ -127,6 +127,11 @@ slot and `/subagents` — it never silently falls back to the parent's model.
 Each child also gets the pinned model's context window, so a small local model
 gets masking and compression tuned to its own limits rather than the parent's.
 
+Routing is visible while a child runs: when the resolved pair differs from the
+parent's live pair, the tool card border carries a dim `(provider/model)` badge
+(e.g. `Coding subagent (local/qwen3.8-27b)`), and the result adds a `via` line.
+A child on the parent's pair shows neither — the footer already says it.
+
 ## Hand-off schema
 
 A child never reports in prose alone. The harness derives a structured result

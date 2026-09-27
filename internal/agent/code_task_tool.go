@@ -102,6 +102,11 @@ func (t *codeTaskTool) Declaration() provider.ToolDeclaration {
 // lease, instead of letting a headless child raise a confirmation per write.
 func (t *codeTaskTool) RequiresConfirmation() bool { return true }
 
+// StartBadge implements tools.StartBadger: the card border shows the child's
+// resolved provider/model when routing pins send it somewhere other than the
+// parent's live pair.
+func (t *codeTaskTool) StartBadge() string { return subagentBadge(t.runner, config.SubagentCoding) }
+
 func (t *codeTaskTool) Execute(ctx context.Context, args map[string]any) (map[string]any, error) {
 	return t.ExecuteStream(ctx, args, func(string) {})
 }
@@ -144,6 +149,9 @@ func (t *codeTaskTool) ExecuteStream(ctx context.Context, args map[string]any, s
 
 	result := buildSubagentResult(child, config.SubagentCoding, runErr, attempt, maxAttempts)
 	result["lease"] = spec.lease.Patterns
+	if via := subagentViaLabel(t.runner, child); via != "" {
+		result["via"] = via
+	}
 	if notice := t.parentRereadNotice(startedAt); notice != "" {
 		result["result"] = text + "\n\n" + notice
 		result["summary"] = result["result"]

@@ -117,6 +117,41 @@ func TestRenderToolCardMCPBadge(t *testing.T) {
 	}
 }
 
+func TestRenderToolCardSubagentBadge(t *testing.T) {
+	t.Parallel()
+	m := newTestModel()
+	c := &toolCard{
+		toolName:    "code_task",
+		displayName: "Coding subagent",
+		badge:       "local/qwen3.8-27b",
+		body:        "result text",
+		phase:       toolSuccess,
+	}
+	out := renderCard(m, c)
+	if !strings.Contains(out, "Coding subagent") || !strings.Contains(out, "(local/qwen3.8-27b)") {
+		t.Fatalf("subagent card missing routing badge:\n%s", out)
+	}
+}
+
+// TestNewToolCardReadsBadge pins the event seam: StreamToolStart.Badge lands
+// on the card at creation.
+func TestNewToolCardReadsBadge(t *testing.T) {
+	t.Parallel()
+	c := newToolCard(ui.StreamEvent{
+		Type:       ui.StreamToolStart,
+		ToolName:   "task",
+		ToolCallID: "c1",
+		Text:       "research something",
+		Badge:      "openrouter/qwen/qwen3-coder",
+	})
+	if c.badge != "openrouter/qwen/qwen3-coder" {
+		t.Fatalf("card badge = %q, want the event's badge", c.badge)
+	}
+	if c.displayName != "Research subagent" {
+		t.Fatalf("displayName = %q", c.displayName)
+	}
+}
+
 func TestRenderToolCardWidthInvariants(t *testing.T) {
 	t.Parallel()
 	m := newTestModel()

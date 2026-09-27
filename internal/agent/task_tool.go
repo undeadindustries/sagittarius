@@ -48,6 +48,11 @@ func (t *taskTool) Declaration() provider.ToolDeclaration {
 
 func (t *taskTool) RequiresConfirmation() bool { return false }
 
+// StartBadge implements tools.StartBadger: the card border shows the child's
+// resolved provider/model when routing pins send it somewhere other than the
+// parent's live pair.
+func (t *taskTool) StartBadge() string { return subagentBadge(t.runner, config.SubagentResearch) }
+
 func (t *taskTool) Execute(ctx context.Context, args map[string]any) (map[string]any, error) {
 	return t.ExecuteStream(ctx, args, func(string) {})
 }
@@ -92,7 +97,11 @@ func (t *taskTool) ExecuteStream(ctx context.Context, args map[string]any, sink 
 	if runErr != nil && ctx.Err() != nil {
 		return nil, runErr
 	}
-	return buildSubagentResult(child, config.SubagentResearch, runErr, attempt, maxAttempts), nil
+	result := buildSubagentResult(child, config.SubagentResearch, runErr, attempt, maxAttempts)
+	if via := subagentViaLabel(t.runner, child); via != "" {
+		result["via"] = via
+	}
+	return result, nil
 }
 
 func stringArg(args map[string]any, key string) (string, error) {

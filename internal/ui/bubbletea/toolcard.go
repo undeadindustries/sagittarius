@@ -40,6 +40,7 @@ type toolCard struct {
 	toolName    string // wire name (e.g. run_shell_command, mcp_srv_tool)
 	displayName string // human label (Shell, Write file, MCP tool name)
 	serverName  string // MCP server name; empty for built-ins
+	badge       string // optional border label (e.g. a subagent's routed provider/model)
 	summary     string // truncated argument detail for the header
 	body        string // live output / result / error / confirm preview text
 	diff        string // unified-diff preview (write_file confirm + result)
@@ -159,6 +160,7 @@ func newToolCard(ev ui.StreamEvent) *toolCard {
 		toolName:    ev.ToolName,
 		displayName: toolDisplayName(ev.ToolName),
 		serverName:  server,
+		badge:       ev.Badge,
 		summary:     ev.Text,
 		phase:       toolRunning,
 	}
@@ -212,6 +214,11 @@ func (m *model) toolCardTop(c *toolCard, border lipgloss.Style, width int) strin
 	// built-ins (e.g. "✓ search  (context7) …").
 	if c.serverName != "" {
 		label += " " + m.th.Code.Render("("+c.serverName+")")
+	}
+	// Subagent cards carry a dim routing badge when the child runs a different
+	// provider/model than the parent (e.g. "⠋ Coding subagent (local/qwen3.8-27b)").
+	if c.badge != "" {
+		label += " " + m.th.Code.Render("("+c.badge+")")
 	}
 	// Reserve "╭─ " (3) + label + " " (1) + "╮" (1) = 5 fixed columns.
 	if avail := width - 5 - lipgloss.Width(label) - 2; c.summary != "" && avail > 3 {

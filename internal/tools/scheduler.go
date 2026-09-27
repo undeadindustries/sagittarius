@@ -332,7 +332,18 @@ func (s *Scheduler) executeOne(
 		return errorResponse(call, ErrCodeInvalidArgs, msg), nil
 	}
 
-	emit(ui.StreamEvent{Type: ui.StreamToolStart, ToolName: name, ToolCallID: id, Text: formatToolSummary(name, args)})
+	// Look the tool up before the start event so a StartBadger can label the
+	// card border (e.g. a subagent's routed provider/model). Unknown tools keep
+	// the pre-existing behavior: a card with no badge, then the error result.
+	tool, known := s.registry.Lookup(name)
+	var badge string
+	if known {
+		if b, ok := tool.(StartBadger); ok {
+			badge = b.StartBadge()
+		}
+	}
+
+	emit(ui.StreamEvent{Type: ui.StreamToolStart, ToolName: name, ToolCallID: id, Text: formatToolSummary(name, args), Badge: badge})
 
 	// The lease gate runs on the normalized arguments so an aliased key
 	// (AD-113) cannot smuggle a path past it.
@@ -354,8 +365,7 @@ func (s *Scheduler) executeOne(
 		return errorResponse(call, ErrCodeModeRestriction, reason), nil
 	}
 
-	tool, ok := s.registry.Lookup(name)
-	if !ok {
+	if !known {
 		errText := fmt.Sprintf("unknown tool %q", name)
 		emitErr(errText)
 		return errorResponse(call, ErrCodeUnknownTool, errText), nil
@@ -942,6 +952,8 @@ func formatToolResult(name string, result map[string]any, writeDiff string) (tex
 		return formatSessionSearchResult(result), nil, false
 	case CodeTaskToolName:
 		return formatCodeTaskResult(result), nil, false
+	case TaskToolName:
+		return formatTaskResult(result), nil, false
 	case WaitUntilToolName:
 		return formatWaitUntilResult(result), waitUntilExitCode(result), false
 	}
@@ -1010,6 +1022,9 @@ func formatCodeTaskResult(result map[string]any) string {
 		}
 		parts = append(parts, head)
 	}
+	if via := asString(result["via"]); via != "" {
+		parts = append(parts, "via "+via)
+	}
 	if written := stringSlice(result["files_written"]); len(written) == 0 {
 		written = stringSlice(result["files_changed"])
 		if len(written) > 0 {
@@ -1045,6 +1060,27 @@ func formatCodeTaskResult(result map[string]any) string {
 	}
 	if next := strings.TrimSpace(asString(result["next_step"])); next != "" {
 		parts = append(parts, next)
+	}
+	return capLines(strings.Join(parts, "\n"), toolResultMaxLines)
+}
+
+// formatTaskResult renders a research subagent's card: a non-completed status
+// head, the routing badge (when the child ran a different provider/model than
+// the parent), then its report.
+func formatTaskResult(result map[string]any) string {
+	var parts []string
+	if status := asString(result["status"]); status != "" && status != "completed" {
+		head := "Subagent " + status
+		if n, ok := intValue(result["tool_calls"]); ok && n > 0 {
+			head += fmt.Sprintf(" after %d tool call(s)", n)
+		}
+		parts = append(parts, head)
+	}
+	if via := asString(result["via"]); via != "" {
+		parts = append(parts, "via "+via)
+	}
+	if text := strings.TrimSpace(asString(result["result"])); text != "" {
+		parts = append(parts, text)
 	}
 	return capLines(strings.Join(parts, "\n"), toolResultMaxLines)
 }

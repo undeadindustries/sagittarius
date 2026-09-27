@@ -154,3 +154,123 @@ func TestFormatCodeTaskResultIncomplete(t *testing.T) {
 		}
 	}
 }
+
+// TestFormatCodeTaskResultVia pins the routing line: a hand-off from a child
+// on a different pair shows "via provider/model" on the card.
+func TestFormatCodeTaskResultVia(t *testing.T) {
+	t.Parallel()
+
+	text, _, isErr := formatToolResult(CodeTaskToolName, map[string]any{
+		"status":        "completed",
+		"result":        "done",
+		"files_changed": []string{"a.go"},
+		"via":           "local/qwen3.8-27b",
+	}, "")
+	if isErr {
+		t.Error("completed hand-off must not flag the card as an error")
+	}
+	if !strings.Contains(text, "via local/qwen3.8-27b") {
+		t.Errorf("card %q does not name the child's pair", text)
+	}
+}
+
+// TestFormatTaskResultVia covers the research card: status head only when not
+// completed, via line when present, report last.
+func TestFormatTaskResultVia(t *testing.T) {
+	t.Parallel()
+
+	text, _, _ := formatToolResult(TaskToolName, map[string]any{
+		"status": "completed",
+		"result": "the answer",
+		"via":    "gemini/gemini-3-flash",
+	}, "")
+	if strings.Contains(text, "completed") {
+		t.Errorf("completed status must not head the card: %q", text)
+	}
+	if !strings.Contains(text, "via gemini/gemini-3-flash") || !strings.Contains(text, "the answer") {
+		t.Errorf("card %q missing via line or report", text)
+	}
+
+	text, _, _ = formatToolResult(TaskToolName, map[string]any{
+		"status":     "failed",
+		"result":     "boom",
+		"tool_calls": 3,
+	}, "")
+	if !strings.Contains(text, "Subagent failed after 3 tool call(s)") {
+		t.Errorf("card %q missing failure head", text)
+	}
+}
+
+// badgeStub is a StartBadger: the scheduler must copy its label onto the
+// StreamToolStart event so the card border can show it.
+type badgeStub struct{ label string }
+
+func (t *badgeStub) Name() string        { return "badge_stub" }
+func (t *badgeStub) Description() string { return "badge probe" }
+func (t *badgeStub) Declaration() provider.ToolDeclaration {
+	return provider.ToolDeclaration{Name: "badge_stub"}
+}
+func (t *badgeStub) RequiresConfirmation() bool { return false }
+func (t *badgeStub) StartBadge() string         { return t.label }
+func (t *badgeStub) Execute(context.Context, map[string]any) (map[string]any, error) {
+	return map[string]any{"ok": true}, nil
+}
+
+func startEvents(events []ui.StreamEvent) []ui.StreamEvent {
+	var out []ui.StreamEvent
+	for _, ev := range events {
+		if ev.Type == ui.StreamToolStart {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+// TestStartBadgeFlowsToStartEvent pins the scheduler seam: a StartBadger's
+// label lands on StreamToolStart.Badge; a plain tool gets an empty badge; an
+// unknown tool still gets a start event (then the unknown-tool error), exactly
+// as before the badge existed.
+func TestStartBadgeFlowsToStartEvent(t *testing.T) {
+	t.Parallel()
+
+	stub := &badgeStub{label: "local/qwen3.8-27b"}
+	registry := &Registry{
+		byName:  map[string]Tool{"badge_stub": stub},
+		aliases: map[string]string{},
+	}
+	s := NewScheduler(registry, Policy{}, false, nil, nil)
+
+	var events []ui.StreamEvent
+	emit := func(ev ui.StreamEvent) { events = append(events, ev) }
+	calls := []provider.ToolCall{
+		{Name: "badge_stub", ID: "b1"},
+		{Name: "no_such_tool", ID: "x1"},
+	}
+	if _, err := s.Execute(context.Background(), calls, emit); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	starts := startEvents(events)
+	if len(starts) != 2 {
+		t.Fatalf("want 2 start events, got %d", len(starts))
+	}
+	byID := map[string]string{}
+	for _, ev := range starts {
+		byID[ev.ToolCallID] = ev.Badge
+	}
+	if byID["b1"] != "local/qwen3.8-27b" {
+		t.Errorf("badge_stub start badge = %q, want the label", byID["b1"])
+	}
+	if byID["x1"] != "" {
+		t.Errorf("unknown tool start badge = %q, want empty", byID["x1"])
+	}
+	var sawUnknownErr bool
+	for _, ev := range events {
+		if ev.Type == ui.StreamToolResult && ev.ToolCallID == "x1" && ev.IsError {
+			sawUnknownErr = true
+		}
+	}
+	if !sawUnknownErr {
+		t.Error("unknown tool must still produce its error result after the start event")
+	}
+}

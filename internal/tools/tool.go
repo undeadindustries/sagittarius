@@ -25,6 +25,15 @@ type StreamingTool interface {
 	ExecuteStream(ctx context.Context, args map[string]any, sink ToolOutputSink) (map[string]any, error)
 }
 
+// StartBadger is an optional interface for tools that want a short label in
+// the tool card border (e.g. a subagent's resolved provider/model when routing
+// pins send it somewhere other than the parent's live pair). The scheduler
+// calls it once when emitting StreamToolStart; an empty string means no badge.
+type StartBadger interface {
+	Tool
+	StartBadge() string
+}
+
 // InteractiveTool is an optional interface for tools that pose a structured
 // question to the user and wait for a reply mid-execution (e.g. grill mode's
 // ask_user). interactive reports whether a UI consumer is attached to answer
