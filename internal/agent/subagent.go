@@ -8,7 +8,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/undeadindustries/sagittarius/internal/config"
-	"github.com/undeadindustries/sagittarius/internal/contextmgmt"
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 	"github.com/undeadindustries/sagittarius/internal/session"
@@ -53,18 +52,30 @@ func (r *Runner) checkSubagentDepth() error {
 
 // newSubagent builds a child runner sharing the parent's runtime (MCP servers,
 // background processes, file state) but with its own history, session
-// recorder, context manager, and generator.
+// recorder, context manager, and generator. The child's (provider, model) pair
+// comes from config.ResolveSubagentTarget: a class or default pin may route it
+// to a different provider than the parent, in which case the generator and the
+// context manager are built from a settings clone with that pair forced active
+// (the auxGenerator pattern). A pin that cannot be built fails here with the
+// slot and pair named; it never falls back to the parent's model.
 func (r *Runner) newSubagent(ctx context.Context, spec subagentSpec) (*subagent, error) {
 	subID := uuid.New().String()
 	root := r.workspace.Root()
 	settings := r.settingsSnapshot()
 
-	outputDir, _ := session.ChatsDir(root)
-	ctxMgr := contextmgmt.NewManager(contextmgmt.ManagerConfig{
-		Enabled:   true,
-		SessionID: subID,
-		OutputDir: outputDir,
-	})
+	target := config.ResolveSubagentTarget(spec.class, r.sagittariusSettings(), r.activeProviderID(), r.Model())
+	childSettings := settings
+	if target.Source != config.SubagentTargetLive {
+		clone, err := settingsForTarget(settings, target.Provider, target.Model)
+		if err != nil {
+			return nil, fmt.Errorf("subagent %s target %s/%s: %w (see /subagents)", spec.class, target.Provider, target.Model, err)
+		}
+		childSettings = clone
+	}
+	effectiveProvider := target.Provider
+	if effectiveProvider == "" {
+		effectiveProvider = r.activeProviderID()
+	}
 
 	var rec *session.Recorder
 	if r.sessionRecorder != nil {
@@ -73,13 +84,13 @@ func (r *Runner) newSubagent(ctx context.Context, spec subagentSpec) (*subagent,
 		}
 	}
 
-	gen, err := r.newSubagentGenerator(ctx, settings)
+	gen, err := r.newSubagentGenerator(ctx, childSettings)
 	if err != nil {
-		return nil, fmt.Errorf("subagent generator: %w", err)
+		return nil, fmt.Errorf("subagent %s target %s/%s: generator: %w (see /subagents)", spec.class, effectiveProvider, target.Model, err)
 	}
 
 	child, err := NewRunner(RunnerConfig{
-		Model: config.SubagentModel(spec.class, r.sagittariusSettings(), r.Model()),
+		Model: target.Model,
 		// Pinned so a mode override on the parent — which may route agent mode
 		// to an engine chosen for something else entirely — cannot capture the
 		// child through mode resolution.
@@ -87,15 +98,14 @@ func (r *Runner) newSubagent(ctx context.Context, spec subagentSpec) (*subagent,
 		WorkDir:           root,
 		ApprovalMode:      spec.approval,
 		Interactive:       false,
-		ContextManager:    ctxMgr,
 		SessionRecorder:   rec,
-		Settings:          settings,
+		Settings:          childSettings,
 		ProjectBoundary:   r.projectBoundary,
 		Snapshotter:       spec.snapshotter,
 		InitialMode:       spec.mode,
 		Runtime:           r.runtime,
 		SpillDir:          r.spillDir,
-		ScriptToolEnabled: config.ScriptToolEnabled(settings, nil),
+		ScriptToolEnabled: config.ScriptToolEnabled(childSettings, nil),
 		Generator:         gen,
 		WriteLease:        spec.lease,
 		AgentID:           subID,
@@ -106,8 +116,14 @@ func (r *Runner) newSubagent(ctx context.Context, spec subagentSpec) (*subagent,
 	if err != nil {
 		return nil, fmt.Errorf("create subagent runner: %w", err)
 	}
+	if mgr := NewContextManager(childSettings, gen, child.Model, child.ActiveProviderID,
+		func() string { return child.InteractionMode().String() },
+		subID, child.RecordUsage, child.OnWillCompress); mgr != nil {
+		child.SetContextManager(mgr)
+	}
 	slog.Info("launching subagent", "description", spec.description, "sessionID", subID,
-		"class", spec.class, "mode", spec.mode)
+		"class", spec.class, "mode", spec.mode,
+		"provider", effectiveProvider, "model", target.Model, "source", string(target.Source))
 	return &subagent{runner: child, id: subID, desc: spec.description}, nil
 }
 

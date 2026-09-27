@@ -45,10 +45,13 @@ var reservedSagittariusModeKeys = map[string]struct{}{
 // the field and then again into Named, with its scalar members swallowed into
 // that entry's Extra.
 var reservedSagittariusSubagentKeys = map[string]struct{}{
-	"default":  {},
-	"enabled":  {},
-	"research": {},
-	"coding":   {},
+	"default":       {},
+	"enabled":       {},
+	"research":      {},
+	"coding":        {},
+	"reviewer":      {},
+	"maxAttempts":   {},
+	"maxConcurrent": {},
 }
 
 func unmarshalModeConfig(raw json.RawMessage) (*SagittariusModeConfig, error) {
@@ -207,6 +210,12 @@ func unmarshalSubagentConfig(raw json.RawMessage) (SagittariusSubagentConfig, er
 			}
 			continue
 		}
+		if key == "provider" {
+			if err := json.Unmarshal(val, &cfg.Provider); err != nil {
+				return cfg, err
+			}
+			continue
+		}
 		cfg.Extra[key] = val
 	}
 	if len(cfg.Extra) == 0 {
@@ -217,6 +226,13 @@ func unmarshalSubagentConfig(raw json.RawMessage) (SagittariusSubagentConfig, er
 
 func marshalSubagentConfig(cfg SagittariusSubagentConfig) (json.RawMessage, error) {
 	obj := make(map[string]json.RawMessage)
+	if cfg.Provider != "" {
+		b, err := json.Marshal(cfg.Provider)
+		if err != nil {
+			return nil, err
+		}
+		obj["provider"] = b
+	}
 	if cfg.Model != "" {
 		b, err := json.Marshal(cfg.Model)
 		if err != nil {
@@ -250,6 +266,10 @@ func unmarshalSubagentClass(raw json.RawMessage) (*SagittariusSubagentClass, err
 				return nil, fmt.Errorf("decode enabled: %w", err)
 			}
 			cls.Enabled = &b
+		case "provider":
+			if err := json.Unmarshal(val, &cls.Provider); err != nil {
+				return nil, fmt.Errorf("decode provider: %w", err)
+			}
 		case "model":
 			if err := json.Unmarshal(val, &cls.Model); err != nil {
 				return nil, fmt.Errorf("decode model: %w", err)
@@ -275,6 +295,13 @@ func marshalSubagentClass(cls *SagittariusSubagentClass) (json.RawMessage, error
 			return nil, err
 		}
 		obj["enabled"] = b
+	}
+	if cls.Provider != "" {
+		b, err := json.Marshal(cls.Provider)
+		if err != nil {
+			return nil, err
+		}
+		obj["provider"] = b
 	}
 	if cls.Model != "" {
 		b, err := json.Marshal(cls.Model)
@@ -321,15 +348,34 @@ func unmarshalSubagents(raw json.RawMessage) (*SagittariusSubagents, error) {
 			s.Enabled = &b
 			continue
 		}
-		if key == "research" || key == "coding" {
+		if key == "maxAttempts" {
+			var n int
+			if err := json.Unmarshal(val, &n); err != nil {
+				return nil, fmt.Errorf("decode sagittarius.subagents.maxAttempts: %w", err)
+			}
+			s.MaxAttempts = &n
+			continue
+		}
+		if key == "maxConcurrent" {
+			var n int
+			if err := json.Unmarshal(val, &n); err != nil {
+				return nil, fmt.Errorf("decode sagittarius.subagents.maxConcurrent: %w", err)
+			}
+			s.MaxConcurrent = &n
+			continue
+		}
+		if key == "research" || key == "coding" || key == "reviewer" {
 			cls, err := unmarshalSubagentClass(val)
 			if err != nil {
 				return nil, fmt.Errorf("decode sagittarius.subagents.%s: %w", key, err)
 			}
-			if key == "research" {
+			switch key {
+			case "research":
 				s.Research = cls
-			} else {
+			case "coding":
 				s.Coding = cls
+			default:
+				s.Reviewer = cls
 			}
 			continue
 		}
@@ -363,7 +409,21 @@ func marshalSubagents(s *SagittariusSubagents) (json.RawMessage, error) {
 		}
 		obj["enabled"] = b
 	}
-	for name, cls := range map[string]*SagittariusSubagentClass{"research": s.Research, "coding": s.Coding} {
+	if s.MaxAttempts != nil {
+		b, err := json.Marshal(*s.MaxAttempts)
+		if err != nil {
+			return nil, err
+		}
+		obj["maxAttempts"] = b
+	}
+	if s.MaxConcurrent != nil {
+		b, err := json.Marshal(*s.MaxConcurrent)
+		if err != nil {
+			return nil, err
+		}
+		obj["maxConcurrent"] = b
+	}
+	for name, cls := range map[string]*SagittariusSubagentClass{"research": s.Research, "coding": s.Coding, "reviewer": s.Reviewer} {
 		if cls == nil {
 			continue
 		}
@@ -373,7 +433,7 @@ func marshalSubagents(s *SagittariusSubagents) (json.RawMessage, error) {
 		}
 		obj[name] = b
 	}
-	if s.Default.Model != "" || len(s.Default.Extra) > 0 {
+	if s.Default.Provider != "" || s.Default.Model != "" || len(s.Default.Extra) > 0 {
 		b, err := marshalSubagentConfig(s.Default)
 		if err != nil {
 			return nil, err

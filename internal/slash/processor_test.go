@@ -214,6 +214,16 @@ func (m *mockHooks) ClearHistory() error { return nil }
 func (m *mockHooks) SetModeOverride(_ context.Context, _, _, _ string, _ config.SettingScope) error {
 	return nil
 }
+
+func (m *mockHooks) SetSubagentOverride(_ context.Context, _, _, _ string, _ config.SettingScope) error {
+	return nil
+}
+
+func (m *mockHooks) ResetSubagentOverrides(_ context.Context, _ config.SettingScope) (string, error) {
+	return "reset", nil
+}
+
+func (m *mockHooks) SubagentRoutingText() string { return "default (default)" }
 func (m *mockHooks) SetInteractionMode(_ context.Context, mode modes.Mode) (string, error) {
 	m.setModeCalls = append(m.setModeCalls, mode)
 	return "gpt-4o-mini", nil

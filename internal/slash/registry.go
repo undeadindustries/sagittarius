@@ -127,6 +127,7 @@ func (r *Registry) registerBuiltins() {
 		modelsCommand(),
 		systemPromptCommand(),
 		modesCommand(),
+		subagentsCommand(),
 		agentCommand(),
 		planCommand(),
 		askCommand(),

@@ -61,6 +61,16 @@ type Hooks interface {
 	// SetModeOverride persists a mode routing override to the given scope.
 	// providerID and model identify the target; an empty model clears the override.
 	SetModeOverride(ctx context.Context, modeName, providerID, model string, scope config.SettingScope) error
+	// SetSubagentOverride persists a subagent routing pin for slot
+	// (default, research, coding, reviewer, utility) to the given scope.
+	// An empty model clears the pin.
+	SetSubagentOverride(ctx context.Context, slot, providerID, model string, scope config.SettingScope) error
+	// ResetSubagentOverrides clears every subagent routing pin in the given
+	// scope, preserving enablement switches.
+	ResetSubagentOverrides(ctx context.Context, scope config.SettingScope) (string, error)
+	// SubagentRoutingText renders the five routing slots with their current
+	// pins for the headless /subagents show listing.
+	SubagentRoutingText() string
 	// Snapshot hooks (local diffs + undo). SnapshotDiff returns the net unified
 	// diff of this session's file changes (empty when none); SnapshotUndo
 	// reverts the last n changes and returns the restored relative paths.

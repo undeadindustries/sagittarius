@@ -1772,6 +1772,66 @@ func (h *appHooks) SetModeOverride(ctx context.Context, modeName, providerID, mo
 	return docs.Save(scope)
 }
 
+func (h *appHooks) SetSubagentOverride(_ context.Context, slot, providerID, model string, scope config.SettingScope) error {
+	if h.app == nil {
+		return fmt.Errorf("app not available")
+	}
+	docs := h.app.docs
+	if docs == nil {
+		return fmt.Errorf("settings not loaded")
+	}
+	if !config.ValidSubagentSlot(slot) {
+		return fmt.Errorf("unknown subagent slot %q (expected default, research, coding, reviewer, utility)", slot)
+	}
+	if err := config.SetSubagentOverride(docs.TargetSettings(scope), slot, providerID, model); err != nil {
+		return err
+	}
+	return docs.Save(scope)
+}
+
+func (h *appHooks) ResetSubagentOverrides(_ context.Context, scope config.SettingScope) (string, error) {
+	if h.app == nil {
+		return "", fmt.Errorf("app not available")
+	}
+	docs := h.app.docs
+	if docs == nil {
+		return "", fmt.Errorf("settings not loaded")
+	}
+	if !config.ResetSubagentOverrides(docs.TargetSettings(scope)) {
+		return fmt.Sprintf("No subagent routing pins in %s settings.", scope), nil
+	}
+	if err := docs.Save(scope); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Subagent routing reset in %s settings (all slots use defaults).", scope), nil
+}
+
+func (h *appHooks) SubagentRoutingText() string {
+	if h.app == nil {
+		return "Subagent routing unavailable."
+	}
+	var s *config.Settings
+	if h.app.docs != nil {
+		s = h.app.docs.Merged()
+	} else {
+		s = h.app.deps.Settings
+	}
+	var b strings.Builder
+	for _, slot := range config.SubagentSlots {
+		prov, model := subagentSlotValues(s, slot)
+		if model == "" {
+			fmt.Fprintf(&b, "%-9s (default)\n", slot)
+			continue
+		}
+		if prov == "" {
+			fmt.Fprintf(&b, "%-9s %s\n", slot, model)
+			continue
+		}
+		fmt.Fprintf(&b, "%-9s %s/%s\n", slot, prov, model)
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
 func (h *appHooks) SnapshotDiff(pathFilter string) (string, error) {
 	if h.app == nil || h.app.runner == nil {
 		return "", fmt.Errorf("runner not available")

@@ -378,25 +378,37 @@ type SagittariusModeConfig struct {
 type SagittariusSubagents struct {
 	// Enabled is the legacy single switch. It is the fallback for
 	// Research.Enabled only; it never grants write access.
-	Enabled  *bool                                `json:"enabled,omitempty"`
-	Research *SagittariusSubagentClass            `json:"research,omitempty"`
-	Coding   *SagittariusSubagentClass            `json:"coding,omitempty"`
-	Default  SagittariusSubagentConfig            `json:"default,omitempty"`
-	Named    map[string]SagittariusSubagentConfig `json:"-"`
-	Extra    map[string]json.RawMessage           `json:"-"`
+	Enabled  *bool                     `json:"enabled,omitempty"`
+	Research *SagittariusSubagentClass `json:"research,omitempty"`
+	Coding   *SagittariusSubagentClass `json:"coding,omitempty"`
+	Reviewer *SagittariusSubagentClass `json:"reviewer,omitempty"`
+	// MaxAttempts caps how many times the same task (class + description +
+	// lease) may be delegated per session. Nil means the compiled-in default
+	// (2). 0 means no cap. Negative values are invalid.
+	MaxAttempts *int `json:"maxAttempts,omitempty"`
+	// MaxConcurrent caps how many subagents run at once. Nil means the
+	// compiled-in default (8). 1 runs children serially. Valid range 1-16.
+	MaxConcurrent *int                                 `json:"maxConcurrent,omitempty"`
+	Default       SagittariusSubagentConfig            `json:"default,omitempty"`
+	Named         map[string]SagittariusSubagentConfig `json:"-"`
+	Extra         map[string]json.RawMessage           `json:"-"`
 }
 
-// SagittariusSubagentClass configures one subagent class (research or coding).
+// SagittariusSubagentClass configures one subagent class (research, coding, or
+// reviewer). Provider qualifies Model the same way SagittariusModeConfig does:
+// the pair is written together by the picker and resolved together at launch.
 type SagittariusSubagentClass struct {
-	Enabled *bool                      `json:"enabled,omitempty"`
-	Model   string                     `json:"model,omitempty"`
-	Extra   map[string]json.RawMessage `json:"-"`
+	Enabled  *bool                      `json:"enabled,omitempty"`
+	Provider string                     `json:"provider,omitempty"`
+	Model    string                     `json:"model,omitempty"`
+	Extra    map[string]json.RawMessage `json:"-"`
 }
 
 // SagittariusSubagentConfig configures one subagent's model override.
 type SagittariusSubagentConfig struct {
-	Model string                     `json:"model,omitempty"`
-	Extra map[string]json.RawMessage `json:"-"`
+	Provider string                     `json:"provider,omitempty"`
+	Model    string                     `json:"model,omitempty"`
+	Extra    map[string]json.RawMessage `json:"-"`
 }
 
 var validInteractionModes = map[string]struct{}{
@@ -455,6 +467,14 @@ func ValidateSagittariusSettings(s *SagittariusSettings) error {
 	}
 	if s.MaxToolRounds != nil && *s.MaxToolRounds < 0 {
 		return fmt.Errorf("sagittarius.maxToolRounds must be >= 0 (0 = unlimited), got %d", *s.MaxToolRounds)
+	}
+	if s.Subagents != nil && s.Subagents.MaxAttempts != nil && *s.Subagents.MaxAttempts < 0 {
+		return fmt.Errorf("sagittarius.subagents.maxAttempts must be >= 0 (0 = unlimited), got %d", *s.Subagents.MaxAttempts)
+	}
+	if s.Subagents != nil && s.Subagents.MaxConcurrent != nil &&
+		(*s.Subagents.MaxConcurrent < MinSubagentMaxConcurrent || *s.Subagents.MaxConcurrent > MaxSubagentMaxConcurrent) {
+		return fmt.Errorf("sagittarius.subagents.maxConcurrent must be %d-%d, got %d",
+			MinSubagentMaxConcurrent, MaxSubagentMaxConcurrent, *s.Subagents.MaxConcurrent)
 	}
 	if s.Memory != nil && s.Memory.MaxRunes != nil && *s.Memory.MaxRunes < 0 {
 		return fmt.Errorf("sagittarius.memory.maxRunes must be >= 0 (0 = unlimited), got %d", *s.Memory.MaxRunes)

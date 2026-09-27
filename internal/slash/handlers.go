@@ -297,6 +297,18 @@ func parseScope(s string) (config.SettingScope, error) {
 	}
 }
 
+// trailingScope parses an optional trailing scope argument (default project).
+// It rejects more than one trailing token so a typo cannot silently pass.
+func trailingScope(parts []string) (config.SettingScope, error) {
+	if len(parts) == 0 {
+		return config.ScopeProject, nil
+	}
+	if len(parts) > 1 {
+		return config.ScopeProject, fmt.Errorf("unexpected arguments %q (expected [global|project])", strings.Join(parts, " "))
+	}
+	return parseScope(parts[0])
+}
+
 // MemoryEntry mirrors agent.MemoryEntry without importing internal/agent
 // (which imports internal/slash to implement Hooks), keeping the two
 // packages decoupled.

@@ -68,3 +68,79 @@ func TestPruneModeOverridesQualified(t *testing.T) {
 		t.Errorf("Agent mode override provider should be cleared, got %q", settings.Sagittarius.Modes.Agent.Provider)
 	}
 }
+
+func TestPruneModelOverridesSubagentSlots(t *testing.T) {
+	settings := &config.Settings{
+		Providers: &config.ProvidersSettings{
+			Active: "gemini-apikey",
+			GeminiAPIKey: &config.ProviderInstanceConfig{
+				ActiveModels: []string{"gemini-pro-latest"},
+			},
+		},
+		Sagittarius: &config.SagittariusSettings{
+			Subagents: &config.SagittariusSubagents{
+				Default:  config.SagittariusSubagentConfig{Provider: "gemini-apikey", Model: "gemini-pro-latest"},
+				Research: &config.SagittariusSubagentClass{Provider: "gemini-apikey", Model: "stale-model"},
+				Coding:   &config.SagittariusSubagentClass{Model: "also-stale"},
+				Reviewer: &config.SagittariusSubagentClass{Provider: "removed-provider", Model: "x"},
+			},
+			Goal: &config.SagittariusGoalConfig{
+				EvaluatorProvider: "gemini-apikey",
+				EvaluatorModel:    "gemini-pro-latest",
+			},
+		},
+	}
+
+	if !PruneModelOverrides(settings) {
+		t.Fatal("expected prune to report a change")
+	}
+	sub := settings.Sagittarius.Subagents
+	if sub.Default.Model != "gemini-pro-latest" {
+		t.Errorf("default pin should survive, got %+v", sub.Default)
+	}
+	if sub.Research.Model != "" || sub.Research.Provider != "" {
+		t.Errorf("research pin should be cleared, got %+v", sub.Research)
+	}
+	if sub.Coding.Model != "" || sub.Coding.Provider != "" {
+		t.Errorf("unqualified coding pin should be cleared, got %+v", sub.Coding)
+	}
+	if sub.Reviewer.Model != "" || sub.Reviewer.Provider != "" {
+		t.Errorf("reviewer pin should be cleared, got %+v", sub.Reviewer)
+	}
+	if settings.Sagittarius.Goal.EvaluatorModel != "gemini-pro-latest" {
+		t.Errorf("goal evaluator pin should survive, got %+v", settings.Sagittarius.Goal)
+	}
+}
+
+func TestPruneModelOverridesGoalEvaluatorStale(t *testing.T) {
+	settings := &config.Settings{
+		Providers: &config.ProvidersSettings{
+			Active: "gemini-apikey",
+			GeminiAPIKey: &config.ProviderInstanceConfig{
+				ActiveModels: []string{"gemini-pro-latest"},
+			},
+		},
+		Sagittarius: &config.SagittariusSettings{
+			Goal: &config.SagittariusGoalConfig{
+				EvaluatorProvider: "openrouter",
+				EvaluatorModel:    "qwen/qwen3.5-122b-a10b",
+			},
+		},
+	}
+
+	if !PruneModelOverrides(settings) {
+		t.Fatal("expected prune to report a change")
+	}
+	if settings.Sagittarius.Goal.EvaluatorModel != "" || settings.Sagittarius.Goal.EvaluatorProvider != "" {
+		t.Errorf("stale goal evaluator pin should be cleared, got %+v", settings.Sagittarius.Goal)
+	}
+}
+
+func TestPruneModelOverridesNoSagittarius(t *testing.T) {
+	if PruneModelOverrides(nil) {
+		t.Error("nil settings should not report a change")
+	}
+	if PruneModelOverrides(&config.Settings{}) {
+		t.Error("settings without a sagittarius block should not report a change")
+	}
+}

@@ -30,6 +30,8 @@ func mapDialogKind(kind slash.DialogKind) ui.DialogKind {
 		return ui.DialogModelPick
 	case slash.DialogModes:
 		return ui.DialogModes
+	case slash.DialogSubagents:
+		return ui.DialogSubagents
 	case slash.DialogSystemPrompt:
 		return ui.DialogSystemPrompt
 	case slash.DialogMCP:
@@ -937,4 +939,145 @@ func (d *modesDialogDeps) maybeRebuildActiveMode(ctx context.Context, modifiedMo
 		// app's status bar all at once.
 		_, _ = d.app.deps.Hooks.SetInteractionMode(ctx, currentMode)
 	}
+}
+
+// SubagentsDialogDeps returns the side-effect adapter the /subagents routing
+// editor uses. It implements modesdialog.Deps over the five routing slots
+// (default/research/coding/reviewer/utility), so the slot-override editor is
+// shared with /modes.
+func (a *App) SubagentsDialogDeps() modesdialog.Deps {
+	return &subagentsDialogDeps{baseDialogDeps{app: a}}
+}
+
+type subagentsDialogDeps struct {
+	baseDialogDeps
+}
+
+func (d *subagentsDialogDeps) mergedSubagentSettings() *config.Settings {
+	docs := d.app.docs
+	if docs != nil {
+		return docs.Merged()
+	}
+	return d.app.deps.Settings
+}
+
+func (d *subagentsDialogDeps) ListModes() []modesdialog.ModeEntry {
+	s := d.mergedSubagentSettings()
+	entries := make([]modesdialog.ModeEntry, 0, len(config.SubagentSlots))
+	for _, slot := range config.SubagentSlots {
+		prov, model := subagentSlotValues(s, slot)
+		entries = append(entries, modesdialog.ModeEntry{
+			Mode:     slot,
+			Provider: prov,
+			Model:    model,
+		})
+	}
+	return entries
+}
+
+func subagentSlotValues(s *config.Settings, slot string) (prov, model string) {
+	if s == nil || s.Sagittarius == nil {
+		return "", ""
+	}
+	switch slot {
+	case config.SubagentSlotUtility:
+		if s.Sagittarius.Goal == nil {
+			return "", ""
+		}
+		return s.Sagittarius.Goal.EvaluatorProvider, s.Sagittarius.Goal.EvaluatorModel
+	case config.SubagentSlotDefault:
+		if s.Sagittarius.Subagents == nil {
+			return "", ""
+		}
+		return s.Sagittarius.Subagents.Default.Provider, s.Sagittarius.Subagents.Default.Model
+	}
+	if s.Sagittarius.Subagents == nil {
+		return "", ""
+	}
+	var cls *config.SagittariusSubagentClass
+	switch config.SubagentClass(slot) {
+	case config.SubagentResearch:
+		cls = s.Sagittarius.Subagents.Research
+	case config.SubagentCoding:
+		cls = s.Sagittarius.Subagents.Coding
+	case config.SubagentReviewer:
+		cls = s.Sagittarius.Subagents.Reviewer
+	}
+	if cls == nil {
+		return "", ""
+	}
+	return cls.Provider, cls.Model
+}
+
+func (d *subagentsDialogDeps) AllActiveModels() []modesdialog.ModelEntry {
+	s := d.mergedSubagentSettings()
+	if s == nil {
+		return nil
+	}
+	pairs := provider.AllActiveModels(s)
+	entries := make([]modesdialog.ModelEntry, 0, len(pairs))
+	for _, p := range pairs {
+		entries = append(entries, modesdialog.ModelEntry{
+			ProviderID: p.ProviderID,
+			DisplayID:  p.DisplayID,
+			Model:      p.Model,
+		})
+	}
+	return entries
+}
+
+func (d *subagentsDialogDeps) SetModeOverride(_ context.Context, slot, providerID, model string, scope config.SettingScope) error {
+	docs := d.app.docs
+	if docs == nil {
+		return fmt.Errorf("settings not loaded")
+	}
+	if !config.ValidSubagentSlot(slot) {
+		return fmt.Errorf("unknown subagent slot %q (expected default, research, coding, reviewer, utility)", slot)
+	}
+	if err := config.SetSubagentOverride(docs.TargetSettings(scope), slot, providerID, model); err != nil {
+		return err
+	}
+	return docs.Save(scope)
+}
+
+func (d *subagentsDialogDeps) ClearModeOverride(_ context.Context, slot string, scope config.SettingScope) error {
+	docs := d.app.docs
+	if docs == nil {
+		return fmt.Errorf("settings not loaded")
+	}
+	config.ClearSubagentOverride(docs.TargetSettings(scope), slot)
+	return docs.Save(scope)
+}
+
+// ResetAllOverrides clears every routing pin in scope, preserving enablement
+// switches. It satisfies modesdialog.Resetter, which arms the dialog's R key.
+func (d *subagentsDialogDeps) ResetAllOverrides(_ context.Context, scope config.SettingScope) (string, error) {
+	docs := d.app.docs
+	if docs == nil {
+		return "", fmt.Errorf("settings not loaded")
+	}
+	if !config.ResetSubagentOverrides(docs.TargetSettings(scope)) {
+		return fmt.Sprintf("No subagent routing pins in %s settings.", scope), nil
+	}
+	if err := docs.Save(scope); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Subagent routing reset in %s settings (all slots use defaults).", scope), nil
+}
+
+// Header summarizes enablement switches so the routing dialog shows which
+// classes are actually on. Switches live in /settings; the dialog edits pins
+// only. It satisfies modesdialog.HeaderProvider.
+func (d *subagentsDialogDeps) Header() string {
+	s := d.mergedSubagentSettings()
+	onOff := func(v bool) string {
+		if v {
+			return "on"
+		}
+		return "off"
+	}
+	research := onOff(config.ResearchSubagentsEnabled(s, nil))
+	coding := onOff(config.CodingSubagentsEnabled(s, nil))
+	review := onOff(config.ReviewSubagentsEnabled(s, nil))
+	return fmt.Sprintf("research %s · coding %s · reviewer %s — switches in /settings", research, coding, review)
 }

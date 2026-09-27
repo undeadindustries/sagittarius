@@ -20,6 +20,8 @@ const (
 	DialogModelPick DialogKind = "model-pick"
 	// DialogModes opens the mode-override editor.
 	DialogModes DialogKind = "modes"
+	// DialogSubagents opens the subagent routing editor.
+	DialogSubagents DialogKind = "subagents"
 	// DialogSystemPrompt opens the project system-prompt preset picker.
 	DialogSystemPrompt DialogKind = "system-prompt"
 	// DialogMCP opens the MCP server management wizard.

@@ -25,6 +25,9 @@ type Model struct {
 	ctx  context.Context
 	th   theme.Theme
 
+	title    string
+	itemNoun string
+
 	width  int
 	height int
 
@@ -47,6 +50,10 @@ type Model struct {
 	spin     spinner.Model
 	applying bool
 
+	// pendingReset arms the two-step R (reset every row) confirm. The first
+	// press only announces; the second press executes.
+	pendingReset bool
+
 	errMsg string
 	info   string
 }
@@ -60,6 +67,20 @@ type applyResultMsg struct {
 
 // New constructs the modes-override editor.
 func New(ctx context.Context, deps Deps) Model {
+	return NewWithOptions(ctx, deps, DefaultOptions())
+}
+
+// NewWithOptions constructs the slot-override editor with a custom title and
+// item noun. DefaultOptions reproduces New exactly.
+func NewWithOptions(ctx context.Context, deps Deps, opts Options) Model {
+	title := opts.Title
+	if title == "" {
+		title = "Mode Overrides"
+	}
+	noun := opts.ItemNoun
+	if noun == "" {
+		noun = "mode"
+	}
 	sel := scopedialog.NewScopeSelector(config.ScopeProject)
 	if !deps.ProjectAvailable() {
 		sel.Disabled = true
@@ -68,6 +89,8 @@ func New(ctx context.Context, deps Deps) Model {
 		deps:     deps,
 		ctx:      ctx,
 		th:       theme.Default(),
+		title:    title,
+		itemNoun: noun,
 		screen:   screenModes,
 		scopeSel: sel,
 		spin:     newDialogSpinner(),
@@ -151,6 +174,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	case "esc", "q":
 		return m.back()
 	case "up", "k":
+		m.pendingReset = false
 		if m.screen == screenModes {
 			m.modeCursor = wrapDec(m.modeCursor, listLen)
 		} else {
@@ -158,23 +182,31 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		}
 		return m, nil
 	case "down", "j":
+		m.pendingReset = false
 		if m.screen == screenModes {
 			m.modeCursor = wrapInc(m.modeCursor, listLen)
 		} else {
 			m.pickCursor = wrapInc(m.pickCursor, listLen)
 		}
 		return m, nil
-	case "r":
+	case "r", "ctrl+l":
 		if m.screen == screenModes {
+			m.pendingReset = false
 			return m.clearCurrentOverride()
 		}
+	case "R":
+		if m.screen == screenModes {
+			return m.resetAllOverrides()
+		}
 	case "enter":
+		m.pendingReset = false
 		return m.selectCurrent()
 	}
 	return m, nil
 }
 
 func (m Model) back() (Model, tea.Cmd) {
+	m.pendingReset = false
 	switch m.screen {
 	case screenModes:
 		m.done = true
@@ -236,11 +268,12 @@ func (m Model) applyOverride() (Model, tea.Cmd) {
 	}
 	scope := m.scopeSel.Scope
 	mode := m.targetMode
+	noun := m.itemNoun
 	ctx := m.ctx
 	deps := m.deps
 	m.applying = true
 	m.errMsg = ""
-	m.info = fmt.Sprintf("Setting %s mode → %s/%s…", mode, e.DisplayID, e.Model)
+	m.info = fmt.Sprintf("Setting %s %s → %s/%s…", mode, noun, e.DisplayID, e.Model)
 	m.scopeFocused = false
 	m.scopeSel.Blur()
 	m.screen = screenModes
@@ -249,7 +282,7 @@ func (m Model) applyOverride() (Model, tea.Cmd) {
 		func() tea.Msg {
 			err := deps.SetModeOverride(ctx, mode, e.ProviderID, e.Model, scope)
 			return applyResultMsg{
-				info: fmt.Sprintf("%s mode → %s/%s. (%s)", mode, e.DisplayID, e.Model, scope),
+				info: fmt.Sprintf("%s %s → %s/%s. (%s)", mode, noun, e.DisplayID, e.Model, scope),
 				err:  err,
 			}
 		},
@@ -262,11 +295,12 @@ func (m Model) clearCurrentOverride() (Model, tea.Cmd) {
 	}
 	mode := m.modes[m.modeCursor].Mode
 	scope := m.scopeSel.Scope
+	noun := m.itemNoun
 	ctx := m.ctx
 	deps := m.deps
 	m.applying = true
 	m.errMsg = ""
-	m.info = fmt.Sprintf("Clearing %s mode override…", mode)
+	m.info = fmt.Sprintf("Clearing %s %s override…", mode, noun)
 	m.scopeFocused = false
 	m.scopeSel.Blur()
 	m.screen = screenModes
@@ -275,7 +309,7 @@ func (m Model) clearCurrentOverride() (Model, tea.Cmd) {
 		func() tea.Msg {
 			err := deps.ClearModeOverride(ctx, mode, scope)
 			return applyResultMsg{
-				info: fmt.Sprintf("%s mode override cleared (uses default).", mode),
+				info: fmt.Sprintf("%s %s override cleared (uses default).", mode, noun),
 				err:  err,
 			}
 		},
@@ -284,6 +318,7 @@ func (m Model) clearCurrentOverride() (Model, tea.Cmd) {
 
 func (m Model) handleApplyResult(msg applyResultMsg) (Model, tea.Cmd) {
 	m.applying = false
+	m.pendingReset = false
 	if msg.err != nil {
 		m.errMsg = msg.err.Error()
 		m.info = ""
@@ -294,6 +329,39 @@ func (m Model) handleApplyResult(msg applyResultMsg) (Model, tea.Cmd) {
 	m.status = msg.info
 	m.errMsg = ""
 	return m, nil
+}
+
+// resetAllOverrides runs the two-step R confirm: the first press arms it, the
+// second press executes the reset through the Resetter extension. Dialogs
+// whose deps do not implement Resetter (/modes) report that reset is
+// unavailable.
+func (m Model) resetAllOverrides() (Model, tea.Cmd) {
+	r, ok := m.deps.(Resetter)
+	if !ok {
+		m.info = ""
+		m.errMsg = "Reset all is not available here."
+		return m, nil
+	}
+	if !m.pendingReset {
+		m.pendingReset = true
+		m.errMsg = ""
+		m.info = "Press R again to clear every " + m.itemNoun + " override in " + m.scopeSel.Scope.String() + " settings."
+		return m, nil
+	}
+	m.pendingReset = false
+	scope := m.scopeSel.Scope
+	ctx := m.ctx
+	m.applying = true
+	m.errMsg = ""
+	m.info = "Resetting every " + m.itemNoun + " override…"
+	m.screen = screenModes
+	return m, tea.Batch(
+		m.spin.Tick,
+		func() tea.Msg {
+			info, err := r.ResetAllOverrides(ctx, scope)
+			return applyResultMsg{info: info, err: err}
+		},
+	)
 }
 
 func (m Model) currentListLen() int {

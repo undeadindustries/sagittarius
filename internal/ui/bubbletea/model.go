@@ -58,6 +58,12 @@ type modesDialogHost interface {
 	ModesDialogDeps() modesdialog.Deps
 }
 
+// subagentsDialogHost is implemented by an App that can supply the subagent
+// routing editor dependencies.
+type subagentsDialogHost interface {
+	SubagentsDialogDeps() modesdialog.Deps
+}
+
 // systemPromptDialogHost is implemented by an App that can supply the project
 // system-prompt picker dependencies.
 type systemPromptDialogHost interface {
@@ -326,6 +332,9 @@ type model struct {
 	modelPickOverlay *modelpickdialog.Model
 	// modesOverlay holds the mode-override editor.
 	modesOverlay *modesdialog.Model
+	// subagentsOverlay holds the subagent routing editor (same dialog type,
+	// different deps and options).
+	subagentsOverlay *modesdialog.Model
 	// systemPromptOverlay holds the project system-prompt preset picker.
 	systemPromptOverlay *systempromptdialog.Model
 	// mcpOverlay holds the MCP server management wizard.
@@ -344,6 +353,7 @@ type model struct {
 func (m *model) hasOverlay() bool {
 	return m.onboardingOverlay != nil || m.overlay != nil ||
 		m.modelsOverlay != nil || m.modelPickOverlay != nil || m.modesOverlay != nil ||
+		m.subagentsOverlay != nil ||
 		m.systemPromptOverlay != nil || m.mcpOverlay != nil || m.toolsOverlay != nil ||
 		m.bgProcOverlay != nil || m.settingsOverlay != nil
 }
@@ -611,6 +621,10 @@ func (m *model) updateOverlay(msg tea.Msg) (tea.Model, tea.Cmd) {
 			o := m.modesOverlay.SetSize(msg.Width, msg.Height)
 			m.modesOverlay = &o
 		}
+		if m.subagentsOverlay != nil {
+			o := m.subagentsOverlay.SetSize(msg.Width, msg.Height)
+			m.subagentsOverlay = &o
+		}
 		if m.systemPromptOverlay != nil {
 			o := m.systemPromptOverlay.SetSize(msg.Width, msg.Height)
 			m.systemPromptOverlay = &o
@@ -693,6 +707,16 @@ func (m *model) updateOverlay(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	if m.subagentsOverlay != nil {
+		next, cmd := m.subagentsOverlay.Update(msg)
+		if next.Done() {
+			m.closeOverlay(next.Status())
+			return m, cmd
+		}
+		m.subagentsOverlay = &next
+		return m, cmd
+	}
+
 	if m.systemPromptOverlay != nil {
 		next, cmd := m.systemPromptOverlay.Update(msg)
 		if next.Done() {
@@ -762,6 +786,7 @@ func (m *model) closeOverlay(status string) {
 	m.modelsOverlay = nil
 	m.modelPickOverlay = nil
 	m.modesOverlay = nil
+	m.subagentsOverlay = nil
 	m.systemPromptOverlay = nil
 	m.mcpOverlay = nil
 	m.toolsOverlay = nil
@@ -841,6 +866,16 @@ func (m *model) openDialog(kind ui.DialogKind) tea.Cmd {
 		o = o.SetTheme(m.th)
 		o = o.SetSize(m.width, m.height)
 		m.modesOverlay = &o
+	case ui.DialogSubagents:
+		host, ok := m.app.(subagentsDialogHost)
+		if !ok {
+			m.addBlock(roleInfo, "Subagents dialog is unavailable in this session.")
+			return nil
+		}
+		so := modesdialog.NewWithOptions(ctx, host.SubagentsDialogDeps(), modesdialog.SubagentsOptions())
+		so = so.SetTheme(m.th)
+		so = so.SetSize(m.width, m.height)
+		m.subagentsOverlay = &so
 	case ui.DialogSystemPrompt:
 		host, ok := m.app.(systemPromptDialogHost)
 		if !ok {
@@ -917,6 +952,9 @@ func (m *model) View() string {
 	}
 	if m.modesOverlay != nil {
 		return m.modesOverlay.View()
+	}
+	if m.subagentsOverlay != nil {
+		return m.subagentsOverlay.View()
 	}
 	if m.systemPromptOverlay != nil {
 		return m.systemPromptOverlay.View()

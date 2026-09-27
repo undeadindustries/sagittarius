@@ -46,3 +46,36 @@ type Deps interface {
 	// hidden and saves always target Global.
 	ProjectAvailable() bool
 }
+
+// Resetter is an optional Deps extension. When the deps implement it, the
+// dialog offers R (reset every row in the selected scope, two-step confirm).
+// The /modes editor does not implement it; /subagents does.
+type Resetter interface {
+	ResetAllOverrides(ctx context.Context, scope config.SettingScope) (string, error)
+}
+
+// HeaderProvider is an optional Deps extension. When implemented, Header is
+// rendered above the row list (e.g. current enablement state for /subagents).
+type HeaderProvider interface {
+	Header() string
+}
+
+// Options customizes the slot-override editor. The zero value reproduces the
+// /modes editor exactly; /subagents passes its own title and noun.
+type Options struct {
+	// Title is the overlay title. Default "Mode Overrides".
+	Title string
+	// ItemNoun names one row in status lines ("mode" or "slot").
+	// Default "mode".
+	ItemNoun string
+}
+
+// DefaultOptions returns the /modes editor configuration.
+func DefaultOptions() Options {
+	return Options{Title: "Mode Overrides", ItemNoun: "mode"}
+}
+
+// SubagentsOptions returns the /subagents routing editor configuration.
+func SubagentsOptions() Options {
+	return Options{Title: "Subagent Routing", ItemNoun: "slot"}
+}

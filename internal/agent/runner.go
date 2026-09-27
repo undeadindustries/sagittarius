@@ -797,8 +797,30 @@ func (r *Runner) auxGenerator(ctx context.Context) (provider.ContentGenerator, e
 		return r.generator()
 	}
 
+	clone, err := settingsForTarget(settings, evalProvider, evalModel)
+	if err != nil {
+		return nil, fmt.Errorf("aux generator: %w", err)
+	}
+
+	gen, err := provider.NewContentGenerator(ctx, clone)
+	if err != nil {
+		return nil, fmt.Errorf("aux generator: %w", err)
+	}
+	return gen, nil
+}
+
+// settingsForTarget clones settings with the given (provider, model) pair
+// forced active, so a fresh generator built from the clone talks to that pair.
+// An empty providerID resolves to the clone's active provider (the legacy
+// model-only pin shape); an empty model leaves the instance model untouched.
+// The clone shares nothing mutable with the source: Providers and its Extra
+// map are copied (AD-085 auxGenerator mutation guard).
+func settingsForTarget(settings *config.Settings, providerID, model string) (*config.Settings, error) {
+	if settings == nil {
+		return nil, fmt.Errorf("settings are required")
+	}
 	clone := *settings
-	active := config.NormalizeProviderID(evalProvider)
+	active := config.NormalizeProviderID(providerID)
 	if active == "" {
 		active = clone.ActiveProvider()
 	}
@@ -808,18 +830,13 @@ func (r *Runner) auxGenerator(ctx context.Context) (provider.ContentGenerator, e
 	prov := *clone.Providers
 	prov.Extra = maps.Clone(prov.Extra)
 	prov.Active = active
-	if evalModel != "" {
-		if err := setProviderInstanceModel(&prov, active, evalModel); err != nil {
-			return nil, fmt.Errorf("aux generator: %w", err)
+	if model != "" {
+		if err := setProviderInstanceModel(&prov, active, model); err != nil {
+			return nil, err
 		}
 	}
 	clone.Providers = &prov
-
-	gen, err := provider.NewContentGenerator(ctx, &clone)
-	if err != nil {
-		return nil, fmt.Errorf("aux generator: %w", err)
-	}
-	return gen, nil
+	return &clone, nil
 }
 
 // auxEvaluatorTarget reports the configured off-band evaluator provider/model,

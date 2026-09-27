@@ -12,7 +12,7 @@ import (
 func (m Model) View() string {
 	dim := m.th.Dim
 	var b strings.Builder
-	b.WriteString(overlay.Title(m.th, "Mode Overrides") + "\n\n")
+	b.WriteString(overlay.Title(m.th, m.title) + "\n\n")
 	b.WriteString(m.body())
 
 	if m.info != "" {
@@ -39,7 +39,11 @@ func (m Model) footerHint() string {
 		}
 		return hint
 	default:
-		return "↑/↓ move • Enter assign model • r clear override • Esc close"
+		hint := "↑/↓ move • Enter assign model • r clear override • Esc close"
+		if _, ok := m.deps.(Resetter); ok {
+			hint += " • R reset all"
+		}
+		return hint
 	}
 }
 
@@ -60,6 +64,11 @@ func (m Model) body() string {
 func (m Model) renderModes() string {
 	dim := m.th.Dim
 	var b strings.Builder
+	if h, ok := m.deps.(HeaderProvider); ok {
+		if header := h.Header(); header != "" {
+			b.WriteString(overlay.Hints(m.th, header) + "\n\n")
+		}
+	}
 	b.WriteString(overlay.Hints(m.th, "Enter = assign model override • r = clear to default") + "\n\n")
 	for i, me := range m.modes {
 		label := me.Mode
@@ -80,7 +89,7 @@ func (m Model) renderModes() string {
 func (m Model) renderPicker() string {
 	dim := m.th.Dim
 	var b strings.Builder
-	fmt.Fprintf(&b, "Assign model for %s mode\n\n", m.targetMode)
+	fmt.Fprintf(&b, "Assign model for %s %s\n\n", m.targetMode, m.itemNoun)
 	if len(m.models) <= 1 { // only the sentinel, no real models
 		b.WriteString(dim.Render("No active models. Open /providers and activate some first."))
 		return b.String()

@@ -925,14 +925,14 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		return nil, nil, nil, "", "", err
 	}
 
-	// Clean up any stale mode overrides (e.g. from older unqualified configs)
+	// Clean up any stale (provider, model) pins (e.g. from older unqualified configs)
 	// on startup. This ensures the UI doesn't show invalid "gemini - qwen"
 	// states when the user launches.
-	if provider.PruneModeOverrides(docs.Global) {
+	if provider.PruneModelOverrides(docs.Global) {
 		_ = docs.Save(config.ScopeGlobal)
 	}
 	if docs.Project != nil {
-		if provider.PruneModeOverrides(docs.Project) {
+		if provider.PruneModelOverrides(docs.Project) {
 			_ = docs.Save(config.ScopeProject)
 		}
 	}

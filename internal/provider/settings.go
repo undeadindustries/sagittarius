@@ -242,54 +242,120 @@ func WriteActiveModel(settings *config.Settings, providerID, model string) error
 	return setProviderInstance(settings, providerID, &cfg)
 }
 
-// PruneModeOverrides clears any per-mode (provider, model) override whose model
-// is no longer present in the provider's curated active-model set, or whose
-// provider no longer exists. This keeps mode overrides consistent after a model
-// is deactivated or a provider is removed. Settings are mutated in place; the
-// caller is responsible for persisting if the function returns true.
-func PruneModeOverrides(settings *config.Settings) bool {
-	if settings == nil || settings.Sagittarius == nil || settings.Sagittarius.Modes == nil {
+// PruneModelOverrides clears every stale (provider, model) pin: the four
+// per-mode overrides, the subagent default/research/coding/reviewer slots, and
+// the goal evaluator pair. A pin is stale when its provider no longer exists
+// or its model left the provider's curated active-model set (e.g. after a
+// model is deactivated or a provider is removed). Settings are mutated in
+// place; the caller is responsible for persisting if the function returns true.
+func PruneModelOverrides(settings *config.Settings) bool {
+	if settings == nil || settings.Sagittarius == nil {
 		return false
 	}
 	changed := false
-	modes := settings.Sagittarius.Modes
-	for _, mc := range []*config.SagittariusModeConfig{modes.Agent, modes.Plan, modes.Ask, modes.Debug} {
-		if mc == nil || mc.Model == "" {
-			continue
-		}
-		provID := config.NormalizeProviderID(mc.Provider)
-		if provID == "" {
-			// No provider qualifier — it will resolve against the active provider
-			// at runtime. We validate it against the current active provider to
-			// prune stale overrides from older configs.
-			provID = config.NormalizeProviderID(settings.ActiveProvider())
-			if provID == "" {
-				continue
+	if settings.Sagittarius.Modes != nil {
+		modes := settings.Sagittarius.Modes
+		for _, mc := range []*config.SagittariusModeConfig{modes.Agent, modes.Plan, modes.Ask, modes.Debug} {
+			if pruneModeSlot(settings, mc) {
+				changed = true
 			}
 		}
-		// Check provider still exists.
-		if !providerKnown(settings, provID) {
-			mc.Model = ""
-			mc.Provider = ""
-			changed = true
-			continue
-		}
-		// Check model is still in the active set for that provider.
-		active := ActiveModelsFor(settings, provID)
-		found := false
-		for _, m := range active {
-			if m == mc.Model {
-				found = true
-				break
+	}
+	if settings.Sagittarius.Subagents != nil {
+		sub := settings.Sagittarius.Subagents
+		for _, cls := range []*config.SagittariusSubagentClass{sub.Research, sub.Coding, sub.Reviewer} {
+			if pruneSubagentSlot(settings, cls) {
+				changed = true
 			}
 		}
-		if !found {
-			mc.Model = ""
-			mc.Provider = ""
+		if pruneSubagentConfigSlot(settings, &sub.Default) {
 			changed = true
 		}
 	}
+	if pruneGoalEvaluatorSlot(settings) {
+		changed = true
+	}
 	return changed
+}
+
+// PruneModeOverrides is kept for existing callers and tests; it prunes every
+// stale (provider, model) pin, not just mode overrides.
+func PruneModeOverrides(settings *config.Settings) bool {
+	return PruneModelOverrides(settings)
+}
+
+// prunePair reports whether the (provider, model) pin is stale. An empty
+// provider resolves against the active provider at runtime, so it is validated
+// against the current active provider (the pre-existing mode-override rule).
+func prunePair(settings *config.Settings, providerID, model string) bool {
+	if model == "" {
+		return false
+	}
+	provID := config.NormalizeProviderID(providerID)
+	if provID == "" {
+		provID = config.NormalizeProviderID(settings.ActiveProvider())
+		if provID == "" {
+			return false
+		}
+	}
+	if !providerKnown(settings, provID) {
+		return true
+	}
+	for _, m := range ActiveModelsFor(settings, provID) {
+		if m == model {
+			return false
+		}
+	}
+	return true
+}
+
+func pruneModeSlot(settings *config.Settings, mc *config.SagittariusModeConfig) bool {
+	if mc == nil || mc.Model == "" {
+		return false
+	}
+	if !prunePair(settings, mc.Provider, mc.Model) {
+		return false
+	}
+	mc.Model = ""
+	mc.Provider = ""
+	return true
+}
+
+func pruneSubagentSlot(settings *config.Settings, cls *config.SagittariusSubagentClass) bool {
+	if cls == nil || cls.Model == "" {
+		return false
+	}
+	if !prunePair(settings, cls.Provider, cls.Model) {
+		return false
+	}
+	cls.Model = ""
+	cls.Provider = ""
+	return true
+}
+
+func pruneSubagentConfigSlot(settings *config.Settings, cfg *config.SagittariusSubagentConfig) bool {
+	if cfg == nil || cfg.Model == "" {
+		return false
+	}
+	if !prunePair(settings, cfg.Provider, cfg.Model) {
+		return false
+	}
+	cfg.Model = ""
+	cfg.Provider = ""
+	return true
+}
+
+func pruneGoalEvaluatorSlot(settings *config.Settings) bool {
+	goal := settings.Sagittarius.Goal
+	if goal == nil || goal.EvaluatorModel == "" {
+		return false
+	}
+	if !prunePair(settings, goal.EvaluatorProvider, goal.EvaluatorModel) {
+		return false
+	}
+	goal.EvaluatorModel = ""
+	goal.EvaluatorProvider = ""
+	return true
 }
 
 // SetActiveModels persists the curated active-model set for providerID. Values
@@ -325,7 +391,7 @@ func SetActiveModels(settings *config.Settings, providerID string, models []stri
 	if err := setProviderInstance(settings, id, cfg); err != nil {
 		return err
 	}
-	PruneModeOverrides(settings)
+	PruneModelOverrides(settings)
 	return nil
 }
 
@@ -751,7 +817,7 @@ func RemoveCustomProvider(settings *config.Settings, id string) error {
 	if settings.Providers.Active == id {
 		settings.Providers.Active = ""
 	}
-	PruneModeOverrides(settings)
+	PruneModelOverrides(settings)
 	return nil
 }
 
