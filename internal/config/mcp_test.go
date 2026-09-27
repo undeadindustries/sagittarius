@@ -70,10 +70,52 @@ func TestSetMCPServerRejectsInlineSecret(t *testing.T) {
 		t.Fatal("expected inline-secret rejection")
 	}
 
+	// Secret-looking header like CF-Access-Client-Secret is rejected when literal.
+	cfg.Headers = map[string]string{"CF-Access-Client-Secret": "cfast_secret123"}
+	if err := s.SetMCPServer("remote", cfg); err == nil {
+		t.Fatal("expected rejection for literal CF-Access-Client-Secret")
+	}
+
 	// Env-var reference is allowed.
 	cfg.Headers["Authorization"] = "Bearer ${MCP_TOKEN}"
+	cfg.Headers["CF-Access-Client-Secret"] = "${CF_ACCESS_SECRET}"
 	if err := s.SetMCPServer("remote", cfg); err != nil {
-		t.Fatalf("env-var header should be allowed, got %v", err)
+		t.Fatalf("env-var headers should be allowed, got %v", err)
+	}
+
+	// Credentials-store secret reference (${secret:NAME}) is allowed.
+	cfg.Headers = map[string]string{
+		"CF-Access-Client-Id":     "client-id.access",
+		"CF-Access-Client-Secret": "${secret:CF-Access-Client-Secret}",
+	}
+	if err := s.SetMCPServer("remote", cfg); err != nil {
+		t.Fatalf("secret-reference header should be allowed, got %v", err)
+	}
+}
+
+func TestIsInlineSecretHeader(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		key   string
+		val   string
+		match bool
+	}{
+		{"Authorization", "Bearer token", true},
+		{"authorization", "secret", true},
+		{"X-Api-Key", "12345", true},
+		{"CF-Access-Client-Secret", "cfast_xyz", true},
+		{"X-Auth-Token", "token", true},
+		{"X-Custom-Header", "harmless", false},
+		{"CF-Access-Client-Id", "harmless-id", false},
+		{"CF-Access-Client-Secret", "${secret:CF-Access-Client-Secret}", false},
+		{"Authorization", "${MCP_TOKEN}", false},
+		{"X-Secret", "", false},
+		{"X-Secret", "   ", false},
+	}
+	for _, tc := range cases {
+		if got := IsInlineSecretHeader(tc.key, tc.val); got != tc.match {
+			t.Errorf("IsInlineSecretHeader(%q, %q) = %v, want %v", tc.key, tc.val, got, tc.match)
+		}
 	}
 }
 

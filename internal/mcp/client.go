@@ -87,7 +87,10 @@ func buildStdioTransport(cfg ServerConfig) (sdkmcp.Transport, error) {
 
 func buildHTTPTransport(ctx context.Context, cfg ServerConfig, url string) (sdkmcp.Transport, error) {
 	url = ExpandEnvVars(url)
-	headers := ResolveHeaders(ctx, cfg.Name, cfg.Headers, credentials.ResolveMCPServerBearer)
+	headers, err := ResolveHeaders(ctx, cfg.Name, cfg.Headers, credentials.ResolveMCPServerBearer, credentials.ResolveMCPServerHeader)
+	if err != nil {
+		return nil, fmt.Errorf("server %q: %w", cfg.Name, err)
+	}
 	client := &http.Client{
 		Timeout:   cfg.Timeout,
 		Transport: headerRoundTripper{base: http.DefaultTransport, headers: headers},

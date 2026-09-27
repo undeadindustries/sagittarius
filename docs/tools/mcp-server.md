@@ -46,6 +46,28 @@ directly to `settings.json`:
   `settings.json` (see `SECURITY.md`).
 - Optional bearer tokens for MCP servers can be stored via the credentials
   layer (`sagittarius-mcp-<server>` service naming).
+- **HTTP Header Secrets (`${secret:HEADER-NAME}`):** Sensitive HTTP headers
+  (such as `CF-Access-Client-Secret`, API keys, or custom tokens) can be stored
+  in the secure credentials layer (keychain or encrypted file fallback).
+  - In `settings.json`, header values reference the credential via
+    `${secret:HEADER-NAME}`:
+    ```json
+    "headers": {
+      "CF-Access-Client-Id": "12345.access",
+      "CF-Access-Client-Secret": "${secret:CF-Access-Client-Secret}"
+    }
+    ```
+  - In the `/mcp` wizard, any literal secret values entered in the headers field
+    are automatically diverted into the credentials store upon saving, and
+    written to `settings.json` as a `${secret:...}` reference.
+  - At connect time, the client resolves these references against the
+    credentials layer (service `sagittarius-mcp-<server>`, account `header:<name>`).
+    If a secret is missing, connection fails fast with a diagnostic error naming
+    the server and missing header.
+  - Renaming a server in the `/mcp` wizard automatically migrates stored header
+    secrets to the new server name. Removing a server deletes all of its stored
+    header secrets alongside its bearer token.
+- Environment variable references (`${VAR}`) are also supported in header values.
 - OAuth MCP authentication is **deferred** in v1; complex OAuth flows will be
   added in a follow-up.
 

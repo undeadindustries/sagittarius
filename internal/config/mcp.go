@@ -199,14 +199,17 @@ func normalizeToolList(in []string) []string {
 // Env-var references (${VAR}) are allowed; empty values are ignored.
 func validateNoInlineMCPSecrets(cfg MCPServerConfig) error {
 	for key, value := range cfg.Headers {
-		if isInlineSecretHeader(key, value) {
+		if IsInlineSecretHeader(key, value) {
 			return fmt.Errorf("header %q must not contain an inline secret; use an env-var reference like ${TOKEN} or store a bearer token via the credentials store", key)
 		}
 	}
 	return nil
 }
 
-func isInlineSecretHeader(key, value string) bool {
+// IsInlineSecretHeader reports whether a header key/value pair is a literal
+// secret that should not be stored directly in settings.json. Env-var references
+// (${VAR}) and credentials-store references (${secret:NAME}) are permitted.
+func IsInlineSecretHeader(key, value string) bool {
 	value = strings.TrimSpace(value)
 	if value == "" || strings.Contains(value, "${") {
 		return false

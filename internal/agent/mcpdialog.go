@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -128,6 +129,46 @@ func (d *mcpDialogDeps) GetServer(name string) (mcpdialog.ServerForm, bool) {
 	return formFromConfig(name, cfg), true
 }
 
+func (d *mcpDialogDeps) findServerConfig(name string) (config.MCPServerConfig, bool) {
+	if name == "" {
+		return config.MCPServerConfig{}, false
+	}
+	docs := d.docs()
+	s := d.settings()
+	if docs != nil {
+		s = docs.Merged()
+	}
+	if s == nil {
+		return config.MCPServerConfig{}, false
+	}
+	servers, err := s.MCPServers()
+	if err != nil {
+		return config.MCPServerConfig{}, false
+	}
+	cfg, ok := servers[name]
+	return cfg, ok
+}
+
+var secretRefPattern = regexp.MustCompile(`\$\{secret:([^}]+)\}`)
+
+func extractSecretHeaderRefs(headers map[string]string) []string {
+	var refs []string
+	seen := make(map[string]bool)
+	for _, v := range headers {
+		matches := secretRefPattern.FindAllStringSubmatch(v, -1)
+		for _, m := range matches {
+			if len(m) >= 2 {
+				name := strings.TrimSpace(m[1])
+				if name != "" && !seen[name] {
+					seen[name] = true
+					refs = append(refs, name)
+				}
+			}
+		}
+	}
+	return refs
+}
+
 func (d *mcpDialogDeps) SaveServer(ctx context.Context, originalName string, form mcpdialog.ServerForm, scope config.SettingScope) error {
 	docs := d.docs()
 	if docs == nil {
@@ -141,6 +182,22 @@ func (d *mcpDialogDeps) SaveServer(ctx context.Context, originalName string, for
 	if err != nil {
 		return err
 	}
+
+	var oldHeaders map[string]string
+	if originalName != "" {
+		if oldCfg, ok := d.findServerConfig(originalName); ok {
+			oldHeaders = oldCfg.Headers
+		}
+	}
+
+	headerSecretsToSet := make(map[string]string)
+	for k, v := range cfg.Headers {
+		if config.IsInlineSecretHeader(k, v) {
+			headerSecretsToSet[k] = v
+			cfg.Headers[k] = fmt.Sprintf("${secret:%s}", k)
+		}
+	}
+
 	renamed := originalName != "" && originalName != name
 	target := docs.TargetSettings(scope)
 	if renamed {
@@ -158,8 +215,14 @@ func (d *mcpDialogDeps) SaveServer(ctx context.Context, originalName string, for
 	if err := d.persistMCPBearer(ctx, originalName, name, form.Bearer, renamed); err != nil {
 		return err
 	}
-	_, err = d.app.deps.Hooks.ReloadMCP(ctx)
-	return err
+	if err := d.persistMCPHeaderSecrets(ctx, originalName, name, headerSecretsToSet, cfg.Headers, oldHeaders, renamed); err != nil {
+		return err
+	}
+	if d.app.deps.Hooks != nil {
+		_, err = d.app.deps.Hooks.ReloadMCP(ctx)
+		return err
+	}
+	return nil
 }
 
 // persistMCPBearer stores the server's bearer token and, on rename, keeps the
@@ -186,10 +249,58 @@ func (d *mcpDialogDeps) persistMCPBearer(ctx context.Context, originalName, name
 	return nil
 }
 
+func (d *mcpDialogDeps) persistMCPHeaderSecrets(
+	ctx context.Context,
+	originalName, name string,
+	headerSecretsToSet map[string]string,
+	newHeaders map[string]string,
+	oldHeaders map[string]string,
+	renamed bool,
+) error {
+	for headerName, secretVal := range headerSecretsToSet {
+		if err := credentials.SetMCPServerHeaderSecret(ctx, name, headerName, secretVal); err != nil {
+			return fmt.Errorf("server saved but header secret store failed: %w", err)
+		}
+	}
+
+	newRefs := extractSecretHeaderRefs(newHeaders)
+	if renamed {
+		for _, ref := range newRefs {
+			if _, newlySet := headerSecretsToSet[ref]; !newlySet {
+				if existing, err := credentials.ResolveMCPServerHeader(ctx, originalName, ref); err == nil && existing != "" {
+					if err := credentials.SetMCPServerHeaderSecret(ctx, name, ref, existing); err != nil {
+						return fmt.Errorf("server saved but migrating header secret %q failed: %w", ref, err)
+					}
+				}
+			}
+		}
+		for _, oldRef := range extractSecretHeaderRefs(oldHeaders) {
+			_ = credentials.DeleteMCPServerHeader(ctx, originalName, oldRef)
+		}
+	} else if oldHeaders != nil {
+		newRefSet := make(map[string]bool, len(newRefs))
+		for _, ref := range newRefs {
+			newRefSet[ref] = true
+		}
+		for _, oldRef := range extractSecretHeaderRefs(oldHeaders) {
+			if !newRefSet[oldRef] {
+				_ = credentials.DeleteMCPServerHeader(ctx, name, oldRef)
+			}
+		}
+	}
+
+	return nil
+}
+
 func (d *mcpDialogDeps) RemoveServer(ctx context.Context, name string) error {
 	docs := d.docs()
 	if docs == nil {
 		return fmt.Errorf("settings not loaded")
+	}
+	if oldCfg, ok := d.findServerConfig(name); ok {
+		for _, ref := range extractSecretHeaderRefs(oldCfg.Headers) {
+			_ = credentials.DeleteMCPServerHeader(ctx, name, ref)
+		}
 	}
 	scope := d.serverScope(name)
 	target := docs.TargetSettings(scope)
@@ -200,8 +311,11 @@ func (d *mcpDialogDeps) RemoveServer(ctx context.Context, name string) error {
 		return err
 	}
 	_ = credentials.DeleteMCPServerBearer(ctx, name)
-	_, err := d.app.deps.Hooks.ReloadMCP(ctx)
-	return err
+	if d.app.deps.Hooks != nil {
+		_, err := d.app.deps.Hooks.ReloadMCP(ctx)
+		return err
+	}
+	return nil
 }
 
 func (d *mcpDialogDeps) SetDisabled(ctx context.Context, name string, disabled bool) error {
