@@ -101,6 +101,13 @@ func TestExtensionServerNotEditable(t *testing.T) {
 func TestTransportToggleSwapsFields(t *testing.T) {
 	m := New(context.Background(), newFake())
 	m, _ = m.Update(keyRunes("a")) // add form, stdio
+	// stdio: env is passed to the child process; HTTP fields do not apply.
+	if !containsField(m.fields, fEnv) {
+		t.Fatal("stdio transport should expose the env field")
+	}
+	if containsField(m.fields, fHeaders) || containsField(m.fields, fBearer) {
+		t.Fatal("stdio transport should not expose HTTP fields")
+	}
 	// fields[1] is fTransport; move cursor to it and toggle.
 	m.fieldCursor = 1
 	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -113,6 +120,14 @@ func TestTransportToggleSwapsFields(t *testing.T) {
 	}
 	if containsField(m.fields, fCommand) {
 		t.Fatal("http transport should not expose the command field")
+	}
+	// Env only reaches stdio child processes; showing it for HTTP servers
+	// invites HTTP headers to be entered there, where they are never sent.
+	if containsField(m.fields, fEnv) {
+		t.Fatal("http transport should not expose the env field (inert for HTTP servers)")
+	}
+	if !containsField(m.fields, fHeaders) {
+		t.Fatal("http transport should expose the headers field")
 	}
 }
 

@@ -279,12 +279,6 @@ func formFromConfig(name string, cfg config.MCPServerConfig) mcpdialog.ServerFor
 func configFromForm(form mcpdialog.ServerForm) (config.MCPServerConfig, error) {
 	cfg := config.MCPServerConfig{Description: strings.TrimSpace(form.Description)}
 
-	env, err := parseKV(form.Env)
-	if err != nil {
-		return cfg, fmt.Errorf("env: %w", err)
-	}
-	cfg.Env = env
-
 	switch form.Transport {
 	case mcpdialog.TransportHTTP, mcpdialog.TransportSSE:
 		url := strings.TrimSpace(form.URL)
@@ -296,6 +290,9 @@ func configFromForm(form mcpdialog.ServerForm) (config.MCPServerConfig, error) {
 			return cfg, fmt.Errorf("headers: %w", err)
 		}
 		cfg.Headers = headers
+		// Env is deliberately not carried over: it only reaches stdio child
+		// processes, so persisting it for an HTTP/SSE server would store
+		// inert (and typically secret) values that are never sent.
 		if form.Transport == mcpdialog.TransportSSE {
 			cfg.URL = url
 			cfg.Type = "sse"
@@ -308,6 +305,11 @@ func configFromForm(form mcpdialog.ServerForm) (config.MCPServerConfig, error) {
 		if command == "" {
 			return cfg, fmt.Errorf("command is required for stdio transport")
 		}
+		env, err := parseKV(form.Env)
+		if err != nil {
+			return cfg, fmt.Errorf("env: %w", err)
+		}
+		cfg.Env = env
 		cfg.Command = command
 		cfg.Args = splitArgs(form.Args)
 	}

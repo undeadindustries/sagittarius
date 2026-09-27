@@ -134,9 +134,9 @@ func (m Model) fieldLabel(id fieldID) string {
 	case fURL:
 		return "URL: " + m.valueOrPlaceholder(m.form.URL)
 	case fEnv:
-		return "Env (K=V,K=V): " + m.valueOrPlaceholder(m.form.Env)
+		return "Process env (K=V,K=V): " + m.valueOrPlaceholder(m.form.Env)
 	case fHeaders:
-		return "Headers (K=V,K=V): " + m.valueOrPlaceholder(m.form.Headers)
+		return "HTTP headers (K=V,K=V): " + m.valueOrPlaceholder(m.form.Headers)
 	case fBearer:
 		return "Bearer token: " + m.secretPlaceholder(m.form.Bearer)
 	case fTimeout:

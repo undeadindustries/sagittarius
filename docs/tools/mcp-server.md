@@ -54,6 +54,7 @@ directly to `settings.json`:
 | Command | Description |
 |---------|-------------|
 | `/mcp` | Open the server wizard: add, edit, enable/disable, remove, reload |
+| `/mcp settings` | Open the same server wizard (listed so it appears in completion) |
 | `/mcp list` | Show configured servers and connection status (text) |
 | `/mcp reload` | Reconnect servers and rediscover tools |
 | `/tools` | Browse the effective tool inventory and toggle MCP tools |

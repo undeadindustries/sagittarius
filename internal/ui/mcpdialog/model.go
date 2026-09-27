@@ -513,9 +513,11 @@ func (m *Model) rebuildFields() {
 	case TransportHTTP, TransportSSE:
 		fields = append(fields, fURL, fHeaders, fBearer)
 	default:
-		fields = append(fields, fCommand, fArgs)
+		// Env is only offered for stdio: it becomes the child process
+		// environment and is never sent on HTTP/SSE requests.
+		fields = append(fields, fCommand, fArgs, fEnv)
 	}
-	fields = append(fields, fEnv, fTimeout, fDescription, fTrust, fDisabled, fSave)
+	fields = append(fields, fTimeout, fDescription, fTrust, fDisabled, fSave)
 	m.fields = fields
 	if m.fieldCursor >= len(m.fields) {
 		m.fieldCursor = 0
