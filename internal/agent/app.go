@@ -316,6 +316,15 @@ func (a *App) AskSidebar(ctx context.Context, question string) (<-chan ui.Stream
 // CycleTheme implements ui.ThemeController: it toggles the TUI color theme
 // between "default" and "greyscale", persists the choice (ui.theme), and returns
 // the new name so the TUI applies it live. Backs the Alt+T shortcut.
+// CancelSubagent implements ui.SubagentCanceller: the TUI's Ctrl+X on a
+// selected task-group card stops that one child (AD-154).
+func (a *App) CancelSubagent(callID string) bool {
+	if a == nil || a.runner == nil {
+		return false
+	}
+	return a.runner.CancelSubagent(callID)
+}
+
 func (a *App) CycleTheme() (string, error) {
 	s := a.effectiveSettings()
 	if s == nil {

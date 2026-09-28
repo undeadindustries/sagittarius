@@ -460,6 +460,18 @@ func (m *model) renderTaskGroup(tg *taskGroupBlock, width int) []string {
 			out = append(out, border.Render("│")+" "+strings.Repeat(" ", inner)+" "+border.Render("│"))
 		}
 	}
-	out = append(out, border.Render("╰"+strings.Repeat("─", width-2)+"╯"))
+	// When a running child is selected, the bottom border names the cancel key
+	// (AD-154). Requiring a selection first is the guard against an accidental
+	// keypress, so the hint only appears when the key would act.
+	if tg.selectedIdx >= 0 && tg.selectedIdx < len(tg.tasks) && tg.tasks[tg.selectedIdx].phase == toolRunning {
+		hint := m.th.Dim.Render("Ctrl+X cancel")
+		hfill := width - 5 - lipgloss.Width(hint)
+		if hfill < 0 {
+			hfill = 0
+		}
+		out = append(out, border.Render("╰─")+" "+hint+" "+border.Render(strings.Repeat("─", hfill)+"╯"))
+	} else {
+		out = append(out, border.Render("╰"+strings.Repeat("─", width-2)+"╯"))
+	}
 	return out
 }

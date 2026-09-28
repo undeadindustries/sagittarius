@@ -157,6 +157,14 @@ type ThemeController interface {
 	CycleTheme() (string, error)
 }
 
+// SubagentCanceller is an optional capability the TUI uses to stop one running
+// subagent (Ctrl+X on its selected task-group card) without canceling its
+// siblings or the turn. The argument is the tool call ID on the card. It
+// returns false when no such child is running. The agent App implements it.
+type SubagentCanceller interface {
+	CancelSubagent(callID string) bool
+}
+
 // RequestDebugExporter is an optional capability the TUI uses to write the
 // most recent provider request to a JSON file (Ctrl+Shift+D, same as /chat
 // debug). Safe to call while a turn is in flight: the runner stores the

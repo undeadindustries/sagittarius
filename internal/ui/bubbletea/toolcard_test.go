@@ -101,6 +101,82 @@ func TestRenderToolCardConfirmMenu(t *testing.T) {
 	}
 }
 
+// cancelApp records CancelSubagent calls for the per-child cancel tests
+// (AD-154).
+type cancelApp struct {
+	quitApp
+	got []string
+	ret bool
+}
+
+func (c *cancelApp) CancelSubagent(id string) bool {
+	c.got = append(c.got, id)
+	return c.ret
+}
+
+// TestTaskGroupCtrlXCancelsSelectedChild: Ctrl+X cancels only the selected,
+// still-running card; a finished sibling and an accidental press with no
+// selection both do nothing.
+func TestTaskGroupCtrlXCancelsSelectedChild(t *testing.T) {
+	t.Parallel()
+	app := &cancelApp{ret: true}
+	m := newTestModel()
+	m.app = app
+
+	cards := []*toolCard{
+		{callID: "c1", toolName: "code_task", displayName: "Coding subagent", summary: "A", phase: toolRunning},
+		{callID: "c2", toolName: "code_task", displayName: "Coding subagent", summary: "B", phase: toolSuccess},
+	}
+	m.blocks = append(m.blocks, scrollBlock{role: roleTaskGroup, taskGroup: &taskGroupBlock{tasks: cards, selectedIdx: 0}})
+
+	if !m.handleTaskGroupKey("ctrl+x") {
+		t.Fatal("ctrl+x must be swallowed by the task group")
+	}
+	if len(app.got) != 1 || app.got[0] != "c1" {
+		t.Fatalf("CancelSubagent calls = %v, want [c1]", app.got)
+	}
+	if cards[0].body != "Canceling…" {
+		t.Errorf("card body = %q, want the cancel acknowledgment", cards[0].body)
+	}
+
+	// The selected card is finished: nothing to cancel.
+	m.lastTaskGroup().selectedIdx = 1
+	m.handleTaskGroupKey("ctrl+x")
+	if len(app.got) != 1 {
+		t.Errorf("a finished card must not be canceled: %v", app.got)
+	}
+
+	// No selection: an accidental press does nothing.
+	m.lastTaskGroup().selectedIdx = -1
+	m.handleTaskGroupKey("ctrl+x")
+	if len(app.got) != 1 {
+		t.Errorf("no selection must not cancel: %v", app.got)
+	}
+}
+
+// TestTaskGroupCancelHint renders the Ctrl+X hint only when a running card is
+// selected.
+func TestTaskGroupCancelHint(t *testing.T) {
+	t.Parallel()
+	m := newTestModel()
+	cards := []*toolCard{
+		{callID: "c1", toolName: "code_task", displayName: "Coding subagent", summary: "A", phase: toolRunning},
+	}
+	tg := &taskGroupBlock{tasks: cards, selectedIdx: 0}
+	if out := stripANSI(strings.Join(m.renderTaskGroup(tg, 60), "\n")); !strings.Contains(out, "Ctrl+X cancel") {
+		t.Errorf("selected running card must show the cancel hint:\n%s", out)
+	}
+	tg.selectedIdx = -1
+	if out := stripANSI(strings.Join(m.renderTaskGroup(tg, 60), "\n")); strings.Contains(out, "Ctrl+X cancel") {
+		t.Errorf("no selection must not show the hint:\n%s", out)
+	}
+	cards[0].phase = toolSuccess
+	tg.selectedIdx = 0
+	if out := stripANSI(strings.Join(m.renderTaskGroup(tg, 60), "\n")); strings.Contains(out, "Ctrl+X cancel") {
+		t.Errorf("a finished card must not show the hint:\n%s", out)
+	}
+}
+
 // TestRenderTaskGroupIntegrity pins the benchmark failure: a completed
 // non-selected task's body is a multi-line result, and rendering it raw leaked
 // the embedded newlines and broke the frame. The group now shows a titled

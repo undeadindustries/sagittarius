@@ -60,6 +60,10 @@ type Scheduler struct {
 	// (batch review, AD-153). Nil means no finalization.
 	batchFinalizer func(ctx context.Context, batch []SubagentBatchItem, emit func(ui.StreamEvent)) error
 
+	// subagentCancelRegistry publishes each subagent call's cancel function
+	// for the child's lifetime (per-child cancel, AD-154). Nil disables it.
+	subagentCancelRegistry func(callID string, cancel context.CancelCauseFunc) (unregister func())
+
 	// sessionGrants records tools the user approved "for this session" so later
 	// invocations of the same tool skip confirmation. Guarded by mu.
 	mu            sync.Mutex
@@ -148,6 +152,20 @@ func WithFileState(reg *FileStateRegistry) SchedulerOption {
 // registry rebuild (the AD-081 live-resolution pattern).
 func WithSubagentConcurrency(fn func() int) SchedulerOption {
 	return func(s *Scheduler) { s.subagentConcurrency = fn }
+}
+
+// ErrSubagentCanceledByUser is the cancel cause when one subagent is stopped
+// from the UI (AD-154). Tools distinguish it from a turn cancel via
+// context.Cause so a user-canceled child can return a partial hand-off
+// instead of an error.
+var ErrSubagentCanceledByUser = errors.New("subagent canceled by user")
+
+// WithSubagentCancelRegistry installs the hook Execute uses to publish each
+// subagent call's cancel function while the child runs. The registry returns
+// an unregister func, called when the call settles. Nil means no per-child
+// cancel (children share the batch context, the pre-AD-154 behavior).
+func WithSubagentCancelRegistry(fn func(callID string, cancel context.CancelCauseFunc) (unregister func())) SchedulerOption {
+	return func(s *Scheduler) { s.subagentCancelRegistry = fn }
 }
 
 // SubagentBatchItem pairs a code_task call with its response slot for the
@@ -239,7 +257,22 @@ func (s *Scheduler) Execute(
 			continue
 		}
 		eg.Go(func() error {
-			resp, err := s.executeOne(ctx, call, emit)
+			// Each subagent gets its own cancel scope so the TUI can stop one
+			// child without cancelling its siblings or the parent's turn
+			// (AD-154). The cause distinguishes a user-cancel from a turn
+			// cancel: context.Cause(childCtx) is ErrSubagentCanceledByUser only
+			// when CancelSubagent fired.
+			callCtx := ctx
+			if s.subagentCancelRegistry != nil {
+				var cancel context.CancelCauseFunc
+				callCtx, cancel = context.WithCancelCause(ctx)
+				unregister := s.subagentCancelRegistry(call.ID, cancel)
+				defer cancel(nil)
+				if unregister != nil {
+					defer unregister()
+				}
+			}
+			resp, err := s.executeOne(callCtx, call, emit)
 			if err != nil {
 				// A child that dies must not throw away the work its siblings
 				// already committed to disk. Record the failure in that child's

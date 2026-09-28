@@ -14,6 +14,10 @@ const (
 	subagentStatusCompleted  = "completed"
 	subagentStatusFailed     = "failed"
 	subagentStatusIncomplete = "incomplete"
+	// subagentStatusCanceled marks a child the user stopped from the TUI
+	// (AD-154). It is distinct from failed: the work may be fine as far as it
+	// went, and the parent must not treat it as a defect to retry.
+	subagentStatusCanceled = "canceled"
 )
 
 // buildSubagentResult assembles the structured hand-off every subagent tool
@@ -88,6 +92,23 @@ func buildSubagentResult(child *subagent, class config.SubagentClass, runErr err
 	if next := subagentNextStep(class, status, filesChanged, checksRan, checksOK); next != "" {
 		result["next_step"] = next
 	}
+	return result
+}
+
+// canceledSubagentResult builds the hand-off for a child the user stopped
+// (AD-154). Unlike a failed launch, a canceled child keeps its files_changed:
+// writes that landed before the cancel are real, and dropping them from the
+// hand-off would hide them from the parent.
+func canceledSubagentResult(child *subagent, class config.SubagentClass, runErr error, attempt, maxAttempts int) map[string]any {
+	result := buildSubagentResult(child, class, runErr, attempt, maxAttempts)
+	result["status"] = subagentStatusCanceled
+	delete(result, "error")
+	if summary, _ := result["summary"].(string); summary == "" || (runErr != nil && summary == runErr.Error()) {
+		result["summary"] = "Canceled by user."
+		result["result"] = result["summary"]
+	}
+	result["next_step"] = "The user canceled this task; files_changed may be partial. " +
+		"Do not re-delegate or repeat it without asking the user first."
 	return result
 }
 

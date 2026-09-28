@@ -297,6 +297,13 @@ type Runner struct {
 	// same goroutine — no lock, and turnActive already serializes turns.
 	turnRequest string
 
+	// subagentCancels holds the cancel functions of in-flight subagent calls,
+	// keyed by tool call ID (plus "<id>#review-N" / "<id>#fix-N" for the
+	// harness-launched review/fix children), so the TUI can stop one child
+	// without canceling its siblings or the turn (AD-154).
+	subagentCancelsMu sync.Mutex
+	subagentCancels   map[string]context.CancelCauseFunc
+
 	goalMu     sync.RWMutex
 	activeGoal *goal.Goal
 
@@ -503,6 +510,7 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		nudgedPaths:           make(map[string]bool),
 		repoLocalGrants:       make(map[string]bool),
 		subagentAttempts:      make(map[string]int),
+		subagentCancels:       make(map[string]context.CancelCauseFunc),
 		goplsHintPending:      needsGoplsHint(cfg.Settings, ws.Root()),
 		loadedMemoryFiles:     memoryFiles,
 		initialSessionGrants:  cfg.InitialSessionGrants,
@@ -1815,9 +1823,12 @@ func (r *Runner) schedulerOptions() []tools.SchedulerOption {
 		tools.WithSubagentConcurrency(r.subagentConcurrency),
 	}
 	// Batch review (AD-153) belongs to the parent only: children cannot
-	// delegate, so they never have a code_task batch to finalize.
+	// delegate, so they never have a code_task batch to finalize. The cancel
+	// registry follows the same rule — a child's scheduler never runs
+	// subagent calls, so there is nothing to register.
 	if !r.isSubagent() {
 		opts = append(opts, tools.WithSubagentBatchFinalizer(r.runBatchReview))
+		opts = append(opts, tools.WithSubagentCancelRegistry(r.registerSubagentCancel))
 	}
 	if r.snap != nil {
 		opts = append(opts, tools.WithSnapshotter(r.snap))
@@ -1839,6 +1850,35 @@ func (r *Runner) schedulerOptions() []tools.SchedulerOption {
 		opts = append(opts, tools.WithWriteLease(*r.writeLease))
 	}
 	return opts
+}
+
+// registerSubagentCancel publishes a subagent call's cancel function for the
+// call's lifetime and returns the unregister func the scheduler defers.
+func (r *Runner) registerSubagentCancel(callID string, cancel context.CancelCauseFunc) func() {
+	r.subagentCancelsMu.Lock()
+	r.subagentCancels[callID] = cancel
+	r.subagentCancelsMu.Unlock()
+	return func() {
+		r.subagentCancelsMu.Lock()
+		delete(r.subagentCancels, callID)
+		r.subagentCancelsMu.Unlock()
+	}
+}
+
+// CancelSubagent stops one in-flight subagent by its tool call ID (or a
+// harness child's derived card ID), leaving its siblings and the turn
+// running. It returns false when no such child is running — a settled child's
+// entry is already gone, so a stale card cannot cancel a later call that
+// happens to reuse the ID space.
+func (r *Runner) CancelSubagent(callID string) bool {
+	r.subagentCancelsMu.Lock()
+	cancel, ok := r.subagentCancels[callID]
+	r.subagentCancelsMu.Unlock()
+	if !ok {
+		return false
+	}
+	cancel(tools.ErrSubagentCanceledByUser)
+	return true
 }
 
 // readOnlyPolicy reports whether the agent should force read-only tool gating.

@@ -3316,6 +3316,22 @@ func (m *model) handleTaskGroupKey(msg string) bool {
 		tg.selectedIdx = -1
 		m.syncViewportContent()
 		return true
+	case "ctrl+x":
+		// Per-child cancel (AD-154): only with an explicit selection, so an
+		// accidental keypress cannot kill a child. The card body acknowledges
+		// immediately; the result event settles the card when the child stops.
+		if tg.selectedIdx < 0 || tg.selectedIdx >= len(tg.tasks) {
+			return true
+		}
+		card := tg.tasks[tg.selectedIdx]
+		if card.phase != toolRunning {
+			return true
+		}
+		if sc, ok := m.app.(ui.SubagentCanceller); ok && sc.CancelSubagent(card.callID) {
+			card.body = "Canceling…"
+			m.syncViewportContent()
+		}
+		return true
 	}
 	return false
 }

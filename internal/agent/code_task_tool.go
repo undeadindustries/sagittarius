@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -159,6 +160,17 @@ func (t *codeTaskTool) ExecuteStream(ctx context.Context, args map[string]any, s
 
 	_, runErr := child.run(ctx, spec.prompt, sink)
 	if runErr != nil && ctx.Err() != nil {
+		// A user cancel of this one child (AD-154) is a hand-off, not a tool
+		// error: the parent needs the partial state, and the batch goes on.
+		if errors.Is(context.Cause(ctx), tools.ErrSubagentCanceledByUser) {
+			result := canceledSubagentResult(child, config.SubagentCoding, runErr, attempt, maxAttempts)
+			result["lease"] = spec.lease.Patterns
+			if via := subagentViaLabel(t.runner, child); via != "" {
+				result["via"] = via
+			}
+			appendRereadNotice(result, t.parentRereadNotice(startedAt))
+			return result, nil
+		}
 		return nil, runErr
 	}
 

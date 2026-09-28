@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -193,6 +194,14 @@ func (r *Runner) reviewBatch(ctx context.Context, baseID string, round int, cont
 		emit(ui.StreamEvent{Type: ui.StreamToolResult, ToolName: "batch_review", ToolCallID: cardID, Text: text, IsError: isErr})
 	}
 
+	// The reviewer runs under its own cancel scope, registered under the
+	// card's derived ID, so the user can stop a stalled review without
+	// canceling the turn (AD-154).
+	reviewCtx, cancel := context.WithCancelCause(ctx)
+	unregister := r.registerSubagentCancel(cardID, cancel)
+	defer cancel(nil)
+	defer unregister()
+
 	reviewPrompt := r.batchReviewPrompt(contract, outcomes, files)
 	// A reviewer that returns no verdict gives the batch nothing: an empty
 	// deliverable (a reasoning-only reply ends a child turn cleanly) or a
@@ -201,7 +210,7 @@ func (r *Runner) reviewBatch(ctx context.Context, baseID string, round int, cont
 	// guards, and a silent no-op review is the worst outcome.
 	var text string
 	for attempt := 1; attempt <= 2; attempt++ {
-		reviewer, err := r.newSubagent(ctx, subagentSpec{
+		reviewer, err := r.newSubagent(reviewCtx, subagentSpec{
 			description: fmt.Sprintf("Batch review (round %d)", round),
 			mode:        modes.ModeAsk,
 			class:       config.SubagentReviewer,
@@ -217,8 +226,12 @@ func (r *Runner) reviewBatch(ctx context.Context, baseID string, round int, cont
 		}
 
 		var runErr error
-		text, runErr = reviewer.run(ctx, reviewPrompt, cardSink(emit, cardID))
+		text, runErr = reviewer.run(reviewCtx, reviewPrompt, cardSink(emit, cardID))
 		if runErr != nil {
+			if errors.Is(context.Cause(reviewCtx), tools.ErrSubagentCanceledByUser) {
+				finish("canceled by user", true)
+				return map[string]any{"verdict": reviewVerdictError, "findings": "review canceled by user"}, nil
+			}
 			if ctx.Err() != nil {
 				return nil, runErr
 			}
@@ -255,7 +268,14 @@ func (r *Runner) runBatchFix(ctx context.Context, baseID string, round int, cont
 		emit(ui.StreamEvent{Type: ui.StreamToolResult, ToolName: "batch_fix", ToolCallID: cardID, Text: text, IsError: isErr})
 	}
 
-	child, err := r.newSubagent(ctx, subagentSpec{
+	// The fix child gets the same per-card cancel scope as the reviewer
+	// (AD-154); a cancel ends the loop and leaves the batch needs_changes.
+	fixCtx, cancel := context.WithCancelCause(ctx)
+	unregister := r.registerSubagentCancel(cardID, cancel)
+	defer cancel(nil)
+	defer unregister()
+
+	child, err := r.newSubagent(fixCtx, subagentSpec{
 		description: fmt.Sprintf("Fix review findings (round %d)", round),
 		mode:        modes.ModeAgent,
 		class:       config.SubagentCoding,
@@ -272,8 +292,12 @@ func (r *Runner) runBatchFix(ctx context.Context, baseID string, round int, cont
 		return nil, fmt.Errorf("fix subagent could not start: %w", err)
 	}
 
-	_, runErr := child.run(ctx, batchFixPrompt(contract, findings, files, r.turnRequest), cardSink(emit, cardID))
+	_, runErr := child.run(fixCtx, batchFixPrompt(contract, findings, files, r.turnRequest), cardSink(emit, cardID))
 	if runErr != nil {
+		if errors.Is(context.Cause(fixCtx), tools.ErrSubagentCanceledByUser) {
+			finish("canceled by user", true)
+			return nil, fmt.Errorf("fix subagent canceled by user")
+		}
 		if ctx.Err() != nil {
 			return nil, runErr
 		}

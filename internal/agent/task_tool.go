@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/undeadindustries/sagittarius/internal/config"
@@ -96,6 +97,15 @@ func (t *taskTool) ExecuteStream(ctx context.Context, args map[string]any, sink 
 	// buildSubagentResult; run's text return is superseded by the schema.
 	_, runErr := child.run(ctx, promptText, sink)
 	if runErr != nil && ctx.Err() != nil {
+		// A user cancel of this one child (AD-154) is a hand-off, not a tool
+		// error: the parent needs the partial state, and the batch goes on.
+		if errors.Is(context.Cause(ctx), tools.ErrSubagentCanceledByUser) {
+			result := canceledSubagentResult(child, config.SubagentResearch, runErr, attempt, maxAttempts)
+			if via := subagentViaLabel(t.runner, child); via != "" {
+				result["via"] = via
+			}
+			return result, nil
+		}
 		return nil, runErr
 	}
 	result := buildSubagentResult(child, config.SubagentResearch, runErr, attempt, maxAttempts)
