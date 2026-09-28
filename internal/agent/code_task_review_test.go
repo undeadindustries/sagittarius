@@ -270,6 +270,42 @@ func TestBatchReviewNeedsChangesTurnGuard(t *testing.T) {
 	}
 }
 
+// TestBatchReviewRetriesEmptyReviewer: a reasoning-only reply ends a child
+// turn cleanly with no deliverable (the empty-reply guard exempts it), so the
+// reviewer gets one nudge retry before the batch accepts "unknown".
+func TestBatchReviewRetriesEmptyReviewer(t *testing.T) {
+	t.Setenv("SAGITTARIUS_HOME", t.TempDir())
+	root := t.TempDir()
+	seedFile(t, root, "alpha/a.txt", "alpha-before")
+	seedFile(t, root, "beta/b.txt", "beta-before")
+
+	snapMgr, err := snapshot.NewManager(root, "batch-retry", snapshot.Options{})
+	if err != nil {
+		t.Fatalf("snapshot.NewManager: %v", err)
+	}
+	scripts := batchScripts()
+	scripts["Review this finished batch"] = [][]provider.StreamResponse{
+		// Reasoning with no text: a clean turn end that produced nothing.
+		{{ReasoningDelta: "let me think about this", Done: true}},
+		{{TextDelta: "all consistent.\nVERDICT: PASS", Done: true}},
+	}
+	gen := newRoutedGenerator(scripts)
+	parent := batchReviewParent(t, root, gen, snapMgr, nil)
+
+	drainToSlice(t, mustRunTurn(t, parent, "PARENT"))
+
+	if got := gen.turns("Review this finished batch"); got != 2 {
+		t.Errorf("reviewer ran %d times, want 2 (empty, then the nudge retry)", got)
+	}
+	review, ok := codeTaskResponses(t, parent)[0]["batch_review"].(map[string]any)
+	if !ok {
+		t.Fatal("first hand-off has no batch_review block")
+	}
+	if review["verdict"] != reviewVerdictPass {
+		t.Errorf("verdict = %v, want pass from the retry", review["verdict"])
+	}
+}
+
 // TestBatchReviewMaxFixRoundsZero: review-only mode attaches the failing
 // verdict without launching a fix child.
 func TestBatchReviewMaxFixRoundsZero(t *testing.T) {

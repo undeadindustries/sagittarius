@@ -225,10 +225,12 @@ The full `batch_review` block (`verdict`, `findings`, `fix_rounds`,
 `fix_files_changed`) is attached to the first `code_task` result; siblings
 carry a one-line reference. Reviewer and fix children are harness-launched, so
 they never count toward the delegation budget, and a reviewer that cannot
-start is reported as `verdict: error` rather than failing the batch. While
-they run, the TUI shows Review and Fix cards with the same routing badge other
-subagents get. Cost note: a review plus up to one fix round adds up to two
-child runs per batch.
+start is reported as `verdict: error` rather than failing the batch. A
+reviewer that returns no usable verdict (a reasoning model can end its turn
+with thinking and no report) is retried once with an explicit nudge before the
+batch accepts `unknown`. While they run, the TUI shows Review and Fix cards
+with the same routing badge other subagents get. Cost note: a review plus up
+to one fix round adds up to two child runs per batch.
 
 ## When not to use them
 

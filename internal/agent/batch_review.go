@@ -188,28 +188,44 @@ func (r *Runner) reviewBatch(ctx context.Context, baseID string, round int, cont
 		emit(ui.StreamEvent{Type: ui.StreamToolResult, ToolName: "batch_review", ToolCallID: cardID, Text: text, IsError: isErr})
 	}
 
-	reviewer, err := r.newSubagent(ctx, subagentSpec{
-		description: fmt.Sprintf("Batch review (round %d)", round),
-		mode:        modes.ModeAsk,
-		class:       config.SubagentReviewer,
-		charter:     prompt.ReviewSubagentCharter(),
-		approval:    r.approval,
-	})
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
+	reviewPrompt := r.batchReviewPrompt(contract, outcomes, files)
+	// A reviewer that returns no verdict gives the batch nothing: an empty
+	// deliverable (a reasoning-only reply ends a child turn cleanly) or a
+	// missing verdict line both land here. Retry once with an explicit nudge
+	// before accepting "unknown" — the retry is cheap next to the batch it
+	// guards, and a silent no-op review is the worst outcome.
+	var text string
+	for attempt := 1; attempt <= 2; attempt++ {
+		reviewer, err := r.newSubagent(ctx, subagentSpec{
+			description: fmt.Sprintf("Batch review (round %d)", round),
+			mode:        modes.ModeAsk,
+			class:       config.SubagentReviewer,
+			charter:     prompt.ReviewSubagentCharter(),
+			approval:    r.approval,
+		})
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			finish("reviewer could not start: "+err.Error(), true)
+			return map[string]any{"verdict": reviewVerdictError, "findings": "reviewer could not start: " + err.Error()}, nil
 		}
-		finish("reviewer could not start: "+err.Error(), true)
-		return map[string]any{"verdict": reviewVerdictError, "findings": "reviewer could not start: " + err.Error()}, nil
-	}
 
-	text, runErr := reviewer.run(ctx, r.batchReviewPrompt(contract, outcomes, files), cardSink(emit, cardID))
-	if runErr != nil {
-		if ctx.Err() != nil {
-			return nil, runErr
+		var runErr error
+		text, runErr = reviewer.run(ctx, reviewPrompt, cardSink(emit, cardID))
+		if runErr != nil {
+			if ctx.Err() != nil {
+				return nil, runErr
+			}
+			finish(runErr.Error(), true)
+			return map[string]any{"verdict": reviewVerdictError, "findings": runErr.Error()}, nil
 		}
-		finish(runErr.Error(), true)
-		return map[string]any{"verdict": reviewVerdictError, "findings": runErr.Error()}, nil
+		if parseReviewVerdict(text) != reviewVerdictUnknown {
+			break
+		}
+		if attempt == 1 {
+			reviewPrompt += "\n\nYour previous reply had no usable verdict. Report your findings and end with exactly one line: VERDICT: PASS or VERDICT: FAIL."
+		}
 	}
 	verdict := parseReviewVerdict(text)
 	finish(capRunes(text, 400), verdict == reviewVerdictFail)
