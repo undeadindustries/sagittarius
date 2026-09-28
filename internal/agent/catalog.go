@@ -333,6 +333,12 @@ func (a *mcpToolAdapter) Name() string { return a.inner.Name() }
 
 func (a *mcpToolAdapter) RequiresConfirmation() bool { return a.inner.RequiresConfirmation() }
 
+// ReadOnlyHint forwards the wrapped tool's read-only resolution (server trust
+// plus the readOnlyTools allowlist plus the tool's own annotation). Without
+// this the adapter hides the hint from the scheduler's mode and lease gates,
+// and every MCP tool fails closed in ask/plan and in leased subagents.
+func (a *mcpToolAdapter) ReadOnlyHint() bool { return a.inner.ReadOnlyHint() }
+
 func (a *mcpToolAdapter) Declaration() provider.ToolDeclaration { return a.inner.Declaration() }
 
 func (a *mcpToolAdapter) Execute(ctx context.Context, args map[string]any) (map[string]any, error) {

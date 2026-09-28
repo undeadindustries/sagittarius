@@ -171,7 +171,9 @@ func (t *grepTool) Execute(ctx context.Context, args map[string]any) (map[string
 		totalMax = maxTotal
 	}
 	rgArgs = append(rgArgs, "--max-count", strconv.Itoa(totalMax))
-	rgArgs = append(rgArgs, pattern, searchPath)
+	// "--" ends flag parsing so a pattern starting with "-" (e.g. a diff
+	// header or a negative look-around) is not read as an rg flag.
+	rgArgs = append(rgArgs, "--", pattern, searchPath)
 
 	runCtx, cancel := context.WithTimeout(ctx, grepTimeout)
 	defer cancel()

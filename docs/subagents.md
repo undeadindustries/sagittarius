@@ -70,6 +70,19 @@ transcript would say so. The lease turns that race into a refusal you can see:
   `code_task` is registered for a child.
 - **Write outside the workspace,** or past the project boundary if that is on.
   The lease narrows the existing gates; it never widens them.
+- **Call a write-capable MCP tool.** A leased child cannot bound an MCP write,
+  so it is denied. Read-only MCP tools (a search, a calculator) are admitted —
+  there is nothing for the lease to bound.
+
+## What a child inherits
+
+A child gets the full context-file stack the parent has: the global and project
+`AGENTS.md` walk, both `MEMORY.md` files, the personality system prompt, and its
+class charter. It also inherits the parent's standing `/constraints` (a scope
+limit you set must bind a leased write), the shared runtime's MCP tools, and
+`activate_skill`. It does not get the conversation history (the context
+firewall is the point), the parent's scratchpad, or `search_session` — those
+are model state and stay behind the firewall.
 
 ### Approval
 

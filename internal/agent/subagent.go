@@ -128,6 +128,12 @@ func (r *Runner) newSubagent(ctx context.Context, spec subagentSpec) (*subagent,
 		// context firewall (AD-138); constraints are user-authored scope, not
 		// model state, so they cross it.
 		InitialConstraints: r.Constraints(),
+		// Children share the parent's runtime, so MCP servers and skills are
+		// the same. The mode gate decides which are callable: a research child
+		// (ModeAsk) admits only read-only MCP tools (AD-133), and a coding
+		// child's lease admits read-only MCP tools and denies unbounded writes
+		// (AD-130). activate_skill is read-only and available to both.
+		ExtraTools: r.runtimeToolsForChild(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create subagent runner: %w", err)
@@ -141,6 +147,27 @@ func (r *Runner) newSubagent(ctx context.Context, spec subagentSpec) (*subagent,
 		"class", spec.class, "mode", spec.mode,
 		"provider", effectiveProvider, "model", target.Model, "source", string(target.Source))
 	return &subagent{runner: child, id: subID, desc: spec.description}, nil
+}
+
+// runtimeToolsForChild builds the shared-runtime tools a child inherits:
+// activate_skill plus every discovered MCP tool. Children share the parent's
+// runtime (MCP servers, skills), so the tools are the same; the child's mode
+// and lease gates decide which are callable. Returns nil when the runtime or
+// its catalog is unavailable (tests, headless without MCP).
+func (r *Runner) runtimeToolsForChild() []tools.Tool {
+	if r.runtime == nil || r.runtime.Catalog == nil {
+		return nil
+	}
+	var out []tools.Tool
+	if mgr := r.runtime.Catalog.SkillManager(); mgr != nil {
+		out = append(out, tools.NewActivateSkillTool(mgr))
+	}
+	if mcpMgr := r.runtime.Catalog.MCPManager(); mcpMgr != nil {
+		for _, tool := range mcpMgr.Tools() {
+			out = append(out, wrapMCPTool(tool))
+		}
+	}
+	return out
 }
 
 // run drives one turn to completion and returns the child's final message,

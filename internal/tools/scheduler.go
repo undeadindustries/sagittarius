@@ -547,7 +547,18 @@ func (s *Scheduler) leaseAllow(name string, args map[string]any) (ErrorCode, str
 	}
 	c := canonicalToolName(name)
 	if !IsFileMutatingTool(c) {
-		if c == SaveMemoryToolName || strings.HasPrefix(c, "mcp_") {
+		if strings.HasPrefix(c, "mcp_") {
+			// A read-only MCP tool has no writes for the lease to bound, so it
+			// is admitted; write-capable MCP tools stay denied. The hint is
+			// resolved at connect time from server trust plus the readOnlyTools
+			// allowlist (AD-133), so an untrusted server cannot talk its way in.
+			if tool, ok := s.registry.Lookup(name); ok && toolIsReadOnly(tool) {
+				return "", "", true
+			}
+			return ErrCodeModeRestriction, fmt.Sprintf(
+				"subagent: MCP tool %q is not available because its effects cannot be bounded by a write lease; report what you need instead", name), false
+		}
+		if c == SaveMemoryToolName {
 			return ErrCodeModeRestriction, fmt.Sprintf(
 				"subagent: tool %q is not available because its effects cannot be bounded by a write lease; report what you need instead", name), false
 		}

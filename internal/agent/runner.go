@@ -114,6 +114,11 @@ type RunnerConfig struct {
 	InitialScratchpad string
 	// InitialReadOnly seeds the standing session read-only posture.
 	InitialReadOnly *bool
+	// ExtraTools are registered into the runner's registry alongside the
+	// built-ins — used by newSubagent to give a child the shared runtime's
+	// MCP tools and activate_skill. Nil for the main agent (its catalog
+	// registry already carries them).
+	ExtraTools []tools.Tool
 	// VerboseLog, when non-nil, receives a full timestamped transcript of every
 	// request sent to the provider and every response/tool result received
 	// (see --log-verbose). It is opt-in and independent of debug logging; the
@@ -450,6 +455,14 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		tools.WithSpillDir(cfg.SpillDir),
 		tools.WithScriptTool(cfg.ScriptToolEnabled),
 	)
+	// ExtraTools are registered before the runner-owned tools and the
+	// scheduler/prompt are built, so a subagent's registry can carry the
+	// shared runtime's MCP tools and activate_skill (see newSubagent).
+	for _, t := range cfg.ExtraTools {
+		if t != nil {
+			registry.Register(t)
+		}
+	}
 
 	// Create the runner struct first to pass it to goal tools
 	var history []provider.Message

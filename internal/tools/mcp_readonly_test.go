@@ -41,6 +41,33 @@ func mcpTool(name string, readOnly bool) Tool {
 	return readOnlyMCPTool{fakeMCPTool: base}
 }
 
+// TestLeaseAdmitsReadOnlyMCPTool: a leased coding subagent can call a
+// read-only MCP tool (nothing to bound), while a write-capable one stays
+// denied. The lease exists to bound writes; a read-only MCP call has none.
+func TestLeaseAdmitsReadOnlyMCPTool(t *testing.T) {
+	t.Parallel()
+
+	ws := newTestWorkspace(t)
+	reg := NewBuiltinRegistry(ws)
+	reg.Register(mcpTool("mcp_palace_search", true))
+	reg.Register(mcpTool("mcp_palace_write", false))
+	sched := NewScheduler(reg, Policy{Mode: ApprovalYolo}, false, nil, ws,
+		WithWriteLease(leaseFor(t, "owned/**")))
+
+	// Read-only MCP tool is admitted through the lease.
+	got := runOne(t, sched, provider.ToolCall{Name: "mcp_palace_search", ID: "r1", Args: map[string]any{}})
+	if got["error"] != nil {
+		t.Fatalf("read-only MCP tool denied by lease: %v", got)
+	}
+
+	// Write-capable MCP tool stays denied.
+	got = runOne(t, sched, provider.ToolCall{Name: "mcp_palace_write", ID: "w1", Args: map[string]any{}})
+	errText, _ := got["error"].(string)
+	if !strings.Contains(errText, "cannot be bounded by a write lease") {
+		t.Fatalf("write MCP tool should be lease-denied, got %v", got)
+	}
+}
+
 // TestReadOnlyMCPToolAllowedInReadOnlyModes is the point of the feature: an MCP
 // tool that modifies nothing (a calculator, a docs search) must be usable in the
 // modes whose promise is that nothing changes. It was previously denied by a
