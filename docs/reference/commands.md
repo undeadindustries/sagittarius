@@ -127,6 +127,7 @@ These work in the interactive TUI in addition to the slash commands above.
 | `Ctrl+T` | Toggle the thinking ("reasoning") box |
 | `Ctrl+Shift+D` | Export the last provider request to a JSON file (works mid-turn; same as `/chat debug`) |
 | `Ctrl+O` | Expand or collapse a pasted text placeholder in place |
+| `Ctrl+X` | Cancel the selected subagent in a task group (select a card with Up/Down first); siblings keep running |
 | `Alt+M` | Toggle mouse-wheel scrolling (see below) |
 | `Ctrl+B` | Open the background process viewer |
 | `PgUp` / `PgDn` / `Shift+Up` / `Shift+Down` | Scroll the conversation |

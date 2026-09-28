@@ -197,6 +197,26 @@ Sibling subagents run together. `sagittarius.subagents.maxConcurrent` (default
 8, range 1–16) caps the fan-out; `1` runs children serially, which also reads
 as "concurrency disabled". The setting applies live with no rebuild.
 
+### Canceling one child
+
+`Esc` cancels the whole turn, which stops every sibling. To stop just one —
+say a child stalled on a slow provider while its siblings finished — select
+its card in the Sub Agents group with `Up`/`Down` and press `Ctrl+X`. The
+batch continues without it. A canceled coding child still reports the files it
+wrote before the cancel (`status: canceled`), and the parent is told not to
+re-delegate the task without asking you first. The Review and Fix cards can be
+canceled the same way.
+
+### Delegation prompt gate
+
+A delegation whose prompt is a bare placeholder (`todo`, `task 2`) or carries
+an unexpanded template marker (`Implement {module_name}`, `write to
+<file name>`) is refused before any child launches — the subagent cannot
+resolve placeholders, so the call could only waste tokens. The whole batch is
+denied, not just the offending call. Literal code is exempt inside backticks
+or fenced blocks, so f-string placeholders and generics in code samples are
+fine.
+
 ## Batch review
 
 `sagittarius.subagents.reviewer.enabled` controls the batch review. The default
@@ -204,13 +224,15 @@ follows the coding switch: enabling `code_task` enables the review, and an
 explicit `false` turns it off alone.
 
 After a turn's `code_task` children settle, one reviewer child reads the whole
-batch at once — the shared contract, each sibling's summary, the changed-file
-list, and per-file diffs from the snapshot index (or the files themselves when
-snapshotting is off). Reviewing the batch rather than each child is the point:
-a per-child review passes internally consistent work, while the defects that
-matter live on the seams between siblings (one child stores cents, another
-reads floats). The reviewer reports findings plus a `VERDICT: PASS` /
-`VERDICT: FAIL` line the harness parses.
+batch at once — your request for the turn, the shared contract, each sibling's
+summary, the changed-file list, and per-file diffs from the snapshot index (or
+the files themselves when snapshotting is off). Reviewing the batch rather than
+each child is the point: a per-child review passes internally consistent work,
+while the defects that matter live on the seams between siblings (one child
+stores cents, another reads floats). Your request is included so the reviewer
+can flag a contract that contradicts or omits something you asked for — the
+parent writes the contract, and it can be wrong. The reviewer reports findings
+plus a `VERDICT: PASS` / `VERDICT: FAIL` line the harness parses.
 
 A FAIL triggers one automatic fix round by default: a coding child with the
 union of the batch's leases gets the findings and the contract, repairs them,
