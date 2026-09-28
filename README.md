@@ -273,7 +273,7 @@ You can extend the agent's domain knowledge and capabilities by creating skills.
 - **Global skills:** `~/.sagittarius/skills/` (or `~/.agents/skills/`).
 - **Project skills:** `<your-project>/.sagittarius/skills/` (or `<your-project>/.agents/skills/`).
 
-The agent discovers these automatically and can activate them when relevant. Use **`/skills`** in the CLI to list or reload them.
+The agent discovers these automatically and can activate them when relevant (the `activate_skill` tool declaration advertises the full catalog of available skill names and descriptions so the model and subagents can self-select skills). Use **`/skills`** in the CLI to list or reload them.
 
 A ready-made `verify-after-edit` skill ships in [docs/skills/verify-after-edit/SKILL.md](docs/skills/verify-after-edit/SKILL.md). Copy it into your skills directory to reinforce running lint, format, type-check, and tests after edits.
 

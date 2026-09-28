@@ -551,7 +551,7 @@ again.
   - **Description:** List discovered skills (user, workspace, extension paths).
   - **Usage:** `/skills list` or `/skills`
 - **`reload`**
-  - **Description:** Rescan skill directories and refresh the `activate_skill` tool schema.
+  - **Description:** Rescan skill directories and refresh the `activate_skill` tool schema (which advertises the skill names and descriptions catalog to the model).
   - **Usage:** `/skills reload`
 
 To force a specific skill on a single message rather than leaving the choice to
