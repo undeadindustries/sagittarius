@@ -74,6 +74,8 @@ const (
 	wireWebFetch      = "web_fetch"
 	wireTask          = "task"
 	wireCodeTask      = "code_task"
+	wireBatchReview   = "batch_review"
+	wireBatchFix      = "batch_fix"
 	wireScratchpad    = "update_scratchpad"
 	wireSessionSearch = "search_session"
 	wireWaitUntil     = "wait_until"
@@ -122,9 +124,9 @@ func toolDisplayName(name string) string {
 		return "Research subagent"
 	case wireCodeTask:
 		return "Coding subagent"
-	case "batch_review":
+	case wireBatchReview:
 		return "Review"
-	case "batch_fix":
+	case wireBatchFix:
 		return "Fix"
 	case wireScratchpad:
 		return "Scratchpad"
@@ -134,6 +136,17 @@ func toolDisplayName(name string) string {
 		return "Wait"
 	default:
 		return name
+	}
+}
+
+// isSubagentTool reports whether a tool runs as a subagent card grouped in a
+// task group (research, coding, batch review, and batch fix).
+func isSubagentTool(name string) bool {
+	switch name {
+	case wireTask, wireCodeTask, wireBatchReview, wireBatchFix:
+		return true
+	default:
+		return false
 	}
 }
 

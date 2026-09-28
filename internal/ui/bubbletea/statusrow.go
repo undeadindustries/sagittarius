@@ -145,7 +145,7 @@ func (m *model) statusRowParts() (left, right string) {
 	nWorking := 0
 	waiting := false
 	for _, c := range m.cardByID {
-		if (c.toolName == wireTask || c.toolName == wireCodeTask) && c.phase == toolRunning {
+		if isSubagentTool(c.toolName) && c.phase == toolRunning {
 			nWorking++
 		}
 		if c.toolName == wireWaitUntil && c.phase == toolRunning {

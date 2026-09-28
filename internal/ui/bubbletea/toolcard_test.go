@@ -116,7 +116,8 @@ func (c *cancelApp) CancelSubagent(id string) bool {
 
 // TestTaskGroupCtrlXCancelsSelectedChild: Ctrl+X cancels only the selected,
 // still-running card; a finished sibling and an accidental press with no
-// selection both do nothing.
+// selection both do nothing. Review and fix cards in the task group can be
+// canceled the same way.
 func TestTaskGroupCtrlXCancelsSelectedChild(t *testing.T) {
 	t.Parallel()
 	app := &cancelApp{ret: true}
@@ -126,6 +127,7 @@ func TestTaskGroupCtrlXCancelsSelectedChild(t *testing.T) {
 	cards := []*toolCard{
 		{callID: "c1", toolName: "code_task", displayName: "Coding subagent", summary: "A", phase: toolRunning},
 		{callID: "c2", toolName: "code_task", displayName: "Coding subagent", summary: "B", phase: toolSuccess},
+		{callID: "c1#review-1", toolName: "batch_review", displayName: "Review", summary: "Batch review", phase: toolRunning},
 	}
 	m.blocks = append(m.blocks, scrollBlock{role: roleTaskGroup, taskGroup: &taskGroupBlock{tasks: cards, selectedIdx: 0}})
 
@@ -139,18 +141,63 @@ func TestTaskGroupCtrlXCancelsSelectedChild(t *testing.T) {
 		t.Errorf("card body = %q, want the cancel acknowledgment", cards[0].body)
 	}
 
+	// The review card can be canceled when selected.
+	m.lastTaskGroup().selectedIdx = 2
+	m.handleTaskGroupKey("ctrl+x")
+	if len(app.got) != 2 || app.got[1] != "c1#review-1" {
+		t.Fatalf("CancelSubagent calls = %v, want second call [c1#review-1]", app.got)
+	}
+	if cards[2].body != "Canceling…" {
+		t.Errorf("card body = %q, want the cancel acknowledgment", cards[2].body)
+	}
+
 	// The selected card is finished: nothing to cancel.
 	m.lastTaskGroup().selectedIdx = 1
 	m.handleTaskGroupKey("ctrl+x")
-	if len(app.got) != 1 {
+	if len(app.got) != 2 {
 		t.Errorf("a finished card must not be canceled: %v", app.got)
 	}
 
 	// No selection: an accidental press does nothing.
 	m.lastTaskGroup().selectedIdx = -1
 	m.handleTaskGroupKey("ctrl+x")
-	if len(app.got) != 1 {
+	if len(app.got) != 2 {
 		t.Errorf("no selection must not cancel: %v", app.got)
+	}
+}
+
+// TestStartToolCardGroupsBatchReviewAndFix verifies that batch_review and
+// batch_fix start events are appended to the subagent task group.
+func TestStartToolCardGroupsBatchReviewAndFix(t *testing.T) {
+	t.Parallel()
+	m := newTestModel()
+
+	// Initial code_task creates the task group.
+	m.startToolCard(ui.StreamEvent{Type: ui.StreamToolStart, ToolName: "code_task", ToolCallID: "c1", Text: "Task A"})
+	if len(m.blocks) != 1 || m.blocks[0].role != roleTaskGroup {
+		t.Fatalf("expected 1 task group block, got %+v", m.blocks)
+	}
+	tg := m.blocks[0].taskGroup
+	if len(tg.tasks) != 1 || tg.tasks[0].callID != "c1" {
+		t.Fatalf("expected 1 task c1, got %+v", tg.tasks)
+	}
+
+	// batch_review appends to the same task group.
+	m.startToolCard(ui.StreamEvent{Type: ui.StreamToolStart, ToolName: "batch_review", ToolCallID: "c1#review-1", Text: "Batch review"})
+	if len(m.blocks) != 1 {
+		t.Fatalf("expected batch_review to stay in task group, got %d blocks", len(m.blocks))
+	}
+	if len(tg.tasks) != 2 || tg.tasks[1].callID != "c1#review-1" || tg.tasks[1].displayName != "Review" {
+		t.Fatalf("expected task 2 to be review, got %+v", tg.tasks)
+	}
+
+	// batch_fix appends to the same task group.
+	m.startToolCard(ui.StreamEvent{Type: ui.StreamToolStart, ToolName: "batch_fix", ToolCallID: "c1#fix-1", Text: "Fix review findings"})
+	if len(m.blocks) != 1 {
+		t.Fatalf("expected batch_fix to stay in task group, got %d blocks", len(m.blocks))
+	}
+	if len(tg.tasks) != 3 || tg.tasks[2].callID != "c1#fix-1" || tg.tasks[2].displayName != "Fix" {
+		t.Fatalf("expected task 3 to be fix, got %+v", tg.tasks)
 	}
 }
 

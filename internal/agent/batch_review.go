@@ -187,7 +187,7 @@ func (r *Runner) reviewBatch(ctx context.Context, baseID string, round int, cont
 	cardID := fmt.Sprintf("%s#review-%d", baseID, round)
 	emit(ui.StreamEvent{
 		Type: ui.StreamToolStart, ToolName: "batch_review", ToolCallID: cardID,
-		Text:  fmt.Sprintf("batch review, round %d (%d files)", round, len(files)),
+		Text:  fmt.Sprintf("Batch review, round %d (%d files)", round, len(files)),
 		Badge: subagentBadge(r, config.SubagentReviewer),
 	})
 	finish := func(text string, isErr bool) {
@@ -261,7 +261,7 @@ func (r *Runner) runBatchFix(ctx context.Context, baseID string, round int, cont
 	cardID := fmt.Sprintf("%s#fix-%d", baseID, round)
 	emit(ui.StreamEvent{
 		Type: ui.StreamToolStart, ToolName: "batch_fix", ToolCallID: cardID,
-		Text:  fmt.Sprintf("fix review findings, round %d", round),
+		Text:  fmt.Sprintf("Fix review findings, round %d", round),
 		Badge: subagentBadge(r, config.SubagentCoding),
 	})
 	finish := func(text string, isErr bool) {
