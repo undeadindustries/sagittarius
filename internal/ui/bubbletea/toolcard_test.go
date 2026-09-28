@@ -101,6 +101,66 @@ func TestRenderToolCardConfirmMenu(t *testing.T) {
 	}
 }
 
+// TestRenderTaskGroupIntegrity pins the benchmark failure: a completed
+// non-selected task's body is a multi-line result, and rendering it raw leaked
+// the embedded newlines and broke the frame. The group now shows a titled
+// frame, a per-row routing badge, and a one-line activity.
+func TestRenderTaskGroupIntegrity(t *testing.T) {
+	t.Parallel()
+	m := newTestModel()
+
+	body := "via qwen/qwen3.8-27b\nWrote 4 file(s): app/db/__init__.py, app/db/connection.py, app/db/repository.py, app/db/schema.py\nDone."
+	cards := []*toolCard{
+		{toolName: "code_task", displayName: "Coding subagent", badge: "qwen/qwen3.8-27b", summary: "Implement app/db layer", body: body, phase: toolSuccess},
+		{toolName: "code_task", displayName: "Coding subagent", badge: "qwen/qwen3.8-27b", summary: "Implement app/models", body: body, phase: toolSuccess},
+	}
+	tg := &taskGroupBlock{tasks: cards, selectedIdx: 0}
+
+	for _, width := range []int{84, 60, 40} {
+		lines := m.renderTaskGroup(tg, width)
+		for i, ln := range lines {
+			if w := lipgloss.Width(ln); w != width {
+				t.Errorf("width %d line %d width = %d, want %d:\n%q", width, i, w, width, stripANSI(ln))
+			}
+			plain := stripANSI(ln)
+			if !strings.HasPrefix(plain, "╭") && !strings.HasPrefix(plain, "│") && !strings.HasPrefix(plain, "╰") {
+				t.Errorf("width %d line %d missing left border: %q", width, i, plain)
+			}
+		}
+		joined := strings.Join(lines, "\n")
+		if !strings.Contains(joined, "Sub Agents") {
+			t.Errorf("width %d: group frame missing its title", width)
+		}
+		// The badge survives truncation at wide-enough widths; at 40 the
+		// description wins the truncation and the badge may be cut.
+		if width >= 60 && !strings.Contains(joined, "(qwen/qwen3.8-27b)") {
+			t.Errorf("width %d: group rows missing the routing badge", width)
+		}
+	}
+}
+
+// TestRenderTaskGroupSingleLineActivity pins the specific break: a
+// non-selected task's activity must be one line even when its result body is
+// multi-line. The selected task's body is exempt — it is expanded by design.
+func TestRenderTaskGroupSingleLineActivity(t *testing.T) {
+	t.Parallel()
+	m := newTestModel()
+	cards := []*toolCard{
+		{toolName: "code_task", displayName: "Coding subagent", summary: "A", body: "selected full body", phase: toolSuccess},
+		{toolName: "code_task", displayName: "Coding subagent", summary: "B", body: "firstactivity\nsecondactivity", phase: toolSuccess},
+	}
+	tg := &taskGroupBlock{tasks: cards, selectedIdx: 0}
+	lines := m.renderTaskGroup(tg, 60)
+	joined := strings.Join(lines, "\n")
+	// Task B is not selected: only its first body line may appear.
+	if strings.Contains(joined, "secondactivity") {
+		t.Errorf("non-selected task leaked a second body line into the frame:\n%s", joined)
+	}
+	if !strings.Contains(joined, "firstactivity") {
+		t.Errorf("non-selected task missing its one-line activity:\n%s", joined)
+	}
+}
+
 func TestRenderToolCardMCPBadge(t *testing.T) {
 	t.Parallel()
 	m := newTestModel()

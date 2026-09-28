@@ -912,6 +912,12 @@ func formatToolSummary(toolName string, args map[string]any) string {
 		if cmd, err := stringArg(args, ShellParamCommand); err == nil {
 			return truncateOneLine(cmd, 72)
 		}
+	case TaskToolName, CodeTaskToolName:
+		// The description is the card's title in the task group; without it the
+		// group falls back to a bare "Task" for every row.
+		if desc := optionalStringArg(args, TaskParamDescription); desc != "" {
+			return truncateOneLine(desc, 72)
+		}
 	case WaitUntilToolName:
 		if desc := optionalStringArg(args, WaitUntilParamDescription); desc != "" {
 			return truncateOneLine(desc, 72)

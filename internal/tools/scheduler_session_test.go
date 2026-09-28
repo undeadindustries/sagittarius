@@ -131,6 +131,8 @@ func TestFormatToolSummary(t *testing.T) {
 		{"write path", WriteFileToolName, map[string]any{ParamFilePath: "pkg/x.go"}, "pkg/x.go"},
 		{"shell command", ShellToolName, map[string]any{ShellParamCommand: "go build ./..."}, "go build ./..."},
 		{"shell multiline truncated to first line", ShellToolName, map[string]any{ShellParamCommand: "echo a\necho b"}, "echo a"},
+		{"research subagent shows its description", TaskToolName, map[string]any{TaskParamDescription: "Research the schema"}, "Research the schema"},
+		{"coding subagent shows its description", CodeTaskToolName, map[string]any{TaskParamDescription: "Add retry"}, "Add retry"},
 		{"unknown tool", "grep_search", map[string]any{}, ""},
 	}
 	for _, tc := range cases {

@@ -377,7 +377,9 @@ func (m *model) wrapStyled(text string, width int, style lipgloss.Style) []strin
 	return out
 }
 
-// renderTaskGroup draws the collapsed subagent cards inside one frame.
+// renderTaskGroup draws the collapsed subagent cards inside one frame. The top
+// border carries a "Sub Agents" title like any other card; each row shows the
+// task description plus the child's routed provider/model badge.
 func (m *model) renderTaskGroup(tg *taskGroupBlock, width int) []string {
 	if width < 8 {
 		width = 8
@@ -389,7 +391,14 @@ func (m *model) renderTaskGroup(tg *taskGroupBlock, width int) []string {
 		inner = 1
 	}
 
-	out := []string{border.Render("╭" + strings.Repeat("─", width-2) + "╮")}
+	// Title the frame like any other card: "╭─ Sub Agents ───╮". The width math
+	// matches toolCardTop: "╭─" (2) + " " (1) + title + " " (1) + fill + "╮" (1).
+	title := m.th.Accent.Bold(true).Render("Sub Agents")
+	fill := width - 5 - lipgloss.Width(title)
+	if fill < 0 {
+		fill = 0
+	}
+	out := []string{border.Render("╭─") + " " + title + " " + border.Render(strings.Repeat("─", fill)+"╮")}
 	for i, c := range tg.tasks {
 		clean := *c
 		clean.body = sanitizeDisplayText(clean.body)
@@ -411,6 +420,11 @@ func (m *model) renderTaskGroup(tg *taskGroupBlock, width int) []string {
 		if title == "" {
 			title = "Task"
 		}
+		// The routing badge names the child's provider/model when it differs
+		// from the parent's (AD-147); it reads from the start event.
+		if clean.badge != "" {
+			title += " " + m.th.Code.Render("("+clean.badge+")")
+		}
 
 		prefix := " "
 		if i == tg.selectedIdx {
@@ -423,6 +437,12 @@ func (m *model) renderTaskGroup(tg *taskGroupBlock, width int) []string {
 		if i != tg.selectedIdx {
 			activity := clean.body
 			if activity != "" {
+				// The body of a completed task is a multi-line result; the
+				// collapsed row is one line. Rendering the raw body would leak
+				// the embedded newlines and break the frame.
+				if idx := strings.IndexByte(activity, '\n'); idx >= 0 {
+					activity = activity[:idx]
+				}
 				line2 := "     " + m.th.Dim.Render(activity)
 				out = append(out, border.Render("│")+" "+padOrTruncate(line2, inner)+" "+border.Render("│"))
 			}
