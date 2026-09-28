@@ -201,6 +201,52 @@ func TestFormatTaskResultVia(t *testing.T) {
 	}
 }
 
+// TestNonInteractiveDenialNamesCause: a headless/subagent denial must not say
+// "user denied" — no user was asked. The message names the gate and the way
+// out, so a child stops retrying shell variants that all fail identically.
+func TestNonInteractiveDenialNamesCause(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	ws, err := NewWorkspace(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := NewBuiltinRegistry(ws)
+	// interactive=false, default policy (not yolo): an unrecognized shell
+	// command escalates and fails closed without a user.
+	s := NewScheduler(registry, Policy{Mode: ApprovalDefault}, false, nil, ws,
+		WithReadOnlyPolicy(func() ReadOnlyPolicy { return PolicyShellInspect }))
+
+	var events []ui.StreamEvent
+	emit := func(ev ui.StreamEvent) { events = append(events, ev) }
+	calls := []provider.ToolCall{{
+		Name: ShellToolName,
+		ID:   "s1",
+		Args: map[string]any{ShellParamCommand: "frobnicate --widget"},
+	}}
+	if _, err := s.Execute(context.Background(), calls, emit); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	var got string
+	for _, ev := range events {
+		if ev.Type == ui.StreamToolResult && ev.IsError {
+			got = ev.Text
+		}
+	}
+	if got == "" {
+		t.Fatal("expected an error result")
+	}
+	if strings.Contains(got, "user denied") {
+		t.Errorf("non-interactive denial must not blame a user: %q", got)
+	}
+	for _, want := range []string{"non-interactive", "read-only"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("denial %q does not name %q", got, want)
+		}
+	}
+}
+
 // badgeStub is a StartBadger: the scheduler must copy its label onto the
 // StreamToolStart event so the card border can show it.
 type badgeStub struct{ label string }

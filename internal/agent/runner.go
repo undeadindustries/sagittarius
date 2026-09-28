@@ -930,14 +930,25 @@ func (r *Runner) RunTurn(ctx context.Context, userInput string) (<-chan ui.Strea
 	// instructions. A resolution failure (missing file, directory, binary,
 	// outside workspace, unknown skill) aborts the turn with a surfaced error
 	// rather than silently dropping context.
-	parts, err := atmention.Expand(r.workspace, userInput, r.skillResolver())
-	if err != nil {
-		r.turnActive.Store(false)
-		ch := make(chan ui.StreamEvent, 2)
-		ch <- ui.StreamEvent{Type: ui.StreamError, Err: err}
-		ch <- ui.StreamEvent{Type: ui.StreamDone}
-		close(ch)
-		return ch, nil
+	//
+	// Subagent prompts are model-generated, not typed into the composer, so
+	// mention expansion must not run on them: a code sample containing a
+	// decorator like @pytest.fixture would otherwise be read as a file
+	// reference and abort the child's turn before it starts.
+	var parts []provider.Part
+	if r.isSubagent() {
+		parts = []provider.Part{{Text: userInput}}
+	} else {
+		var err error
+		parts, err = atmention.Expand(r.workspace, userInput, r.skillResolver())
+		if err != nil {
+			r.turnActive.Store(false)
+			ch := make(chan ui.StreamEvent, 2)
+			ch <- ui.StreamEvent{Type: ui.StreamError, Err: err}
+			ch <- ui.StreamEvent{Type: ui.StreamDone}
+			close(ch)
+			return ch, nil
+		}
 	}
 
 	r.verboseLog.LogTurnStart(userInput)

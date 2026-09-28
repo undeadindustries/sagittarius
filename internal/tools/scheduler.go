@@ -413,7 +413,16 @@ func (s *Scheduler) executeOne(
 			return nil, err
 		}
 		if !approved {
+			// A non-interactive caller (subagent, headless) never prompted a
+			// user, so "user denied" is a lie that sends the model hunting for
+			// a workaround. Name the real gate and the way out.
 			errText := "user denied tool execution"
+			if !s.interactive {
+				errText = "tool requires confirmation but this session is non-interactive (subagent or headless); no one can approve it"
+				if isEscalation {
+					errText = "shell command not recognized as read-only and this session is non-interactive (subagent or headless); no one can approve it. Use read-only tools (read_file, grep_search, run_project_checks) instead of the shell"
+				}
+			}
 			emitErr(errText)
 			return errorResponse(call, ErrCodeUserDenied, errText), nil
 		}

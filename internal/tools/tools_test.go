@@ -208,8 +208,9 @@ func TestShellBlockedWhenDenied(t *testing.T) {
 	if len(responses) != 1 {
 		t.Fatalf("responses = %d, want 1", len(responses))
 	}
-	if responses[0].Response["error"] != "user denied tool execution" {
-		t.Fatalf("response = %#v, want denial", responses[0].Response)
+	want := "tool requires confirmation but this session is non-interactive (subagent or headless); no one can approve it"
+	if responses[0].Response["error"] != want {
+		t.Fatalf("response = %#v, want %q", responses[0].Response, want)
 	}
 
 	tool, ok := registry.Lookup(ShellToolName)

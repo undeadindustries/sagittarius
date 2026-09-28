@@ -39,19 +39,21 @@ func TestSubagentBadgeFollowsPins(t *testing.T) {
 	}
 	h := newSubagentHarness(t, settings)
 
-	if got := subagentBadge(h.parent, config.SubagentResearch); got != "child-model" {
-		t.Errorf("research badge = %q, want child-model (legacy model-only pin)", got)
+	if got := subagentBadge(h.parent, config.SubagentResearch); got != "openai/child-model" {
+		t.Errorf("research badge = %q, want openai/child-model (legacy model-only pin resolves provider from live)", got)
 	}
 	if got := subagentBadge(h.parent, config.SubagentCoding); got != "openrouter/qwen/qwen3-coder" {
 		t.Errorf("coding badge = %q, want openrouter/qwen/qwen3-coder", got)
 	}
-	// Reviewer has no pin: it resolves to the live pair, so no badge.
-	if got := subagentBadge(h.parent, config.SubagentReviewer); got != "" {
-		t.Errorf("unpinned reviewer badge = %q, want empty", got)
+	// Reviewer has no pin: it resolves to the live pair, and the badge shows
+	// it — the card exists to make routing visible even when nothing is
+	// pinned.
+	if got, want := subagentBadge(h.parent, config.SubagentReviewer), "openai/parent-model"; got != want {
+		t.Errorf("unpinned reviewer badge = %q, want %q (the live pair)", got, want)
 	}
 }
 
-func TestSubagentBadgeSilentWhenPinMatchesLive(t *testing.T) {
+func TestSubagentBadgeShowsLivePairWhenPinMatches(t *testing.T) {
 	t.Parallel()
 
 	on := true
@@ -64,8 +66,8 @@ func TestSubagentBadgeSilentWhenPinMatchesLive(t *testing.T) {
 		},
 	}
 	h := newSubagentHarness(t, settings)
-	if got := subagentBadge(h.parent, config.SubagentResearch); got != "" {
-		t.Errorf("badge = %q, want empty when the pin matches the live pair", got)
+	if got, want := subagentBadge(h.parent, config.SubagentResearch), "openai/parent-model"; got != want {
+		t.Errorf("badge = %q, want %q even when the pin matches the live pair", got, want)
 	}
 }
 
