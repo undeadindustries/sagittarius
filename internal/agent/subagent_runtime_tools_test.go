@@ -28,7 +28,7 @@ func (f fakeReadOnlyMCPTool) Execute(context.Context, map[string]any) (map[strin
 func TestRuntimeToolsForChildNilRuntime(t *testing.T) {
 	t.Parallel()
 	h := newSubagentHarness(t, openAISettingsWithModelPins(nil))
-	if got := h.parent.runtimeToolsForChild(); got != nil {
+	if got := h.parent.runtimeToolsForChild(ApprovalDefault); got != nil {
 		t.Errorf("runtimeToolsForChild with no runtime = %v, want nil", got)
 	}
 }
@@ -51,13 +51,56 @@ func TestRuntimeToolsForChildIncludesSkillAndMCP(t *testing.T) {
 	h := newSubagentHarness(t, openAISettingsWithModelPins(nil))
 	h.parent.runtime = &Runtime{Catalog: cat}
 
-	got := h.parent.runtimeToolsForChild()
+	got := h.parent.runtimeToolsForChild(ApprovalDefault)
 	var names []string
 	for _, tool := range got {
 		names = append(names, tool.Name())
 	}
 	if !containsString(names, "activate_skill") {
 		t.Errorf("child tools %v missing activate_skill", names)
+	}
+}
+
+// fakeUntrustedMCPTool is a read-only MCP double from an untrusted server: its
+// calls require confirmation, which a non-interactive child cannot give.
+type fakeUntrustedMCPTool struct{ fakeReadOnlyMCPTool }
+
+func (fakeUntrustedMCPTool) RequiresConfirmation() bool { return true }
+
+// TestWithoutUnconfirmable: a child only inherits tools its approval policy
+// lets it run unattended. Under default approval an untrusted MCP tool would be
+// denied on every call, so it must not be declared; yolo and autoEdit do not
+// confirm MCP calls, so the same tool stays.
+func TestWithoutUnconfirmable(t *testing.T) {
+	t.Parallel()
+	trusted := fakeReadOnlyMCPTool{name: "mcp_trusted_search"}
+	untrusted := fakeUntrustedMCPTool{fakeReadOnlyMCPTool{name: "mcp_untrusted_search"}}
+
+	cases := []struct {
+		approval ApprovalMode
+		want     []string
+	}{
+		{ApprovalDefault, []string{"mcp_trusted_search"}},
+		{ApprovalAutoEdit, []string{"mcp_trusted_search", "mcp_untrusted_search"}},
+		{ApprovalYolo, []string{"mcp_trusted_search", "mcp_untrusted_search"}},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.approval), func(t *testing.T) {
+			t.Parallel()
+			got := withoutUnconfirmable([]tools.Tool{trusted, untrusted}, tc.approval)
+			var names []string
+			for _, tool := range got {
+				names = append(names, tool.Name())
+			}
+			if len(names) != len(tc.want) {
+				t.Fatalf("tools = %v, want %v", names, tc.want)
+			}
+			for i := range names {
+				if names[i] != tc.want[i] {
+					t.Errorf("tools = %v, want %v", names, tc.want)
+				}
+			}
+		})
 	}
 }
 

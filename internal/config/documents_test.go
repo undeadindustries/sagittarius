@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -39,6 +40,53 @@ func TestLoadDocuments_NoProjectFile(t *testing.T) {
 	}
 	if docs.Merged() == nil {
 		t.Fatal("Merged must not be nil")
+	}
+}
+
+// TestLoadDocuments_HomeDirHasNoProjectTier: launched from the home directory,
+// <workDir>/.sagittarius/settings.json is the global file. It must not load as
+// a second, project tier — a "project" save would overwrite the global file
+// with a stale copy, and a later global save would undo it.
+func TestLoadDocuments_HomeDirHasNoProjectTier(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SAGITTARIUS_HOME", home)
+	dir := filepath.Join(home, ".sagittarius")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	global := `{"sagittarius":{"systemPrompt":{"personality":"sysadmin","variant":"full"}}}`
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), []byte(global), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	docs, err := LoadDocuments(home)
+	if err != nil {
+		t.Fatalf("LoadDocuments: %v", err)
+	}
+	if docs.Project != nil {
+		t.Error("Project must be nil when the project path is the global file")
+	}
+	if docs.ProjectAvailable() {
+		t.Error("ProjectAvailable() = true in the home directory, want false")
+	}
+	if err := docs.SaveProject(); !errors.Is(err, ErrNoProjectScope) {
+		t.Errorf("SaveProject err = %v, want ErrNoProjectScope", err)
+	}
+	if got := docs.Merged().Sagittarius.SystemPrompt.Personality; got != "sysadmin" {
+		t.Errorf("merged personality = %q, want the global sysadmin", got)
+	}
+
+	// A real project below home keeps its own tier.
+	sub := filepath.Join(home, "src", "app")
+	if err := os.MkdirAll(sub, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	subDocs, err := LoadDocuments(sub)
+	if err != nil {
+		t.Fatalf("LoadDocuments(sub): %v", err)
+	}
+	if !subDocs.ProjectAvailable() {
+		t.Error("ProjectAvailable() = false for a project below home, want true")
 	}
 }
 

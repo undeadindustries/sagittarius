@@ -19,6 +19,11 @@ const (
 	ScopeProject                     // <workDir>/.sagittarius/settings.json
 )
 
+// ErrNoProjectScope is returned by a project-scoped save when the session has
+// no project tier: no working directory, or the home directory, whose project
+// settings file is the global one.
+var ErrNoProjectScope = errors.New("no project settings for this directory (the home directory uses the global settings file)")
+
 // String returns a human-readable label for the scope.
 func (s SettingScope) String() string {
 	if s == ScopeProject {
@@ -69,6 +74,12 @@ func LoadDocuments(workDir string) (*Documents, error) {
 	}
 
 	var project *Settings
+	if workDir != "" && sameSettingsFile(ResolveProjectSettingsPath(workDir), loader.Path()) {
+		// Launched from the home directory: <workDir>/.sagittarius/settings.json
+		// is the global file. Loading it again as a project tier would let a
+		// "project" save and a global save overwrite each other's changes.
+		workDir = ""
+	}
 	if workDir != "" {
 		project, err = LoadProjectSettings(workDir)
 		if err != nil {
@@ -87,6 +98,20 @@ func LoadDocuments(workDir string) (*Documents, error) {
 	return d, nil
 }
 
+// sameSettingsFile reports whether two settings paths name one file, following
+// symlinks when both exist so a linked home directory is still detected.
+func sameSettingsFile(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
+	ai, errA := os.Stat(a)
+	bi, errB := os.Stat(b)
+	return errA == nil && errB == nil && os.SameFile(ai, bi)
+}
+
 // Merged returns the effective (global+project) settings view. It is safe to call
 // concurrently with the persistence writers; the returned *Settings is read-only
 // for runtime decisions (never mutate or persist through it).
@@ -103,8 +128,16 @@ func (d *Documents) Loader() *Loader {
 }
 
 // WorkDir returns the working directory used when loading project settings.
+// It is empty when there is no separate project tier — including a launch
+// from the home directory, whose project settings file is the global one.
 func (d *Documents) WorkDir() string {
 	return d.workDir
+}
+
+// ProjectAvailable reports whether a project settings tier distinct from the
+// global file exists for this session.
+func (d *Documents) ProjectAvailable() bool {
+	return d != nil && d.workDir != ""
 }
 
 // Save writes the specified scope's Settings to disk and reloads Merged.
@@ -164,7 +197,7 @@ func (d *Documents) SaveProject() error {
 
 func (d *Documents) saveProjectLocked() error {
 	if d.workDir == "" {
-		return fmt.Errorf("save project settings: no working directory")
+		return fmt.Errorf("save project settings: %w", ErrNoProjectScope)
 	}
 	if d.Project == nil {
 		d.Project = &Settings{Raw: map[string]json.RawMessage{}}

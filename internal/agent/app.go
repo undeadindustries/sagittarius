@@ -1905,7 +1905,14 @@ func (h *appHooks) ApplyProjectSystemPromptPreset(ctx context.Context, presetID 
 	if h.app.docs == nil {
 		return "", fmt.Errorf("settings documents not loaded")
 	}
-	s := h.app.docs.TargetSettings(config.ScopeProject)
+	// Without a project tier (launched from the home directory) the only file
+	// there is to write is the global one; say so rather than claim a project
+	// save that would change the default for every other directory silently.
+	scope, where := config.ScopeProject, "saved to .sagittarius/settings.json"
+	if !h.app.docs.ProjectAvailable() {
+		scope, where = config.ScopeGlobal, "saved globally to ~/.sagittarius/settings.json; this directory has no separate project settings"
+	}
+	s := h.app.docs.TargetSettings(scope)
 	if s.Sagittarius == nil {
 		s.Sagittarius = &config.SagittariusSettings{}
 	}
@@ -1913,7 +1920,7 @@ func (h *appHooks) ApplyProjectSystemPromptPreset(ctx context.Context, presetID 
 		Personality: config.CanonicalPersonalityID(preset.Personality),
 		Variant:     config.CanonicalVariant(preset.Variant),
 	}
-	if err := h.app.docs.SaveProject(); err != nil {
+	if err := h.app.docs.Save(scope); err != nil {
 		return "", err
 	}
 
@@ -1923,7 +1930,7 @@ func (h *appHooks) ApplyProjectSystemPromptPreset(ctx context.Context, presetID 
 	if _, _, err := h.RebuildRunner(ctx); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("System prompt → %s (saved to .sagittarius/settings.json)", preset.Label), nil
+	return fmt.Sprintf("System prompt → %s (%s)", preset.Label, where), nil
 }
 
 func (h *appHooks) ToolkitReport() string {

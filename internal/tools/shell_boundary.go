@@ -85,8 +85,11 @@ func ShellMutatesOutsideRoot(command, root string) (bool, string) {
 	return false, ""
 }
 
-// redirectTarget extracts a redirection target from a token (and possibly the
-// following token), e.g. ">", ">>", "2>", "&>", ">|", or ">/abs/path".
+// redirectTarget extracts the file a redirection writes from a token (and
+// possibly the following token), e.g. ">", ">>", "2>", "&>", ">|", or
+// ">/abs/path". File-descriptor duplication ("2>&1", ">&2", "2>&-") and the
+// standard device sinks write no file, so they are not targets: treating them
+// as writes denied ordinary commands like "ls 2>&1" in read-only sessions.
 func redirectTarget(tok string, tokens []string, i int) (string, bool) {
 	idx := strings.Index(tok, ">")
 	if idx < 0 {
@@ -99,14 +102,53 @@ func redirectTarget(tok string, tokens []string, i int) (string, bool) {
 	rest = strings.TrimPrefix(rest, ">")
 	rest = strings.TrimPrefix(rest, ">") // handle ">>"
 	rest = strings.TrimPrefix(rest, "|") // handle ">|"
-	rest = strings.TrimSpace(rest)
-	if rest != "" {
-		return rest, true
+	dup := strings.HasPrefix(rest, "&")  // ">&word": a descriptor, or bash's file form
+	rest = strings.TrimSpace(strings.TrimPrefix(rest, "&"))
+
+	target := rest
+	if target == "" {
+		if i+1 >= len(tokens) || shellSeparators[tokens[i+1]] {
+			return "", false
+		}
+		target = tokens[i+1]
 	}
-	if i+1 < len(tokens) && !shellSeparators[tokens[i+1]] {
-		return tokens[i+1], true
+	// Tokens are whitespace-split, so "2>/dev/null;" keeps its separator.
+	target = strings.TrimRight(target, ";)")
+	if target == "" {
+		return "", false
 	}
-	return "", false
+	if dup && isDescriptorWord(target) {
+		return "", false
+	}
+	if harmlessRedirectSinks[target] {
+		return "", false
+	}
+	return target, true
+}
+
+// harmlessRedirectSinks are device paths a redirection may name without
+// writing any file.
+var harmlessRedirectSinks = map[string]bool{
+	"/dev/null":   true,
+	"/dev/stdout": true,
+	"/dev/stderr": true,
+}
+
+// isDescriptorWord reports whether s is the word after ">&" that names a file
+// descriptor ("1", "2") or closes one ("-"), rather than a file.
+func isDescriptorWord(s string) bool {
+	if s == "-" {
+		return true
+	}
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // isRedirectPrefix reports whether s is a valid prefix before a '>' redirection

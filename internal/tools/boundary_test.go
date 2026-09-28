@@ -78,6 +78,9 @@ func TestShellMutatesOutsideRoot(t *testing.T) {
 		{"home escape", "rm ~/important", true},
 		{"chained inside", "mkdir build && rm build/old.o", false},
 		{"plain read", "cat README.md", false},
+		{"stderr to dev null", "ls /opt 2>/dev/null", false},
+		{"stderr dup to stdout", "go build ./... 2>&1 | tail -5", false},
+		{"bash >&file outside", "make >& /tmp/build.log", true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

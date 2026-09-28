@@ -14,8 +14,7 @@ type baseDialogDeps struct {
 // ProjectAvailable reports whether a project settings scope exists on disk, which
 // gates whether the overlays offer a Global/Project scope selector.
 func (d baseDialogDeps) ProjectAvailable() bool {
-	docs := d.app.docs
-	return docs != nil && docs.WorkDir() != ""
+	return d.app.docs.ProjectAvailable()
 }
 
 // effective returns the merged (global+project) settings for overlay READS so a

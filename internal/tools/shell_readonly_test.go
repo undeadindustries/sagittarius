@@ -43,6 +43,19 @@ func TestClassifyShellReadOnly(t *testing.T) {
 		{"cat foo >> bar", VerdictMutating},
 		{"echo hi 2> err.txt", VerdictMutating},
 		{"echo hi &> out.txt", VerdictMutating},
+		{"ls -la >&out.txt", VerdictMutating}, // bash >&word with a non-descriptor word writes a file
+		{"ls -la >& out.txt", VerdictMutating},
+		{"ls -la 1>&2 >> log.txt", VerdictMutating},
+
+		// Descriptor duplication and device sinks write no file.
+		{"ls -la /tmp 2>&1", VerdictReadOnly},
+		{"ls -la /tmp >&2", VerdictReadOnly},
+		{"ls -la /tmp 2>&-", VerdictReadOnly},
+		{"ls -la /tmp 2>/dev/null", VerdictReadOnly},
+		{"ls -la /tmp 2> /dev/null", VerdictReadOnly},
+		{"ls -la /tmp &>/dev/null", VerdictReadOnly},
+		{"ls /tmp 2>/dev/null; cat /etc/hostname", VerdictReadOnly},
+		{"find /tmp -type f 2>/dev/null | head -50", VerdictReadOnly},
 
 		// Pipes and Subshells
 		{"ls | grep foo", VerdictReadOnly},

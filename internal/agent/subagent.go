@@ -133,7 +133,7 @@ func (r *Runner) newSubagent(ctx context.Context, spec subagentSpec) (*subagent,
 		// (ModeAsk) admits only read-only MCP tools (AD-133), and a coding
 		// child's lease admits read-only MCP tools and denies unbounded writes
 		// (AD-130). activate_skill is read-only and available to both.
-		ExtraTools: r.runtimeToolsForChild(),
+		ExtraTools: r.runtimeToolsForChild(spec.approval),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create subagent runner: %w", err)
@@ -154,7 +154,7 @@ func (r *Runner) newSubagent(ctx context.Context, spec subagentSpec) (*subagent,
 // runtime (MCP servers, skills), so the tools are the same; the child's mode
 // and lease gates decide which are callable. Returns nil when the runtime or
 // its catalog is unavailable (tests, headless without MCP).
-func (r *Runner) runtimeToolsForChild() []tools.Tool {
+func (r *Runner) runtimeToolsForChild(approval ApprovalMode) []tools.Tool {
 	if r.runtime == nil || r.runtime.Catalog == nil {
 		return nil
 	}
@@ -165,6 +165,21 @@ func (r *Runner) runtimeToolsForChild() []tools.Tool {
 	if mcpMgr := r.runtime.Catalog.MCPManager(); mcpMgr != nil {
 		for _, tool := range mcpMgr.Tools() {
 			out = append(out, wrapMCPTool(tool))
+		}
+	}
+	return withoutUnconfirmable(out, approval)
+}
+
+// withoutUnconfirmable drops tools a child could never run. A child is
+// non-interactive, so any call its approval policy would stop to confirm is
+// denied outright; declaring such a tool (an untrusted MCP server's, under
+// default approval) only invites the model to retry a call that always fails.
+func withoutUnconfirmable(in []tools.Tool, approval ApprovalMode) []tools.Tool {
+	policy := approvalToPolicy(approval)
+	out := in[:0]
+	for _, tool := range in {
+		if !policy.NeedsConfirmation(tool) {
+			out = append(out, tool)
 		}
 	}
 	return out
