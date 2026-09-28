@@ -36,13 +36,26 @@ paths that child is allowed to modify:
 {
   "description": "Add retry to the HTTP client",
   "prompt": "…",
-  "write_paths": ["internal/http/**", "internal/http/retry_test.go"]
+  "write_paths": ["internal/http/**", "internal/http/retry_test.go"],
+  "contract": "…"
 }
 ```
 
 Patterns are workspace-relative. `*` matches within one path segment, `**`
 matches any depth (including zero), and a trailing `/` means the whole
 directory. A write to anything else is denied with `LEASE_DENIED`.
+
+### The shared contract
+
+A child cannot see its siblings' work, so any decision that crosses a file
+boundary — how a value is represented, which layer validates input, the exact
+signature two modules share — must be decided by the parent, not re-invented
+per child. When two or more `code_task` calls land in one turn, each must
+carry the same `contract`: a short statement of those shared decisions. The
+scheduler refuses the whole batch before any child starts when a contract is
+missing or the texts differ (whitespace-only differences are ignored). A
+single call may omit it. Every child's charter renders the contract as binding
+text, and the batch review checks the work against it.
 
 ### Why leases
 
@@ -163,7 +176,7 @@ self-report:
 | `provider`, `model` | The child's resolved pair |
 | `attempt`, `max_attempts` | Delegation budget accounting (below) |
 | `next_step` | Follow-up instruction for coding results with changed files |
-| `review` | Reviewer verdict and findings, when the reviewer pass runs |
+| `batch_review` | Batch review verdict, findings, and fix accounting, when the reviewer runs |
 
 `result` and `files_written` remain as aliases. A coding result whose files
 changed always carries a `next_step` telling the parent to verify itself: the
@@ -184,16 +197,38 @@ Sibling subagents run together. `sagittarius.subagents.maxConcurrent` (default
 8, range 1–16) caps the fan-out; `1` runs children serially, which also reads
 as "concurrency disabled". The setting applies live with no rebuild.
 
-## Reviewer pass
+## Batch review
 
-`sagittarius.subagents.reviewer.enabled` (default off) adds a read-only review
-after a `code_task` child changes files. A reviewer child gets the sibling's
-summary, the changed-file list, and per-file diffs from the snapshot index (or
-reads the files itself when snapshotting is off), then reports findings plus a
-`VERDICT: PASS` / `VERDICT: FAIL` line the harness parses into
-`review: {verdict, findings}`. The reviewer never counts toward the attempt
-budget, and a reviewer failure is reported rather than fatal. Enable it only if
-reviews earn their tokens — a review pass roughly doubles child inference cost.
+`sagittarius.subagents.reviewer.enabled` controls the batch review. The default
+follows the coding switch: enabling `code_task` enables the review, and an
+explicit `false` turns it off alone.
+
+After a turn's `code_task` children settle, one reviewer child reads the whole
+batch at once — the shared contract, each sibling's summary, the changed-file
+list, and per-file diffs from the snapshot index (or the files themselves when
+snapshotting is off). Reviewing the batch rather than each child is the point:
+a per-child review passes internally consistent work, while the defects that
+matter live on the seams between siblings (one child stores cents, another
+reads floats). The reviewer reports findings plus a `VERDICT: PASS` /
+`VERDICT: FAIL` line the harness parses.
+
+A FAIL triggers one automatic fix round by default: a coding child with the
+union of the batch's leases gets the findings and the contract, repairs them,
+and the batch is re-reviewed. `sagittarius.subagents.reviewer.maxFixRounds`
+(default 1, 0 = review only, max 3) bounds the loop. A batch that still fails
+is handed back as `status: needs_changes` with the findings and a `next_step`
+telling the parent to fix them itself — and if the parent then ends its turn
+without editing or delegating, the harness injects one reminder so the
+findings are not silently dropped.
+
+The full `batch_review` block (`verdict`, `findings`, `fix_rounds`,
+`fix_files_changed`) is attached to the first `code_task` result; siblings
+carry a one-line reference. Reviewer and fix children are harness-launched, so
+they never count toward the delegation budget, and a reviewer that cannot
+start is reported as `verdict: error` rather than failing the batch. While
+they run, the TUI shows Review and Fix cards with the same routing badge other
+subagents get. Cost note: a review plus up to one fix round adds up to two
+child runs per batch.
 
 ## When not to use them
 

@@ -27,7 +27,7 @@ func TestResearchSubagentCharterRulesAppearOnce(t *testing.T) {
 }
 
 func TestCodingSubagentCharterNamesTheLease(t *testing.T) {
-	got := CodingSubagentCharter([]string{"internal/tools/**", "docs/subagents.md"})
+	got := CodingSubagentCharter([]string{"internal/tools/**", "docs/subagents.md"}, "")
 	for _, want := range []string{"internal/tools/**", "docs/subagents.md"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("charter does not name leased pattern %q", want)
@@ -44,14 +44,30 @@ func TestCodingSubagentCharterNamesTheLease(t *testing.T) {
 			t.Errorf("phrase %q appears %d times, want exactly 1", phrase, n)
 		}
 	}
+	if strings.Contains(got, "Shared design contract") {
+		t.Error("charter without a contract must not render the contract section")
+	}
 }
 
 // An empty lease must read as a prohibition, not as an empty list the model can
 // interpret as "unrestricted".
 func TestCodingSubagentCharterEmptyLease(t *testing.T) {
-	got := CodingSubagentCharter(nil)
+	got := CodingSubagentCharter(nil, "")
 	if !strings.Contains(got, "you may not write any file") {
 		t.Errorf("empty lease must state the prohibition, got:\n%s", got)
+	}
+}
+
+// The contract section is the only place a sibling learns the batch-wide
+// decisions, so it must be present verbatim and framed as binding.
+func TestCodingSubagentCharterRendersContract(t *testing.T) {
+	contract := "Money is integer cents. The CLI layer rejects invalid input."
+	got := CodingSubagentCharter([]string{"app/**"}, contract)
+	if !strings.Contains(got, "## Shared design contract (binding)") {
+		t.Error("charter with a contract must render the contract heading")
+	}
+	if !strings.Contains(got, contract) {
+		t.Error("charter must carry the contract text verbatim")
 	}
 }
 

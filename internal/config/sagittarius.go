@@ -398,10 +398,14 @@ type SagittariusSubagents struct {
 // reviewer). Provider qualifies Model the same way SagittariusModeConfig does:
 // the pair is written together by the picker and resolved together at launch.
 type SagittariusSubagentClass struct {
-	Enabled  *bool                      `json:"enabled,omitempty"`
-	Provider string                     `json:"provider,omitempty"`
-	Model    string                     `json:"model,omitempty"`
-	Extra    map[string]json.RawMessage `json:"-"`
+	Enabled  *bool  `json:"enabled,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	Model    string `json:"model,omitempty"`
+	// MaxFixRounds bounds the automatic fix-and-re-review loop after a failed
+	// batch review (reviewer class only). Nil means the compiled-in default
+	// (1). 0 means review without fixing. Valid range 0-3.
+	MaxFixRounds *int                       `json:"maxFixRounds,omitempty"`
+	Extra        map[string]json.RawMessage `json:"-"`
 }
 
 // SagittariusSubagentConfig configures one subagent's model override.
@@ -475,6 +479,11 @@ func ValidateSagittariusSettings(s *SagittariusSettings) error {
 		(*s.Subagents.MaxConcurrent < MinSubagentMaxConcurrent || *s.Subagents.MaxConcurrent > MaxSubagentMaxConcurrent) {
 		return fmt.Errorf("sagittarius.subagents.maxConcurrent must be %d-%d, got %d",
 			MinSubagentMaxConcurrent, MaxSubagentMaxConcurrent, *s.Subagents.MaxConcurrent)
+	}
+	if s.Subagents != nil && s.Subagents.Reviewer != nil && s.Subagents.Reviewer.MaxFixRounds != nil &&
+		(*s.Subagents.Reviewer.MaxFixRounds < MinSubagentMaxFixRounds || *s.Subagents.Reviewer.MaxFixRounds > MaxSubagentMaxFixRounds) {
+		return fmt.Errorf("sagittarius.subagents.reviewer.maxFixRounds must be %d-%d, got %d",
+			MinSubagentMaxFixRounds, MaxSubagentMaxFixRounds, *s.Subagents.Reviewer.MaxFixRounds)
 	}
 	if s.Memory != nil && s.Memory.MaxRunes != nil && *s.Memory.MaxRunes < 0 {
 		return fmt.Errorf("sagittarius.memory.maxRunes must be >= 0 (0 = unlimited), got %d", *s.Memory.MaxRunes)

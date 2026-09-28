@@ -56,6 +56,10 @@ type Scheduler struct {
 	// A non-positive reading falls back to DefaultMaxConcurrentSubagents.
 	subagentConcurrency func() int
 
+	// batchFinalizer runs once per batch after all subagent siblings settle
+	// (batch review, AD-153). Nil means no finalization.
+	batchFinalizer func(ctx context.Context, batch []SubagentBatchItem, emit func(ui.StreamEvent)) error
+
 	// sessionGrants records tools the user approved "for this session" so later
 	// invocations of the same tool skip confirmation. Guarded by mu.
 	mu            sync.Mutex
@@ -146,6 +150,23 @@ func WithSubagentConcurrency(fn func() int) SchedulerOption {
 	return func(s *Scheduler) { s.subagentConcurrency = fn }
 }
 
+// SubagentBatchItem pairs a code_task call with its response slot for the
+// batch finalizer. The finalizer may amend Response in place (e.g. attach a
+// batch_review result); it must never change the slot's CallID, or the
+// tool-call/response pairing the wire formats rely on (AD-052) breaks.
+type SubagentBatchItem struct {
+	Call     provider.ToolCall
+	Response *provider.FunctionResponse
+}
+
+// WithSubagentBatchFinalizer installs a hook Execute runs once per batch after
+// all subagent siblings have settled. It receives only the code_task slots.
+// The scheduler stays free of agent-package imports: the hook is a plain
+// function value, like WithSubagentConcurrency.
+func WithSubagentBatchFinalizer(fn func(ctx context.Context, batch []SubagentBatchItem, emit func(ui.StreamEvent)) error) SchedulerOption {
+	return func(s *Scheduler) { s.batchFinalizer = fn }
+}
+
 // NewScheduler constructs a scheduler for the given registry and policy.
 // When interactive is false (headless), confirmations are auto-approved or denied per policy.
 // mode and workspace enable interaction-mode tool restrictions (plan/ask read-only gates).
@@ -193,7 +214,13 @@ func (s *Scheduler) Execute(
 
 	// Two coding subagents that claim the same path would race each other's
 	// writes, so the whole batch is refused before any child is launched.
+	// Parallel coders must also carry one identical design contract: siblings
+	// cannot see each other's work, so a decision that crosses a file boundary
+	// has to arrive as the same text in every charter.
 	conflict := leaseConflict(calls)
+	if conflict == "" {
+		conflict = contractConflict(calls)
+	}
 
 	var eg errgroup.Group
 	eg.SetLimit(s.subagentConcurrencyLimit())
@@ -237,6 +264,30 @@ func (s *Scheduler) Execute(
 
 	if err := eg.Wait(); err != nil {
 		return filterValidResponses(responses), err
+	}
+
+	// The batch finalizer (batch review, AD-153) runs after every subagent
+	// sibling has settled and before any same-turn non-subagent calls, so it
+	// sees the complete set of code_task outcomes. It amends the existing
+	// response slots in place — tool-call/response pairing (count and ids)
+	// never changes. A finalizer error is logged, never fatal to the batch;
+	// only cancellation propagates.
+	if s.batchFinalizer != nil {
+		var batch []SubagentBatchItem
+		for i, call := range calls {
+			if canonicalToolName(call.Name) != CodeTaskToolName {
+				continue
+			}
+			batch = append(batch, SubagentBatchItem{Call: call, Response: &responses[i]})
+		}
+		if len(batch) > 0 {
+			if err := s.batchFinalizer(ctx, batch, emit); err != nil {
+				if ctx.Err() != nil {
+					return filterValidResponses(responses), err
+				}
+				slog.Warn("subagent batch finalizer failed", "error", err)
+			}
+		}
 	}
 
 	for i, call := range calls {
@@ -294,6 +345,60 @@ func leaseConflict(calls []provider.ToolCall) string {
 		}
 	}
 	return ""
+}
+
+// contractConflict enforces the shared-contract rule for parallel coding
+// subagents: with two or more code_task calls in one turn, every call must
+// carry a contract and all contracts must match after whitespace
+// normalization. Siblings cannot see each other's work, so a decision that
+// crosses a file boundary has to arrive as the same text in every charter.
+func contractConflict(calls []provider.ToolCall) string {
+	type claim struct {
+		label    string
+		contract string
+	}
+	var claims []claim
+	for _, call := range calls {
+		if canonicalToolName(call.Name) != CodeTaskToolName {
+			continue
+		}
+		args := NormalizeToolArgs(call.Name, call.Args)
+		label, _ := args[TaskParamDescription].(string)
+		if label == "" {
+			label = call.ID
+		}
+		contract, _ := args[CodeTaskParamContract].(string)
+		claims = append(claims, claim{label: label, contract: normalizeContract(contract)})
+	}
+	if len(claims) < 2 {
+		return ""
+	}
+	for _, c := range claims {
+		if c.contract == "" {
+			return fmt.Sprintf(
+				"missing shared design contract: %q has none. "+
+					"Parallel coding subagents cannot see each other's work, so decisions that cross "+
+					"file boundaries (data representations, validation boundaries, interfaces, naming) "+
+					"must be stated once and passed to every sibling. Add the same contract to each code_task call.",
+				c.label)
+		}
+	}
+	for _, c := range claims[1:] {
+		if c.contract != claims[0].contract {
+			return fmt.Sprintf(
+				"mismatched shared design contracts: %q and %q differ. "+
+					"Every code_task call in one turn must carry the identical contract text, "+
+					"so all siblings implement against the same decisions.",
+				claims[0].label, c.label)
+		}
+	}
+	return ""
+}
+
+// normalizeContract collapses all whitespace runs so two contracts that differ
+// only in line wrapping still count as identical.
+func normalizeContract(s string) string {
+	return strings.Join(strings.Fields(s), " ")
 }
 
 func filterValidResponses(in []provider.FunctionResponse) []provider.FunctionResponse {

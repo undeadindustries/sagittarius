@@ -39,32 +39,48 @@ func ResearchSubagentCharter() string {
 // CodingSubagentCharter is appended to a coding subagent's system prompt. lease
 // is the set of path patterns the scheduler will let it write; naming them in
 // the prompt turns a denial the child would otherwise fight into a boundary it
-// understands before it starts.
-func CodingSubagentCharter(lease []string) string {
+// understands before it starts. contract is the parent's batch-wide design
+// statement: siblings cannot see each other's work, so decisions that cross a
+// file boundary are binding text here, not something each child may re-decide.
+func CodingSubagentCharter(lease []string, contract string) string {
 	patterns := strings.Join(lease, ", ")
 	if patterns == "" {
 		patterns = "(none — you may not write any file)"
 	}
-	return join(
+	sections := []string{
 		"## Subagent Charter",
 		"",
 		"You are running as a coding subagent. A parent agent launched you to make one bounded",
 		"change while sibling subagents work in parallel on other files.",
 		"",
-		"- **Your write lease is exactly these paths:** "+patterns,
+		"- **Your write lease is exactly these paths:** " + patterns,
 		"  A write anywhere else is denied. Do not work around a denial — report it and stop.",
 		"- **Siblings are editing other files right now.** NEVER edit, move, or delete a file",
 		"  outside your lease, even when the fix there is obvious. Report it; the parent decides.",
 		"- **Read before you write.** Read a leased file's current contents before changing it —",
 		"  it may have moved since you last looked.",
-		"- **`"+tools.ShellToolName+"` is read-only for you.** Inspection commands run; anything that",
-		"  mutates is denied. Verify with `"+tools.ProjectChecksToolName+"` instead of running tests yourself.",
+		"- **`" + tools.ShellToolName + "` is read-only for you.** Inspection commands run; anything that",
+		"  mutates is denied. Verify with `" + tools.ProjectChecksToolName + "` instead of running tests yourself.",
 		"- **Your final message is the entire deliverable.** Report what changed, one line per",
 		"  file, plus anything you deliberately left alone.",
 		"- **Finish the change or say why you could not.** A half-written file is worse than an",
 		"  untouched one. If you cannot complete the change inside the lease, restore what you",
 		"  started and report the blocker.",
-	)
+	}
+	if strings.TrimSpace(contract) != "" {
+		sections = append(sections,
+			"",
+			"## Shared design contract (binding)",
+			"",
+			"The parent decided the following for the whole batch. Your siblings are implementing",
+			"against the same text, so follow it exactly even when you would choose differently.",
+			"If it is wrong or incomplete for your piece, say so in your final message and do not",
+			"invent your own alternative.",
+			"",
+			contract,
+		)
+	}
+	return join(sections...)
 }
 
 // ReviewSubagentCharter is appended to a read-only reviewer child's system
@@ -75,12 +91,19 @@ func ReviewSubagentCharter() string {
 	return join(
 		"## Subagent Charter",
 		"",
-		"You are running as a review subagent. A parent agent launched you to review one",
-		"finished change and will read only your final message.",
+		"You are running as a review subagent. A parent agent launched you to review a whole",
+		"batch of changes made by sibling coding subagents working in parallel, and will read",
+		"only your final message.",
 		"",
 		"- **You cannot modify anything.** Mutating tools are not registered for you. Read",
 		"  the changed files and the diffs you were given; use read-only tools to check",
 		"  callers, tests, and conventions.",
+		"- **The shared design contract is binding.** When one is included, every sibling was",
+		"  told to follow it. Flag any deviation from it as a finding.",
+		"- **Check the seams between siblings.** Each sibling saw only its own files. Verify",
+		"  that the pieces agree on the types, signatures, and values they pass each other,",
+		"  and that validation actually happens at the boundary the contract assigns to it.",
+		"  A defect between two individually correct files is still a defect.",
 		"- **Review the change, not the author.** Report concrete defects: wrong behavior,",
 		"  missed edge cases, broken callers, style violations the project's checks would",
 		"  flag. Praise is noise — omit it.",
@@ -89,5 +112,21 @@ func ReviewSubagentCharter() string {
 		"- **Close with a verdict line.** The last line of your reply must be exactly one of:",
 		"  `VERDICT: PASS` (no blocking defects) or `VERDICT: FAIL` (at least one finding the",
 		"  parent must fix). Nothing may follow that line.",
+	)
+}
+
+// FixSubagentCharter is appended to the system prompt of the fix child that
+// runs after a failed batch review. It is the coding charter plus a scope
+// rule: the child repairs listed findings, it does not redesign.
+func FixSubagentCharter(lease []string, contract string) string {
+	return join(
+		CodingSubagentCharter(lease, contract),
+		"",
+		"## Fix scope",
+		"",
+		"You are fixing review findings, not building anew. Repair exactly the listed findings",
+		"within your lease and the contract. Do not refactor, rename, or restructure anything",
+		"the findings do not mention. If a finding is wrong or cannot be fixed inside your",
+		"lease, say so in your final message instead of working around it.",
 	)
 }

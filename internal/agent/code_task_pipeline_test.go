@@ -108,6 +108,14 @@ func codeTaskCall(id, desc, prompt string, paths ...string) provider.ToolCall {
 	}
 }
 
+// codeTaskCallWithContract is codeTaskCall plus the shared design contract
+// parallel siblings must carry (AD-153).
+func codeTaskCallWithContract(id, desc, prompt, contract string, paths ...string) provider.ToolCall {
+	call := codeTaskCall(id, desc, prompt, paths...)
+	call.Args[tools.CodeTaskParamContract] = contract
+	return call
+}
+
 func writeCall(id, path, content string) provider.ToolCall {
 	return provider.ToolCall{
 		ID:   id,
@@ -118,6 +126,10 @@ func writeCall(id, path, content string) provider.ToolCall {
 		},
 	}
 }
+
+// pipelineContract is the shared design statement the pipeline batch carries;
+// the scheduler denies parallel code_task calls without one (AD-153).
+const pipelineContract = "Files hold plain text. Each child writes only its own directory."
 
 // TestCodingSubagentPipeline drives three coding subagents concurrently through
 // the real scheduler, tool registry, and snapshot manager. It is the end-to-end
@@ -140,9 +152,9 @@ func TestCodingSubagentPipeline(t *testing.T) {
 		"PARENT": {
 			{
 				{ToolCalls: []provider.ToolCall{
-					codeTaskCall("c1", "alpha work", "TASK-ALPHA", "alpha/**"),
-					codeTaskCall("c2", "beta work", "TASK-BETA", "beta/**"),
-					codeTaskCall("c3", "gamma work", "TASK-GAMMA", "gamma/**"),
+					codeTaskCallWithContract("c1", "alpha work", "TASK-ALPHA", pipelineContract, "alpha/**"),
+					codeTaskCallWithContract("c2", "beta work", "TASK-BETA", pipelineContract, "beta/**"),
+					codeTaskCallWithContract("c3", "gamma work", "TASK-GAMMA", pipelineContract, "gamma/**"),
 				}},
 				{Done: true},
 			},

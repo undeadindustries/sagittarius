@@ -295,11 +295,18 @@ func listSettings(docs *config.Documents, scope config.SettingScope) []settingsd
 		}, subCodingEnabled(scopeSettings), subCodingEnabled(global), subCodingEnabled(project)),
 		row(settingsdialog.SettingEntry{
 			Key:          "sagittarius.subagents.reviewer.enabled",
-			Label:        "Reviewer pass after code_task",
-			Description:  "After a coding subagent changes files, launch a read-only reviewer child with the diffs before returning. Doubles child inference cost; enable only if reviews earn it (default off)",
+			Label:        "Batch review after code_task",
+			Description:  "After a code_task batch changes files, one reviewer child checks every sibling's diff against the shared contract — the cross-file seams no per-child view can see. Adds one child run per batch (default: on when coding subagents are on)",
 			DefaultValue: fmtBool(config.ReviewSubagentsEnabled(nil, nil)),
 			Kind:         settingsdialog.KindBool,
 		}, subReviewerEnabled(scopeSettings), subReviewerEnabled(global), subReviewerEnabled(project)),
+		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.subagents.reviewer.maxFixRounds",
+			Label:        "Batch review fix rounds",
+			Description:  "How many automatic fix-and-re-review rounds follow a failed batch review before the parent must fix the findings itself (0 = review only, default 1, max 3)",
+			DefaultValue: strconv.Itoa(config.ResolveSubagentMaxFixRounds(nil, config.DefaultSubagentMaxFixRounds)),
+			Kind:         settingsdialog.KindInt,
+		}, subMaxFixRounds(scopeSettings), subMaxFixRounds(global), subMaxFixRounds(project)),
 		row(settingsdialog.SettingEntry{
 			Key:          "sagittarius.subagents.maxAttempts",
 			Label:        "Subagent max attempts",
@@ -767,6 +774,15 @@ func applySettingValue(s *config.Settings, key, value string) error {
 		}
 		cls := subagentClassSlot(s, key)
 		cls.Enabled = &b
+	case "sagittarius.subagents.reviewer.maxFixRounds":
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("maxFixRounds must be an integer: %w", err)
+		}
+		if n < config.MinSubagentMaxFixRounds || n > config.MaxSubagentMaxFixRounds {
+			return fmt.Errorf("maxFixRounds must be %d-%d", config.MinSubagentMaxFixRounds, config.MaxSubagentMaxFixRounds)
+		}
+		subagentClassSlot(s, key).MaxFixRounds = &n
 	case "sagittarius.subagents.maxAttempts":
 		n, err := strconv.Atoi(value)
 		if err != nil {
@@ -1011,6 +1027,10 @@ func clearSettingValue(s *config.Settings, key string) error {
 	case "sagittarius.subagents.reviewer.enabled":
 		if cls := existingSubagentClass(s, config.SubagentReviewer); cls != nil {
 			cls.Enabled = nil
+		}
+	case "sagittarius.subagents.reviewer.maxFixRounds":
+		if cls := existingSubagentClass(s, config.SubagentReviewer); cls != nil {
+			cls.MaxFixRounds = nil
 		}
 	case "sagittarius.subagents.maxAttempts":
 		if s.Sagittarius != nil && s.Sagittarius.Subagents != nil {
@@ -1307,6 +1327,13 @@ func subReviewerEnabled(s *config.Settings) string {
 	return ""
 }
 
+func subMaxFixRounds(s *config.Settings) string {
+	if cls := existingSubagentClass(s, config.SubagentReviewer); cls != nil {
+		return fmtPtrInt(cls.MaxFixRounds)
+	}
+	return ""
+}
+
 func subMaxAttempts(s *config.Settings) string {
 	if sag := sagOf(s); sag != nil && sag.Subagents != nil {
 		return fmtPtrInt(sag.Subagents.MaxAttempts)
@@ -1354,7 +1381,7 @@ func subagentClassSlot(s *config.Settings, key string) *config.SagittariusSubage
 		}
 		return subs.Coding
 	}
-	if key == "sagittarius.subagents.reviewer.enabled" {
+	if key == "sagittarius.subagents.reviewer.enabled" || key == "sagittarius.subagents.reviewer.maxFixRounds" {
 		if subs.Reviewer == nil {
 			subs.Reviewer = &config.SagittariusSubagentClass{}
 		}

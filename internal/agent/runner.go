@@ -1073,6 +1073,14 @@ func (r *Runner) runAgentLoop(ctx context.Context, userInput string, out chan<- 
 	}
 
 	verifyHinted := false
+	// AD-153 turn guard: a code_task batch whose review still fails after the
+	// automatic fix round is handed back as needs_changes. If the model then
+	// ends its turn without touching a file or delegating again, inject one
+	// reminder so the findings are fixed, not silently dropped. At most one
+	// reminder per batch; a later write/edit/code_task clears the obligation.
+	pendingBatchID := ""
+	pendingBatchFindings := ""
+	batchReminded := false
 	maxRounds := r.maxToolRounds()
 	// 0 (settings) or a Session grant on the Continue prompt: no further cap
 	// this turn. An uncapped inner loop only exits via return (model stopped).
@@ -1228,6 +1236,21 @@ outerLoop:
 					out <- ui.StreamEvent{Type: ui.StreamDone}
 					return
 				}
+				if pendingBatchID != "" && !batchReminded && ctx.Err() == nil {
+					batchReminded = true
+					reminder := batchReviewReminder(pendingBatchFindings)
+					r.historyMu.Lock()
+					r.history = append(r.history, provider.Message{
+						Role:  provider.RoleUser,
+						Parts: []provider.Part{{Text: reminder}},
+					})
+					r.historyMu.Unlock()
+					if r.sessionRecorder != nil {
+						r.sessionRecorder.RecordUserMessage(reminder)
+					}
+					out <- ui.StreamEvent{Type: ui.StreamInfo, Text: "Batch review findings are still open; the model must fix them itself."}
+					continue
+				}
 				if r.evaluateGoalTurn(ctx, out, modelText) {
 					continue outerLoop
 				}
@@ -1251,6 +1274,12 @@ outerLoop:
 			}
 			r.metrics.recordTools(len(toolCalls), countToolFailures(responses))
 			r.appendFunctionResponses(responses)
+			if id, findings := needsChangesBatch(responses); id != "" {
+				pendingBatchID, pendingBatchFindings = id, findings
+				batchReminded = false
+			} else if pendingBatchID != "" && containsSuccessfulAction(responses) {
+				pendingBatchID, pendingBatchFindings = "", ""
+			}
 			r.flushPendingSidebarMidTurn()
 			if config.VerifySuggestAfterWrite(r.settingsSnapshot(), nil) && !verifyHinted && containsSuccessfulWrite(responses) {
 				verifyHinted = true
@@ -1776,6 +1805,11 @@ func (r *Runner) schedulerOptions() []tools.SchedulerOption {
 	opts := []tools.SchedulerOption{
 		tools.WithProjectBoundary(r.projectBoundary),
 		tools.WithSubagentConcurrency(r.subagentConcurrency),
+	}
+	// Batch review (AD-153) belongs to the parent only: children cannot
+	// delegate, so they never have a code_task batch to finalize.
+	if !r.isSubagent() {
+		opts = append(opts, tools.WithSubagentBatchFinalizer(r.runBatchReview))
 	}
 	if r.snap != nil {
 		opts = append(opts, tools.WithSnapshotter(r.snap))
@@ -2349,6 +2383,51 @@ func containsSuccessfulWrite(responses []provider.FunctionResponse) bool {
 		}
 	}
 	return false
+}
+
+// containsSuccessfulAction reports whether the batch acted on the code: a
+// successful write/edit, or a successful code_task delegation. The AD-153 turn
+// guard treats any of these as the model addressing a needs_changes batch.
+func containsSuccessfulAction(responses []provider.FunctionResponse) bool {
+	for i := range responses {
+		name := responses[i].Name
+		if !tools.IsFileMutatingTool(name) && name != tools.CodeTaskToolName {
+			continue
+		}
+		if _, failed := responses[i].Response["error"]; !failed {
+			return true
+		}
+	}
+	return false
+}
+
+// needsChangesBatch finds a code_task response whose batch review still fails
+// after the automatic fix rounds, returning the call id and the findings.
+func needsChangesBatch(responses []provider.FunctionResponse) (id, findings string) {
+	for i := range responses {
+		if responses[i].Name != tools.CodeTaskToolName {
+			continue
+		}
+		review, ok := responses[i].Response["batch_review"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if status, _ := review["status"].(string); status != "needs_changes" {
+			continue
+		}
+		findings, _ := review["findings"].(string)
+		return responses[i].CallID, findings
+	}
+	return "", ""
+}
+
+// batchReviewReminder is the one-shot user-role message the turn guard injects
+// when a needs_changes batch would otherwise be dropped by a text-only reply.
+func batchReviewReminder(findings string) string {
+	return "[Sagittarius] The batch review still has unresolved findings after the automatic fix round:\n" +
+		findings +
+		"\nFix these yourself now with your own edits — do not delegate the same task again. " +
+		"When they are resolved, finish the task."
 }
 
 // extractWrittenPathsFromHistory looks at the last round of history and

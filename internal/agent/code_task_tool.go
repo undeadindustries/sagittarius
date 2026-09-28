@@ -65,6 +65,13 @@ func (t *codeTaskTool) Description() string {
 		"You must declare write_paths: the subagent can modify those paths and nothing else. " +
 		"Issue several calls in one turn to work on disjoint parts of the codebase in parallel; " +
 		"leases that overlap are rejected before any subagent starts. " +
+		"When you issue two or more calls in one turn, you must also pass each one the same " +
+		"contract: one short statement of the decisions every sibling must share — data " +
+		"representations (how values are stored and passed), validation and error-handling " +
+		"boundaries (which layer rejects bad input), the exact interfaces between the pieces " +
+		"(function and type signatures), and naming conventions. Subagents cannot see each " +
+		"other's work, so any decision that crosses a file boundary belongs in the contract, " +
+		"not in one sibling's prompt. " +
 		"The subagent's shell is read-only, so it verifies with run_project_checks and cannot run tests — run those yourself after it returns."
 }
 
@@ -87,6 +94,13 @@ func (t *codeTaskTool) Declaration() provider.ToolDeclaration {
 					"type":        "array",
 					"items":       map[string]any{"type": "string"},
 					"description": "Workspace-relative paths this subagent may modify. Supports globs and '**' for any depth; a trailing slash means the whole directory (e.g. 'internal/http/**', 'docs/api.md'). Every other path is denied.",
+				},
+				tools.CodeTaskParamContract: map[string]any{
+					"type": "string",
+					"description": "Shared design decisions every parallel sibling must follow: data representations, " +
+						"validation and error boundaries, exact interfaces between the pieces, naming conventions. " +
+						"Required when you issue two or more code_task calls in one turn, and must be identical on each. " +
+						"Optional for a single call.",
 				},
 			},
 			"required": []string{
@@ -134,7 +148,7 @@ func (t *codeTaskTool) ExecuteStream(ctx context.Context, args map[string]any, s
 		mode:        modes.ModeAgent,
 		class:       config.SubagentCoding,
 		lease:       &spec.lease,
-		charter:     prompt.CodingSubagentCharter(spec.lease.Patterns),
+		charter:     prompt.CodingSubagentCharter(spec.lease.Patterns, spec.contract),
 		snapshotter: t.runner.snap,
 		approval:    ApprovalYolo,
 	})
@@ -154,16 +168,9 @@ func (t *codeTaskTool) ExecuteStream(ctx context.Context, args map[string]any, s
 		result["via"] = via
 	}
 	appendRereadNotice(result, t.parentRereadNotice(startedAt))
-	// The reviewer pass runs last so its prompt sees the final hand-off
-	// shape: files_changed is already final, and the child's summary is what
-	// the reviewer will read back.
-	if files, _ := result["files_changed"].([]string); len(files) > 0 {
-		if review, reviewErr := t.maybeReview(ctx, spec.description, child, files, sink); reviewErr != nil {
-			return nil, reviewErr
-		} else if review != nil {
-			result["review"] = review
-		}
-	}
+	// Batch review is the scheduler's post-batch finalizer (AD-153): it sees
+	// every sibling's diff against the shared contract, which a per-child
+	// review never could.
 	return result, nil
 }
 
@@ -210,6 +217,7 @@ func (t *codeTaskTool) parentRereadNotice(since time.Time) string {
 type codeTaskSpec struct {
 	description string
 	prompt      string
+	contract    string
 	lease       tools.WriteLease
 }
 
@@ -226,5 +234,15 @@ func parseCodeTaskArgs(args map[string]any) (codeTaskSpec, error) {
 	if desc == "" {
 		desc = "Coding subagent"
 	}
-	return codeTaskSpec{description: desc, prompt: promptText, lease: lease}, nil
+	// The contract is optional: absent and empty both mean none, but a
+	// non-string value is a caller error worth reporting.
+	contract := ""
+	if raw, present := args[tools.CodeTaskParamContract]; present {
+		s, ok := raw.(string)
+		if !ok {
+			return codeTaskSpec{}, fmt.Errorf("parameter %q must be a string", tools.CodeTaskParamContract)
+		}
+		contract = strings.TrimSpace(s)
+	}
+	return codeTaskSpec{description: desc, prompt: promptText, contract: contract, lease: lease}, nil
 }

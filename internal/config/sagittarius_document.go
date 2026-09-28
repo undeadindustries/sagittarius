@@ -274,6 +274,12 @@ func unmarshalSubagentClass(raw json.RawMessage) (*SagittariusSubagentClass, err
 			if err := json.Unmarshal(val, &cls.Model); err != nil {
 				return nil, fmt.Errorf("decode model: %w", err)
 			}
+		case "maxFixRounds":
+			var n int
+			if err := json.Unmarshal(val, &n); err != nil {
+				return nil, fmt.Errorf("decode maxFixRounds: %w", err)
+			}
+			cls.MaxFixRounds = &n
 		default:
 			cls.Extra[key] = val
 		}
@@ -309,6 +315,13 @@ func marshalSubagentClass(cls *SagittariusSubagentClass) (json.RawMessage, error
 			return nil, err
 		}
 		obj["model"] = b
+	}
+	if cls.MaxFixRounds != nil {
+		b, err := json.Marshal(*cls.MaxFixRounds)
+		if err != nil {
+			return nil, err
+		}
+		obj["maxFixRounds"] = b
 	}
 	for key, val := range cls.Extra {
 		obj[key] = val

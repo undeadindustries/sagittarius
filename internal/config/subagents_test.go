@@ -332,6 +332,95 @@ func TestSetClearResetSubagentOverride(t *testing.T) {
 	}
 }
 
+// TestReviewerDefaultFollowsCoding pins the AD-153 default: with no explicit
+// reviewer setting the batch review follows the coding switch, and an explicit
+// choice always wins.
+func TestReviewerDefaultFollowsCoding(t *testing.T) {
+	t.Parallel()
+
+	settings := func(body string) *Settings {
+		t.Helper()
+		s, err := decodeSettingsDocument([]byte(body))
+		if err != nil {
+			t.Fatalf("decode %s: %v", body, err)
+		}
+		return s
+	}
+
+	tests := []struct {
+		name            string
+		global, project string
+		want            bool
+	}{
+		{"both unset defaults to off", `{}`, `{}`, false},
+		{"coding on defaults reviewer on", `{"sagittarius":{"subagents":{"coding":{"enabled":true}}}}`, `{}`, true},
+		{"explicit false beats coding on", `{"sagittarius":{"subagents":{"coding":{"enabled":true},"reviewer":{"enabled":false}}}}`, `{}`, false},
+		{"explicit on without coding", `{"sagittarius":{"subagents":{"reviewer":{"enabled":true}}}}`, `{}`, true},
+		{
+			"project overrides global",
+			`{"sagittarius":{"subagents":{"coding":{"enabled":true}}}}`,
+			`{"sagittarius":{"subagents":{"reviewer":{"enabled":false}}}}`,
+			false,
+		},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := ReviewSubagentsEnabled(settings(tc.global), settings(tc.project)); got != tc.want {
+				t.Errorf("ReviewSubagentsEnabled = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSubagentMaxFixRoundsRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte(`{"reviewer":{"enabled":true,"maxFixRounds":2}}`)
+	s, err := unmarshalSubagents(raw)
+	if err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if s.Reviewer == nil || s.Reviewer.MaxFixRounds == nil || *s.Reviewer.MaxFixRounds != 2 {
+		t.Fatalf("reviewer.maxFixRounds = %+v, want 2", s.Reviewer)
+	}
+	b, err := marshalSubagents(s)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	again, err := unmarshalSubagents(b)
+	if err != nil {
+		t.Fatalf("re-unmarshal: %v", err)
+	}
+	if again.Reviewer == nil || again.Reviewer.MaxFixRounds == nil || *again.Reviewer.MaxFixRounds != 2 {
+		t.Errorf("maxFixRounds did not survive round trip: %+v", again.Reviewer)
+	}
+
+	mk := func(n int) *SagittariusSettings {
+		return &SagittariusSettings{Subagents: &SagittariusSubagents{
+			Reviewer: &SagittariusSubagentClass{MaxFixRounds: &n},
+		}}
+	}
+	if got := ResolveSubagentMaxFixRounds(nil, DefaultSubagentMaxFixRounds); got != 1 {
+		t.Errorf("nil = %d, want default 1", got)
+	}
+	if got := ResolveSubagentMaxFixRounds(mk(0), 1); got != 0 {
+		t.Errorf("0 = %d, want 0 (review only)", got)
+	}
+	if got := ResolveSubagentMaxFixRounds(mk(3), 1); got != 3 {
+		t.Errorf("3 = %d, want 3", got)
+	}
+	for _, n := range []int{-1, 4, 100} {
+		if got := ResolveSubagentMaxFixRounds(mk(n), 1); got != 1 {
+			t.Errorf("%d = %d, want default 1", n, got)
+		}
+		if err := ValidateSagittariusSettings(mk(n)); err == nil {
+			t.Errorf("ValidateSagittariusSettings(%d) = nil, want a range error", n)
+		}
+	}
+}
+
 func TestSubagentMaxAttemptsRoundTrip(t *testing.T) {
 	t.Parallel()
 

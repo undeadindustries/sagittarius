@@ -46,6 +46,7 @@ const (
 	TaskParamPrompt      = "prompt"
 
 	CodeTaskParamWritePaths = "write_paths"
+	CodeTaskParamContract   = "contract"
 
 	SaveMemoryParamText  = "text"
 	SaveMemoryParamScope = "scope"

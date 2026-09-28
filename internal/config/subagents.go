@@ -81,10 +81,12 @@ func CodingSubagentsEnabled(global, project *Settings) bool {
 	return false
 }
 
-// ReviewSubagentsEnabled reports whether the opt-in post-write reviewer pass
-// runs after a code_task child changes files. Project settings win over
-// global. Like coding, it has no legacy fallback and defaults to false: a
-// review pass doubles child inference cost and must be chosen deliberately.
+// ReviewSubagentsEnabled reports whether the batch reviewer runs after a
+// code_task batch changes files. Project settings win over global. Since
+// AD-153 the default follows the coding switch: a user who enabled
+// write-capable children gets the cross-file review that catches what a
+// per-child view cannot. An explicit false still wins — the review roughly
+// doubles child inference cost, so opting out stays possible.
 func ReviewSubagentsEnabled(global, project *Settings) bool {
 	if v, ok := subagentClassEnabled(project, SubagentReviewer); ok {
 		return v
@@ -92,7 +94,31 @@ func ReviewSubagentsEnabled(global, project *Settings) bool {
 	if v, ok := subagentClassEnabled(global, SubagentReviewer); ok {
 		return v
 	}
-	return false
+	return CodingSubagentsEnabled(global, project)
+}
+
+// DefaultSubagentMaxFixRounds bounds the automatic fix-and-re-review loop
+// after a failed batch review when sagittarius.subagents.reviewer.maxFixRounds
+// is unset.
+const DefaultSubagentMaxFixRounds = 1
+
+// SubagentMaxFixRoundsRange bounds sagittarius.subagents.reviewer.maxFixRounds.
+const (
+	MinSubagentMaxFixRounds = 0
+	MaxSubagentMaxFixRounds = 3
+)
+
+// ResolveSubagentMaxFixRounds returns the effective fix-round cap. Nil falls
+// back to def (the compiled-in 1). 0 means review without fixing. Out-of-range
+// pins are treated as unset; ValidateSagittariusSettings rejects them on load.
+func ResolveSubagentMaxFixRounds(s *SagittariusSettings, def int) int {
+	if s == nil || s.Subagents == nil || s.Subagents.Reviewer == nil || s.Subagents.Reviewer.MaxFixRounds == nil {
+		return def
+	}
+	if n := *s.Subagents.Reviewer.MaxFixRounds; n >= MinSubagentMaxFixRounds && n <= MaxSubagentMaxFixRounds {
+		return n
+	}
+	return def
 }
 
 // ResolveSubagentTarget resolves the (provider, model) pair for a subagent class.

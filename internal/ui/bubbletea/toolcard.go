@@ -122,6 +122,10 @@ func toolDisplayName(name string) string {
 		return "Research subagent"
 	case wireCodeTask:
 		return "Coding subagent"
+	case "batch_review":
+		return "Review"
+	case "batch_fix":
+		return "Fix"
 	case wireScratchpad:
 		return "Scratchpad"
 	case wireSessionSearch:

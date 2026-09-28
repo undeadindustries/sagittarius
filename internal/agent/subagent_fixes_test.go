@@ -12,9 +12,10 @@ import (
 )
 
 // TestReviewerStartFailureIsNonFatal: the coding child writes, then the
-// reviewer cannot be built (its pinned provider's generator fails). The
-// hand-off must still succeed, keep files_changed, and carry a review with
-// verdict "error" — not abort the whole code_task.
+// batch reviewer cannot be built (its pinned provider's generator fails). The
+// hand-off must still succeed, keep files_changed, and carry a batch_review
+// with verdict "error" — not abort the turn, and not trigger the turn guard
+// (an error is not a FAIL the parent can fix).
 func TestReviewerStartFailureIsNonFatal(t *testing.T) {
 	t.Setenv("SAGITTARIUS_HOME", t.TempDir())
 	root := t.TempDir()
@@ -25,6 +26,13 @@ func TestReviewerStartFailureIsNonFatal(t *testing.T) {
 		t.Fatalf("snapshot.NewManager: %v", err)
 	}
 	gen := newRoutedGenerator(map[string][][]provider.StreamResponse{
+		"PARENT": {
+			{
+				{ToolCalls: []provider.ToolCall{codeTaskCall("c1", "alpha work", "TASK-ALPHA", "alpha/**")}},
+				{Done: true},
+			},
+			{{TextDelta: "done", Done: true}},
+		},
 		"TASK-ALPHA": {
 			{
 				{ToolCalls: []provider.ToolCall{writeCall("a1", "alpha/a.txt", "after")}},
@@ -61,23 +69,28 @@ func TestReviewerStartFailureIsNonFatal(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = parent.Close() })
 
-	result, err := newCodeTaskTool(parent).Execute(context.Background(), codeTaskArgs("alpha work", "TASK-ALPHA", "alpha/**"))
-	if err != nil {
-		t.Fatalf("Execute must not fail when only the reviewer cannot start: %v", err)
-	}
-	files, _ := result["files_changed"].([]string)
+	drainToSlice(t, mustRunTurn(t, parent, "PARENT"))
+
+	resp := codeTaskResponses(t, parent)[0]
+	files, _ := resp["files_changed"].([]string)
 	if len(files) != 1 {
-		t.Errorf("files_changed = %v, want the child's write", result["files_changed"])
+		t.Errorf("files_changed = %v, want the child's write", resp["files_changed"])
 	}
-	review, ok := result["review"].(map[string]any)
+	review, ok := resp["batch_review"].(map[string]any)
 	if !ok {
-		t.Fatalf("hand-off has no review block: %v", result)
+		t.Fatalf("hand-off has no batch_review block: %v", resp)
 	}
 	if review["verdict"] != reviewVerdictError {
 		t.Errorf("verdict = %v, want error", review["verdict"])
 	}
 	if f, _ := review["findings"].(string); !strings.Contains(f, "could not start") {
 		t.Errorf("findings = %q, want the start failure", f)
+	}
+	if review["status"] == "needs_changes" {
+		t.Error("a reviewer error is not needs_changes — the parent cannot fix our failure")
+	}
+	if n := userMessagesContaining(parent, "The batch review still has unresolved findings"); n != 0 {
+		t.Errorf("a reviewer error must not trigger the turn guard, got %d reminders", n)
 	}
 }
 
