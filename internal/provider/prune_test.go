@@ -56,9 +56,11 @@ func TestPruneModeOverridesQualified(t *testing.T) {
 			},
 		},
 	}
-	// openrouter is a preset, but it has no active models explicitly set.
-	// Its fallback default model is "gpt-4o-mini", not "qwen...".
-	// So this override should be pruned.
+	// Curate openrouter's active set to a different model, so the pin's model
+	// is known-absent (not merely unknown) and the override should be pruned.
+	if err := SetActiveModels(settings, "openrouter", []string{"gpt-4o-mini"}); err != nil {
+		t.Fatalf("SetActiveModels: %v", err)
+	}
 	PruneModeOverrides(settings)
 
 	if settings.Sagittarius.Modes.Agent.Model != "" {
@@ -127,12 +129,19 @@ func TestPruneModelOverridesGoalEvaluatorStale(t *testing.T) {
 			},
 		},
 	}
-
-	if !PruneModelOverrides(settings) {
-		t.Fatal("expected prune to report a change")
+	// Curate openrouter's active set to a different model, so the evaluator
+	// pin's model is known-absent (not merely unknown) and should be pruned.
+	// SetActiveModels prunes internally, so the pin is cleared by the set.
+	if err := SetActiveModels(settings, "openrouter", []string{"gpt-4o-mini"}); err != nil {
+		t.Fatalf("SetActiveModels: %v", err)
 	}
+
 	if settings.Sagittarius.Goal.EvaluatorModel != "" || settings.Sagittarius.Goal.EvaluatorProvider != "" {
 		t.Errorf("stale goal evaluator pin should be cleared, got %+v", settings.Sagittarius.Goal)
+	}
+	// A second prune is a no-op now that the pin is gone.
+	if PruneModelOverrides(settings) {
+		t.Error("prune after the pin is gone should report no change")
 	}
 }
 
@@ -142,5 +151,32 @@ func TestPruneModelOverridesNoSagittarius(t *testing.T) {
 	}
 	if PruneModelOverrides(&config.Settings{}) {
 		t.Error("settings without a sagittarius block should not report a change")
+	}
+}
+
+// TestPruneModelOverridesKeepsPinWhenModelSetUnknown is the benchmark failure:
+// a pin to a custom local provider with no curated active-model set and no
+// configured default model was pruned at startup because ActiveModelsFor
+// returned empty. An empty set means "unknown," not "gone."
+func TestPruneModelOverridesKeepsPinWhenModelSetUnknown(t *testing.T) {
+	settings := &config.Settings{
+		Providers: &config.ProvidersSettings{
+			Active: "gemini-apikey",
+			Custom: map[string]config.CustomProviderDefinition{
+				"GX10-01": {BaseURL: "http://127.0.0.1:8000/v1"},
+			},
+		},
+		Sagittarius: &config.SagittariusSettings{
+			Subagents: &config.SagittariusSubagents{
+				Coding: &config.SagittariusSubagentClass{Provider: "GX10-01", Model: "qwen3.8-27b"},
+			},
+		},
+	}
+
+	if PruneModelOverrides(settings) {
+		t.Fatal("pin to an uncurated provider must survive pruning")
+	}
+	if settings.Sagittarius.Subagents.Coding.Model != "qwen3.8-27b" {
+		t.Errorf("coding pin = %+v, want qwen3.8-27b kept", settings.Sagittarius.Subagents.Coding)
 	}
 }

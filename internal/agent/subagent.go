@@ -122,6 +122,12 @@ func (r *Runner) newSubagent(ctx context.Context, spec subagentSpec) (*subagent,
 		FileState:         r.fileState,
 		SubagentCharter:   spec.charter,
 		SubagentGenerator: r.newSubagentGenerator,
+		// Standing session constraints bind children too: a "do not touch X"
+		// limit the user set must hold inside a leased write, not just in the
+		// parent's own turns. The scratchpad and history stay behind the
+		// context firewall (AD-138); constraints are user-authored scope, not
+		// model state, so they cross it.
+		InitialConstraints: r.Constraints(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create subagent runner: %w", err)

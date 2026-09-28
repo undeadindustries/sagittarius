@@ -301,7 +301,17 @@ func prunePair(settings *config.Settings, providerID, model string) bool {
 	if !providerKnown(settings, provID) {
 		return true
 	}
-	for _, m := range ActiveModelsFor(settings, provID) {
+	// Check the model is still in the provider's active set. An empty set
+	// means the provider's models are unknown — uncurated, or a local server
+	// that was down at discovery — not that the model is gone. Pruning there
+	// would silently eat legitimate pins (a local model's whole point is that
+	// it is not in a curated cloud list), and a genuinely stale pin already
+	// fails loud at launch.
+	active := ActiveModelsFor(settings, provID)
+	if len(active) == 0 {
+		return false
+	}
+	for _, m := range active {
 		if m == model {
 			return false
 		}

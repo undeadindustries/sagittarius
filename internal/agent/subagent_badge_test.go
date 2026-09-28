@@ -7,6 +7,31 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/modes"
 )
 
+// TestChildInheritsConstraints: a standing session constraint the user set on
+// the parent must bind the child — a leased write must not be able to violate
+// a scope limit the parent was told to hold.
+func TestChildInheritsConstraints(t *testing.T) {
+	t.Parallel()
+
+	h := newSubagentHarness(t, openAISettingsWithModelPins(nil))
+	if err := h.parent.AddConstraint("do not touch go.mod"); err != nil {
+		t.Fatalf("AddConstraint: %v", err)
+	}
+	child, err := h.parent.newSubagent(t.Context(), subagentSpec{
+		description: "constraints",
+		mode:        modes.ModeAgent,
+		class:       config.SubagentCoding,
+		approval:    ApprovalYolo,
+	})
+	if err != nil {
+		t.Fatalf("newSubagent: %v", err)
+	}
+	got := child.runner.Constraints()
+	if len(got) != 1 || got[0] != "do not touch go.mod" {
+		t.Errorf("child constraints = %v, want the parent's constraint", got)
+	}
+}
+
 func TestSubagentPairLabel(t *testing.T) {
 	t.Parallel()
 
