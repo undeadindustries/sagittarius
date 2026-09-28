@@ -2,10 +2,14 @@ package agent
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
+	"github.com/undeadindustries/sagittarius/internal/skills"
 	"github.com/undeadindustries/sagittarius/internal/tools"
 )
 
@@ -105,10 +109,24 @@ func TestWithoutUnconfirmable(t *testing.T) {
 }
 
 // TestChildExtraToolsRegisteredAndDeclared: ExtraTools land in the child's
-// registry and, for a read-only MCP tool in ask mode, in the declared tools
-// the model actually sees.
+// registry and, for a read-only MCP tool and activate_skill in ask mode, in
+// the declared tools the model actually sees (including the skills catalog).
 func TestChildExtraToolsRegisteredAndDeclared(t *testing.T) {
 	t.Parallel()
+
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, ".sagittarius", "skills", "testskill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: testskill\ndescription: A child test skill\n---\nBody.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mgr := skills.NewManager(dir, true)
+	if err := mgr.Discover(t.Context(), nil); err != nil {
+		t.Fatal(err)
+	}
+	skillTool := tools.NewActivateSkillTool(mgr)
 
 	mcp := fakeReadOnlyMCPTool{name: "mcp_palace_search"}
 	child, err := NewRunner(RunnerConfig{
@@ -118,7 +136,7 @@ func TestChildExtraToolsRegisteredAndDeclared(t *testing.T) {
 		Interactive: false,
 		Settings:    openAISettingsWithModelPins(nil),
 		InitialMode: modes.ModeAsk,
-		ExtraTools:  []tools.Tool{mcp},
+		ExtraTools:  []tools.Tool{mcp, skillTool},
 	})
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
@@ -128,14 +146,29 @@ func TestChildExtraToolsRegisteredAndDeclared(t *testing.T) {
 	if _, ok := child.Registry().Lookup("mcp_palace_search"); !ok {
 		t.Fatal("extra MCP tool not in child registry")
 	}
-	// In ask mode the read-only MCP tool must be declared to the model.
+	if _, ok := child.Registry().Lookup("activate_skill"); !ok {
+		t.Fatal("extra activate_skill tool not in child registry")
+	}
+
+	// In ask mode the read-only MCP tool and activate_skill must be declared to the model.
 	decls := child.Registry().ListDeclarationsForMode(modes.ModeAsk)
 	var declared []string
+	var skillDecl *provider.ToolDeclaration
 	for _, d := range decls {
 		declared = append(declared, d.Name)
+		if d.Name == "activate_skill" {
+			dCopy := d
+			skillDecl = &dCopy
+		}
 	}
 	if !containsString(declared, "mcp_palace_search") {
 		t.Errorf("read-only MCP tool not declared in ask mode: %v", declared)
+	}
+	if !containsString(declared, "activate_skill") {
+		t.Errorf("activate_skill tool not declared in ask mode: %v", declared)
+	}
+	if skillDecl == nil || !strings.Contains(skillDecl.Description, "Available skills:\n- testskill: A child test skill") {
+		t.Errorf("activate_skill declaration in child missing catalog: %+v", skillDecl)
 	}
 }
 
