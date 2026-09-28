@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -239,6 +240,10 @@ func (s *Scheduler) Execute(
 	if conflict == "" {
 		conflict = contractConflict(calls)
 	}
+	// A delegation prompt that is a placeholder or carries an unexpanded
+	// template marker can only waste tokens: the child cannot resolve it.
+	// Deny the whole batch before any child launches (AD-154).
+	promptProblem := delegationPromptProblem(calls)
 
 	var eg errgroup.Group
 	eg.SetLimit(s.subagentConcurrencyLimit())
@@ -248,12 +253,16 @@ func (s *Scheduler) Execute(
 		if !IsSubagentTool(call.Name) {
 			continue
 		}
-		if conflict != "" && canonicalToolName(call.Name) == CodeTaskToolName {
+		deny := promptProblem
+		if deny == "" && conflict != "" && canonicalToolName(call.Name) == CodeTaskToolName {
+			deny = conflict
+		}
+		if deny != "" {
 			emit(ui.StreamEvent{
 				Type: ui.StreamToolResult, ToolName: call.Name, ToolCallID: call.ID,
-				Text: conflict, IsError: true,
+				Text: deny, IsError: true,
 			})
-			responses[i] = *errorResponse(call, ErrCodeInvalidArgs, conflict)
+			responses[i] = *errorResponse(call, ErrCodeInvalidArgs, deny)
 			continue
 		}
 		eg.Go(func() error {
@@ -432,6 +441,83 @@ func contractConflict(calls []provider.ToolCall) string {
 // only in line wrapping still count as identical.
 func normalizeContract(s string) string {
 	return strings.Join(strings.Fields(s), " ")
+}
+
+// delegationPromptProblem rejects delegation prompts that cannot produce
+// useful work: bare placeholders ("todo", "task 2") and unexpanded template
+// markers ("Implement {module_name}", "write to <file name>"). Borrowed from
+// Hermes' delegate_task gate with two deliberate differences: no minimum
+// length (our contract gate already forces substance in a parallel batch), and
+// fenced code blocks / inline code spans are stripped first, because coding
+// prompts legitimately contain f-string placeholders and generics as literal
+// code, which Hermes' raw match denies. It checks the prompt and the contract
+// of every subagent call, single calls included — a placeholder is broken
+// regardless of batch size.
+func delegationPromptProblem(calls []provider.ToolCall) string {
+	for _, call := range calls {
+		if !IsSubagentTool(call.Name) {
+			continue
+		}
+		args := NormalizeToolArgs(call.Name, call.Args)
+		label, _ := args[TaskParamDescription].(string)
+		if label == "" {
+			label = call.ID
+		}
+		for _, key := range []string{TaskParamPrompt, CodeTaskParamContract} {
+			text, _ := args[key].(string)
+			if text == "" {
+				continue
+			}
+			if problem := placeholderOrTemplate(text); problem != "" {
+				return fmt.Sprintf(
+					"delegation prompt problem in %q: %s. "+
+						"Substitute the real value before delegating — the subagent cannot resolve "+
+						"placeholders. Literal code containing {placeholders} or <markers> is fine inside backticks.",
+					label, problem)
+			}
+		}
+	}
+	return ""
+}
+
+// delegationPlaceholderRE matches a prompt that is nothing but a placeholder.
+var delegationPlaceholderRE = regexp.MustCompile(`^(todo|tbd|task\s*\d+)$`)
+
+// delegationTemplateRE matches an unexpanded template marker: two or more
+// words inside angle or curly brackets. One-word forms (<div>, {id}) are
+// common in real text and stay legal.
+var delegationTemplateRE = regexp.MustCompile(`<[A-Za-z][A-Za-z0-9]*(?:[ _-][A-Za-z0-9]+)+>|\{[A-Za-z][A-Za-z0-9]*(?:[ _-][A-Za-z0-9]+)+\}`)
+
+// inlineCodeSpanRE matches a single-line inline code span.
+var inlineCodeSpanRE = regexp.MustCompile("`[^`\n]+`")
+
+func placeholderOrTemplate(text string) string {
+	trimmed := strings.TrimSpace(text)
+	if delegationPlaceholderRE.MatchString(strings.ToLower(trimmed)) {
+		return fmt.Sprintf("the prompt is a bare placeholder (%q)", trimmed)
+	}
+	if m := delegationTemplateRE.FindString(stripCodeSpans(text)); m != "" {
+		return fmt.Sprintf("unexpanded template marker %q", m)
+	}
+	return ""
+}
+
+// stripCodeSpans removes fenced code blocks and inline code spans so the
+// template-marker check fires on prose, not on literal code.
+func stripCodeSpans(text string) string {
+	var b strings.Builder
+	inFence := false
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+			inFence = !inFence
+			continue
+		}
+		if !inFence {
+			b.WriteString(line)
+			b.WriteByte('\n')
+		}
+	}
+	return inlineCodeSpanRE.ReplaceAllString(b.String(), "")
 }
 
 func filterValidResponses(in []provider.FunctionResponse) []provider.FunctionResponse {
