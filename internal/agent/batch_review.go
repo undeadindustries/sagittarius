@@ -34,6 +34,11 @@ const reviewDiffRunes = 6000
 // wall of diffs that hides the seams it exists to check.
 const batchReviewTotalDiffRunes = 24000
 
+// batchReviewRequestRunes caps the user's request text handed to the reviewer
+// and fix children. The request is what the contract is checked against, so
+// it must be present, but a pasted epic must not dominate the review prompt.
+const batchReviewRequestRunes = 4000
+
 // batchOutcome is one successful code_task child's contribution to the batch
 // review: what it was asked to do, what it reported, and what it touched.
 type batchOutcome struct {
@@ -267,7 +272,7 @@ func (r *Runner) runBatchFix(ctx context.Context, baseID string, round int, cont
 		return nil, fmt.Errorf("fix subagent could not start: %w", err)
 	}
 
-	_, runErr := child.run(ctx, batchFixPrompt(contract, findings, files), cardSink(emit, cardID))
+	_, runErr := child.run(ctx, batchFixPrompt(contract, findings, files, r.turnRequest), cardSink(emit, cardID))
 	if runErr != nil {
 		if ctx.Err() != nil {
 			return nil, runErr
@@ -280,13 +285,16 @@ func (r *Runner) runBatchFix(ctx context.Context, baseID string, round int, cont
 	return changed, nil
 }
 
-// batchReviewPrompt assembles what the reviewer sees: the binding contract,
-// each sibling's own summary, the files the batch touched, and per-file diffs
-// when snapshots are available. When snapshotting is off the reviewer still
-// has the file list and reads current contents itself.
+// batchReviewPrompt assembles what the reviewer sees: the user's request, the
+// binding contract, each sibling's own summary, the files the batch touched,
+// and per-file diffs when snapshots are available. When snapshotting is off
+// the reviewer still has the file list and reads current contents itself.
 func (r *Runner) batchReviewPrompt(contract string, outcomes []batchOutcome, files []string) string {
 	var b strings.Builder
 	b.WriteString("Review this finished batch of changes. Sibling coding subagents made them in parallel, each seeing only its own files.\n\n")
+	if req := strings.TrimSpace(r.turnRequest); req != "" {
+		fmt.Fprintf(&b, "The user asked for:\n%s\n\n", capRunes(req, batchReviewRequestRunes))
+	}
 	if strings.TrimSpace(contract) != "" {
 		fmt.Fprintf(&b, "Shared design contract (binding on every sibling):\n%s\n\n", contract)
 	}
@@ -309,9 +317,12 @@ func (r *Runner) batchReviewPrompt(contract string, outcomes []batchOutcome, fil
 }
 
 // batchFixPrompt tells the fix child exactly what to repair and nothing more.
-func batchFixPrompt(contract, findings string, files []string) string {
+func batchFixPrompt(contract, findings string, files []string, request string) string {
 	var b strings.Builder
 	b.WriteString("A review of the batch found defects. Fix exactly these findings and nothing else.\n\n")
+	if req := strings.TrimSpace(request); req != "" {
+		fmt.Fprintf(&b, "The user asked for:\n%s\n\n", capRunes(req, batchReviewRequestRunes))
+	}
 	fmt.Fprintf(&b, "Review findings:\n%s\n\n", findings)
 	b.WriteString("Files in scope:\n")
 	for _, f := range files {

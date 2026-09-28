@@ -29,10 +29,13 @@ type routedGenerator struct {
 	// scripts maps a routing key to the successive turns for that agent.
 	scripts map[string][][]provider.StreamResponse
 	seen    map[string]int
+	// prompts records the first user text of every generation call, keyed the
+	// way route() keys it, so a test can assert what a child was told.
+	prompts map[string][]string
 }
 
 func newRoutedGenerator(scripts map[string][][]provider.StreamResponse) *routedGenerator {
-	return &routedGenerator{scripts: scripts, seen: map[string]int{}}
+	return &routedGenerator{scripts: scripts, seen: map[string]int{}, prompts: map[string][]string{}}
 }
 
 func (g *routedGenerator) GenerateContentStream(ctx context.Context, req *provider.GenerateRequest) (<-chan provider.StreamResponse, error) {
@@ -41,6 +44,7 @@ func (g *routedGenerator) GenerateContentStream(ctx context.Context, req *provid
 	g.mu.Lock()
 	turn := g.seen[key]
 	g.seen[key] = turn + 1
+	g.prompts[key] = append(g.prompts[key], firstRequestUserText(req))
 	var responses []provider.StreamResponse
 	if script, ok := g.scripts[key]; ok && turn < len(script) {
 		responses = append([]provider.StreamResponse(nil), script[turn]...)
@@ -66,19 +70,34 @@ func (g *routedGenerator) GenerateContentStream(ctx context.Context, req *provid
 }
 
 // route picks the script key from the first user text, which is the prompt the
-// agent was launched with and never changes across its turns.
+// agent was launched with and never changes across its turns. When several
+// keys match (a reviewer prompt quotes the parent's request, which contains
+// the parent's own key), the longest wins — it is the most specific.
 func (g *routedGenerator) route(req *provider.GenerateRequest) string {
+	text := firstRequestUserText(req)
+	if text == "" {
+		return ""
+	}
+	best := ""
+	for key := range g.scripts {
+		if strings.Contains(text, key) && len(key) > len(best) {
+			best = key
+		}
+	}
+	if best != "" {
+		return best
+	}
+	return text
+}
+
+// firstRequestUserText is the first non-empty user text part in the request.
+func firstRequestUserText(req *provider.GenerateRequest) string {
 	for _, msg := range req.Messages {
 		if msg.Role != provider.RoleUser {
 			continue
 		}
 		for _, p := range msg.Parts {
 			if text := strings.TrimSpace(p.Text); text != "" {
-				for key := range g.scripts {
-					if strings.Contains(text, key) {
-						return key
-					}
-				}
 				return text
 			}
 		}
@@ -90,6 +109,17 @@ func (g *routedGenerator) turns(key string) int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.seen[key]
+}
+
+// promptFor returns the first user text of the nth generation call routed to
+// key, or "" when there is no such call.
+func (g *routedGenerator) promptFor(key string, n int) string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if n >= len(g.prompts[key]) {
+		return ""
+	}
+	return g.prompts[key][n]
 }
 
 func codeTaskCall(id, desc, prompt string, paths ...string) provider.ToolCall {

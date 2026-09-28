@@ -119,6 +119,34 @@ func userMessagesContaining(r *Runner, marker string) int {
 
 const batchContract = "Amounts are integer cents. The CLI layer validates input."
 
+// TestBatchReviewPromptIncludesUserRequest pins the AD-154 contract-check
+// input: the reviewer sees what the user asked for, capped, and the section
+// is omitted entirely when there is no request (tests, headless edge cases).
+func TestBatchReviewPromptIncludesUserRequest(t *testing.T) {
+	t.Parallel()
+
+	r := &Runner{turnRequest: "Build an expense tracker; money must be exact."}
+	got := r.batchReviewPrompt("contract text", []batchOutcome{{desc: "a", summary: "s", files: []string{"f.go"}}}, []string{"f.go"})
+	if !strings.Contains(got, "The user asked for:") || !strings.Contains(got, "money must be exact") {
+		t.Errorf("prompt is missing the user request:\n%s", got)
+	}
+
+	big := &Runner{turnRequest: strings.Repeat("x", batchReviewRequestRunes+500)}
+	capped := big.batchReviewPrompt("", nil, []string{"f.go"})
+	if strings.Contains(capped, strings.Repeat("x", batchReviewRequestRunes+100)) {
+		t.Error("the request must be capped at batchReviewRequestRunes")
+	}
+	if !strings.Contains(capped, strings.Repeat("x", 100)) {
+		t.Error("the capped request must still be present")
+	}
+
+	bare := &Runner{}
+	omitted := bare.batchReviewPrompt("", nil, []string{"f.go"})
+	if strings.Contains(omitted, "The user asked for:") {
+		t.Error("an empty request must omit the section, not render an empty one")
+	}
+}
+
 // batchScripts is the shared wiring for the review tests: the parent delegates
 // alpha and beta with one contract, each child writes inside its lease.
 func batchScripts() map[string][][]provider.StreamResponse {
@@ -179,9 +207,16 @@ func TestBatchReviewFailFixPass(t *testing.T) {
 	gen := newRoutedGenerator(scripts)
 	parent := batchReviewParent(t, root, gen, snapMgr, nil)
 
-	drainToSlice(t, mustRunTurn(t, parent, "PARENT"))
+	drainToSlice(t, mustRunTurn(t, parent, "PARENT — money must be exact to the cent"))
 
 	assertFile(t, root, "alpha/a.txt", "alpha-fixed")
+	// AD-154: the reviewer and the fix child both see what the user asked for.
+	if got := gen.promptFor("Review this finished batch", 0); !strings.Contains(got, "exact to the cent") {
+		t.Errorf("reviewer prompt lacks the user request:\n%s", got)
+	}
+	if got := gen.promptFor("A review of the batch", 0); !strings.Contains(got, "exact to the cent") {
+		t.Errorf("fix prompt lacks the user request:\n%s", got)
+	}
 	if got := gen.turns("Review this finished batch"); got != 2 {
 		t.Errorf("reviewer ran %d times, want 2 (fail, re-review)", got)
 	}

@@ -290,6 +290,13 @@ type Runner struct {
 	// turnActive guards against overlapping RunTurn calls mutating history.
 	turnActive atomic.Bool
 
+	// turnRequest is the raw user text of the in-flight turn, so the batch
+	// reviewer can check the children's contract against what the user
+	// actually asked for (AD-154). Written once at the top of runAgentLoop and
+	// read by the batch finalizer, which runs inside Scheduler.Execute on the
+	// same goroutine — no lock, and turnActive already serializes turns.
+	turnRequest string
+
 	goalMu     sync.RWMutex
 	activeGoal *goal.Goal
 
@@ -1066,6 +1073,7 @@ func (r *Runner) runAgentLoop(ctx context.Context, userInput string, out chan<- 
 	}
 
 	r.setState(StateStreaming)
+	r.turnRequest = userInput
 
 	if r.goplsHintPending {
 		r.goplsHintPending = false
