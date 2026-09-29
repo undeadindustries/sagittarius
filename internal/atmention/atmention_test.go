@@ -31,7 +31,7 @@ func TestScanMentions(t *testing.T) {
 		{"skill", "use @skill:golang here", []mention{{kindSkill, "golang"}}},
 		{"skill uppercase prefix", "@SKILL:golang", []mention{{kindSkill, "golang"}}},
 		{"skill with hyphen", "@skill:postgres-engineering", []mention{{kindSkill, "postgres-engineering"}}},
-		{"bare skill prefix stays a path", "@skill:", []mention{{kindPath, "skill:"}}},
+		{"bare skill prefix is skill without name", "@skill:", []mention{{kindSkill, ""}}},
 		{"skill after email is not a mention", "rob@skill:golang", nil},
 		{"skill and file", "@skill:golang @a.go", []mention{{kindSkill, "golang"}, {kindPath, "a.go"}}},
 		{"diff hunk header @@ ignored", "@@ -1,3 +1,2 @@", nil},
@@ -87,10 +87,41 @@ func TestExpandInjectsFile(t *testing.T) {
 	}
 }
 
-func TestExpandMissingFileErrors(t *testing.T) {
+func TestExpandMissingFilePathErrors(t *testing.T) {
 	ws := newWorkspace(t, nil)
 	if _, err := Expand(ws, "see @nope.txt", nil); err == nil {
-		t.Fatal("expected error for missing file")
+		t.Fatal("expected error for missing file path with extension")
+	}
+	if _, err := Expand(ws, "see @path/to/missing.go", nil); err == nil {
+		t.Fatal("expected error for missing file path with slashes")
+	}
+}
+
+func TestExpandDecoratorPreservedAsText(t *testing.T) {
+	ws := newWorkspace(t, nil)
+	parts, err := Expand(ws, "function with @schedule_open_buffer and @Override decorator", nil)
+	if err != nil {
+		t.Fatalf("unexpected error for decorators: %v", err)
+	}
+	if len(parts) != 1 || parts[0].Text != "function with @schedule_open_buffer and @Override decorator" {
+		t.Fatalf("parts = %+v, want query preserved without file blocks", parts)
+	}
+}
+
+func TestExpandMixedRealFileAndDecorator(t *testing.T) {
+	ws := newWorkspace(t, map[string]string{"real.go": "package main"})
+	parts, err := Expand(ws, "check @real.go with @schedule_open_buffer", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(parts) != 2 {
+		t.Fatalf("expected 2 parts (query + real.go), got %d: %+v", len(parts), parts)
+	}
+	if !strings.Contains(parts[1].Text, "File: @real.go") || !strings.Contains(parts[1].Text, "package main") {
+		t.Fatalf("expected real.go content in parts[1], got: %s", parts[1].Text)
+	}
+	if strings.Contains(parts[1].Text, "schedule_open_buffer") {
+		t.Fatalf("decorator should not be in referenced files block: %s", parts[1].Text)
 	}
 }
 

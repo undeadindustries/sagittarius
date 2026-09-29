@@ -1584,15 +1584,19 @@ func (m *model) applyInputKey(msg tea.KeyMsg) tea.Cmd {
 	cur := m.inputByteCursor()
 
 	if msg.Type == tea.KeyBackspace && cur > 0 {
-		if _, start, end, ok := placeholderAt(val, cur-1); ok && end == cur {
-			m.setTextAndCursor(val[:start]+val[end:], start)
+		if _, start, end, ok := placeholderAt(val, cur-1); ok && cur > start && cur <= end {
+			newVal := val[:start] + val[end:]
+			m.setTextAndCursor(newVal, start)
+			m.pastes.prune(newVal)
 			m.syncInputLayout()
 			m.refreshSuggestions()
 			return nil
 		}
 	} else if msg.Type == tea.KeyDelete && cur < len(val) {
-		if _, start, end, ok := placeholderAt(val, cur); ok && start == cur {
-			m.setTextAndCursor(val[:start]+val[end:], start)
+		if _, start, end, ok := placeholderAt(val, cur); ok && cur >= start && cur < end {
+			newVal := val[:start] + val[end:]
+			m.setTextAndCursor(newVal, start)
+			m.pastes.prune(newVal)
 			m.syncInputLayout()
 			m.refreshSuggestions()
 			return nil
@@ -1613,7 +1617,16 @@ func (m *model) applyInputKey(msg tea.KeyMsg) tea.Cmd {
 			}
 		}
 
-		if id, start, end, ok := placeholderAt(val, cur); ok {
+		id, start, end, ok := placeholderAt(val, cur)
+		if !ok {
+			// If cursor is not on a placeholder, find the first placeholder in the input.
+			if loc := pastePlaceholderRe.FindStringIndex(val); loc != nil {
+				id = val[loc[0]:loc[1]]
+				start, end = loc[0], loc[1]
+				ok = true
+			}
+		}
+		if ok {
 			if content, ok := m.pastes.content[id]; ok {
 				m.pastes.expanded = &expandedPaste{id: id}
 				m.setTextAndCursor(val[:start]+content+val[end:], start+len(content))

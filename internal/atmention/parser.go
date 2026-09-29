@@ -70,9 +70,12 @@ func scanMentions(query string) []mention {
 }
 
 // classify splits a scanned token into a skill or path mention. A bare
-// "@skill:" with no name stays a path mention so the usual "no such file"
-// error surfaces instead of the token being silently dropped.
+// "@skill:" with no name is classified as an empty skill mention so an
+// informative error surfaces instead of the token being silently dropped.
 func classify(token string) mention {
+	if strings.EqualFold(token, skillPrefix) {
+		return mention{kind: kindSkill, name: ""}
+	}
 	if len(token) > len(skillPrefix) && strings.EqualFold(token[:len(skillPrefix)], skillPrefix) {
 		return mention{kind: kindSkill, name: token[len(skillPrefix):]}
 	}

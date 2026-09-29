@@ -148,3 +148,106 @@ func TestModelPasteEscapeAtOnPaste(t *testing.T) {
 		t.Errorf("got line %q, want %q", msgOff.line, pasteText)
 	}
 }
+
+func TestModelPasteDeleteAndRepasteNoCollision(t *testing.T) {
+	m := newTestModel()
+	pasteText := "1\n2\n3\n4\n5\n6\n7"
+
+	// 1. Paste
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(pasteText), Paste: true})
+	if val := m.input.Value(); val != "[Pasted Text: 7 lines]" {
+		t.Fatalf("first paste expected [Pasted Text: 7 lines], got %q", val)
+	}
+
+	// 2. Delete it with Backspace immediately
+	m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	if m.input.Value() != "" {
+		t.Fatalf("expected empty input after backspace, got %q", m.input.Value())
+	}
+	// Pastes store should be pruned immediately
+	if len(m.pastes.content) != 0 {
+		t.Fatalf("expected pasteStore to be empty after backspace deletion, got %v", m.pastes.content)
+	}
+
+	// 3. Paste again - should NOT get #2 suffix!
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(pasteText), Paste: true})
+	if val := m.input.Value(); val != "[Pasted Text: 7 lines]" {
+		t.Fatalf("re-paste expected clean [Pasted Text: 7 lines], got %q", val)
+	}
+}
+
+func TestModelPasteAtomicDeleteFromInside(t *testing.T) {
+	m := newTestModel()
+	pasteText := "1\n2\n3\n4\n5\n6\n7"
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("Prefix ")})
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(pasteText), Paste: true})
+
+	// Cursor is at end of placeholder. Move left 8 times into the middle of the placeholder.
+	for i := 0; i < 8; i++ {
+		m.Update(tea.KeyMsg{Type: tea.KeyLeft})
+	}
+
+	// Backspacing from inside should atomically delete the entire placeholder
+	m.Update(tea.KeyMsg{Type: tea.KeyBackspace})
+	if m.input.Value() != "Prefix " {
+		t.Fatalf("expected %q after backspacing inside placeholder, got %q", "Prefix ", m.input.Value())
+	}
+	if len(m.pastes.content) != 0 {
+		t.Fatalf("expected pasteStore to be pruned immediately, got %v", m.pastes.content)
+	}
+}
+
+func TestModelPasteCtrlOExpandsAnywhere(t *testing.T) {
+	m := newTestModel()
+	pasteText := "1\n2\n3\n4\n5\n6\n7"
+
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(pasteText), Paste: true})
+	placeholder := "[Pasted Text: 7 lines]"
+
+	// Move cursor all the way to start of line (before placeholder)
+	m.Update(tea.KeyMsg{Type: tea.KeyHome})
+
+	// Hit Ctrl+O while cursor is at start of line
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
+
+	// Should still expand
+	if m.input.Value() != pasteText {
+		t.Fatalf("expected expanded %q from line start, got %q", pasteText, m.input.Value())
+	}
+
+	// Hit Ctrl+O again - should collapse
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
+	if m.input.Value() != placeholder {
+		t.Fatalf("expected collapsed %q, got %q", placeholder, m.input.Value())
+	}
+}
+
+func TestModelPasteStatusRowHint(t *testing.T) {
+	m := newTestModel()
+	pasteText := "1\n2\n3\n4\n5\n6\n7"
+
+	// Before paste, no paste hint in status row
+	left, _ := m.statusRowParts()
+	if strings.Contains(left, "Ctrl+O") {
+		t.Fatalf("unexpected Ctrl+O hint before paste: %q", left)
+	}
+
+	// Paste large text
+	m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(pasteText), Paste: true})
+
+	// Status row should advertise expanding
+	left, _ = m.statusRowParts()
+	if !strings.Contains(left, "Ctrl+O expand paste") {
+		t.Fatalf("expected 'Ctrl+O expand paste' in status row, got %q", left)
+	}
+
+	// Expand it
+	m.Update(tea.KeyMsg{Type: tea.KeyCtrlO})
+
+	// Status row should advertise collapsing
+	left, _ = m.statusRowParts()
+	if !strings.Contains(left, "Ctrl+O collapse paste") {
+		t.Fatalf("expected 'Ctrl+O collapse paste' in status row, got %q", left)
+	}
+}

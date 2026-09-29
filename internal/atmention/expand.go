@@ -79,6 +79,9 @@ func expandSkills(mentions []mention, resolver SkillResolver, budget *int) (stri
 		if m.kind != kindSkill {
 			continue
 		}
+		if m.name == "" {
+			return "", fmt.Errorf("@%s: missing skill name", skillPrefix)
+		}
 		key := strings.ToLower(m.name)
 		if seen[key] {
 			continue
@@ -145,9 +148,12 @@ func expandFiles(ws *tools.Workspace, mentions []mention, budget *int) (string, 
 		}
 		seen[m.name] = true
 
-		ref, err := resolveMention(ws, m.name)
+		ref, found, err := resolveMention(ws, m.name)
 		if err != nil {
 			return "", fmt.Errorf("@%s: %w", m.name, err)
+		}
+		if !found {
+			continue
 		}
 		content, truncated, err := readCapped(ref.abs, *budget)
 		if err != nil {

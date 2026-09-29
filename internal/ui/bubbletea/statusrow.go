@@ -125,6 +125,12 @@ func (m *model) statusRowParts() (left, right string) {
 		left = hints
 	}
 
+	if m.pastes.expanded != nil {
+		left = left + "  ·  Ctrl+O collapse paste"
+	} else if len(m.pastes.content) > 0 || pastePlaceholderRe.MatchString(m.input.Value()) {
+		left = left + "  ·  Ctrl+O expand paste"
+	}
+
 	// Latch the auto-title announcement the first time the app surfaces it so
 	// the status-row line persists across frames (the provider peeks, never
 	// consumes). Dismissal is local (titleDismissed).
