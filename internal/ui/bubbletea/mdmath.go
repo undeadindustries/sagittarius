@@ -59,11 +59,51 @@ var latexGlyphs = map[string]string{
 	"Gamma": "Γ", "Delta": "Δ", "Theta": "Θ", "Lambda": "Λ",
 	"Xi": "Ξ", "Pi": "Π", "Sigma": "Σ", "Upsilon": "Υ",
 	"Phi": "Φ", "Psi": "Ψ", "Omega": "Ω",
+
+	// Big operators / Calculus
+	"sum": "∑", "prod": "∏", "coprod": "∐",
+	"int": "∫", "iint": "∬", "iiint": "∭", "oint": "∮",
+
+	// Logic, relations, sets
+	"wedge": "∧", "vee": "∨",
+	"ni": "∋", "owns": "∋",
+	"nexists":  "∄",
+	"setminus": "∖", "backslash": "∖",
+	"therefore": "∴", "because": "∵",
+	"sqsubset": "⊏", "sqsubseteq": "⊑",
+	"sqsupset": "⊐", "sqsupseteq": "⊒",
+
+	// Arithmetic, operators, geometry
+	"ast": "∗", "star": "⋆", "bullet": "•",
+	"oplus": "⊕", "ominus": "⊖", "otimes": "⊗", "oslash": "⊘", "odot": "⊙",
+	"perp": "⊥", "parallel": "∥", "angle": "∠",
+	"top": "⊤", "bot": "⊥",
+	"vdash": "⊢", "dashv": "⊣", "models": "⊨",
+	"prec": "≺", "succ": "≻", "preceq": "⪯", "succeq": "⪰",
+	"asymp": "≍",
+
+	// Delimiters
+	"langle": "⟨", "rangle": "⟩",
+	"lceil": "⌈", "rceil": "⌉",
+	"lfloor": "⌊", "rfloor": "⌋",
+	"Vert": "‖", "vert": "|",
+
+	// Misc symbols
+	"hbar": "ℏ", "ell": "ℓ", "aleph": "ℵ",
+	"Re": "ℜ", "Im": "ℑ",
+	"prime": "′",
+	"dag":   "†", "ddag": "‡",
+
+	// Directional arrows
+	"nearrow": "↗", "searrow": "↘", "swarrow": "↙", "nwarrow": "↖",
 }
 
 var latexTextCmds = map[string]struct{}{
 	"text": {}, "mathrm": {}, "mathbf": {}, "mathit": {},
-	"textrm": {}, "textbf": {}, "textit": {},
+	"textrm": {}, "textbf": {}, "textit": {}, "textnormal": {},
+	"mathsf": {}, "mathtt": {}, "boldsymbol": {}, "bm": {},
+	"mathcal": {}, "mathscr": {}, "mathfrak": {},
+	"overline": {}, "underline": {}, "widehat": {}, "widetilde": {},
 }
 
 var latexSpaceCmds = map[string]string{
@@ -115,15 +155,20 @@ func copyCodeSpan(runes []rune, i int, b *strings.Builder) int {
 	return 0
 }
 
-// scanInlineMath matches $...$, $$...$$, or \(...\). A $ followed by
+// scanInlineMath matches $...$, $$...$$, \(...\), or \[...\]. A $ followed by
 // space is not an opener. A $ followed by digits is math only when the
 // inner span contains a command or a letter ($90^{\circ}$), not currency ($100$).
 func scanInlineMath(runes []rune, i int) (string, int, bool) {
 	if i >= len(runes) {
 		return "", i, false
 	}
-	if runes[i] == '\\' && i+1 < len(runes) && runes[i+1] == '(' {
-		return scanParenMath(runes, i)
+	if runes[i] == '\\' && i+1 < len(runes) {
+		if runes[i+1] == '(' {
+			return scanParenMath(runes, i)
+		}
+		if runes[i+1] == '[' {
+			return scanBracketMath(runes, i)
+		}
 	}
 	if runes[i] != '$' {
 		return "", i, false
@@ -135,6 +180,10 @@ func scanInlineMath(runes []rune, i int) (string, int, bool) {
 		return "", i, false
 	}
 	return scanDollarMath(runes, i)
+}
+
+func scanBracketMath(runes []rune, i int) (string, int, bool) {
+	return scanDelimited(runes, i+2, []rune(`\]`))
 }
 
 func canOpenDollar(runes []rune, i int) bool {
@@ -212,7 +261,7 @@ func expandLatexCommands(s string) string {
 	var b strings.Builder
 	b.Grow(len(s))
 	for i := 0; i < len(runes); {
-		if glyph, end, ok := consumeDegree(runes, i); ok {
+		if glyph, end, ok := consumeScript(runes, i); ok {
 			b.WriteString(glyph)
 			i = end
 			continue
@@ -228,6 +277,23 @@ func expandLatexCommands(s string) string {
 	return b.String()
 }
 
+var superscriptMap = map[rune]rune{
+	'0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴',
+	'5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹',
+	'+': '⁺', '-': '⁻', '=': '⁼', '(': '⁽', ')': '⁾',
+	'n': 'ⁿ', 'i': 'ⁱ',
+}
+
+var subscriptMap = map[rune]rune{
+	'0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄',
+	'5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉',
+	'+': '₊', '-': '₋', '=': '₌', '(': '₍', ')': '₎',
+	'a': 'ₐ', 'e': 'ₑ', 'h': 'ₕ', 'i': 'ᵢ', 'j': 'ⱼ',
+	'k': 'ₖ', 'l': 'ₗ', 'm': 'ₘ', 'n': 'ₙ', 'o': 'ₒ',
+	'p': 'ₚ', 'r': 'ᵣ', 's': 'ₛ', 't': 'ₜ', 'u': 'ᵤ',
+	'v': 'ᵥ', 'x': 'ₓ',
+}
+
 func consumeDegree(runes []rune, i int) (string, int, bool) {
 	if i >= len(runes) || runes[i] != '^' {
 		return "", i, false
@@ -238,7 +304,61 @@ func consumeDegree(runes []rune, i int) (string, int, bool) {
 			return "°", end, true
 		}
 	}
+	if i+1 < len(runes) && runes[i+1] == '\\' {
+		end := i + 2
+		for end < len(runes) && unicode.IsLetter(runes[end]) {
+			end++
+		}
+		cmd := string(runes[i+1 : end])
+		if cmd == "circ" || cmd == "degree" {
+			return "°", end, true
+		}
+	}
 	return "", i, false
+}
+
+func consumeScript(runes []rune, i int) (string, int, bool) {
+	if i >= len(runes) {
+		return "", i, false
+	}
+	op := runes[i]
+	if op != '^' && op != '_' {
+		return "", i, false
+	}
+	if op == '^' {
+		if glyph, end, ok := consumeDegree(runes, i); ok {
+			return glyph, end, true
+		}
+	}
+	var charMap map[rune]rune
+	if op == '^' {
+		charMap = superscriptMap
+	} else {
+		charMap = subscriptMap
+	}
+	arg, nextI, ok := consumeMathArg(runes, i+1)
+	if !ok || arg == "" {
+		return "", i, false
+	}
+	expandedArg := expandLatexCommands(arg)
+	argRunes := []rune(expandedArg)
+	var b strings.Builder
+	allMapped := true
+	for _, r := range argRunes {
+		if mapped, ok := charMap[r]; ok {
+			b.WriteRune(mapped)
+		} else {
+			allMapped = false
+			break
+		}
+	}
+	if allMapped && b.Len() > 0 {
+		return b.String(), nextI, true
+	}
+	if len(argRunes) == 1 {
+		return string(op) + expandedArg, nextI, true
+	}
+	return string(op) + "(" + expandedArg + ")", nextI, true
 }
 
 func consumeLatexCommand(runes []rune, i int) (string, int, bool) {
@@ -250,6 +370,12 @@ func consumeLatexCommand(runes []rune, i int) (string, int, bool) {
 	}
 	if runes[i+1] == '\\' {
 		return " ", i + 2, true
+	}
+	if runes[i+1] == '{' || runes[i+1] == '}' {
+		return string(runes[i+1]), i + 2, true
+	}
+	if runes[i+1] == '|' {
+		return "‖", i + 2, true
 	}
 	if space, ok := latexSpaceCmds[string(runes[i+1])]; ok && !unicode.IsLetter(runes[i+1]) {
 		return space, i + 2, true
@@ -268,7 +394,22 @@ func applyLatexCommand(name string, runes []rune, end int) (string, int, bool) {
 	if space, ok := latexSpaceCmds[name]; ok {
 		return space, end, true
 	}
+	if isFractionCmd(name) {
+		return consumeFraction(runes, end)
+	}
+	if isBinomialCmd(name) {
+		return consumeBinomial(runes, end)
+	}
+	if name == "sqrt" {
+		return consumeSqrt(runes, end)
+	}
+	if name == "mathbb" {
+		return consumeMathbb(runes, end)
+	}
 	if _, ok := latexTextCmds[name]; ok {
+		for end < len(runes) && unicode.IsSpace(runes[end]) {
+			end++
+		}
 		if inner, after, ok := consumeBraceGroup(runes, end); ok {
 			return expandLatexCommands(inner), after, true
 		}
@@ -281,23 +422,289 @@ func applyLatexCommand(name string, runes []rune, end int) (string, int, bool) {
 	if !ok {
 		return "", end, false
 	}
-	if name == "sqrt" {
-		if inner, after, ok := consumeBraceGroup(runes, end); ok {
-			return glyph + expandLatexCommands(inner), after, true
-		}
-	}
 	return glyph, end, true
 }
 
+var vulgarFractions = map[[2]string]string{
+	{"1", "2"}:  "½",
+	{"1", "3"}:  "⅓",
+	{"2", "3"}:  "⅔",
+	{"1", "4"}:  "¼",
+	{"3", "4"}:  "¾",
+	{"1", "5"}:  "⅕",
+	{"2", "5"}:  "⅖",
+	{"3", "5"}:  "⅗",
+	{"4", "5"}:  "⅘",
+	{"1", "6"}:  "⅙",
+	{"5", "6"}:  "⅚",
+	{"1", "7"}:  "⅐",
+	{"1", "8"}:  "⅛",
+	{"3", "8"}:  "⅜",
+	{"5", "8"}:  "⅝",
+	{"7", "8"}:  "⅞",
+	{"1", "9"}:  "⅑",
+	{"1", "10"}: "⅒",
+}
+
+func isFractionCmd(name string) bool {
+	switch name {
+	case "frac", "dfrac", "tfrac", "cfrac", "nicefrac", "sfrac":
+		return true
+	}
+	return false
+}
+
+func consumeFraction(runes []rune, i int) (string, int, bool) {
+	num, nextI, ok := consumeMathArg(runes, i)
+	if !ok {
+		return "", i, false
+	}
+	den, afterDen, ok := consumeMathArg(runes, nextI)
+	if !ok {
+		return "", i, false
+	}
+	expandedNum := strings.TrimSpace(expandLatexCommands(num))
+	expandedDen := strings.TrimSpace(expandLatexCommands(den))
+	return formatFraction(expandedNum, expandedDen), afterDen, true
+}
+
+func formatFraction(num, den string) string {
+	cleanNum := strings.TrimSpace(num)
+	cleanDen := strings.TrimSpace(den)
+
+	if vf, ok := vulgarFractions[[2]string{cleanNum, cleanDen}]; ok {
+		return vf
+	}
+	if strings.HasPrefix(cleanNum, "-") {
+		posNum := strings.TrimSpace(cleanNum[1:])
+		if vf, ok := vulgarFractions[[2]string{posNum, cleanDen}]; ok {
+			return "-" + vf
+		}
+	}
+	if strings.HasPrefix(cleanDen, "-") {
+		posDen := strings.TrimSpace(cleanDen[1:])
+		if vf, ok := vulgarFractions[[2]string{cleanNum, posDen}]; ok {
+			return "-" + vf
+		}
+	}
+
+	n := cleanNum
+	d := cleanDen
+
+	if needsNumeratorParens(n) {
+		n = "(" + n + ")"
+	}
+	if needsDenominatorParens(d) {
+		d = "(" + d + ")"
+	}
+	return n + "/" + d
+}
+
+func isEnclosedInParens(s string) bool {
+	s = strings.TrimSpace(s)
+	if len(s) < 2 {
+		return false
+	}
+	open := s[0]
+	closeChar := byte(0)
+	switch open {
+	case '(':
+		closeChar = ')'
+	case '[':
+		closeChar = ']'
+	default:
+		return false
+	}
+	if s[len(s)-1] != closeChar {
+		return false
+	}
+	depth := 0
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case open:
+			depth++
+		case closeChar:
+			depth--
+			if depth == 0 && i < len(s)-1 {
+				return false
+			}
+		}
+	}
+	return depth == 0
+}
+
+func hasBinaryOp(s string) bool {
+	trimmed := strings.TrimSpace(s)
+	trimmed = strings.TrimPrefix(trimmed, "-")
+	trimmed = strings.TrimPrefix(trimmed, "+")
+	trimmed = strings.TrimPrefix(trimmed, "−")
+	trimmed = strings.TrimSpace(trimmed)
+	for _, r := range trimmed {
+		switch r {
+		case '+', '-', '−', '±', '∓', '*', '/', '÷', '×', '·', '=', '≠', '≈', '≡', '≤', '≥', '<', '>':
+			return true
+		}
+	}
+	return false
+}
+
+func needsNumeratorParens(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" || isEnclosedInParens(s) {
+		return false
+	}
+	if hasBinaryOp(s) || strings.Contains(s, " ") {
+		return true
+	}
+	return false
+}
+
+func needsDenominatorParens(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" || isEnclosedInParens(s) {
+		return false
+	}
+	if strings.HasPrefix(s, "-") || strings.HasPrefix(s, "−") || hasBinaryOp(s) || strings.Contains(s, " ") {
+		return true
+	}
+	return false
+}
+
+func isBinomialCmd(name string) bool {
+	switch name {
+	case "binom", "dbinom", "tbinom":
+		return true
+	}
+	return false
+}
+
+func consumeBinomial(runes []rune, i int) (string, int, bool) {
+	n, nextI, ok := consumeMathArg(runes, i)
+	if !ok {
+		return "", i, false
+	}
+	k, afterK, ok := consumeMathArg(runes, nextI)
+	if !ok {
+		return "", i, false
+	}
+	expandedN := strings.TrimSpace(expandLatexCommands(n))
+	expandedK := strings.TrimSpace(expandLatexCommands(k))
+	return "C(" + expandedN + ", " + expandedK + ")", afterK, true
+}
+
+func consumeSqrt(runes []rune, end int) (string, int, bool) {
+	i := end
+	for i < len(runes) && unicode.IsSpace(runes[i]) {
+		i++
+	}
+	rootIndex := ""
+	if i < len(runes) && runes[i] == '[' {
+		closeIdx := -1
+		for j := i + 1; j < len(runes); j++ {
+			if runes[j] == ']' {
+				closeIdx = j
+				break
+			}
+		}
+		if closeIdx > 0 {
+			rootIndex = string(runes[i+1 : closeIdx])
+			i = closeIdx + 1
+			for i < len(runes) && unicode.IsSpace(runes[i]) {
+				i++
+			}
+		}
+	}
+	inner, after, ok := consumeMathArg(runes, i)
+	if !ok {
+		return "√", end, true
+	}
+	expanded := strings.TrimSpace(expandLatexCommands(inner))
+	if hasBinaryOp(expanded) && !isEnclosedInParens(expanded) {
+		expanded = "(" + expanded + ")"
+	}
+	glyph := "√"
+	if rootIndex == "3" {
+		glyph = "∛"
+	} else if rootIndex == "4" {
+		glyph = "∜"
+	} else if rootIndex != "" {
+		expandedIndex := strings.TrimSpace(expandLatexCommands(rootIndex))
+		glyph = expandedIndex + "√"
+	}
+	return glyph + expanded, after, true
+}
+
+var blackboardBold = map[rune]rune{
+	'C': 'ℂ', 'H': 'ℍ', 'N': 'ℕ', 'P': 'ℙ',
+	'Q': 'ℚ', 'R': 'ℝ', 'Z': 'ℤ',
+}
+
+func consumeMathbb(runes []rune, end int) (string, int, bool) {
+	for end < len(runes) && unicode.IsSpace(runes[end]) {
+		end++
+	}
+	inner, after, ok := consumeBraceGroup(runes, end)
+	if !ok {
+		return "", end, true
+	}
+	trimmed := strings.TrimSpace(inner)
+	r := []rune(trimmed)
+	if len(r) == 1 {
+		if bb, ok := blackboardBold[r[0]]; ok {
+			return string(bb), after, true
+		}
+	}
+	return expandLatexCommands(inner), after, true
+}
+
+func consumeMathArg(runes []rune, i int) (string, int, bool) {
+	for i < len(runes) && unicode.IsSpace(runes[i]) {
+		i++
+	}
+	if i >= len(runes) {
+		return "", i, false
+	}
+	if runes[i] == '{' {
+		return consumeBraceGroup(runes, i)
+	}
+	if runes[i] == '\\' {
+		if glyph, after, ok := consumeLatexCommand(runes, i); ok {
+			return glyph, after, true
+		}
+	}
+	return string(runes[i]), i + 1, true
+}
+
 func consumeLeftRight(runes []rune, i int) (string, int, bool) {
+	for i < len(runes) && unicode.IsSpace(runes[i]) {
+		i++
+	}
 	if i >= len(runes) {
 		return "", i, true
 	}
 	switch runes[i] {
 	case '.':
 		return "", i + 1, true
-	case '(', ')', '[', ']', '|', '{', '}':
+	case '(', ')', '[', ']', '|':
 		return string(runes[i]), i + 1, true
+	}
+	if runes[i] == '\\' && i+1 < len(runes) {
+		if runes[i+1] == '{' || runes[i+1] == '}' {
+			return string(runes[i+1]), i + 2, true
+		}
+		if runes[i+1] == '|' {
+			return "‖", i + 2, true
+		}
+		end := i + 1
+		for end < len(runes) && unicode.IsLetter(runes[end]) {
+			end++
+		}
+		if end > i+1 {
+			cmd := string(runes[i+1 : end])
+			if glyph, ok := latexGlyphs[cmd]; ok {
+				return glyph, end, true
+			}
+		}
 	}
 	return "", i, true
 }

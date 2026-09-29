@@ -60,6 +60,48 @@ func TestRenderMathInProse(t *testing.T) {
 		{"spacing quad", `$A\quad B$`, "A   B"},
 		{"thin space", `$A\,B$`, "A B"},
 		{"left right paren", `$\left( x \right)$`, "( x )"},
+		{"left right braces", `$\left\{ x \right\}$`, "{ x }"},
+		{"left right angle", `$\left\langle x \right\rangle$`, "⟨ x ⟩"},
+		{"escaped braces", `\{ x \mid x > 0 \}`, "{ x | x > 0 }"},
+		{"bracket display math", `\[\frac{1}{2}\]`, "½"},
+
+		// Fractions
+		{"frac half", `$\frac{1}{2}$`, "½"},
+		{"frac three quarters", `$\frac{3}{4}$`, "¾"},
+		{"frac five sixths", `$\frac{5}{6}$`, "⅚"},
+		{"frac seven eighths", `$\frac{7}{8}$`, "⅞"},
+		{"frac negative numerator", `$\frac{-1}{2}$`, "-½"},
+		{"frac negative denominator", `$\frac{1}{-2}$`, "-½"},
+		{"frac algebraic", `$\frac{a}{b}$`, "a/b"},
+		{"frac two digits", `$\frac{1}{12}$`, "1/12"},
+		{"frac numerator sum", `$\frac{x + 1}{2}$`, "(x + 1)/2"},
+		{"frac denominator sum", `$\frac{2}{x + 1}$`, "2/(x + 1)"},
+		{"frac both sums", `$\frac{x + 1}{x - 1}$`, "(x + 1)/(x - 1)"},
+		{"frac delta", `$\frac{\Delta y}{\Delta x}$`, "(Δ y)/(Δ x)"},
+		{"frac derivative", `$\frac{d}{dx}$`, "d/dx"},
+		{"frac partial", `$\frac{\partial f}{\partial x}$`, "(∂ f)/(∂ x)"},
+		{"frac pi half", `$\frac{\pi}{2}$`, "π/2"},
+		{"dfrac", `$\dfrac{1}{2}$`, "½"},
+		{"tfrac", `$\tfrac{1}{2}$`, "½"},
+		{"bare frac glyph in text", `Add \frac{1}{2} cup of water`, "Add ½ cup of water"},
+		{"bare frac variables", `slope is \frac{y}{x}`, "slope is y/x"},
+		{"frac unbraced digits", `$\frac 1 2$`, "½"},
+		{"frac unbraced tight", `$\frac12$`, "½"},
+		{"nested frac", `$\frac{1}{1 + \frac{1}{2}}$`, "1/(1 + ½)"},
+
+		// Binomial and roots
+		{"binom", `$\binom{n}{k}$`, "C(n, k)"},
+		{"cbrt", `$\sqrt[3]{8}$`, "∛8"},
+		{"fourth root", `$\sqrt[4]{16}$`, "∜16"},
+		{"sqrt sum", `$\sqrt{x + 1}$`, "√(x + 1)"},
+
+		// Big operators and sets
+		{"summation", `$\sum_{i=1}^n x_i$`, "∑ᵢ₌₁ⁿ xᵢ"},
+		{"integral", `$\int_0^1$`, "∫₀¹"},
+		{"blackboard R", `$\mathbb{R}$`, "ℝ"},
+		{"blackboard C", `$\mathbb{C}$`, "ℂ"},
+		{"logic and or", `$A \wedge B \vee C$`, "A ∧ B ∨ C"},
+		{"therefore", `$A \therefore B$`, "A ∴ B"},
 	}
 
 	for _, tc := range tests {
@@ -133,5 +175,40 @@ func TestRenderMarkdownMathLeavesCurrency(t *testing.T) {
 	}
 	if !strings.Contains(got, "$PATH") {
 		t.Errorf("shell var was eaten:\n%s", got)
+	}
+}
+
+func TestRenderMarkdownMathFractions(t *testing.T) {
+	t.Parallel()
+
+	md := "# Ratio $\\frac{1}{2}$\n\n- Scale is $\\frac{3}{4}$ for width.\n- Formula: $y = \\frac{a}{b} x$\n\n| Fraction | Value |\n|---|---|\n| $\\frac{1}{2}$ | 0.5 |\n| $\\frac{x + 1}{2}$ | expr |\n\n```\n\\frac{1}{2}\n```\n"
+	got := stripANSI(strings.Join(renderMarkdown(md, 80, theme.Greyscale()), "\n"))
+	if strings.Contains(got, `\frac`) {
+		// Only fenced code should retain raw \frac
+		lines := strings.Split(got, "\n")
+		var rawFracLines []string
+		for _, l := range lines {
+			if strings.Contains(l, `\frac`) && !strings.Contains(l, "wrapped to fit") {
+				rawFracLines = append(rawFracLines, l)
+			}
+		}
+		if len(rawFracLines) != 1 || !strings.Contains(rawFracLines[0], `\frac{1}{2}`) {
+			t.Errorf("unexpected raw LaTeX fraction leaked outside code block:\n%s", got)
+		}
+	}
+	if !strings.Contains(got, "Ratio ½") {
+		t.Errorf("heading fraction missing:\n%s", got)
+	}
+	if !strings.Contains(got, "Scale is ¾ for width.") {
+		t.Errorf("bullet fraction missing:\n%s", got)
+	}
+	if !strings.Contains(got, "y = a/b x") {
+		t.Errorf("formula fraction missing:\n%s", got)
+	}
+	if !strings.Contains(got, "½") {
+		t.Errorf("table cell fraction missing:\n%s", got)
+	}
+	if !strings.Contains(got, "(x + 1)/2") {
+		t.Errorf("table cell algebraic fraction missing:\n%s", got)
 	}
 }
