@@ -140,6 +140,14 @@ func (t *codeTaskTool) ExecuteStream(ctx context.Context, args map[string]any, s
 	// parent to finish it directly.
 	attempt, maxAttempts, err := t.runner.claimSubagentAttempt(config.SubagentCoding, spec.description, spec.lease.Patterns)
 	if err != nil {
+		if t.runner.sessionRecorder != nil {
+			t.runner.sessionRecorder.RecordEvent("subagent_denial", map[string]any{
+				"class":       "coding",
+				"description": spec.description,
+				"lease":       spec.lease.Patterns,
+				"reason":      err.Error(),
+			})
+		}
 		return nil, err
 	}
 
@@ -152,6 +160,7 @@ func (t *codeTaskTool) ExecuteStream(ctx context.Context, args map[string]any, s
 		charter:     prompt.CodingSubagentCharter(spec.lease.Patterns, spec.contract),
 		snapshotter: t.runner.snap,
 		approval:    ApprovalYolo,
+		callID:      callIDFromArgs(args),
 	})
 	if err != nil {
 		t.runner.releaseSubagentAttempt(config.SubagentCoding, spec.description, spec.lease.Patterns)

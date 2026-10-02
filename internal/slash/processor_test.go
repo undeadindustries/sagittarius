@@ -415,6 +415,9 @@ func (m *mockHooks) TrustAllHooks() error {
 	m.trustAll = true
 	return nil
 }
+func (m *mockHooks) ExportATIF(outPath string) (string, error) {
+	return "/tmp/trajectory-mock.json", nil
+}
 
 func testDeps(t *testing.T, settings *config.Settings) (slash.Deps, *config.Loader, *mockHooks) {
 	t.Helper()

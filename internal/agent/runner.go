@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1071,6 +1073,12 @@ func (r *Runner) runAgentLoop(ctx context.Context, userInput string, out chan<- 
 		r.cancelSidebar(sidebarCancelWait)
 		r.flushPendingSidebar()
 		r.turnActive.Store(false)
+		if r.sessionRecorder != nil {
+			state := r.State()
+			if state == StateDone {
+				_ = r.sessionRecorder.SetOutcome("done")
+			}
+		}
 		close(out)
 	}()
 
@@ -1149,10 +1157,16 @@ outerLoop:
 			// inside this loop would hold every round's context until the turn ends.
 			streamCtx, cancelStream := context.WithCancel(ctx)
 
+			roundStart := time.Now()
+			llmCalls := 1
 			respCh, err := gen.GenerateContentStream(streamCtx, req)
 			if err != nil {
 				if provider.IsContextOverflow(err) && !overflowRetried {
 					overflowRetried = true
+					llmCalls++
+					if r.sessionRecorder != nil {
+						r.sessionRecorder.RecordEvent("context_overflow_retry", map[string]any{"round": round})
+					}
 					r.historyMu.Lock()
 					mgr := r.contextManager()
 					overhead := contextmgmt.EstimateRequestOverhead(req.SystemInstruction, req.Tools)
@@ -1193,6 +1207,12 @@ outerLoop:
 			cancelStream()
 			if errors.Is(streamErr, errThinkingBudgetExceeded) {
 				thinkingCutPending = true
+				if r.sessionRecorder != nil {
+					r.sessionRecorder.RecordEvent("thinking_budget_cut", map[string]any{
+						"round":         round,
+						"budget_tokens": hardBudget,
+					})
+				}
 				r.armThinkingCut(hardBudget, res.Reasoning)
 				r.recordAbortedRoundUsage(req, currentProvider, currentModel, currentMode, res.Reasoning)
 				out <- ui.StreamEvent{
@@ -1236,13 +1256,61 @@ outerLoop:
 					inTok, outTok, 0, false)
 			}
 
+			// Build RoundTelemetry
+			var roundTelem *session.RoundTelemetry
+			latencyMs := time.Since(roundStart).Milliseconds()
+			sysHash := ""
+			if req.SystemInstruction != "" {
+				h := sha256.Sum256([]byte(req.SystemInstruction))
+				sysHash = hex.EncodeToString(h[:])
+			}
+			inTok := 0
+			outTok := 0
+			cachedTok := 0
+			reasoningTok := 0
+			costUSD := 0.0
+			costKnown := false
+			usageEstimated := false
+			if streamUsage != nil {
+				inTok = streamUsage.InputTokens
+				outTok = streamUsage.OutputTokens
+				cachedTok = streamUsage.CachedTokens
+				reasoningTok = streamUsage.ReasoningTokens
+				costUSD = streamUsage.CostUSD
+				costKnown = streamUsage.CostKnown
+			} else {
+				usageEstimated = true
+				inTok = estimateMessageTokens(req.Messages)
+				if modelText != "" {
+					outTok = contextmgmt.EstimateTokens([]provider.Part{{Text: modelText}})
+				}
+			}
+			roundTelem = &session.RoundTelemetry{
+				Provider:         currentProvider,
+				Model:            currentModel,
+				Mode:             currentMode,
+				AgentKind:        r.agentKind(),
+				InputTokens:      inTok,
+				OutputTokens:     outTok,
+				CachedTokens:     cachedTok,
+				ReasoningTokens:  reasoningTok,
+				CostUSD:          costUSD,
+				CostKnown:        costKnown,
+				UsageEstimated:   usageEstimated,
+				LatencyMs:        latencyMs,
+				LLMCalls:         llmCalls,
+				HadReasoning:     hadReasoning,
+				Reasoning:        res.Reasoning,
+				SystemPromptHash: sysHash,
+			}
+
 			// Prefer the provider's verbatim model parts (carries Gemini thought
 			// signatures) when supplied; otherwise reconstruct from text + tool
 			// calls (OpenAI-family path).
 			if len(modelParts) > 0 {
-				r.appendModelParts(modelParts, modelText, toolCalls)
+				r.appendModelParts(modelParts, modelText, toolCalls, roundTelem)
 			} else {
-				r.appendModelMessage(modelText, toolCalls)
+				r.appendModelMessage(modelText, toolCalls, roundTelem)
 			}
 
 			if len(toolCalls) == 0 {
@@ -1262,7 +1330,7 @@ outerLoop:
 					})
 					r.historyMu.Unlock()
 					if r.sessionRecorder != nil {
-						r.sessionRecorder.RecordUserMessage(reminder)
+						r.sessionRecorder.RecordHarnessMessage(reminder)
 					}
 					out <- ui.StreamEvent{Type: ui.StreamInfo, Text: "Batch review findings are still open; the model must fix them itself."}
 					continue
@@ -1336,6 +1404,9 @@ outerLoop:
 
 	r.fireAfterAgentHooks(ctx, userInput, turnReply.String(), out)
 	r.setState(StateDone)
+	if r.sessionRecorder != nil {
+		_ = r.sessionRecorder.SetOutcome("max_rounds")
+	}
 	r.verboseLog.LogInfo("max tool rounds exceeded")
 	out <- ui.StreamEvent{Type: ui.StreamError, Text: "max tool rounds exceeded"}
 	out <- ui.StreamEvent{Type: ui.StreamDone}
@@ -1436,11 +1507,24 @@ func (r *Runner) enforceRequestBudget(req *provider.GenerateRequest, out chan<- 
 	res := contextmgmt.TruncateHistoryToFit(r.history, target, contextmgmt.EstimateTokens)
 	if res.DroppedCount > 0 {
 		r.history = res.NewHistory
+		if r.sessionRecorder != nil {
+			r.sessionRecorder.RecordEvent("truncation", map[string]any{
+				"dropped_count":   res.DroppedCount,
+				"new_token_count": res.NewTokenCount,
+				"target_tokens":   target,
+			})
+		}
 	}
 
 	cappedCount := 0
 	if res.NewTokenCount > target {
 		cappedCount = r.capOversizedHistoryLocked(target)
+		if cappedCount > 0 && r.sessionRecorder != nil {
+			r.sessionRecorder.RecordEvent("capping", map[string]any{
+				"capped_count":  cappedCount,
+				"target_tokens": target,
+			})
+		}
 	}
 	r.historyMu.Unlock()
 
@@ -2018,13 +2102,15 @@ func (r *Runner) consumeStream(
 	budget int,
 ) (streamResult, error) {
 	var modelText strings.Builder
+	var reasoningText strings.Builder
+	recordReasoning := config.SessionsRecordReasoning(r.settingsSnapshot(), nil)
 	var res streamResult
 	watch := newThinkingBudgetWatch(budget)
 	streamDone := false
 
 	fail := func(err error) (streamResult, error) {
 		out <- ui.StreamEvent{Type: ui.StreamError, Err: err}
-		return streamResult{HadReasoning: res.HadReasoning}, err
+		return streamResult{HadReasoning: res.HadReasoning, Reasoning: reasoningText.String()}, err
 	}
 
 	for !streamDone {
@@ -2042,6 +2128,9 @@ func (r *Runner) consumeStream(
 			if resp.ReasoningDelta != "" {
 				res.HadReasoning = true
 				watch.add(resp.ReasoningDelta)
+				if recordReasoning {
+					reasoningText.WriteString(resp.ReasoningDelta)
+				}
 			}
 			if resp.TextDelta != "" {
 				modelText.WriteString(resp.TextDelta)
@@ -2079,10 +2168,13 @@ func (r *Runner) consumeStream(
 	}
 
 	res.Text = modelText.String()
+	if recordReasoning {
+		res.Reasoning = reasoningText.String()
+	}
 	return res, nil
 }
 
-func (r *Runner) appendModelMessage(text string, toolCalls []provider.ToolCall) {
+func (r *Runner) appendModelMessage(text string, toolCalls []provider.ToolCall, telemetry ...*session.RoundTelemetry) {
 	parts := make([]provider.Part, 0, 1+len(toolCalls))
 	if text != "" {
 		parts = append(parts, provider.Part{Text: text})
@@ -2101,7 +2193,7 @@ func (r *Runner) appendModelMessage(text string, toolCalls []provider.ToolCall) 
 	})
 	r.historyMu.Unlock()
 	if r.sessionRecorder != nil {
-		r.sessionRecorder.RecordModelMessage(text, toolCalls)
+		r.sessionRecorder.RecordModelMessage(text, toolCalls, telemetry...)
 	}
 }
 
@@ -2127,7 +2219,7 @@ func (r *Runner) recordBranch() {
 // Gemini thought signatures) in history. text and toolCalls are passed through
 // to the session recorder, which persists the provider-neutral projection;
 // signatures are not yet persisted across resume (tracked separately).
-func (r *Runner) appendModelParts(parts []provider.Part, text string, toolCalls []provider.ToolCall) {
+func (r *Runner) appendModelParts(parts []provider.Part, text string, toolCalls []provider.ToolCall, telemetry ...*session.RoundTelemetry) {
 	if len(parts) == 0 {
 		return
 	}
@@ -2138,7 +2230,7 @@ func (r *Runner) appendModelParts(parts []provider.Part, text string, toolCalls 
 	})
 	r.historyMu.Unlock()
 	if r.sessionRecorder != nil {
-		r.sessionRecorder.RecordModelMessage(text, toolCalls)
+		r.sessionRecorder.RecordModelMessage(text, toolCalls, telemetry...)
 	}
 }
 
@@ -2147,9 +2239,33 @@ func (r *Runner) appendFunctionResponses(responses []provider.FunctionResponse) 
 		return
 	}
 	parts := make([]provider.Part, 0, len(responses))
+	toolResults := make([]session.ToolResultTelemetry, 0, len(responses))
 	for _, resp := range responses {
 		respCopy := resp
 		parts = append(parts, provider.Part{FunctionResponse: &respCopy})
+
+		tr := session.ToolResultTelemetry{
+			ID:         resp.CallID,
+			Name:       resp.Name,
+			DurationMs: resp.Duration.Milliseconds(),
+			Status:     "ok",
+		}
+		if _, hasErr := resp.Response["error"]; hasErr {
+			tr.Status = "error"
+		}
+		if code, ok := resp.Response["code"].(string); ok && code != "" {
+			tr.Code = code
+			if code == "HOOK_DENIED" || code == "MODE_RESTRICTION" || code == "PROJECT_BOUNDARY_DENIED" || code == "PERMISSION_DENIED" {
+				tr.Status = "denied"
+			}
+		}
+		if exitCode, ok := resp.Response["exit_code"].(int); ok {
+			tr.ExitCode = &exitCode
+		} else if exitCodeF, ok := resp.Response["exit_code"].(float64); ok {
+			ec := int(exitCodeF)
+			tr.ExitCode = &ec
+		}
+		toolResults = append(toolResults, tr)
 	}
 	r.historyMu.Lock()
 	r.history = append(r.history, provider.Message{
@@ -2158,7 +2274,7 @@ func (r *Runner) appendFunctionResponses(responses []provider.FunctionResponse) 
 	})
 	r.historyMu.Unlock()
 	if r.sessionRecorder != nil {
-		r.sessionRecorder.RecordFunctionResponses(responses)
+		r.sessionRecorder.RecordFunctionResponses(responses, toolResults)
 	}
 }
 

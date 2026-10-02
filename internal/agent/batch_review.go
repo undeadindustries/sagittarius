@@ -216,6 +216,7 @@ func (r *Runner) reviewBatch(ctx context.Context, baseID string, round int, cont
 			class:       config.SubagentReviewer,
 			charter:     prompt.ReviewSubagentCharter(),
 			approval:    r.approval,
+			callID:      cardID,
 		})
 		if err != nil {
 			if ctx.Err() != nil {
@@ -283,6 +284,7 @@ func (r *Runner) runBatchFix(ctx context.Context, baseID string, round int, cont
 		charter:     prompt.FixSubagentCharter(lease.Patterns, contract),
 		snapshotter: r.snap,
 		approval:    ApprovalYolo,
+		callID:      cardID,
 	})
 	if err != nil {
 		if ctx.Err() != nil {

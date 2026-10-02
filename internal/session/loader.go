@@ -23,6 +23,7 @@ func LoadSession(filePath string) (*ConversationRecord, error) {
 
 	var meta MetadataRecord
 	var messages []MessageRecord
+	var events []EventRecord
 
 	scanner := bufio.NewScanner(f)
 	scanner.Buffer(make([]byte, 1024*1024), 1024*1024) // 1 MB line buffer
@@ -31,7 +32,7 @@ func LoadSession(filePath string) (*ConversationRecord, error) {
 		if line == "" {
 			continue
 		}
-		parseLine(line, &meta, &messages)
+		parseLineWithEvents(line, &meta, &messages, &events)
 	}
 
 	if err := scanner.Err(); err != nil {
@@ -43,21 +44,28 @@ func LoadSession(filePath string) (*ConversationRecord, error) {
 	}
 
 	return &ConversationRecord{
-		SessionID:     meta.SessionID,
-		ProjectHash:   meta.ProjectHash,
-		StartTime:     coalesce(meta.StartTime, time.Now().UTC().Format(time.RFC3339)),
-		LastUpdated:   coalesce(meta.LastUpdated, time.Now().UTC().Format(time.RFC3339)),
-		Summary:       meta.Summary,
-		Branch:        meta.Branch,
-		Kind:          meta.Kind,
-		CleanExit:     meta.CleanExit,
-		SessionGrants: meta.SessionGrants,
-		Goal:          meta.Goal,
-		Grill:         meta.Grill,
-		Constraints:   derefConstraints(meta.Constraints),
-		ReadOnly:      meta.ReadOnly,
-		Scratchpad:    derefString(meta.Scratchpad),
-		Messages:      messages,
+		SessionID:       meta.SessionID,
+		ProjectHash:     meta.ProjectHash,
+		StartTime:       coalesce(meta.StartTime, time.Now().UTC().Format(time.RFC3339)),
+		LastUpdated:     coalesce(meta.LastUpdated, time.Now().UTC().Format(time.RFC3339)),
+		Summary:         meta.Summary,
+		Branch:          meta.Branch,
+		Kind:            meta.Kind,
+		ParentSessionID: meta.ParentSessionID,
+		ParentCallID:    meta.ParentCallID,
+		SubagentClass:   meta.SubagentClass,
+		AgentVersion:    meta.AgentVersion,
+		PersonaPreset:   meta.PersonaPreset,
+		Outcome:         meta.Outcome,
+		CleanExit:       meta.CleanExit,
+		SessionGrants:   meta.SessionGrants,
+		Goal:            meta.Goal,
+		Grill:           meta.Grill,
+		Constraints:     derefConstraints(meta.Constraints),
+		ReadOnly:        meta.ReadOnly,
+		Scratchpad:      derefString(meta.Scratchpad),
+		Events:          events,
+		Messages:        messages,
 	}, nil
 }
 
@@ -80,11 +88,22 @@ func derefConstraints(p *[]string) []string {
 	return *p
 }
 
-// parseLine interprets one JSONL line, updating meta and messages in-place.
-func parseLine(line string, meta *MetadataRecord, messages *[]MessageRecord) {
+// parseLineWithEvents interprets one JSONL line, updating meta, messages, and events.
+func parseLineWithEvents(line string, meta *MetadataRecord, messages *[]MessageRecord, events *[]EventRecord) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(line), &raw); err != nil {
 		return // skip unparseable lines
+	}
+
+	// $event: lifecycle event.
+	if evRaw, ok := raw["$event"]; ok {
+		if events != nil {
+			var ev EventRecord
+			if err := json.Unmarshal(evRaw, &ev); err == nil && ev.Type != "" {
+				*events = append(*events, ev)
+			}
+		}
+		return
 	}
 
 	// $rewindTo: remove messages from rewind point onwards.
@@ -365,6 +384,24 @@ func applyMetaUpdate(dst, src *MetadataRecord) {
 	}
 	if src.Kind != "" {
 		dst.Kind = src.Kind
+	}
+	if src.ParentSessionID != "" {
+		dst.ParentSessionID = src.ParentSessionID
+	}
+	if src.ParentCallID != "" {
+		dst.ParentCallID = src.ParentCallID
+	}
+	if src.SubagentClass != "" {
+		dst.SubagentClass = src.SubagentClass
+	}
+	if src.AgentVersion != "" {
+		dst.AgentVersion = src.AgentVersion
+	}
+	if src.PersonaPreset != "" {
+		dst.PersonaPreset = src.PersonaPreset
+	}
+	if src.Outcome != "" {
+		dst.Outcome = src.Outcome
 	}
 	if src.Goal != nil {
 		dst.Goal = src.Goal

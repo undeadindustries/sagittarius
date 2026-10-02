@@ -219,8 +219,10 @@ func (g *GeminiGenerator) GenerateContentStream(
 		final := StreamResponse{ModelParts: acc.parts()}
 		if lastUsageMeta != nil {
 			final.Usage = &Usage{
-				InputTokens:  int(lastUsageMeta.PromptTokenCount),
-				OutputTokens: int(lastUsageMeta.CandidatesTokenCount),
+				InputTokens:     int(lastUsageMeta.PromptTokenCount),
+				OutputTokens:    int(lastUsageMeta.CandidatesTokenCount),
+				CachedTokens:    int(lastUsageMeta.CachedContentTokenCount),
+				ReasoningTokens: int(lastUsageMeta.ThoughtsTokenCount),
 			}
 		}
 		if final.Usage != nil || len(final.ModelParts) > 0 {

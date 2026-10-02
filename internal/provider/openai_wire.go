@@ -136,11 +136,21 @@ type openAIStreamDeltaFunc struct {
 	Arguments string `json:"arguments,omitempty"`
 }
 
+type openAIPromptTokensDetails struct {
+	CachedTokens int `json:"cached_tokens"`
+}
+
+type openAICompletionTokensDetails struct {
+	ReasoningTokens int `json:"reasoning_tokens"`
+}
+
 type openAIUsage struct {
-	PromptTokens     int      `json:"prompt_tokens"`
-	CompletionTokens int      `json:"completion_tokens"`
-	TotalTokens      int      `json:"total_tokens"`
-	Cost             *float64 `json:"cost,omitempty"` // OpenRouter: actual USD cost for this request
+	PromptTokens            int                            `json:"prompt_tokens"`
+	CompletionTokens        int                            `json:"completion_tokens"`
+	TotalTokens             int                            `json:"total_tokens"`
+	PromptTokensDetails     *openAIPromptTokensDetails     `json:"prompt_tokens_details,omitempty"`
+	CompletionTokensDetails *openAICompletionTokensDetails `json:"completion_tokens_details,omitempty"`
+	Cost                    *float64                       `json:"cost,omitempty"` // OpenRouter: actual USD cost for this request
 }
 
 type openAINonStreamResponse struct {
@@ -556,6 +566,12 @@ func flushSSEState(
 		u := &Usage{
 			InputTokens:  state.lastUsage.PromptTokens,
 			OutputTokens: state.lastUsage.CompletionTokens,
+		}
+		if state.lastUsage.PromptTokensDetails != nil {
+			u.CachedTokens = state.lastUsage.PromptTokensDetails.CachedTokens
+		}
+		if state.lastUsage.CompletionTokensDetails != nil {
+			u.ReasoningTokens = state.lastUsage.CompletionTokensDetails.ReasoningTokens
 		}
 		if state.lastUsage.Cost != nil {
 			u.CostUSD = *state.lastUsage.Cost

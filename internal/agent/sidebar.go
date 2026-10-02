@@ -273,7 +273,7 @@ func (r *Runner) flushSidebar(resume bool) {
 		}
 	}
 	if resume {
-		r.sessionRecorder.RecordUserMessage(sidebarResumeText)
+		r.sessionRecorder.RecordHarnessMessage(sidebarResumeText)
 	}
 }
 

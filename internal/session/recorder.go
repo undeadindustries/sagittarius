@@ -29,19 +29,31 @@ type Recorder struct {
 	// summary is the in-memory view of the session title, kept so auto-titling
 	// can avoid overwriting a title that is already set (manual rename, fork, or
 	// resume). It is updated by SetSummary and cleared by Rotate.
-	summary  string
-	disabled bool // set on ENOSPC or init failure
+	summary       string
+	agentVersion  string
+	personaPreset string
+	disabled      bool // set on ENOSPC or init failure
 }
 
-// NewRecorder creates a new session file under chatsDir and writes the initial
-// metadata line. Returns a disabled (no-op) recorder on error so the caller
-// can always call Record* methods without nil checks.
-func NewRecorder(chatsDir, sessionID, projectHash, kind string) *Recorder {
+// RecorderConfig carries optional metadata for initial recorder construction.
+type RecorderConfig struct {
+	ParentSessionID string
+	ParentCallID    string
+	SubagentClass   string
+	AgentVersion    string
+	PersonaPreset   string
+}
+
+// NewRecorderWithConfig creates a new session file under chatsDir and writes the initial
+// metadata line including hierarchy and persona configuration.
+func NewRecorderWithConfig(chatsDir, sessionID, projectHash, kind string, cfg RecorderConfig) *Recorder {
 	r := &Recorder{
-		chatsDir:    chatsDir,
-		sessionID:   sessionID,
-		projectHash: projectHash,
-		kind:        kind,
+		chatsDir:      chatsDir,
+		sessionID:     sessionID,
+		projectHash:   projectHash,
+		kind:          kind,
+		agentVersion:  cfg.AgentVersion,
+		personaPreset: cfg.PersonaPreset,
 	}
 
 	if err := os.MkdirAll(chatsDir, 0o700); err != nil {
@@ -51,10 +63,6 @@ func NewRecorder(chatsDir, sessionID, projectHash, kind string) *Recorder {
 	}
 
 	ts := time.Now().UTC().Format("2006-01-02T15-04")
-	// fileKey is the first 8 chars of the session ID when it is UUID-like
-	// (random), matching the fork's filename format. For non-UUID session IDs
-	// (e.g. "sagittarius-<pid>"), we derive an 8-char random hex suffix to
-	// prevent filename collisions when multiple sessions start in the same minute.
 	fileKey := deriveFileKey(sessionID)
 	filename := fmt.Sprintf("%s%s-%s.jsonl", SessionFilePrefix, ts, fileKey)
 	r.filePath = filepath.Join(chatsDir, filename)
@@ -63,17 +71,29 @@ func NewRecorder(chatsDir, sessionID, projectHash, kind string) *Recorder {
 		kind = "main"
 	}
 	meta := MetadataRecord{
-		SessionID:   sessionID,
-		ProjectHash: projectHash,
-		StartTime:   time.Now().UTC().Format(time.RFC3339Nano),
-		LastUpdated: time.Now().UTC().Format(time.RFC3339Nano),
-		Kind:        kind,
+		SessionID:       sessionID,
+		ProjectHash:     projectHash,
+		StartTime:       time.Now().UTC().Format(time.RFC3339Nano),
+		LastUpdated:     time.Now().UTC().Format(time.RFC3339Nano),
+		Kind:            kind,
+		ParentSessionID: cfg.ParentSessionID,
+		ParentCallID:    cfg.ParentCallID,
+		SubagentClass:   cfg.SubagentClass,
+		AgentVersion:    cfg.AgentVersion,
+		PersonaPreset:   cfg.PersonaPreset,
 	}
 	if err := r.appendLine(meta); err != nil {
 		slog.Warn("session: cannot write initial metadata, recording disabled", "err", err)
 		r.disabled = true
 	}
 	return r
+}
+
+// NewRecorder creates a new session file under chatsDir and writes the initial
+// metadata line. Returns a disabled (no-op) recorder on error so the caller
+// can always call Record* methods without nil checks.
+func NewRecorder(chatsDir, sessionID, projectHash, kind string) *Recorder {
+	return NewRecorderWithConfig(chatsDir, sessionID, projectHash, kind, RecorderConfig{})
 }
 
 // SessionID returns the session identifier being recorded. Guarded by r.mu
@@ -83,6 +103,20 @@ func (r *Recorder) SessionID() string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.sessionID
+}
+
+// AgentVersion returns the agent version configured on the recorder. Guarded by r.mu.
+func (r *Recorder) AgentVersion() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.agentVersion
+}
+
+// PersonaPreset returns the persona preset configured on the recorder. Guarded by r.mu.
+func (r *Recorder) PersonaPreset() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.personaPreset
 }
 
 // Kind returns the session kind ("main", "subagent", or "evaluator"). Guarded by r.mu.
@@ -176,12 +210,25 @@ func (r *Recorder) RecordUserMessage(text string) {
 		ID:        newID(),
 		Timestamp: now(),
 		Type:      MessageTypeUser,
+		Origin:    "user",
 		Content:   textParts(text),
 	})
 }
 
-// RecordModelMessage appends a model (assistant) message.
-func (r *Recorder) RecordModelMessage(text string, calls []provider.ToolCall) {
+// RecordHarnessMessage appends a synthetic harness message (e.g. post-write check feedback,
+// turn-guard reminder, sidebar resume) to the session file.
+func (r *Recorder) RecordHarnessMessage(text string) {
+	r.record(MessageRecord{
+		ID:        newID(),
+		Timestamp: now(),
+		Type:      MessageTypeUser,
+		Origin:    "harness",
+		Content:   textParts(text),
+	})
+}
+
+// RecordModelMessage appends a model (assistant) message with optional round telemetry.
+func (r *Recorder) RecordModelMessage(text string, calls []provider.ToolCall, telemetry ...*RoundTelemetry) {
 	parts := textParts(text)
 	toolRecords := make([]ToolCallRecord, 0, len(calls))
 	for _, c := range calls {
@@ -196,18 +243,23 @@ func (r *Recorder) RecordModelMessage(text string, calls []provider.ToolCall) {
 			Status: "success",
 		})
 	}
+	var round *RoundTelemetry
+	if len(telemetry) > 0 && telemetry[0] != nil {
+		round = telemetry[0]
+	}
 	r.record(MessageRecord{
 		ID:        newID(),
 		Timestamp: now(),
 		Type:      MessageTypeModel,
+		Round:     round,
 		Content:   parts,
 		ToolCalls: toolRecords,
 	})
 	r.updateLastUpdated()
 }
 
-// RecordFunctionResponses appends tool responses as a user turn.
-func (r *Recorder) RecordFunctionResponses(responses []provider.FunctionResponse) {
+// RecordFunctionResponses appends tool responses as a user turn with optional tool result telemetry.
+func (r *Recorder) RecordFunctionResponses(responses []provider.FunctionResponse, toolResults ...[]ToolResultTelemetry) {
 	if len(responses) == 0 {
 		return
 	}
@@ -219,12 +271,36 @@ func (r *Recorder) RecordFunctionResponses(responses []provider.FunctionResponse
 			Response: resp.Response,
 		}})
 	}
+	var results []ToolResultTelemetry
+	if len(toolResults) > 0 && len(toolResults[0]) > 0 {
+		results = toolResults[0]
+	}
 	r.record(MessageRecord{
-		ID:        newID(),
-		Timestamp: now(),
-		Type:      MessageTypeUser,
-		Content:   parts,
+		ID:          newID(),
+		Timestamp:   now(),
+		Type:        MessageTypeUser,
+		ToolResults: results,
+		Content:     parts,
 	})
+}
+
+// RecordEvent appends an asynchronous lifecycle event record to the session file.
+func (r *Recorder) RecordEvent(eventType string, data map[string]interface{}) {
+	ev := map[string]interface{}{
+		"$event": EventRecord{
+			Type:      eventType,
+			Timestamp: now(),
+			Data:      data,
+		},
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.disabled {
+		return
+	}
+	if err := r.appendLineLocked(ev); err != nil {
+		r.handleWriteError(err)
+	}
 }
 
 // record appends a message record and updates lastUpdated in the file.
@@ -495,6 +571,21 @@ func NewSessionID() string {
 func FilenameForSessionID(sessionID string) string {
 	ts := time.Now().UTC().Format("2006-01-02T15-04")
 	return fmt.Sprintf("%s%s-%s.jsonl", SessionFilePrefix, ts, deriveFileKey(sessionID))
+}
+
+// SetOutcome records the end-of-run outcome ("done", "max_rounds", "canceled", "error").
+func (r *Recorder) SetOutcome(outcome string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.disabled {
+		return nil
+	}
+	update := map[string]interface{}{
+		"$set": map[string]string{
+			"outcome": outcome,
+		},
+	}
+	return r.appendLineLocked(update)
 }
 
 // newID generates a random UUID v4 using crypto/rand.

@@ -80,16 +80,16 @@ func TestSessionsConfigRoundTrip(t *testing.T) {
 
 // TestSessionsMerge verifies project-over-global merge of the sessions block.
 func TestSessionsMerge(t *testing.T) {
-	global := &SagittariusSessionsConfig{AutoTitle: strPtr("auto")}
-	project := &SagittariusSessionsConfig{AutoTitle: strPtr("off")}
+	global := &SagittariusSessionsConfig{AutoTitle: strPtr("auto"), RecordReasoning: boolPtr(false)}
+	project := &SagittariusSessionsConfig{AutoTitle: strPtr("off"), RecordReasoning: boolPtr(true)}
 
-	if got := mergeSessionsConfig(global, project); got == nil || *got.AutoTitle != "off" {
-		t.Errorf("merge project-over-global = %v, want off", got)
+	if got := mergeSessionsConfig(global, project); got == nil || *got.AutoTitle != "off" || got.RecordReasoning == nil || !*got.RecordReasoning {
+		t.Errorf("merge project-over-global = %v, want off + recordReasoning:true", got)
 	}
-	if got := mergeSessionsConfig(global, nil); got == nil || *got.AutoTitle != "auto" {
-		t.Errorf("merge nil project = %v, want auto", got)
+	if got := mergeSessionsConfig(global, nil); got == nil || *got.AutoTitle != "auto" || got.RecordReasoning == nil || *got.RecordReasoning {
+		t.Errorf("merge nil project = %v, want auto + recordReasoning:false", got)
 	}
-	if got := mergeSessionsConfig(nil, project); got == nil || *got.AutoTitle != "off" {
-		t.Errorf("merge nil global = %v, want off", got)
+	if got := mergeSessionsConfig(nil, project); got == nil || *got.AutoTitle != "off" || got.RecordReasoning == nil || !*got.RecordReasoning {
+		t.Errorf("merge nil global = %v, want off + recordReasoning:true", got)
 	}
 }

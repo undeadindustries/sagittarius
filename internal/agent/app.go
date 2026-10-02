@@ -32,6 +32,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/slash"
 	"github.com/undeadindustries/sagittarius/internal/toolkit"
 	"github.com/undeadindustries/sagittarius/internal/tools"
+	"github.com/undeadindustries/sagittarius/internal/trajectory"
 	"github.com/undeadindustries/sagittarius/internal/ui"
 	"github.com/undeadindustries/sagittarius/internal/version"
 )
@@ -2095,6 +2096,53 @@ func (h *appHooks) ClearReasoningOverride() {
 		return
 	}
 	h.app.runner.ClearReasoningOverride()
+}
+
+// ExportATIF implements slash.Hooks.
+func (h *appHooks) ExportATIF(outPath string) (string, error) {
+	if h.app == nil || h.app.runner == nil {
+		return "", fmt.Errorf("runner not available")
+	}
+	sessID := h.app.runner.CurrentSessionID()
+	root := h.app.runner.Workspace().Root()
+	chatsDir, err := session.ChatsDir(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve chats dir: %w", err)
+	}
+	sel := session.NewSelector(chatsDir, "")
+	res, err := sel.ResolveSession(sessID)
+	if err != nil {
+		return "", fmt.Errorf("load session %s: %w", sessID, err)
+	}
+	rec := res.Record
+
+	children, err := trajectory.IndexChildren(chatsDir, sessID)
+	if err != nil {
+		slog.Warn("export atif: could not index child sessions", "err", err)
+	}
+
+	traj, err := trajectory.FromSession(rec, children, trajectory.Options{
+		RedactSecrets: true,
+	})
+	if err != nil {
+		return "", fmt.Errorf("convert to atif: %w", err)
+	}
+
+	b, err := json.MarshalIndent(traj, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshal atif: %w", err)
+	}
+
+	if outPath == "" {
+		outPath = filepath.Join(root, fmt.Sprintf("trajectory-%s.json", sessID))
+	} else if !filepath.IsAbs(outPath) {
+		outPath = filepath.Join(root, outPath)
+	}
+
+	if err := os.WriteFile(outPath, b, 0644); err != nil {
+		return "", fmt.Errorf("write atif: %w", err)
+	}
+	return outPath, nil
 }
 
 // systemPromptStatusDetail returns the human-readable system-prompt preset label

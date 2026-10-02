@@ -1529,6 +1529,12 @@ func unmarshalSessionsConfig(data []byte) (*SagittariusSessionsConfig, error) {
 				return nil, fmt.Errorf("decode sagittarius.sessions.autoTitle: %w", err)
 			}
 			c.AutoTitle = &s
+		case "recordReasoning":
+			var b bool
+			if err := json.Unmarshal(val, &b); err != nil {
+				return nil, fmt.Errorf("decode sagittarius.sessions.recordReasoning: %w", err)
+			}
+			c.RecordReasoning = &b
 		default:
 			c.Extra[key] = val
 		}
@@ -1596,6 +1602,13 @@ func marshalSessionsConfig(c *SagittariusSessionsConfig) (json.RawMessage, error
 			return nil, err
 		}
 		obj["autoTitle"] = b
+	}
+	if c.RecordReasoning != nil {
+		b, err := json.Marshal(*c.RecordReasoning)
+		if err != nil {
+			return nil, err
+		}
+		obj["recordReasoning"] = b
 	}
 	for key, val := range c.Extra {
 		obj[key] = val

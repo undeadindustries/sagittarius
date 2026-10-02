@@ -403,6 +403,13 @@ func listSettings(docs *config.Documents, scope config.SettingScope) []settingsd
 			Kind:         settingsdialog.KindEnum,
 			Choices:      []string{"prompt", "auto", "off"},
 		}, sessAutoTitle(scopeSettings), sessAutoTitle(global), sessAutoTitle(project)),
+		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.sessions.recordReasoning",
+			Label:        "Record reasoning text",
+			Description:  "Persist full model reasoning/thinking text to session JSONL (default false; token counts are always recorded)",
+			DefaultValue: fmtBool(config.SessionsRecordReasoning(nil, nil)),
+			Kind:         settingsdialog.KindBool,
+		}, sessRecordReasoning(scopeSettings), sessRecordReasoning(global), sessRecordReasoning(project)),
 		{Label: "Memory", Kind: settingsdialog.KindHeader},
 		row(settingsdialog.SettingEntry{
 			Key:          "sagittarius.memory.maxRunes",
@@ -689,6 +696,18 @@ func applySettingValue(s *config.Settings, key, value string) error {
 			s.Sagittarius.Sessions = &config.SagittariusSessionsConfig{}
 		}
 		s.Sagittarius.Sessions.AutoTitle = &value
+	case "sagittarius.sessions.recordReasoning":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("recordReasoning must be true/false: %w", err)
+		}
+		if s.Sagittarius == nil {
+			s.Sagittarius = &config.SagittariusSettings{}
+		}
+		if s.Sagittarius.Sessions == nil {
+			s.Sagittarius.Sessions = &config.SagittariusSessionsConfig{}
+		}
+		s.Sagittarius.Sessions.RecordReasoning = &b
 	case "sagittarius.verify.editLoopThreshold":
 		n, err := strconv.Atoi(value)
 		if err != nil {
@@ -1047,6 +1066,10 @@ func clearSettingValue(s *config.Settings, key string) error {
 	case "sagittarius.sessions.autoTitle":
 		if s.Sagittarius != nil && s.Sagittarius.Sessions != nil {
 			s.Sagittarius.Sessions.AutoTitle = nil
+		}
+	case "sagittarius.sessions.recordReasoning":
+		if s.Sagittarius != nil && s.Sagittarius.Sessions != nil {
+			s.Sagittarius.Sessions.RecordReasoning = nil
 		}
 	case "sagittarius.verify.editLoopThreshold":
 		if s.Sagittarius != nil && s.Sagittarius.Verify != nil {
@@ -1486,6 +1509,13 @@ func gcConfirmTimeout(s *config.Settings) string {
 func sessAutoTitle(s *config.Settings) string {
 	if sag := sagOf(s); sag != nil && sag.Sessions != nil {
 		return fmtPtrStr(sag.Sessions.AutoTitle)
+	}
+	return ""
+}
+
+func sessRecordReasoning(s *config.Settings) string {
+	if sag := sagOf(s); sag != nil && sag.Sessions != nil {
+		return fmtPtrBool(sag.Sessions.RecordReasoning)
 	}
 	return ""
 }

@@ -85,7 +85,7 @@ func (r *Runner) runPostWriteChecks(ctx context.Context, emit func(ui.StreamEven
 	r.historyMu.Unlock()
 
 	if r.sessionRecorder != nil {
-		r.sessionRecorder.RecordUserMessage(feedbackText)
+		r.sessionRecorder.RecordHarnessMessage(feedbackText)
 	}
 
 	return true
@@ -182,6 +182,13 @@ func (r *Runner) editLoopNudge(paths []string, threshold int) string {
 		r.editStats[p]++
 		if nudge == "" && r.editStats[p] >= threshold && !r.nudgedPaths[p] {
 			r.nudgedPaths[p] = true
+			if r.sessionRecorder != nil {
+				r.sessionRecorder.RecordEvent("edit_loop_nudge", map[string]any{
+					"path":      p,
+					"failures":  r.editStats[p],
+					"threshold": threshold,
+				})
+			}
 			nudge = fmt.Sprintf("\n\n[SYSTEM NUDGE] You have repeatedly failed to fix %q. "+
 				"Please STOP applying the same edit. Analyze the diagnostic carefully, "+
 				"rethink your approach, and try a different strategy.", p)

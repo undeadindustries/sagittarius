@@ -33,6 +33,7 @@ type subagentSpec struct {
 	charter     string
 	snapshotter *snapshot.Manager
 	approval    ApprovalMode
+	callID      string
 }
 
 // subagent is a launched child and its identity.
@@ -90,7 +91,13 @@ func (r *Runner) newSubagent(ctx context.Context, spec subagentSpec) (*subagent,
 	var rec *session.Recorder
 	if r.sessionRecorder != nil {
 		if chatsDir, err := session.ChatsDir(root); err == nil {
-			rec = session.NewRecorder(chatsDir, subID, session.ProjectHash(root), sessionKindSubagent)
+			rec = session.NewRecorderWithConfig(chatsDir, subID, session.ProjectHash(root), sessionKindSubagent, session.RecorderConfig{
+				ParentSessionID: r.sessionRecorder.SessionID(),
+				ParentCallID:    spec.callID,
+				SubagentClass:   string(spec.class),
+				AgentVersion:    r.sessionRecorder.AgentVersion(),
+				PersonaPreset:   r.sessionRecorder.PersonaPreset(),
+			})
 		}
 	}
 

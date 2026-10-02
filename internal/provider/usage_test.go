@@ -16,7 +16,7 @@ func TestOpenAIChatUsageParsed(t *testing.T) {
 	// usage-carrying final frame with no choices.
 	sse := "data: {\"id\":\"1\",\"choices\":[{\"delta\":{\"content\":\"hello\"},\"finish_reason\":null}]}\n\n" +
 		"data: {\"id\":\"1\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]," +
-		"\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15}}\n\n" +
+		"\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":5,\"total_tokens\":15,\"prompt_tokens_details\":{\"cached_tokens\":4},\"completion_tokens_details\":{\"reasoning_tokens\":2}}}\n\n" +
 		"data: [DONE]\n\n"
 
 	var usageResp *StreamResponse
@@ -42,6 +42,12 @@ func TestOpenAIChatUsageParsed(t *testing.T) {
 	}
 	if usageResp.Usage.OutputTokens != 5 {
 		t.Errorf("OutputTokens = %d, want 5", usageResp.Usage.OutputTokens)
+	}
+	if usageResp.Usage.CachedTokens != 4 {
+		t.Errorf("CachedTokens = %d, want 4", usageResp.Usage.CachedTokens)
+	}
+	if usageResp.Usage.ReasoningTokens != 2 {
+		t.Errorf("ReasoningTokens = %d, want 2", usageResp.Usage.ReasoningTokens)
 	}
 	if usageResp.Usage.CostKnown {
 		t.Error("CostKnown should be false for plain OpenAI (no cost field)")
@@ -105,6 +111,12 @@ func TestOpenAIResponsesUsageParsed(t *testing.T) {
 				InputTokens:  30,
 				OutputTokens: 12,
 				TotalTokens:  42,
+				InputTokenDetails: &responsesSseInputTokenDetails{
+					CachedTokens: 8,
+				},
+				OutputTokenDetails: &responsesSseOutputTokenDetails{
+					ReasoningTokens: 6,
+				},
 			},
 		},
 	}
@@ -129,6 +141,12 @@ func TestOpenAIResponsesUsageParsed(t *testing.T) {
 	}
 	if usageChunk.Usage.OutputTokens != 12 {
 		t.Errorf("OutputTokens = %d, want 12", usageChunk.Usage.OutputTokens)
+	}
+	if usageChunk.Usage.CachedTokens != 8 {
+		t.Errorf("CachedTokens = %d, want 8", usageChunk.Usage.CachedTokens)
+	}
+	if usageChunk.Usage.ReasoningTokens != 6 {
+		t.Errorf("ReasoningTokens = %d, want 6", usageChunk.Usage.ReasoningTokens)
 	}
 	if usageChunk.Usage.CostKnown {
 		t.Error("CostKnown should be false for OpenAI Responses (no cost field)")

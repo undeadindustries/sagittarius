@@ -20,6 +20,16 @@ func newTaskTool(r *Runner) tools.Tool {
 	return &taskTool{runner: r}
 }
 
+func callIDFromArgs(args map[string]any) string {
+	if args == nil {
+		return ""
+	}
+	if id, ok := args["_call_id"].(string); ok {
+		return id
+	}
+	return ""
+}
+
 func (t *taskTool) Name() string { return tools.TaskToolName }
 
 func (t *taskTool) Description() string {
@@ -76,6 +86,13 @@ func (t *taskTool) ExecuteStream(ctx context.Context, args map[string]any, sink 
 	// parent to finish it directly.
 	attempt, maxAttempts, err := t.runner.claimSubagentAttempt(config.SubagentResearch, desc, nil)
 	if err != nil {
+		if t.runner.sessionRecorder != nil {
+			t.runner.sessionRecorder.RecordEvent("subagent_denial", map[string]any{
+				"class":       "research",
+				"description": desc,
+				"reason":      err.Error(),
+			})
+		}
 		return nil, err
 	}
 
@@ -87,6 +104,7 @@ func (t *taskTool) ExecuteStream(ctx context.Context, args map[string]any, sink 
 		class:       config.SubagentResearch,
 		charter:     prompt.ResearchSubagentCharter(),
 		approval:    t.runner.approval,
+		callID:      callIDFromArgs(args),
 	})
 	if err != nil {
 		t.runner.releaseSubagentAttempt(config.SubagentResearch, desc, nil)

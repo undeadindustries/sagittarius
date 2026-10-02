@@ -32,6 +32,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/snapshot"
 	"github.com/undeadindustries/sagittarius/internal/storage"
 	"github.com/undeadindustries/sagittarius/internal/tools"
+	"github.com/undeadindustries/sagittarius/internal/trajectory"
 	"github.com/undeadindustries/sagittarius/internal/ui"
 	"github.com/undeadindustries/sagittarius/internal/ui/bubbletea"
 	"github.com/undeadindustries/sagittarius/internal/ui/googlechat"
@@ -89,6 +90,13 @@ func run(args []string) int {
 	googleChatFlag := fs.Bool("google-chat", false, "attach Google Chat bridge alongside TUI")
 	googleChatOnlyFlag := fs.Bool("google-chat-only", false, "run headless Google Chat bridge without TUI")
 
+	// ATIF trajectory export and analysis flags.
+	exportAtifFlag := fs.String("export-atif", "", "export a session as an ATIF v1.7 trajectory by session ID, index, or 'latest'")
+	atifOutFlag := fs.String("atif-out", "", "destination path for ATIF trajectory export (default: stdout for --export-atif, or file with -p)")
+	analyzeTrajectoryFlag := fs.String("analyze-trajectory", "", "analyze an ATIF trajectory file or session ID for efficiency and failure patterns")
+	compareFlag := fs.String("compare", "", "compare the trajectory from --analyze-trajectory against a second trajectory file")
+	noRedactFlag := fs.Bool("no-redact", false, "disable automatic secret redaction during ATIF export")
+
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -125,6 +133,16 @@ func run(args []string) int {
 	// --delete-session: delete and exit.
 	if *deleteSession != "" {
 		return runDeleteSession(*deleteSession)
+	}
+
+	// --export-atif: export session trajectory and exit.
+	if *exportAtifFlag != "" {
+		return runExportATIF(*exportAtifFlag, *atifOutFlag, !*noRedactFlag)
+	}
+
+	// --analyze-trajectory: analyze ATIF trajectory and exit.
+	if *analyzeTrajectoryFlag != "" {
+		return runAnalyzeTrajectory(*analyzeTrajectoryFlag, *compareFlag, outputFormat(strings.ToLower(strings.TrimSpace(*outputFmt))))
 	}
 
 	query := strings.TrimSpace(*prompt)
@@ -197,6 +215,8 @@ func run(args []string) int {
 		logVerbose:    *logVerbose,
 		readOnly:      readOnlyFlag,
 		googleChat:    *googleChatFlag,
+		atifOut:       *atifOutFlag,
+		noRedact:      *noRedactFlag,
 	}
 
 	googleChat := *googleChatFlag
@@ -355,6 +375,149 @@ func runDeleteSession(identifier string) int {
 	return 0
 }
 
+func exportSessionATIF(sessionID, outPath string, redactSecrets bool) error {
+	wd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("resolve cwd: %w", err)
+	}
+	chatsDir, err := session.ChatsDir(wd)
+	if err != nil {
+		return fmt.Errorf("resolve chats dir: %w", err)
+	}
+	sel := session.NewSelector(chatsDir, "")
+	res, err := sel.ResolveSession(sessionID)
+	if err != nil {
+		return fmt.Errorf("load session %s: %w", sessionID, err)
+	}
+	rec := res.Record
+
+	children, err := trajectory.IndexChildren(chatsDir, rec.SessionID)
+	if err != nil {
+		slog.Warn("export atif: could not index child sessions", "err", err)
+	}
+
+	traj, err := trajectory.FromSession(rec, children, trajectory.Options{
+		RedactSecrets: redactSecrets,
+	})
+	if err != nil {
+		return fmt.Errorf("convert session to atif: %w", err)
+	}
+
+	b, err := json.MarshalIndent(traj, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal atif trajectory: %w", err)
+	}
+
+	if outPath == "" {
+		fmt.Println(string(b))
+		return nil
+	}
+	if !filepath.IsAbs(outPath) {
+		outPath = filepath.Join(wd, outPath)
+	}
+	if err := os.WriteFile(outPath, b, 0644); err != nil {
+		return fmt.Errorf("write atif: %w", err)
+	}
+	return nil
+}
+
+func runExportATIF(identifier, outPath string, redactSecrets bool) int {
+	wd, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "sagittarius:", err)
+		return 1
+	}
+	chatsDir, err := session.ChatsDir(wd)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "sagittarius:", err)
+		return 1
+	}
+
+	sel := session.NewSelector(chatsDir, "")
+	res, err := sel.ResolveSession(identifier)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "sagittarius: resolve session:", err)
+		return 1
+	}
+
+	if err := exportSessionATIF(res.Record.SessionID, outPath, redactSecrets); err != nil {
+		fmt.Fprintln(os.Stderr, "sagittarius: export atif:", err)
+		return 1
+	}
+	if outPath != "" {
+		fmt.Printf("Exported ATIF trajectory for session %s to %s\n", res.Record.SessionID, outPath)
+	}
+	return 0
+}
+
+func runAnalyzeTrajectory(target, compareTarget string, fmt_ outputFormat) int {
+	trajA, err := loadOrResolveTrajectory(target)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "sagittarius: analyze:", err)
+		return 1
+	}
+
+	analysisA := trajectory.Analyze(trajA)
+
+	if compareTarget != "" {
+		trajB, err := loadOrResolveTrajectory(compareTarget)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "sagittarius: compare target:", err)
+			return 1
+		}
+		analysisB := trajectory.Analyze(trajB)
+
+		if fmt_ == outputFormatJSON {
+			data := map[string]any{
+				"target_a": analysisA,
+				"target_b": analysisB,
+			}
+			b, _ := json.MarshalIndent(data, "", "  ")
+			fmt.Println(string(b))
+			return 0
+		}
+		fmt.Println(trajectory.Compare(analysisA, analysisB))
+		return 0
+	}
+
+	if fmt_ == outputFormatJSON {
+		b, _ := json.MarshalIndent(analysisA, "", "  ")
+		fmt.Println(string(b))
+		return 0
+	}
+
+	fmt.Println(trajectory.RenderText(analysisA))
+	return 0
+}
+
+func loadOrResolveTrajectory(target string) (*trajectory.Trajectory, error) {
+	// Try loading as file first
+	if b, err := os.ReadFile(target); err == nil {
+		var traj trajectory.Trajectory
+		if err := json.Unmarshal(b, &traj); err == nil && traj.SchemaVersion != "" {
+			return &traj, nil
+		}
+	}
+
+	// Try resolving as session ID or index
+	wd, err := os.Getwd()
+	if err != nil {
+		return nil, fmt.Errorf("resolve cwd: %w", err)
+	}
+	chatsDir, err := session.ChatsDir(wd)
+	if err != nil {
+		return nil, fmt.Errorf("resolve chats dir: %w", err)
+	}
+	sel := session.NewSelector(chatsDir, "")
+	res, err := sel.ResolveSession(target)
+	if err != nil {
+		return nil, fmt.Errorf("target is neither valid ATIF file nor session: %w", err)
+	}
+
+	children, _ := trajectory.IndexChildren(chatsDir, res.Record.SessionID)
+	return trajectory.FromSession(res.Record, children, trajectory.Options{RedactSecrets: false})
+}
+
 // runWorktreeStub handles the --worktree flag. It checks the experimental gate
 // in settings and fails with a clear error if the feature is not enabled.
 // Full git worktree setup is deferred to a later phase (AD-020).
@@ -423,11 +586,12 @@ func runHeadless(prompt string, opts runnerOptions, fmt_ outputFormat) int {
 		}
 	}
 
+	exitCode := 0
 	switch fmt_ {
 	case outputFormatJSON:
-		return runHeadlessJSON(ctx, runner, prompt, false)
+		exitCode = runHeadlessJSON(ctx, runner, prompt, false)
 	case outputFormatStreamJSON:
-		return runHeadlessJSON(ctx, runner, prompt, true)
+		exitCode = runHeadlessJSON(ctx, runner, prompt, true)
 	default:
 		if err := runner.RunHeadless(ctx, prompt, os.Stdout); err != nil {
 			if errors.Is(err, context.Canceled) {
@@ -436,8 +600,14 @@ func runHeadless(prompt string, opts runnerOptions, fmt_ outputFormat) int {
 			fmt.Fprintln(os.Stderr, err.Error())
 			return 1
 		}
-		return 0
 	}
+
+	if opts.atifOut != "" {
+		if err := exportSessionATIF(sessID, opts.atifOut, !opts.noRedact); err != nil {
+			fmt.Fprintf(os.Stderr, "sagittarius: failed to export ATIF trajectory: %v\n", err)
+		}
+	}
+	return exitCode
 }
 
 // runSlash executes a single slash command headlessly and exits. StreamInfo
@@ -908,6 +1078,8 @@ type runnerOptions struct {
 	logVerbose bool
 	readOnly   *bool
 	googleChat bool
+	atifOut    string
+	noRedact   bool
 }
 
 // buildRunner constructs a Runner, optionally loading a resumed session.
@@ -1077,7 +1249,14 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		if cdErr != nil {
 			slog.Warn("session recording disabled: cannot resolve chats dir", "err", cdErr)
 		} else {
-			sessRecorder = session.NewRecorder(chatsDir, sessID, hash, "main")
+			preset := ""
+			if settings != nil {
+				preset = config.ProjectSystemPromptPresetID(settings)
+			}
+			sessRecorder = session.NewRecorderWithConfig(chatsDir, sessID, hash, "main", session.RecorderConfig{
+				AgentVersion:  version.String(),
+				PersonaPreset: preset,
+			})
 		}
 	}
 

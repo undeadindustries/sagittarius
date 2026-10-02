@@ -150,6 +150,7 @@ func (r *Registry) registerBuiltins() {
 		toolkitCommand(),
 		updateCommand(),
 		hooksCommand(),
+		exportCommand(),
 	}
 	r.sortCommandTree(r.commands)
 }

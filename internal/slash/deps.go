@@ -193,6 +193,9 @@ type Hooks interface {
 	ReasoningOverride() string
 	SetReasoningOverride(effort string)
 	ClearReasoningOverride()
+
+	// ExportATIF exports the active session (and its subagent children) as an ATIF JSON trajectory.
+	ExportATIF(outPath string) (string, error)
 }
 
 // Deps supplies slash command dependencies (injectable for tests).

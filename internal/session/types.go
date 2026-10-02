@@ -54,11 +54,51 @@ type ToolCallRecord struct {
 	Status string `json:"status"`
 }
 
+// RoundTelemetry carries per-model-generation operational telemetry.
+type RoundTelemetry struct {
+	Provider         string  `json:"provider,omitempty"`
+	Model            string  `json:"model,omitempty"`
+	Mode             string  `json:"mode,omitempty"`
+	AgentKind        string  `json:"agentKind,omitempty"` // "main", "subagent", "evaluator"
+	InputTokens      int     `json:"inputTokens,omitempty"`
+	OutputTokens     int     `json:"outputTokens,omitempty"`
+	CachedTokens     int     `json:"cachedTokens,omitempty"`
+	ReasoningTokens  int     `json:"reasoningTokens,omitempty"`
+	CostUSD          float64 `json:"costUSD,omitempty"`
+	CostKnown        bool    `json:"costKnown,omitempty"`
+	UsageEstimated   bool    `json:"usageEstimated,omitempty"`
+	LatencyMs        int64   `json:"latencyMs,omitempty"`
+	LLMCalls         int     `json:"llmCalls,omitempty"` // count of inferences for this round (retries/cuts)
+	HadReasoning     bool    `json:"hadReasoning,omitempty"`
+	Reasoning        string  `json:"reasoning,omitempty"` // populated only when opted in
+	SystemPromptHash string  `json:"systemPromptHash,omitempty"`
+}
+
+// ToolResultTelemetry carries per-tool execution telemetry.
+type ToolResultTelemetry struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	DurationMs int64  `json:"durationMs,omitempty"`
+	Status     string `json:"status,omitempty"` // "ok", "error", "denied"
+	Code       string `json:"code,omitempty"`   // ErrorCode string (e.g. INVALID_ARGS, MODE_RESTRICTION)
+	ExitCode   *int   `json:"exitCode,omitempty"`
+}
+
+// EventRecord captures asynchronous agent lifecycle events (compression, budget cut, etc.).
+type EventRecord struct {
+	Type      string                 `json:"type"`
+	Timestamp string                 `json:"timestamp"`
+	Data      map[string]interface{} `json:"data,omitempty"`
+}
+
 // MessageRecord is one line of JSONL (a single turn).
 type MessageRecord struct {
-	ID        string      `json:"id"`
-	Timestamp string      `json:"timestamp"`
-	Type      MessageType `json:"type"`
+	ID          string                `json:"id"`
+	Timestamp   string                `json:"timestamp"`
+	Type        MessageType           `json:"type"`
+	Origin      string                `json:"origin,omitempty"`      // "user" (default) or "harness"
+	Round       *RoundTelemetry       `json:"round,omitempty"`       // populated on model turns
+	ToolResults []ToolResultTelemetry `json:"toolResults,omitempty"` // populated on functionResponse turns
 	// Content is []Part (serialised as JSON array).
 	Content   []Part           `json:"content"`
 	ToolCalls []ToolCallRecord `json:"toolCalls,omitempty"`
@@ -66,13 +106,19 @@ type MessageRecord struct {
 
 // MetadataRecord is the first line of each JSONL file and any $set update.
 type MetadataRecord struct {
-	SessionID   string `json:"sessionId"`
-	ProjectHash string `json:"projectHash"`
-	StartTime   string `json:"startTime"`
-	LastUpdated string `json:"lastUpdated"`
-	Summary     string `json:"summary,omitempty"`
-	Branch      string `json:"branch,omitempty"` // display-only; never validated on read
-	Kind        string `json:"kind,omitempty"`   // "main" | "subagent" | "evaluator"
+	SessionID       string `json:"sessionId"`
+	ProjectHash     string `json:"projectHash"`
+	StartTime       string `json:"startTime"`
+	LastUpdated     string `json:"lastUpdated"`
+	Summary         string `json:"summary,omitempty"`
+	Branch          string `json:"branch,omitempty"` // display-only; never validated on read
+	Kind            string `json:"kind,omitempty"`   // "main" | "subagent" | "evaluator"
+	ParentSessionID string `json:"parentSessionId,omitempty"`
+	ParentCallID    string `json:"parentCallId,omitempty"`
+	SubagentClass   string `json:"subagentClass,omitempty"`
+	AgentVersion    string `json:"agentVersion,omitempty"`
+	PersonaPreset   string `json:"personaPreset,omitempty"`
+	Outcome         string `json:"outcome,omitempty"` // "done" | "max_rounds" | "canceled" | "error"
 	// CleanExit is set by a $set line when the session's Runner.Close() runs on
 	// a normal shutdown. Its absence is the unclean-exit signal (SIGHUP from a
 	// dropped connection, a crash, or kill -9 all skip deferred cleanup).
@@ -109,17 +155,23 @@ type RewindRecord struct {
 
 // ConversationRecord is the fully loaded in-memory view of a session.
 type ConversationRecord struct {
-	SessionID     string
-	ProjectHash   string
-	StartTime     string
-	LastUpdated   string
-	Summary       string
-	Branch        string
-	Kind          string
-	CleanExit     bool
-	SessionGrants []string
-	Goal          *goal.Snapshot
-	Grill         *grill.Snapshot
+	SessionID       string
+	ProjectHash     string
+	StartTime       string
+	LastUpdated     string
+	Summary         string
+	Branch          string
+	Kind            string
+	ParentSessionID string
+	ParentCallID    string
+	SubagentClass   string
+	AgentVersion    string
+	PersonaPreset   string
+	Outcome         string
+	CleanExit       bool
+	SessionGrants   []string
+	Goal            *goal.Snapshot
+	Grill           *grill.Snapshot
 	// Constraints holds standing session constraints (see internal/agent's
 	// Runner.Constraints), or nil when none were ever set. Unlike
 	// MetadataRecord.Constraints this is a plain slice: the pointer indirection
@@ -133,6 +185,7 @@ type ConversationRecord struct {
 	// Runner.Scratchpad), or "" when none was ever set. As with Constraints the
 	// pointer indirection exists only for the $set merge, not for consumers.
 	Scratchpad string
+	Events     []EventRecord
 	Messages   []MessageRecord
 }
 

@@ -591,6 +591,16 @@ the model, use an [`@skill:<name>` mention](#skillname).
   - **Description:** Trust every loaded project hook.
   - **Usage:** `/hooks trust-all`
 
+### `/export`
+
+- **Description:** Export session data.
+
+#### Sub-commands
+
+- **`atif [path]`**
+  - **Description:** Export the current active session (along with any embedded subagent child trajectories) as a Harbor ATIF v1.7 trajectory JSON file. If `path` is omitted, saves to `<workDir>/trajectory-<sessionID>.json`.
+  - **Usage:** `/export atif` or `/export atif ./run.json`
+
 ### `/mcp`
 
 - **Description:** Manage MCP servers configured in `settings.json` (`mcpServers`).
@@ -716,6 +726,16 @@ See also: [MCP server configuration](../tools/mcp-server.md).
   OpenRouter data) reports "not applicable" — the command is always safe to
   run, but has no effect for such models beyond the best-effort wire field.
 
+### `/export`
+
+- **Description:** Export session trajectories in standard formats.
+
+#### Sub-commands
+
+- **`atif [path]`**
+  - **Description:** Export the current session and any child subagents as a Harbor ATIF v1.7 trajectory JSON file. If `path` is omitted, the trajectory is saved to `~/.sagittarius/chats/<session-id>.atif.json`. Sensitive tokens and keys are automatically redacted unless `--no-redact` was supplied at startup.
+  - **Usage:** `/export atif` or `/export atif /tmp/session.atif.json`
+
 ### `/diff`
 
 - **Description:** Show the net unified diff of files Sagittarius changed this session (Sagittarius-specific; no fork equivalent).
@@ -782,6 +802,11 @@ exercise it. See [agent-testing.md](../agent-testing.md) for end-to-end recipes.
 | `-y`, `--yolo` | Shorthand for `--approval-mode=yolo`. Cannot be combined with `--approval-mode`. |
 | `--mode <agent\|plan\|ask\|debug>` | Interaction mode for this run, overriding `sagittarius.defaultMode`. `ask` and `plan` enforce read-only tool policy. The fork's `--approval-mode plan` is not accepted; use `--mode plan` (AD-022). |
 | `--read-only` | Start with the durable read-only inspection posture set (see [`/readonly`](#readonly)). Independent of `--mode`; lift it in-session with `/readonly off` or by switching to agent or debug. |
+| `--export-atif <id\|index\|latest>` | Export a session and its subagents as a Harbor ATIF v1.7 trajectory JSON. |
+| `--atif-out <path>` | Destination path for ATIF export (used with `--export-atif` or with `-p` for benchmark runs). |
+| `--analyze-trajectory <file\|sessionID>` | Run efficiency, tool health, loop hazard, and hygiene diagnostics on any ATIF trajectory. |
+| `--compare <fileB>` | Compare `--analyze-trajectory` output against a second trajectory. |
+| `--no-redact` | Disable automatic secret redaction during ATIF export. |
 | `--google-chat` | Attach Google Chat DM bridge alongside the TUI; multiplexes turns via an internal hub. Refuses `--yolo`. See [docs/google-chat.md](../google-chat.md). |
 | `--google-chat-only` | Run headless Google Chat bridge without a terminal (for systemd or screen daemons). Refuses `--yolo`. |
 | `--slash <command>` | Run a single slash command headlessly (e.g. `--slash "/mode show"`, `--slash "/diff"`, `--slash "/undo"`) and exit. Mutually exclusive with `-p`. Commands that open an interactive dialog (bare `/providers`, `/models`) print a message and exit 2. |
@@ -818,7 +843,7 @@ incrementally; track gaps in `AGENTS.md`.
 
 Implemented: `/about`, `/agent`, `/ask`, `/chat`, `/clear`, `/compress`,
 `/constraints add|list|clear`,
-`/copy` (`code`), `/debug`, `/diff`, `/goal`,
+`/copy` (`code`), `/debug`, `/diff`, `/export atif`, `/goal`,
 `/grill`, `/init`, `/memory add|list|remove|reload`, `/mcp` (list, reload, add/edit/remove wizard),
 `/mode` (show, switch), `/modes` (override, clear headlessly), `/model`, `/models`, `/mouse`, `/plan`, `/reasoning`,
 `/resume`, `/settings` (curated browser), `/skills` (list, reload), `/agents`

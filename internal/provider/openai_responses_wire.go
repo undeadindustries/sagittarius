@@ -89,10 +89,20 @@ type responsesSseResponse struct {
 	Error  *responsesSseErrorField `json:"error,omitempty"`
 }
 
+type responsesSseInputTokenDetails struct {
+	CachedTokens int `json:"cached_tokens"`
+}
+
+type responsesSseOutputTokenDetails struct {
+	ReasoningTokens int `json:"reasoning_tokens"`
+}
+
 type responsesSseUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
-	TotalTokens  int `json:"total_tokens"`
+	InputTokens        int                             `json:"input_tokens"`
+	OutputTokens       int                             `json:"output_tokens"`
+	TotalTokens        int                             `json:"total_tokens"`
+	InputTokenDetails  *responsesSseInputTokenDetails  `json:"input_tokens_details,omitempty"`
+	OutputTokenDetails *responsesSseOutputTokenDetails `json:"output_tokens_details,omitempty"`
 }
 
 type responsesSseErrorField struct {
@@ -368,10 +378,17 @@ func MapResponsesSseEvent(event ResponsesSseEvent, state *ResponsesSseMapperStat
 		}
 		// Emit provider-reported token counts from the completed response.
 		if event.Response != nil && event.Response.Usage != nil {
-			out = append(out, StreamResponse{Usage: &Usage{
+			u := &Usage{
 				InputTokens:  event.Response.Usage.InputTokens,
 				OutputTokens: event.Response.Usage.OutputTokens,
-			}})
+			}
+			if event.Response.Usage.InputTokenDetails != nil {
+				u.CachedTokens = event.Response.Usage.InputTokenDetails.CachedTokens
+			}
+			if event.Response.Usage.OutputTokenDetails != nil {
+				u.ReasoningTokens = event.Response.Usage.OutputTokenDetails.ReasoningTokens
+			}
+			out = append(out, StreamResponse{Usage: u})
 		}
 		out = append(out, StreamResponse{Done: true})
 		return out, nil

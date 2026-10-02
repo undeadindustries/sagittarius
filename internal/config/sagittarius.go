@@ -283,8 +283,12 @@ type SagittariusMemoryConfig struct {
 type SagittariusSessionsConfig struct {
 	// AutoTitle controls session titling after the first exchange:
 	// "prompt" (default), "auto", or "off".
-	AutoTitle *string                    `json:"autoTitle,omitempty"`
-	Extra     map[string]json.RawMessage `json:"-"`
+	AutoTitle *string `json:"autoTitle,omitempty"`
+	// RecordReasoning controls whether raw reasoning/thinking text is stored
+	// in session JSONL files (default false). When false, only token counts and
+	// hadReasoning flags are persisted.
+	RecordReasoning *bool                      `json:"recordReasoning,omitempty"`
+	Extra           map[string]json.RawMessage `json:"-"`
 }
 
 func parseRepoLocalToolsPolicy(s string) RepoLocalToolsPolicy {
@@ -321,6 +325,29 @@ func SessionsAutoTitle(global, project *Settings) AutoTitlePolicy {
 		return parseAutoTitlePolicy(v)
 	}
 	return AutoTitlePrompt
+}
+
+// SessionsRecordReasoning reports whether raw reasoning text should be recorded in session JSONL.
+// Project wins over global; the default is false.
+func SessionsRecordReasoning(global, project *Settings) bool {
+	if v, ok := sessionsBoolValue(project, func(c *SagittariusSessionsConfig) *bool { return c.RecordReasoning }); ok {
+		return v
+	}
+	if v, ok := sessionsBoolValue(global, func(c *SagittariusSessionsConfig) *bool { return c.RecordReasoning }); ok {
+		return v
+	}
+	return false
+}
+
+func sessionsBoolValue(s *Settings, field func(*SagittariusSessionsConfig) *bool) (bool, bool) {
+	if s == nil || s.Sagittarius == nil || s.Sagittarius.Sessions == nil {
+		return false, false
+	}
+	v := field(s.Sagittarius.Sessions)
+	if v == nil {
+		return false, false
+	}
+	return *v, true
 }
 
 func sessionsStringValue(s *Settings, pick func(*SagittariusSessionsConfig) *string) (string, bool) {

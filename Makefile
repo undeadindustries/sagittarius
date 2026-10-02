@@ -81,3 +81,19 @@ vulncheck:
 release-snapshot:
 	goreleaser release --snapshot --clean
 
+atif-smoke: $(BINARY)
+	SAGITTARIUS_E2E_MOCK=1 SAGITTARIUS_BIN=$(abspath $(BINARY)) $(GO) test -v -count=1 -run TestE2E_MockATIFSmoke ./tests/e2e/...
+	@echo "ATIF smoke test passed."
+
+atif-validate-harbor:
+	@if command -v harbor >/dev/null 2>&1; then \
+		echo "Running Harbor trajectory validation..."; \
+		harbor trajectory validate /tmp/sagittarius-atif-smoke/trajectory.json; \
+	elif command -v uvx >/dev/null 2>&1; then \
+		echo "Running Harbor trajectory validation via uvx..."; \
+		uvx harbor-framework trajectory validate /tmp/sagittarius-atif-smoke/trajectory.json; \
+	else \
+		echo "harbor/uvx not found; skipping optional harbor validator."; \
+	fi
+
+

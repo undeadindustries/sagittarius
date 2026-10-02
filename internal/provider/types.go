@@ -1,6 +1,9 @@
 package provider
 
-import "strings"
+import (
+	"strings"
+	"time"
+)
 
 // Role identifies who produced a message in a conversation turn.
 type Role string
@@ -28,6 +31,7 @@ type FunctionResponse struct {
 	Name     string
 	CallID   string
 	Response map[string]any
+	Duration time.Duration
 }
 
 // Message is one turn in a multi-turn conversation.
@@ -132,10 +136,12 @@ func effortSuppressesReasoning(effort string) bool {
 // only OpenRouter). A zero-cost value with CostKnown=true means the model was
 // free, not that cost was unavailable.
 type Usage struct {
-	InputTokens  int
-	OutputTokens int
-	CostUSD      float64
-	CostKnown    bool
+	InputTokens     int
+	OutputTokens    int
+	CachedTokens    int
+	ReasoningTokens int
+	CostUSD         float64
+	CostKnown       bool
 }
 
 // StreamResponse is one chunk emitted from GenerateContentStream.

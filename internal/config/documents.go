@@ -800,6 +800,7 @@ func mergeSessionsConfig(global, project *SagittariusSessionsConfig) *Sagittariu
 	}
 	merged := *global
 	merged.AutoTitle = overlayPtr(global.AutoTitle, project.AutoTitle)
+	merged.RecordReasoning = overlayPtr(global.RecordReasoning, project.RecordReasoning)
 	merged.Extra = mergeRaw(global.Extra, project.Extra)
 	return &merged
 }

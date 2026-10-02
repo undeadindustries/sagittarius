@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 
@@ -534,7 +535,13 @@ func (s *Scheduler) executeOne(
 	ctx context.Context,
 	call provider.ToolCall,
 	emit func(ui.StreamEvent),
-) (*provider.FunctionResponse, error) {
+) (resp *provider.FunctionResponse, err error) {
+	start := time.Now()
+	defer func() {
+		if resp != nil && resp.Duration == 0 {
+			resp.Duration = time.Since(start)
+		}
+	}()
 	name := call.Name
 	id := call.ID
 	args := call.Args
@@ -545,6 +552,9 @@ func (s *Scheduler) executeOne(
 	// them, so the boundary gate, mode gate, confirm card, hooks, snapshots,
 	// and history all see one set of names.
 	args = NormalizeToolArgs(name, args)
+	if id != "" {
+		args["_call_id"] = id
+	}
 	call.Args = args
 
 	emitErr := func(reason string) {
@@ -675,11 +685,11 @@ func (s *Scheduler) executeOne(
 	}
 
 	var result map[string]any
-	var err error
+	var execErr error
 
 	switch t := tool.(type) {
 	case BatchTool:
-		result, err = t.ExecuteBatch(ctx, args, s.runNested)
+		result, execErr = t.ExecuteBatch(ctx, args, s.runNested)
 	case InteractiveTool:
 		wrappedEmit := func(se ui.StreamEvent) {
 			if se.ToolCallID == "" {
@@ -690,19 +700,19 @@ func (s *Scheduler) executeOne(
 			}
 			emit(se)
 		}
-		result, err = t.ExecuteInteractive(ctx, args, s.interactive, wrappedEmit)
+		result, execErr = t.ExecuteInteractive(ctx, args, s.interactive, wrappedEmit)
 	case StreamingTool:
 		sink := func(text string) {
 			emit(ui.StreamEvent{Type: ui.StreamToolOutput, ToolName: name, ToolCallID: id, Text: text})
 		}
-		result, err = t.ExecuteStream(ctx, args, sink)
+		result, execErr = t.ExecuteStream(ctx, args, sink)
 	default:
-		result, err = tool.Execute(ctx, args)
+		result, execErr = tool.Execute(ctx, args)
 	}
 
-	if err != nil {
-		emitErr(err.Error())
-		return errorResponseFromErr(call, err), nil
+	if execErr != nil {
+		emitErr(execErr.Error())
+		return errorResponseFromErr(call, execErr), nil
 	}
 
 	if snapAbs != "" {
@@ -711,6 +721,11 @@ func (s *Scheduler) executeOne(
 	s.recordFileAccess(name, args, mutAbs, staleBy, result)
 
 	resultText, exitCode, isErr := formatToolResult(name, result, writeDiff)
+	if exitCode != nil && result != nil {
+		if _, ok := result["exit_code"]; !ok {
+			result["exit_code"] = *exitCode
+		}
+	}
 	emit(ui.StreamEvent{
 		Type:       ui.StreamToolResult,
 		ToolName:   name,
