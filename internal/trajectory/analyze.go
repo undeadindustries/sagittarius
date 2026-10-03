@@ -59,6 +59,34 @@ type Finding struct {
 	Remedy   string          `json:"remedy"`
 }
 
+func observationFor(step Step, callID string) (ObservationResult, bool) {
+	if step.Observation == nil || callID == "" {
+		return ObservationResult{}, false
+	}
+	for _, res := range step.Observation.Results {
+		if res.SourceCallID == callID {
+			return res, true
+		}
+	}
+	return ObservationResult{}, false
+}
+
+func extraInt(extra map[string]any, key string) int {
+	if extra == nil {
+		return 0
+	}
+	switch v := extra[key].(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	default:
+		return 0
+	}
+}
+
 // Analyze evaluates any ATIF trajectory against efficiency, tool health, loop, coding hygiene,
 // terminal, context, and subagent heuristics.
 func Analyze(traj *Trajectory) *Analysis {
@@ -139,9 +167,7 @@ func Analyze(traj *Trajectory) *Analysis {
 				if step.Metrics.CachedTokens != nil {
 					cachedTokens += *step.Metrics.CachedTokens
 				}
-				if step.Metrics.ReasoningTokens != nil {
-					reasoningTokens += *step.Metrics.ReasoningTokens
-				}
+				reasoningTokens += extraInt(step.Metrics.Extra, "reasoning_tokens")
 				if step.Metrics.CostUSD != nil {
 					totalCost += *step.Metrics.CostUSD
 				}
@@ -152,13 +178,16 @@ func Analyze(traj *Trajectory) *Analysis {
 
 			for _, tc := range step.ToolCalls {
 				an.ToolHealth.TotalCalls++
-				an.ToolHealth.ToolCounts[tc.ToolName]++
+				an.ToolHealth.ToolCounts[tc.FunctionName]++
 
-				argsJSON, _ := json.Marshal(tc.Arguments)
-				sig := toolSig{name: tc.ToolName, argsHash: string(argsJSON)}
+				argsJSON, err := json.Marshal(tc.Arguments)
+				if err != nil {
+					argsJSON = []byte("{}")
+				}
+				sig := toolSig{name: tc.FunctionName, argsHash: string(argsJSON)}
 				seenInStep[sig]++
 
-				switch tc.ToolName {
+				switch tc.FunctionName {
 				case "read_file":
 					p, _ := tc.Arguments["file_path"].(string)
 					if p == "" {
@@ -206,42 +235,38 @@ func Analyze(traj *Trajectory) *Analysis {
 				}
 
 				// Check observation results for this call
-				if step.Observation != nil {
-					if res, ok := step.Observation.Results[tc.CallID]; ok {
-						status, _ := res.Extra["status"].(string)
-						code, _ := res.Extra["code"].(string)
-						if code != "" {
-							an.ToolHealth.CodeCounts[code]++
-						}
+				if res, ok := observationFor(step, tc.ToolCallID); ok {
+					status, _ := res.Extra["status"].(string)
+					code, _ := res.Extra["code"].(string)
+					if code != "" {
+						an.ToolHealth.CodeCounts[code]++
+					}
 
-						if status == "error" || status == "denied" {
-							an.ToolHealth.FailedCalls++
-							if tc.ToolName == "edit" {
-								p, _ := tc.Arguments["file_path"].(string)
-								editFailuresPerPath[p]++
-							}
-							if tc.ToolName == "run_shell_command" {
-								cmd, _ := tc.Arguments["command"].(string)
-								if len(consecutiveShellFails) > 0 && consecutiveShellFails[len(consecutiveShellFails)-1] == cmd {
-									an.Findings = append(an.Findings, Finding{
-										Category: "loop",
-										Severity: SeverityCritical,
-										Title:    "Failed shell command retried unchanged",
-										Detail:   fmt.Sprintf("Command %q failed repeatedly without modification.", cmd),
-										Remedy:   "Fix command syntax, environment, or parameters before retrying.",
-									})
-								}
-								consecutiveShellFails = append(consecutiveShellFails, cmd)
-							}
-						} else {
-							an.ToolHealth.SuccessCalls++
+					if status == "error" || status == "denied" {
+						an.ToolHealth.FailedCalls++
+						if tc.FunctionName == "edit" {
+							p, _ := tc.Arguments["file_path"].(string)
+							editFailuresPerPath[p]++
 						}
+						if tc.FunctionName == "run_shell_command" {
+							cmd, _ := tc.Arguments["command"].(string)
+							if len(consecutiveShellFails) > 0 && consecutiveShellFails[len(consecutiveShellFails)-1] == cmd {
+								an.Findings = append(an.Findings, Finding{
+									Category: "loop",
+									Severity: SeverityCritical,
+									Title:    "Failed shell command retried unchanged",
+									Detail:   fmt.Sprintf("Command %q failed repeatedly without modification.", cmd),
+									Remedy:   "Fix command syntax, environment, or parameters before retrying.",
+								})
+							}
+							consecutiveShellFails = append(consecutiveShellFails, cmd)
+						}
+					} else {
+						an.ToolHealth.SuccessCalls++
+					}
 
-						if exitCode, ok := res.Extra["exit_code"].(float64); ok && int(exitCode) != 0 {
-							nonZeroExits++
-						} else if exitCode, ok := res.Extra["exit_code"].(int); ok && exitCode != 0 {
-							nonZeroExits++
-						}
+					if exitCode := extraInt(res.Extra, "exit_code"); exitCode != 0 {
+						nonZeroExits++
 					}
 				}
 			}
@@ -321,12 +346,12 @@ func Analyze(traj *Trajectory) *Analysis {
 	}
 
 	// Subagents
-	if len(traj.Subagents) > 0 {
+	if len(traj.SubagentTrajectories) > 0 {
 		an.Findings = append(an.Findings, Finding{
 			Category: "subagents",
 			Severity: SeverityInfo,
 			Title:    "Subagent delegations utilized",
-			Detail:   fmt.Sprintf("%d child subagent trajectories recorded.", len(traj.Subagents)),
+			Detail:   fmt.Sprintf("%d child subagent trajectories recorded.", len(traj.SubagentTrajectories)),
 			Remedy:   "Monitor subagent token share and failure rates.",
 		})
 	}

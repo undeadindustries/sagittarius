@@ -573,7 +573,8 @@ func FilenameForSessionID(sessionID string) string {
 	return fmt.Sprintf("%s%s-%s.jsonl", SessionFilePrefix, ts, deriveFileKey(sessionID))
 }
 
-// SetOutcome records the end-of-run outcome ("done", "max_rounds", "canceled", "error").
+// SetOutcome records the end-of-run outcome (OutcomeDone, OutcomeMaxRounds,
+// "canceled", or "error"). A later call replaces the earlier value.
 func (r *Recorder) SetOutcome(outcome string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

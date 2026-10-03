@@ -3,19 +3,31 @@ package trajectory
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/undeadindustries/sagittarius/internal/redact"
 	"github.com/undeadindustries/sagittarius/internal/session"
+	"github.com/undeadindustries/sagittarius/internal/version"
 )
 
+// Options controls FromSession. RedactSecrets strips credentials from text
+// and tool arguments. AgentName and AgentVersion override the trajectory
+// agent block; an empty version falls back to the session, then the binary.
 type Options struct {
 	RedactSecrets bool
 	AgentName     string
 	AgentVersion  string
 }
 
-// FromSession converts a session conversation record (and optional child sessions) into ATIF v1.7.
+type timedStep struct {
+	ts   string
+	ord  int
+	step Step
+}
+
+// FromSession converts a session conversation record (and optional child
+// sessions) into an ATIF document Harbor's Trajectory model accepts.
 func FromSession(rec *session.ConversationRecord, children map[string]*session.ConversationRecord, opts Options) (*Trajectory, error) {
 	if rec == nil {
 		return nil, fmt.Errorf("trajectory: nil conversation record")
@@ -24,10 +36,6 @@ func FromSession(rec *session.ConversationRecord, children map[string]*session.C
 	agentName := opts.AgentName
 	if agentName == "" {
 		agentName = "sagittarius"
-	}
-	agentVersion := opts.AgentVersion
-	if agentVersion == "" && rec.AgentVersion != "" {
-		agentVersion = rec.AgentVersion
 	}
 
 	modelName := ""
@@ -39,18 +47,15 @@ func FromSession(rec *session.ConversationRecord, children map[string]*session.C
 	}
 
 	traj := &Trajectory{
-		SchemaVersion: "1.7",
+		SchemaVersion: SchemaATIFV17,
 		SessionID:     rec.SessionID,
+		TrajectoryID:  rec.SessionID,
 		Agent: Agent{
 			Name:      agentName,
-			Version:   agentVersion,
+			Version:   resolveAgentVersion(opts.AgentVersion, rec.AgentVersion),
 			ModelName: modelName,
-			Extra: map[string]any{
-				"kind":           rec.Kind,
-				"persona_preset": rec.PersonaPreset,
-			},
+			Extra:     agentExtra(rec),
 		},
-		Steps: make([]Step, 0, len(rec.Messages)),
 	}
 
 	var totalPrompt, totalCompletion, totalCached, totalReasoning, totalTok int
@@ -58,32 +63,35 @@ func FromSession(rec *session.ConversationRecord, children map[string]*session.C
 	var hasCost bool
 	var legacyMissingTelemetry bool
 
-	stepCounter := 1
+	var timed []timedStep
+	ord := 0
 
-	// Track function responses by CallID for folding into the preceding agent step
-	// We iterate messages in order.
 	i := 0
 	for i < len(rec.Messages) {
 		msg := rec.Messages[i]
 
 		switch msg.Type {
 		case session.MessageTypeUser:
+			// An unpaired function-response line has no user text. The paired
+			// case is consumed by the model-step lookahead above.
+			if isFunctionResponseMessage(msg) && extractMessageText(msg, false) == "" {
+				i++
+				continue
+			}
 			source := StepSourceUser
-			extra := map[string]any{}
+			var extra map[string]any
 			if msg.Origin == "harness" {
 				source = StepSourceSystem
-				extra["origin"] = "harness"
+				extra = map[string]any{"origin": "harness"}
 			}
-			userText := extractMessageText(msg, opts.RedactSecrets)
 			step := Step{
-				StepID:    stepCounter,
 				Timestamp: msg.Timestamp,
 				Source:    source,
-				Message:   userText,
+				Message:   extractMessageText(msg, opts.RedactSecrets),
 				Extra:     extra,
 			}
-			stepCounter++
-			traj.Steps = append(traj.Steps, step)
+			timed = append(timed, timedStep{ts: msg.Timestamp, ord: ord, step: step})
+			ord++
 			i++
 
 		case session.MessageTypeModel:
@@ -94,21 +102,20 @@ func FromSession(rec *session.ConversationRecord, children map[string]*session.C
 			}
 
 			step := Step{
-				StepID:    stepCounter,
 				Timestamp: msg.Timestamp,
 				Source:    StepSourceAgent,
 				Message:   modelText,
-				Extra:     map[string]any{},
 			}
-			stepCounter++
 
 			if round != nil {
 				step.ModelName = round.Model
-				step.Extra["provider"] = round.Provider
-				step.Extra["mode"] = round.Mode
-				step.Extra["agent_kind"] = round.AgentKind
-				step.Extra["latency_ms"] = round.LatencyMs
-				step.Extra["usage_estimated"] = round.UsageEstimated
+				step.Extra = map[string]any{
+					"provider":        round.Provider,
+					"mode":            round.Mode,
+					"agent_kind":      round.AgentKind,
+					"latency_ms":      round.LatencyMs,
+					"usage_estimated": round.UsageEstimated,
+				}
 				if round.SystemPromptHash != "" {
 					step.Extra["system_prompt_hash"] = round.SystemPromptHash
 				}
@@ -133,7 +140,6 @@ func FromSession(rec *session.ConversationRecord, children map[string]*session.C
 				m.PromptTokens = &inT
 				m.CompletionTokens = &outT
 				tot := inT + outT
-				m.TotalTokens = &tot
 				totalPrompt += inT
 				totalCompletion += outT
 				totalTok += tot
@@ -143,112 +149,50 @@ func FromSession(rec *session.ConversationRecord, children map[string]*session.C
 					m.CachedTokens = &c
 					totalCached += c
 				}
-				if round.ReasoningTokens > 0 {
-					r := round.ReasoningTokens
-					m.ReasoningTokens = &r
-					totalReasoning += r
-				}
 				if round.CostKnown {
 					c := round.CostUSD
 					m.CostUSD = &c
 					totalCost += c
 					hasCost = true
 				}
+				if round.ReasoningTokens > 0 {
+					totalReasoning += round.ReasoningTokens
+				}
+				m.Extra = metricsExtra(round.ReasoningTokens, tot)
 				step.Metrics = m
 			} else {
 				calls := 1
 				step.LLMCallCount = &calls
 			}
 
-			// Map tool calls from Part.FunctionCall
 			var calls []ToolCall
 			for _, p := range msg.Content {
-				if p.FunctionCall != nil {
-					args := p.FunctionCall.Args
-					if opts.RedactSecrets && args != nil {
-						args = redactMap(args)
-					}
-					calls = append(calls, ToolCall{
-						CallID:    p.FunctionCall.ID,
-						ToolName:  p.FunctionCall.Name,
-						Arguments: args,
-					})
+				if p.FunctionCall == nil {
+					continue
 				}
+				args := p.FunctionCall.Args
+				if args == nil {
+					args = map[string]any{}
+				} else if opts.RedactSecrets {
+					args = redactMap(args)
+				}
+				calls = append(calls, ToolCall{
+					ToolCallID:   p.FunctionCall.ID,
+					FunctionName: p.FunctionCall.Name,
+					Arguments:    args,
+				})
 			}
 			if len(calls) > 0 {
 				step.ToolCalls = calls
 			}
 
-			// Lookahead: is next message containing function responses?
-			if i+1 < len(rec.Messages) {
-				nextMsg := rec.Messages[i+1]
-				var funcParts []*session.FuncResponsePart
-				for _, p := range nextMsg.Content {
-					if p.FunctionResponse != nil {
-						funcParts = append(funcParts, p.FunctionResponse)
-					}
-				}
-
-				if len(funcParts) > 0 {
-					obs := &Observation{
-						Results: make(map[string]ObservationResult, len(funcParts)),
-					}
-
-					// Map ToolResults telemetry if available
-					resultTelemByID := make(map[string]session.ToolResultTelemetry)
-					for _, tr := range nextMsg.ToolResults {
-						resultTelemByID[tr.ID] = tr
-					}
-
-					for _, fr := range funcParts {
-						contentStr := ""
-						if fr.Response != nil {
-							b, _ := json.Marshal(fr.Response)
-							contentStr = string(b)
-						}
-						if opts.RedactSecrets {
-							contentStr = redact.Secrets(contentStr)
-						}
-
-						obsRes := ObservationResult{
-							SourceCallID: fr.ID,
-							Content:      contentStr,
-							Extra:        map[string]any{},
-						}
-
-						if tr, ok := resultTelemByID[fr.ID]; ok {
-							obsRes.Extra["duration_ms"] = tr.DurationMs
-							obsRes.Extra["status"] = tr.Status
-							if tr.Code != "" {
-								obsRes.Extra["code"] = tr.Code
-							}
-							if tr.ExitCode != nil {
-								obsRes.Extra["exit_code"] = *tr.ExitCode
-							}
-						}
-
-						// Check if this tool call corresponds to a subagent child session
-						for childSessID, childRec := range children {
-							if childRec.ParentCallID == fr.ID {
-								obsRes.SubagentTrajectoryRef = &SubagentTrajectoryRef{
-									TrajectoryID: childSessID,
-									SessionID:    childSessID,
-									Extra: map[string]any{
-										"subagent_class": childRec.SubagentClass,
-									},
-								}
-								break
-							}
-						}
-
-						obs.Results[fr.ID] = obsRes
-					}
-					step.Observation = obs
-					i++ // consumed function response message as well
-				}
+			if i+1 < len(rec.Messages) && isFunctionResponseMessage(rec.Messages[i+1]) {
+				step.Observation = foldObservation(rec.Messages[i+1], children, opts.RedactSecrets)
+				i++
 			}
 
-			traj.Steps = append(traj.Steps, step)
+			timed = append(timed, timedStep{ts: msg.Timestamp, ord: ord, step: step})
+			ord++
 			i++
 
 		default:
@@ -256,15 +200,16 @@ func FromSession(rec *session.ConversationRecord, children map[string]*session.C
 		}
 	}
 
-	// Insert events as system steps if any
 	for _, ev := range rec.Events {
 		eventData := ev.Data
 		if eventData == nil {
 			eventData = map[string]any{}
 		}
-		dataBytes, _ := json.Marshal(eventData)
+		dataBytes, err := json.Marshal(eventData)
+		if err != nil {
+			dataBytes = []byte("{}")
+		}
 		step := Step{
-			StepID:    stepCounter,
 			Timestamp: ev.Timestamp,
 			Source:    StepSourceSystem,
 			Message:   fmt.Sprintf("$event: %s %s", ev.Type, string(dataBytes)),
@@ -273,35 +218,67 @@ func FromSession(rec *session.ConversationRecord, children map[string]*session.C
 				"event_data": eventData,
 			},
 		}
-		stepCounter++
-		traj.Steps = append(traj.Steps, step)
+		timed = append(timed, timedStep{ts: ev.Timestamp, ord: ord, step: step})
+		ord++
 	}
 
-	// Subagent trajectories
+	sort.SliceStable(timed, func(a, b int) bool {
+		if timed[a].ts != timed[b].ts {
+			return timed[a].ts < timed[b].ts
+		}
+		return timed[a].ord < timed[b].ord
+	})
+
+	traj.Steps = make([]Step, len(timed))
+	for n, item := range timed {
+		item.step.StepID = n + 1
+		traj.Steps[n] = item.step
+	}
+
 	if len(children) > 0 {
-		traj.Subagents = make([]Trajectory, 0, len(children))
-		for _, childRec := range children {
-			childTraj, err := FromSession(childRec, nil, opts)
-			if err == nil && childTraj != nil {
-				traj.Subagents = append(traj.Subagents, *childTraj)
+		ids := make([]string, 0, len(children))
+		for id := range children {
+			ids = append(ids, id)
+		}
+		sort.Slice(ids, func(a, b int) bool {
+			ca, cb := children[ids[a]], children[ids[b]]
+			if ca.StartTime != cb.StartTime {
+				return ca.StartTime < cb.StartTime
 			}
+			return ids[a] < ids[b]
+		})
+		traj.SubagentTrajectories = make([]Trajectory, 0, len(ids))
+		for _, id := range ids {
+			childTraj, err := FromSession(children[id], nil, opts)
+			if err != nil || childTraj == nil {
+				continue
+			}
+			childTraj.TrajectoryID = id
+			traj.SubagentTrajectories = append(traj.SubagentTrajectories, *childTraj)
 		}
 	}
 
-	// Final metrics
+	stepCount := len(traj.Steps)
+	fmExtra := map[string]any{}
+	if rec.Outcome != "" {
+		fmExtra["outcome"] = rec.Outcome
+	}
+	if totalReasoning > 0 {
+		fmExtra["reasoning_tokens"] = totalReasoning
+	}
+	if totalTok > 0 {
+		fmExtra["total_tokens"] = totalTok
+	}
 	fm := &FinalMetrics{
 		TotalPromptTokens:     &totalPrompt,
 		TotalCompletionTokens: &totalCompletion,
-		TotalTokens:           &totalTok,
-		Extra: map[string]any{
-			"outcome": rec.Outcome,
-		},
+		TotalSteps:            &stepCount,
+	}
+	if len(fmExtra) > 0 {
+		fm.Extra = fmExtra
 	}
 	if totalCached > 0 {
 		fm.TotalCachedTokens = &totalCached
-	}
-	if totalReasoning > 0 {
-		fm.TotalReasoningTokens = &totalReasoning
 	}
 	if hasCost {
 		fm.TotalCostUSD = &totalCost
@@ -313,6 +290,115 @@ func FromSession(rec *session.ConversationRecord, children map[string]*session.C
 	}
 
 	return traj, nil
+}
+
+func resolveAgentVersion(opt, recorded string) string {
+	if opt != "" {
+		return opt
+	}
+	if recorded != "" {
+		return recorded
+	}
+	if version.Version != "" {
+		return version.Version
+	}
+	return "unknown"
+}
+
+func agentExtra(rec *session.ConversationRecord) map[string]any {
+	extra := map[string]any{}
+	if rec.Kind != "" {
+		extra["kind"] = rec.Kind
+	}
+	if rec.PersonaPreset != "" {
+		extra["persona_preset"] = rec.PersonaPreset
+	}
+	if len(extra) == 0 {
+		return nil
+	}
+	return extra
+}
+
+func metricsExtra(reasoningTokens, totalTokens int) map[string]any {
+	extra := map[string]any{}
+	if reasoningTokens > 0 {
+		extra["reasoning_tokens"] = reasoningTokens
+	}
+	if totalTokens > 0 {
+		extra["total_tokens"] = totalTokens
+	}
+	if len(extra) == 0 {
+		return nil
+	}
+	return extra
+}
+
+func isFunctionResponseMessage(msg session.MessageRecord) bool {
+	for _, p := range msg.Content {
+		if p.FunctionResponse != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func foldObservation(msg session.MessageRecord, children map[string]*session.ConversationRecord, redactSec bool) *Observation {
+	resultTelemByID := make(map[string]session.ToolResultTelemetry)
+	for _, tr := range msg.ToolResults {
+		resultTelemByID[tr.ID] = tr
+	}
+
+	obs := &Observation{}
+	for _, p := range msg.Content {
+		fr := p.FunctionResponse
+		if fr == nil {
+			continue
+		}
+		contentStr := ""
+		if fr.Response != nil {
+			b, err := json.Marshal(fr.Response)
+			if err == nil {
+				contentStr = string(b)
+			}
+		}
+		if redactSec {
+			contentStr = redact.Secrets(contentStr)
+		}
+		obsRes := ObservationResult{
+			SourceCallID: fr.ID,
+			Content:      contentStr,
+		}
+		if tr, ok := resultTelemByID[fr.ID]; ok {
+			extra := map[string]any{
+				"duration_ms": tr.DurationMs,
+				"status":      tr.Status,
+			}
+			if tr.Code != "" {
+				extra["code"] = tr.Code
+			}
+			if tr.ExitCode != nil {
+				extra["exit_code"] = *tr.ExitCode
+			}
+			obsRes.Extra = extra
+		}
+		for childSessID, childRec := range children {
+			if childRec != nil && childRec.ParentCallID == fr.ID {
+				obsRes.SubagentTrajectoryRef = []SubagentTrajectoryRef{{
+					TrajectoryID: childSessID,
+					SessionID:    childSessID,
+					Extra: map[string]any{
+						"subagent_class": childRec.SubagentClass,
+					},
+				}}
+				break
+			}
+		}
+		obs.Results = append(obs.Results, obsRes)
+	}
+	if len(obs.Results) == 0 {
+		return nil
+	}
+	return obs
 }
 
 func extractMessageText(msg session.MessageRecord, redactSec bool) string {

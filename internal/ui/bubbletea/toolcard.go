@@ -311,8 +311,16 @@ func (m *model) toolResultBody(c *toolCard, inner int) []string {
 }
 
 func (m *model) withBangHint(c *toolCard, lines []string) []string {
-	if c.phase != toolRunning || !isBangCallID(c.callID) {
+	if c.phase != toolRunning {
 		return lines
+	}
+	if c.toolName != "run_shell_command" && !isBangCallID(c.callID) {
+		return lines
+	}
+	if m.app != nil {
+		if _, ok := m.app.(ui.ShellInputWriter); !ok {
+			return lines
+		}
 	}
 	hint := "Tab to interact"
 	if m.ptyFocus && m.ptyToolCallID == c.callID {

@@ -1,176 +1,206 @@
-"""
-Harbor agent adapter for Sagittarius CLI.
+"""Harbor installed agent for Sagittarius.
 
-Implements BaseInstalledAgent to benchmark Sagittarius against Terminal-Bench 2.0,
-SWE-bench, and other Harbor evaluation environments.
+Load it from the repo root:
+
+    PYTHONPATH=. harbor run \
+      --agent integrations.harbor.sagittarius_agent:Sagittarius \
+      -m openrouter/<vendor>/<model> \
+      --ae OPENROUTER_API_KEY=$OPENROUTER_API_KEY
 """
+
+from __future__ import annotations
 
 import json
-import os
-import shutil
-import subprocess
-import tarfile
-import urllib.request
+import shlex
 from pathlib import Path
-from typing import Any, Dict, Optional
 
-# Harbor BaseInstalledAgent import
-try:
-    from harbor.agents.installed import BaseInstalledAgent  # type: ignore
-except ImportError:
-    # Fallback interface stub when harbor package is not directly installed in environment
-    class BaseInstalledAgent:  # type: ignore
-        def __init__(self, **kwargs: Any) -> None:
-            self.kwargs = kwargs
+from harbor.agents.capabilities import AgentCapabilities
+from harbor.agents.installed.base import BaseInstalledAgent, with_prompt_template
+from harbor.agents.options import InstalledAgentOptions
+from harbor.environments.base import BaseEnvironment
+from harbor.models.agent.context import AgentContext
+from pydantic import Field
+
+from integrations.harbor.route import (
+    BINARY,
+    HOME,
+    LOG,
+    SETTINGS,
+    TRAJECTORY,
+    VLLM,
+    build_settings,
+    release_asset,
+    resolve_route,
+)
+
+
+class SagittariusOptions(InstalledAgentOptions):
+    """kwargs accepted by `harbor run --agent-kwarg key=value`."""
+
+    binary_path: str | None = Field(
+        default=None,
+        description="Host path of a Linux sagittarius binary to upload.",
+    )
+    base_url: str | None = Field(
+        default=None,
+        description="OpenAI-compatible base URL (local vLLM or any compatible server).",
+    )
+    context_limit: int | None = Field(
+        default=None,
+        description="Context window pin for the selected model.",
+    )
+    temperature: float | None = Field(
+        default=None,
+        description="Temperature pin for the selected model.",
+    )
+    reasoning_effort: str | None = Field(
+        default=None,
+        description="Reasoning effort pin for the selected model.",
+    )
 
 
 class Sagittarius(BaseInstalledAgent):
-    """Sagittarius CLI adapter for Harbor benchmarks."""
+    """Runs the Sagittarius CLI inside the trial and writes an ATIF trajectory."""
 
-    VERSION = "0.20.1"
-    REPO = "undeadindustries/sagittarius"
+    options_model = SagittariusOptions
+    capabilities = AgentCapabilities(atif=True)
 
-    def __init__(
+    @staticmethod
+    def name() -> str:
+        return "sagittarius"
+
+    def _options(self) -> SagittariusOptions:
+        if not isinstance(self.options, SagittariusOptions):
+            raise RuntimeError("Sagittarius options were not parsed")
+        return self.options
+
+    def _route(self) -> tuple[str, str]:
+        if not self.model_name:
+            raise ValueError("Sagittarius requires -m <model>")
+        return resolve_route(self.model_name, self._options().base_url)
+
+    @with_prompt_template
+    async def run(
         self,
-        provider: str = "openrouter",
-        model: Optional[str] = None,
-        base_url: Optional[str] = None,
-        persona: str = "programmer",
-        extra_flags: Optional[str] = None,
-        **kwargs: Any,
+        instruction: str,
+        environment: BaseEnvironment,
+        context: AgentContext,
     ) -> None:
-        super().__init__(**kwargs)
-        self.provider = provider
-        self.model = model or "anthropic/claude-3.5-sonnet"
-        self.base_url = base_url
-        self.persona = persona
-        self.extra_flags = extra_flags or ""
-
-    def install(self, target_dir: Path) -> Path:
-        """Download and install the sagittarius binary into the container environment."""
-        target_dir = Path(target_dir)
-        target_dir.mkdir(parents=True, exist_ok=True)
-        bin_path = target_dir / "sagittarius"
-
-        if bin_path.exists():
-            return bin_path
-
-        # Check if local binary is available or download from GitHub releases
-        arch = "amd64" if os.uname().machine in ("x86_64", "amd64") else "arm64"
-        os_name = "linux"
-        tar_name = f"sagittarius_{self.VERSION}_{os_name}_{arch}.tar.gz"
-        url = f"https://github.com/{self.REPO}/releases/download/v{self.VERSION}/{tar_name}"
-
-        tar_dest = target_dir / tar_name
-        try:
-            urllib.request.urlretrieve(url, tar_dest)
-            with tarfile.open(tar_dest, "r:gz") as tar:
-                tar.extractall(path=target_dir)
-            bin_path.chmod(0o755)
-        except Exception as e:
-            # Check PATH fallback
-            fallback = shutil.which("sagittarius")
-            if fallback:
-                return Path(fallback)
-            raise RuntimeError(f"Failed to install sagittarius from {url}: {e}")
-        finally:
-            if tar_dest.exists():
-                tar_dest.unlink()
-
-        return bin_path
-
-    def setup_config(self, config_dir: Path) -> None:
-        """Write throwaway settings.json in SAGITTARIUS_HOME."""
-        config_dir.mkdir(parents=True, exist_ok=True)
-        settings_file = config_dir / "settings.json"
-
-        settings: Dict[str, Any] = {
-            "sagittarius": {
-                "defaultMode": "agent",
-                "systemPrompt": self.persona,
-            },
-            "providers": {
-                "active": self.provider,
-            },
+        provider_id, model = self._route()
+        opts = self._options()
+        settings = build_settings(
+            provider_id,
+            model,
+            base_url=opts.base_url,
+            context_limit=opts.context_limit,
+            temperature=opts.temperature,
+            reasoning_effort=opts.reasoning_effort,
+            vllm_api_key_env=provider_id == VLLM and self._get_env("VLLM_API_KEY") is not None,
+        )
+        await self._write_settings(environment, settings)
+        env = {
+            "SAGITTARIUS_HOME": HOME,
+            "HARBOR_INSTRUCTION": instruction,
         }
+        command = (
+            "set -o pipefail; "
+            f"{shlex.quote(BINARY)} --yolo --output-format stream-json "
+            f"-m {shlex.quote(model)} -p \"$HARBOR_INSTRUCTION\" "
+            f"--atif-out {shlex.quote(TRAJECTORY)} | tee {shlex.quote(LOG)}"
+        )
+        try:
+            await self.exec_as_agent(environment, command, env=env)
+        finally:
+            await self._export_if_missing(environment, env)
 
-        if self.base_url:
-            settings["providers"]["custom"] = {
-                self.provider: {
-                    "displayName": self.provider,
-                    "baseUrl": self.base_url,
-                    "wireFormat": "openai-chat",
-                    "defaultModel": self.model,
-                }
-            }
-
-        with open(settings_file, "w", encoding="utf-8") as f:
-            json.dump(settings, f, indent=2)
-
-    def run(self, instruction: str, workspace_dir: Path, logs_dir: Path) -> None:
-        """Execute Sagittarius headlessly for one benchmark problem turn."""
-        workspace_dir = Path(workspace_dir)
-        logs_dir = Path(logs_dir)
-        logs_dir.mkdir(parents=True, exist_ok=True)
-
-        home_dir = logs_dir / ".sagittarius_home"
-        self.setup_config(home_dir)
-
-        bin_path = self.install(logs_dir / "bin")
-        trajectory_out = logs_dir / "sagittarius-trajectory.json"
-
-        env = os.environ.copy()
-        env["SAGITTARIUS_HOME"] = str(home_dir)
-
-        cmd = [
-            str(bin_path),
-            "--yolo",
-            "-p",
-            instruction,
-            "--output-format",
-            "stream-json",
-            "--atif-out",
-            str(trajectory_out),
-        ]
-
-        if self.model:
-            cmd.extend(["--model", self.model])
-
-        if self.extra_flags:
-            cmd.extend(self.extra_flags.split())
-
-        stdout_log = logs_dir / "sagittarius.stdout.log"
-        stderr_log = logs_dir / "sagittarius.stderr.log"
-
-        with open(stdout_log, "w", encoding="utf-8") as out_f, open(
-            stderr_log, "w", encoding="utf-8"
-        ) as err_f:
-            subprocess.run(
-                cmd,
-                cwd=workspace_dir,
-                env=env,
-                stdout=out_f,
-                stderr=err_f,
-                check=False,
+    async def install(self, environment: BaseEnvironment) -> None:
+        self._route()
+        # Go verifies TLS against the system pool. The trial image does not
+        # always have CA certificates installed before the agent runs.
+        await self.ensure_system_dependencies(environment, ("ca_certificates",))
+        binary = self._options().binary_path
+        if binary:
+            await self._upload_binary(environment, Path(binary).expanduser())
+            return
+        version = self.version()
+        if not version:
+            raise RuntimeError(
+                "no Sagittarius release is selected. Pass "
+                "--agent-kwarg binary_path=<linux binary> until a release "
+                "includes --atif-out, or --agent-kwarg version=<tag> after that."
             )
+        await self._download_release(environment, version)
 
-    def populate_context_post_run(self, context: Any, logs_dir: Path) -> None:
-        """Populate evaluation context with ATIF trajectory and token/cost telemetry."""
-        logs_dir = Path(logs_dir)
-        traj_file = logs_dir / "sagittarius-trajectory.json"
-        dest_file = logs_dir / "trajectory.json"
+    def populate_context_post_run(self, context: AgentContext) -> None:
+        source = self.logs_dir / "sagittarius-trajectory.json"
+        dest = self.logs_dir / "trajectory.json"
+        try:
+            if not source.is_file():
+                self.logger.warning("sagittarius trajectory missing at %s", source)
+                return
+            data = json.loads(source.read_text(encoding="utf-8"))
+            dest.write_text(json.dumps(data), encoding="utf-8")
+            metrics = data.get("final_metrics") or {}
+            extra = metrics.get("extra") or {}
+            prompt = metrics.get("total_prompt_tokens")
+            cached = metrics.get("total_cached_tokens")
+            completion = metrics.get("total_completion_tokens")
+            cost = metrics.get("total_cost_usd")
+            if prompt is not None:
+                context.n_input_tokens = int(prompt)
+            if cached is not None:
+                context.n_cache_tokens = int(cached)
+            if completion is not None:
+                context.n_output_tokens = int(completion)
+            if cost is not None:
+                context.cost_usd = float(cost)
+            outcome = extra.get("outcome")
+            if outcome:
+                if context.metadata is None:
+                    context.metadata = {}
+                context.metadata["outcome"] = outcome
+        except Exception as exc:
+            self.logger.warning("failed to record sagittarius trajectory: %s", exc)
 
-        if traj_file.exists():
-            shutil.copyfile(traj_file, dest_file)
-            try:
-                with open(dest_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                fm = data.get("final_metrics", {})
-                if hasattr(context, "n_input_tokens") and "total_prompt_tokens" in fm:
-                    context.n_input_tokens = fm["total_prompt_tokens"]
-                if hasattr(context, "n_output_tokens") and "total_completion_tokens" in fm:
-                    context.n_output_tokens = fm["total_completion_tokens"]
-                if hasattr(context, "cost_usd") and "total_cost_usd" in fm:
-                    context.cost_usd = fm["total_cost_usd"]
-            except Exception:
-                pass
+    async def _write_settings(self, environment: BaseEnvironment, settings: dict) -> None:
+        quoted_dir = shlex.quote(str(Path(SETTINGS).parent))
+        await self.exec_as_agent(environment, f"mkdir -p {quoted_dir}")
+        await self._upload_config_text(
+            environment,
+            content=json.dumps(settings, indent=2) + "\n",
+            remote_path=SETTINGS,
+            filename="settings.json",
+        )
+
+    async def _upload_binary(self, environment: BaseEnvironment, source: Path) -> None:
+        if not source.is_file():
+            raise FileNotFoundError(f"binary_path is not a file: {source}")
+        await self._upload_agent_owned_file(environment, source, BINARY)
+        await self.exec_as_root(environment, f"chmod 755 {shlex.quote(BINARY)}")
+
+    async def _download_release(self, environment: BaseEnvironment, version: str) -> None:
+        await self.ensure_system_dependencies(environment, ("curl", "tar", "ca_certificates"))
+        uname = await self.exec_as_agent(environment, "uname -m")
+        url, filename = release_asset(version, (uname.stdout or "").strip())
+        command = (
+            "set -euo pipefail; "
+            "tmp=$(mktemp -d); "
+            f"curl -fsSL {shlex.quote(url)} -o \"$tmp/{filename}\"; "
+            f"tar -xzf \"$tmp/{filename}\" -C \"$tmp\"; "
+            f"install -m 755 \"$tmp/sagittarius\" {shlex.quote(BINARY)}"
+        )
+        await self.exec_as_root(environment, command)
+
+    async def _export_if_missing(self, environment: BaseEnvironment, env: dict[str, str]) -> None:
+        check = await environment.exec(command=f"test -s {shlex.quote(TRAJECTORY)}")
+        if check.return_code == 0:
+            return
+        self.logger.warning("trajectory missing after the run; exporting the session")
+        try:
+            await self.exec_as_agent(
+                environment,
+                f"{shlex.quote(BINARY)} --export-atif latest --atif-out {shlex.quote(TRAJECTORY)}",
+                env=env,
+            )
+        except Exception as exc:
+            self.logger.warning("fallback ATIF export failed: %s", exc)

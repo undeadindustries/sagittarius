@@ -30,24 +30,6 @@ func (a *App) HandleBang(ctx context.Context, input string) (<-chan ui.StreamEve
 	return out, nil
 }
 
-// WriteBangInput implements ui.BangInputWriter.
-func (a *App) WriteBangInput(p []byte) error {
-	a.bangMu.Lock()
-	stdin := a.bangStdin
-	a.bangMu.Unlock()
-	if stdin == nil {
-		return tools.ErrPTYClosed
-	}
-	_, err := stdin.Write(p)
-	return err
-}
-
-func (a *App) setBangStdin(stdin *tools.PTYStdin) {
-	a.bangMu.Lock()
-	a.bangStdin = stdin
-	a.bangMu.Unlock()
-}
-
 func (a *App) runBang(ctx context.Context, input string, out chan<- ui.StreamEvent) {
 	command, ok := slash.ParseBangCommand(input)
 	if !ok || command == "" {
@@ -82,8 +64,10 @@ func (a *App) runBang(ctx context.Context, input string, out chan<- ui.StreamEve
 	}
 
 	stdin := &tools.PTYStdin{}
-	a.setBangStdin(stdin)
-	defer a.setBangStdin(nil)
+	if a.runner != nil {
+		unregister := a.runner.registerShellStdin(id, stdin)
+		defer unregister()
+	}
 
 	sink := func(text string) {
 		select {

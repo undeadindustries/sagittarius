@@ -4,7 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/provider"
+	"github.com/undeadindustries/sagittarius/internal/session"
 	"github.com/undeadindustries/sagittarius/internal/tools"
 	"github.com/undeadindustries/sagittarius/internal/ui"
 )
@@ -240,4 +242,81 @@ func TestHeadlessMaxToolRoundsStopsWithoutPrompt(t *testing.T) {
 	if gen.calls() != 1 {
 		t.Fatalf("generator calls = %d, want 1", gen.calls())
 	}
+}
+
+func TestHeadlessMaxToolRoundsRecordsMaxRoundsOutcome(t *testing.T) {
+	t.Parallel()
+
+	one := 1
+	gen := &fakeGenerator{
+		batches: [][]provider.StreamResponse{listDirBatch()},
+	}
+	rec := session.NewRecorder(t.TempDir(), "max-rounds-outcome", "hash", "main")
+	runner, err := NewRunner(RunnerConfig{
+		Generator:             gen,
+		Model:                 "test-model",
+		WorkDir:               t.TempDir(),
+		ApprovalMode:          ApprovalYolo,
+		Interactive:           false,
+		MaxToolRoundsOverride: &one,
+		SessionRecorder:       rec,
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	events, err := runner.RunTurn(testContext(t), "list")
+	if err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+	drainEvents(t, events)
+
+	if got := loadedSessionOutcome(t, runner); got != session.OutcomeMaxRounds {
+		t.Fatalf("outcome = %q, want %q", got, session.OutcomeMaxRounds)
+	}
+}
+
+func TestCleanTurnRecordsDoneOutcome(t *testing.T) {
+	t.Parallel()
+
+	off := string(config.AutoTitleOff)
+	gen := &fakeGenerator{
+		batches: [][]provider.StreamResponse{textBatch("ok")},
+	}
+	rec := session.NewRecorder(t.TempDir(), "done-outcome", "hash", "main")
+	runner, err := NewRunner(RunnerConfig{
+		Generator:       gen,
+		Model:           "test-model",
+		WorkDir:         t.TempDir(),
+		ApprovalMode:    ApprovalYolo,
+		Interactive:     false,
+		SessionRecorder: rec,
+		Settings: &config.Settings{
+			Sagittarius: &config.SagittariusSettings{
+				Sessions: &config.SagittariusSessionsConfig{AutoTitle: &off},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	events, err := runner.RunTurn(testContext(t), "hi")
+	if err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+	drainEvents(t, events)
+
+	if got := loadedSessionOutcome(t, runner); got != session.OutcomeDone {
+		t.Fatalf("outcome = %q, want %q", got, session.OutcomeDone)
+	}
+}
+
+func loadedSessionOutcome(t *testing.T, runner *Runner) string {
+	t.Helper()
+	loaded, err := session.LoadSession(runner.SessionFilePath())
+	if err != nil {
+		t.Fatalf("LoadSession: %v", err)
+	}
+	return loaded.Outcome
 }

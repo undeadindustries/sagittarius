@@ -726,3 +726,118 @@ func TestShellUserStdinEcho(t *testing.T) {
 		t.Fatalf("output = %q, want got:hello", out)
 	}
 }
+
+func TestShellExecuteStreamStdinEcho(t *testing.T) {
+	t.Parallel()
+	tool := newTestShellTool(t)
+	stdin := &PTYStdin{}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ctx = WithPTYStdin(ctx, stdin)
+
+	done := make(chan struct{})
+	var res map[string]any
+	var execErr error
+	go func() {
+		defer close(done)
+		res, execErr = tool.ExecuteStream(ctx, map[string]any{
+			ShellParamCommand: `read line; printf 'got:%s\n' "$line"`,
+		}, nil)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	var wrote bool
+	for time.Now().Before(deadline) {
+		if _, err := stdin.Write([]byte("streamhello\r")); err == nil {
+			wrote = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !wrote {
+		t.Fatal("could not write to PTY stdin")
+	}
+
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("ExecuteStream did not return after stdin write")
+	}
+	if execErr != nil {
+		t.Fatalf("ExecuteStream: %v", execErr)
+	}
+	out, _ := res["output"].(string)
+	if !strings.Contains(out, "got:streamhello") {
+		t.Fatalf("output = %q, want got:streamhello", out)
+	}
+}
+
+func TestShellExecuteStreamWithoutStdin(t *testing.T) {
+	t.Parallel()
+	tool := newTestShellTool(t)
+
+	res, err := tool.ExecuteStream(context.Background(), map[string]any{
+		ShellParamCommand: "echo stream-no-stdin",
+	}, nil)
+	if err != nil {
+		t.Fatalf("ExecuteStream: %v", err)
+	}
+	if got := res["output"]; got != "stream-no-stdin" {
+		t.Fatalf("output = %q, want %q", got, "stream-no-stdin")
+	}
+}
+
+func TestShellAutoBackgroundPausedWhileFocused(t *testing.T) {
+	t.Parallel()
+	tool := newTestShellTool(t)
+	tool.autoBackgroundAfter = 150 * time.Millisecond
+
+	stdin := &PTYStdin{}
+	stdin.SetFocused(true)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	ctx = WithPTYStdin(ctx, stdin)
+
+	done := make(chan struct{})
+	var res map[string]any
+	var execErr error
+	go func() {
+		defer close(done)
+		res, execErr = tool.ExecuteStream(ctx, map[string]any{
+			ShellParamCommand: "echo serving; sleep 3",
+		}, nil)
+	}()
+
+	// Wait 350ms, well past the 150ms autoBackgroundAfter threshold.
+	// Because stdin is focused, the command must NOT have auto-backgrounded yet.
+	select {
+	case <-done:
+		t.Fatal("command returned early; auto-background should be paused while focused")
+	case <-time.After(350 * time.Millisecond):
+		// As expected, still running while focused.
+	}
+
+	// Now unfocus. The next timer tick will detect !Focused() and background the process.
+	stdin.SetFocused(false)
+
+	select {
+	case <-done:
+	case <-time.After(1500 * time.Millisecond):
+		t.Fatal("command did not auto-background after focus was cleared")
+	}
+	if execErr != nil {
+		t.Fatalf("ExecuteStream error: %v", execErr)
+	}
+	if res["background"] != true {
+		t.Fatalf("background = %v, want true", res["background"])
+	}
+	pid, ok := res["pid"].(int)
+	if !ok || pid <= 0 {
+		t.Fatalf("pid = %v, want positive int", res["pid"])
+	}
+	defer killGroup(pid)
+	if !processAlive(pid) {
+		t.Fatalf("pid %d not alive; auto-backgrounded process should still run", pid)
+	}
+}

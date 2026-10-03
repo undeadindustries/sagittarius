@@ -125,7 +125,8 @@ func (t *shellTool) ExecuteStream(ctx context.Context, args map[string]any, sink
 	if background {
 		grace = backgroundStartGrace
 	}
-	result, err := t.run(ctx, command, background, grace, sink, nil)
+	stdin := ptyStdinFrom(ctx)
+	result, err := t.run(ctx, command, background, grace, sink, stdin)
 	if err != nil && errors.Is(err, context.DeadlineExceeded) {
 		return nil, &ToolError{Code: ErrCodeExecutionTimeout, Message: "command timed out"}
 	}
@@ -281,38 +282,8 @@ func (t *shellTool) run(ctx context.Context, command string, explicitBackground 
 		}()
 	}
 
-	if grace <= 0 {
-		select {
-		case err = <-waitErr:
-			waitDrain(ioDone, logPath)
-			isDone.Store(true)
-			if tailCancel != nil {
-				tailCancel()
-			}
-			if sink != nil {
-				sink(renderEmulator(term))
-			}
-			t.captureJobs(jobsPath, command, logPath)
-			return t.completedResult(logPath, err, storedErr(&logWriteErr))
-		case <-ctx.Done():
-			isDone.Store(true)
-			if tailCancel != nil {
-				tailCancel()
-			}
-			_ = syscall.Kill(-pid, syscall.SIGKILL)
-			_ = f.Close()
-			waitDrain(ioDone, logPath)
-			_ = os.Remove(logPath)
-			return nil, ctx.Err()
-		}
-	}
-
-	timer := time.NewTimer(grace)
-	defer timer.Stop()
-
-	select {
-	case err = <-waitErr:
-		waitDrain(ioDone, logPath) // wait for remaining output to flush
+	onComplete := func(exitErr error) (map[string]any, error) {
+		waitDrain(ioDone, logPath)
 		isDone.Store(true)
 		if tailCancel != nil {
 			tailCancel()
@@ -320,12 +291,11 @@ func (t *shellTool) run(ctx context.Context, command string, explicitBackground 
 		if sink != nil {
 			sink(renderEmulator(term))
 		}
-
-		// Capture background jobs started by '&'
 		t.captureJobs(jobsPath, command, logPath)
+		return t.completedResult(logPath, exitErr, storedErr(&logWriteErr))
+	}
 
-		return t.completedResult(logPath, err, storedErr(&logWriteErr))
-	case <-ctx.Done():
+	onCancel := func() (map[string]any, error) {
 		isDone.Store(true)
 		if tailCancel != nil {
 			tailCancel()
@@ -335,30 +305,46 @@ func (t *shellTool) run(ctx context.Context, command string, explicitBackground 
 		waitDrain(ioDone, logPath)
 		_ = os.Remove(logPath)
 		return nil, ctx.Err()
-	case <-timer.C:
-		// Prefer a concurrent exit over backgrounding when both are ready.
+	}
+
+	if grace <= 0 {
 		select {
 		case err = <-waitErr:
-			waitDrain(ioDone, logPath)
-			isDone.Store(true)
-			if tailCancel != nil {
-				tailCancel()
+			return onComplete(err)
+		case <-ctx.Done():
+			return onCancel()
+		}
+	}
+
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+
+	for {
+		select {
+		case err = <-waitErr:
+			return onComplete(err)
+		case <-ctx.Done():
+			return onCancel()
+		case <-timer.C:
+			// Prefer a concurrent exit over backgrounding when both are ready.
+			select {
+			case err = <-waitErr:
+				return onComplete(err)
+			default:
+				if stdin != nil && stdin.Focused() {
+					timer.Reset(grace)
+					continue
+				}
+				backgrounded.Store(true)
+				isDone.Store(true)
+				if tailCancel != nil {
+					tailCancel()
+				}
+				if t.bgMgr != nil {
+					t.bgMgr.Register(pid, pid, command, logPath)
+				}
+				return backgroundedResult(pid, logPath, explicitBackground, grace, storedErr(&logWriteErr)), nil
 			}
-			if sink != nil {
-				sink(renderEmulator(term))
-			}
-			t.captureJobs(jobsPath, command, logPath)
-			return t.completedResult(logPath, err, storedErr(&logWriteErr))
-		default:
-			backgrounded.Store(true)
-			isDone.Store(true)
-			if tailCancel != nil {
-				tailCancel()
-			}
-			if t.bgMgr != nil {
-				t.bgMgr.Register(pid, pid, command, logPath)
-			}
-			return backgroundedResult(pid, logPath, explicitBackground, grace, storedErr(&logWriteErr)), nil
 		}
 	}
 }

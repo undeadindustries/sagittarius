@@ -104,6 +104,15 @@ type MessageRecord struct {
 	ToolCalls []ToolCallRecord `json:"toolCalls,omitempty"`
 }
 
+// End-of-run outcome values stored on MetadataRecord.Outcome. A later $set
+// replaces an earlier one, so a turn records exactly one of these.
+const (
+	// OutcomeDone is a turn that finished without hitting the tool-round cap.
+	OutcomeDone = "done"
+	// OutcomeMaxRounds is a turn stopped because it exhausted max tool rounds.
+	OutcomeMaxRounds = "max_rounds"
+)
+
 // MetadataRecord is the first line of each JSONL file and any $set update.
 type MetadataRecord struct {
 	SessionID       string `json:"sessionId"`
@@ -118,7 +127,7 @@ type MetadataRecord struct {
 	SubagentClass   string `json:"subagentClass,omitempty"`
 	AgentVersion    string `json:"agentVersion,omitempty"`
 	PersonaPreset   string `json:"personaPreset,omitempty"`
-	Outcome         string `json:"outcome,omitempty"` // "done" | "max_rounds" | "canceled" | "error"
+	Outcome         string `json:"outcome,omitempty"` // OutcomeDone | OutcomeMaxRounds | "canceled" | "error"
 	// CleanExit is set by a $set line when the session's Runner.Close() runs on
 	// a normal shutdown. Its absence is the unclean-exit signal (SIGHUP from a
 	// dropped connection, a crash, or kill -9 all skip deferred cleanup).

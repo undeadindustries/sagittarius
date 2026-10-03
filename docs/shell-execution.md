@@ -47,6 +47,15 @@ Sagittarius implements a robust, feature-complete shell execution system designe
    24 hours. Unlinking an open log does not free space — only the writer stopping
    (or a process exit that closes the fd) does.
 
+7. **Interactive PTY Input & Focus (Tab / Shift+Tab)**
+   Both user-initiated commands (`!` / `/run`) and model-driven `run_shell_command` executions run in an interactive PTY.
+   While a shell tool card is running in the TUI:
+   - Pressing **Tab** enters PTY focus mode, routing keystrokes directly into the process's PTY master handle (for answering interactive prompts like `[sudo] password:`, confirmation prompts `[y/N]`, or interacting with terminal programs).
+   - While focused, the automatic backgrounding timer is paused so slow password or text entry is not interrupted.
+   - Pressing **Shift+Tab** leaves PTY focus and returns control to the composer (re-arming the auto-background timer from when focus was left).
+   - Keystrokes like `Esc` and `Ctrl+C` pass directly through to the process while focused in the PTY; outside focus, `Esc` cancels the turn.
+   - Passwords typed under terminal no-echo mode are not echoed or captured in the output; however, any input echoed by the process will appear in the card output and model transcript.
+
 ## Safety & Process Groups
 
 Commands are spawned in their own Process Group (`Setpgid: true` implicitly via `pty.Start`). When a command is canceled (via `Esc`), a `SIGKILL` is dispatched to the entire process group (`-pid`), ensuring that no orphaned children or zombie processes are left behind.

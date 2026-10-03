@@ -34,7 +34,7 @@ LDFLAGS := -ldflags "-X $(MODULE)/internal/version.Version=$(VERSION) \
 # coverage matches what ships.
 BUILD_TAGS := grammar_set_core
 
-.PHONY: build test vet lint race clean tools vulncheck e2e e2e-mock prompt-eval release-snapshot
+.PHONY: build test vet lint race clean tools vulncheck e2e e2e-mock prompt-eval release-snapshot atif-smoke atif-harbor-validate harbor-binary bench-smoke
 
 build: $(BINARY)
 
@@ -85,15 +85,37 @@ atif-smoke: $(BINARY)
 	SAGITTARIUS_E2E_MOCK=1 SAGITTARIUS_BIN=$(abspath $(BINARY)) $(GO) test -v -count=1 -run TestE2E_MockATIFSmoke ./tests/e2e/...
 	@echo "ATIF smoke test passed."
 
-atif-validate-harbor:
-	@if command -v harbor >/dev/null 2>&1; then \
-		echo "Running Harbor trajectory validation..."; \
-		harbor trajectory validate /tmp/sagittarius-atif-smoke/trajectory.json; \
-	elif command -v uvx >/dev/null 2>&1; then \
-		echo "Running Harbor trajectory validation via uvx..."; \
-		uvx harbor-framework trajectory validate /tmp/sagittarius-atif-smoke/trajectory.json; \
-	else \
-		echo "harbor/uvx not found; skipping optional harbor validator."; \
-	fi
+# Opt-in. Installs Harbor in a uv environment and validates the checked-in
+# fixture with Harbor's Pydantic Trajectory model (extra=forbid).
+atif-harbor-validate:
+	uv run --with harbor python integrations/harbor/validate_fixture.py internal/trajectory/testdata/atif_v17.json
+
+# Linux binaries Harbor can upload with --agent-kwarg binary_path=...
+# A release tarball is the other install path; it has to include --atif-out.
+HARBOR_DIST := dist
+harbor-binary:
+	mkdir -p $(HARBOR_DIST)
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -tags $(BUILD_TAGS) $(LDFLAGS) -o $(HARBOR_DIST)/sagittarius-linux-amd64 ./cmd/sagittarius
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build -tags $(BUILD_TAGS) $(LDFLAGS) -o $(HARBOR_DIST)/sagittarius-linux-arm64 ./cmd/sagittarius
+
+# Opt-in hello-world trial. Needs Docker, uv, and OPENROUTER_API_KEY.
+# BENCH_MODEL overrides the OpenRouter model. A local server is a separate
+# invocation; see docs/benchmarks.md.
+BENCH_JOBS := /tmp/sagittarius-bench-smoke
+BENCH_MODEL ?= openrouter/deepseek/deepseek-chat
+BENCH_ARCH := $(shell uname -m | sed -e 's/x86_64/amd64/' -e 's/aarch64/arm64/')
+bench-smoke: harbor-binary
+	@test -n "$$OPENROUTER_API_KEY" || { echo "OPENROUTER_API_KEY is required"; exit 1; }
+	rm -rf $(BENCH_JOBS)
+	PYTHONPATH=. uv run --with harbor harbor run \
+		-t hello-world/hello-world \
+		--jobs-dir $(BENCH_JOBS) \
+		--agent integrations.harbor.sagittarius_agent:Sagittarius \
+		-m $(BENCH_MODEL) \
+		--agent-kwarg binary_path=$(abspath $(HARBOR_DIST))/sagittarius-linux-$(BENCH_ARCH) \
+		--ae OPENROUTER_API_KEY=$$OPENROUTER_API_KEY
+	@traj=$$(find $(BENCH_JOBS) -path '*/agent/trajectory.json' | head -n 1); \
+		test -n "$$traj" || { echo "agent/trajectory.json was not written"; exit 1; }; \
+		uv run --with harbor python integrations/harbor/validate_fixture.py "$$traj"
 
 

@@ -1,66 +1,69 @@
 # Benchmarking Sagittarius with Harbor
 
-Sagittarius integrates with the [Harbor benchmarking framework](https://github.com/harbor-framework/harbor) to evaluate task performance on standard suites like **Terminal-Bench 2.0 (TB2)** and **SWE-bench**.
+A Harbor trial runs the Sagittarius CLI inside the task container and scores the result. The number is a Sagittarius-plus-model score: the full tool set, the system prompt, and the tool loop. It is not a model-only score.
 
-## Running Terminal-Bench 2.0
+`terminus-2` and Harbor's `dsh-minimal` agent are smaller scaffolds (a shell and a string replace). Their published numbers are not comparable to a Sagittarius run. Say which harness you used.
 
-### Prerequisites
-Install Harbor via `uv` or `pip`:
+## Install
+
+Harbor is not a Go dependency. The opt-in Make targets install it with `uv` for that command:
+
 ```bash
-pip install harbor-framework
-# or
-uv tool install harbor-framework
+uv run --with harbor harbor --version
 ```
 
-Ensure API keys for your target model provider (e.g. `OPENROUTER_API_KEY`, `GEMINI_API_KEY`, `OPENAI_API_KEY`) are exported in your environment.
+Run the commands below from the repository root so `PYTHONPATH=.` can import the adapter.
 
-### Execution
+## One trial
 
-To run Terminal-Bench 2.0 with the Sagittarius installed-agent adapter:
+`--agent` takes `module:Class`. `--agent-import-path` still sets the same field, and current Harbor marks it deprecated.
+
+Until a release includes `--atif-out`, upload a Linux binary. `make harbor-binary` writes `dist/sagittarius-linux-amd64` and `dist/sagittarius-linux-arm64`.
+
 ```bash
-harbor run -d terminal-bench@2.0 \
+make harbor-binary
+PYTHONPATH=. uv run --with harbor harbor run \
+  -d terminal-bench@2.0 \
   --agent integrations.harbor.sagittarius_agent:Sagittarius \
-  --agent-kwargs '{"provider":"openrouter","model":"anthropic/claude-3.5-sonnet"}'
+  -m openrouter/deepseek/deepseek-v4-flash \
+  --agent-kwarg binary_path=$PWD/dist/sagittarius-linux-amd64 \
+  --ae OPENROUTER_API_KEY=$OPENROUTER_API_KEY
 ```
 
-### Local vLLM on DGX Spark (ASUS Ascent GX10)
+Use the arm64 binary on an arm64 host. `--agent-kwarg version=0.21.0` downloads that GitHub release instead, once the release exists. `harbor run` takes `--agent-kwarg`, not `--ak` (`--ak` is only on `harbor analyze`).
 
-When benchmarking against a local vLLM instance running on host port 8000:
-- Use `host.docker.internal` or the host IP to allow containers in Harbor's Docker network to reach the local endpoint.
-- Pass `base_url`:
+Gemini is the same shape, with `-m gemini/<model>` and `--ae GEMINI_API_KEY=$GEMINI_API_KEY` (or `GOOGLE_API_KEY`).
+
+The adapter writes a fresh `$SAGITTARIUS_HOME/.sagittarius/settings.json` for the trial: unlimited tool rounds, auto-title off, update check off. Optional pins:
+
 ```bash
-harbor run -d terminal-bench@2.0 \
+--agent-kwarg temperature=0 --agent-kwarg reasoning_effort=low
+```
+
+## A local OpenAI-compatible server
+
+`--agent-kwarg base_url=...` builds a custom `openai-chat` provider and ignores the `openrouter/` and `gemini/` prefixes. `VLLM_API_KEY` is optional. `context_limit` is optional.
+
+```bash
+PYTHONPATH=. uv run --with harbor harbor run \
+  -t hello-world/hello-world \
   --agent integrations.harbor.sagittarius_agent:Sagittarius \
-  --agent-kwargs '{"provider":"local-gx10","model":"Qwen/Qwen2.5-Coder-32B-Instruct","base_url":"http://host.docker.internal:8000/v1"}'
+  -m Qwen/Qwen3-8B \
+  --agent-kwarg binary_path=$PWD/dist/sagittarius-linux-amd64 \
+  --agent-kwarg base_url=http://host.docker.internal:8000/v1 \
+  --extra-docker-compose integrations/harbor/host-gateway-compose.yaml
 ```
 
----
+Harbor's Docker environment does not add `host.docker.internal`. Docker Desktop does. Linux Docker does not, unless the compose service `main` sets `extra_hosts: ["host.docker.internal:host-gateway"]`. The file above is that overlay, passed with `--extra-docker-compose`. The server must already be listening on the host. This is not specific to one machine.
 
-## Evaluating SWE-bench
+A task whose network policy is an allowlist also has to allow the host. A public network policy does not.
 
-Confirm available datasets with:
-```bash
-harbor datasets list
-```
+## What the trial writes
 
-Run SWE-bench Lite:
-```bash
-harbor run -d swe-bench-lite@1.0 \
-  --agent integrations.harbor.sagittarius_agent:Sagittarius \
-  --agent-kwargs '{"provider":"openrouter","model":"anthropic/claude-3.5-sonnet"}'
-```
+The CLI runs with `--yolo`, `--atif-out /logs/agent/sagittarius-trajectory.json`, and the instruction in `HARBOR_INSTRUCTION`. If the process is killed before that file exists, the adapter runs `--export-atif latest` with the same home directory. `populate_context_post_run` copies the file to `agent/trajectory.json` and fills Harbor's token and cost fields. `final_metrics.extra.outcome` is copied to `context.metadata["outcome"]`.
 
----
+`make atif-harbor-validate` checks the checked-in fixture with Harbor's own Trajectory model. `make bench-smoke` runs `hello-world/hello-world` on OpenRouter and checks that `agent/trajectory.json` validates. Both need `uv`. The smoke target also needs Docker and `OPENROUTER_API_KEY`.
 
-## A/B Trajectory Analysis Workflow
+## What to publish
 
-When evaluating prompt, model, or tool modifications:
-1. Run a fixed subset of benchmark tasks using the baseline version and save the exported trajectory.
-2. Run the same tasks using the candidate version.
-3. Compare trajectories using the built-in analyzer:
-
-```bash
-sagittarius --analyze-trajectory run-baseline/trajectory.json \
-  --compare run-candidate/trajectory.json
-```
-The comparison table details differences in LLM calls, total token consumption, cache hit rates, tool failure rates, and detected loop hazards.
+Publish the Harbor version, the dataset name and version, the Sagittarius version, the model id, the temperature and reasoning pins, the task count, and the pass rate. A trial whose outcome is `max_rounds` did not finish. Count it as incomplete, not as a pass.

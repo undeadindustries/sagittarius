@@ -14,8 +14,10 @@ type App interface {
 	HandleInput(ctx context.Context, input string) (<-chan StreamEvent, error)
 }
 
-// BangInputWriter writes keystrokes into an in-flight user `!` PTY.
+// ShellInputWriter writes keystrokes into an in-flight shell PTY and manages
+// focus state to suspend auto-backgrounding timers while interactive.
 // Implemented by the agent App; TUI stubs may omit it.
-type BangInputWriter interface {
-	WriteBangInput([]byte) error
+type ShellInputWriter interface {
+	WriteShellInput(callID string, p []byte) error
+	SetShellFocus(callID string, on bool)
 }

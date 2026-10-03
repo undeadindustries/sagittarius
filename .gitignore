@@ -38,6 +38,7 @@ coverage.html
 *.txt
 *.json
 !internal/config/testdata/*.json
+!internal/trajectory/testdata/*.json
 
 # Sagittarius runtime (if we add local state later)
 .sagittarius/

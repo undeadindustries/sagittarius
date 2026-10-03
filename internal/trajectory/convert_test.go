@@ -1,6 +1,10 @@
 package trajectory
 
 import (
+	"bytes"
+	"encoding/json"
+	"os"
+	"strings"
 	"testing"
 
 	"github.com/undeadindustries/sagittarius/internal/session"
@@ -88,11 +92,50 @@ func TestFromSession_BasicAndValidation(t *testing.T) {
 		t.Fatalf("FromSession failed: %v", err)
 	}
 
-	if traj.SchemaVersion != "1.7" {
-		t.Errorf("expected schema version 1.7, got %s", traj.SchemaVersion)
+	if traj.SchemaVersion != SchemaATIFV17 {
+		t.Errorf("schema version = %q, want %q", traj.SchemaVersion, SchemaATIFV17)
+	}
+	if traj.Agent.Version != "0.20.1" {
+		t.Errorf("agent.version = %q, want 0.20.1", traj.Agent.Version)
 	}
 	if len(traj.Steps) != 3 { // user, agent (folded func), system ($event)
 		t.Fatalf("expected 3 steps, got %d", len(traj.Steps))
+	}
+	if traj.Steps[1].ToolCalls[0].ToolCallID != "call-1" || traj.Steps[1].ToolCalls[0].FunctionName != "read_file" {
+		t.Fatalf("tool call = %+v", traj.Steps[1].ToolCalls)
+	}
+	if traj.Steps[1].ToolCalls[0].Arguments == nil {
+		t.Fatal("tool call arguments must be present")
+	}
+	if len(traj.Steps[1].Observation.Results) != 1 || traj.Steps[1].Observation.Results[0].SourceCallID != "call-1" {
+		t.Fatalf("observation = %+v", traj.Steps[1].Observation)
+	}
+	raw, err := json.Marshal(traj)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	body := string(raw)
+	for _, forbidden := range []string{`"call_id"`, `"tool_name"`, `"schema_version":"1.7"`, `"total_reasoning_tokens"`} {
+		if strings.Contains(body, forbidden) {
+			t.Errorf("marshaled trajectory contains forbidden token %s", forbidden)
+		}
+	}
+	for _, required := range []string{`"schema_version":"ATIF-v1.7"`, `"tool_call_id"`, `"function_name"`, `"arguments"`} {
+		if !strings.Contains(body, required) {
+			t.Errorf("marshaled trajectory missing %s", required)
+		}
+	}
+	var pretty bytes.Buffer
+	if err := json.Indent(&pretty, raw, "", "  "); err != nil {
+		t.Fatal(err)
+	}
+	pretty.WriteByte('\n')
+	golden, err := os.ReadFile("testdata/atif_v17.json")
+	if err != nil {
+		t.Fatalf("read golden fixture: %v", err)
+	}
+	if pretty.String() != string(golden) {
+		t.Fatalf("trajectory JSON drifted from testdata/atif_v17.json")
 	}
 
 	valErrs := Validate(traj)
@@ -119,7 +162,7 @@ func TestValidate_NegativeCases(t *testing.T) {
 				StepID: 2, // invalid sequence
 				Source: StepSourceUser,
 				ToolCalls: []ToolCall{ // user cannot have tool calls
-					{CallID: "c1", ToolName: "test"},
+					{ToolCallID: "c1", FunctionName: "test", Arguments: map[string]any{}},
 				},
 			},
 		},

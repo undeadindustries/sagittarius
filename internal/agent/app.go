@@ -68,7 +68,7 @@ var (
 	_ ui.MentionCompleter       = (*App)(nil)
 	_ ui.MetricsProvider        = (*App)(nil)
 	_ ui.ComposerStatusProvider = (*App)(nil)
-	_ ui.BangInputWriter        = (*App)(nil)
+	_ ui.ShellInputWriter       = (*App)(nil)
 	_ ui.SidebarAsker           = (*App)(nil)
 )
 
@@ -102,9 +102,6 @@ type App struct {
 	// mentions is the lazily-built "@path" completion index over the runner's
 	// workspace. nil until the first CompleteMention call.
 	mentions *atmention.Index
-	// bangMu guards bangStdin, the live PTY write handle for an in-flight `!`.
-	bangMu    sync.Mutex
-	bangStdin *tools.PTYStdin
 }
 
 // NewApp wraps runner for interactive use and exposes footer metadata.
@@ -324,6 +321,22 @@ func (a *App) CancelSubagent(callID string) bool {
 		return false
 	}
 	return a.runner.CancelSubagent(callID)
+}
+
+// WriteShellInput implements ui.ShellInputWriter.
+func (a *App) WriteShellInput(callID string, p []byte) error {
+	if a == nil || a.runner == nil {
+		return tools.ErrPTYClosed
+	}
+	return a.runner.WriteShellInput(callID, p)
+}
+
+// SetShellFocus implements ui.ShellInputWriter.
+func (a *App) SetShellFocus(callID string, on bool) {
+	if a == nil || a.runner == nil {
+		return
+	}
+	a.runner.SetShellFocus(callID, on)
 }
 
 func (a *App) CycleTheme() (string, error) {

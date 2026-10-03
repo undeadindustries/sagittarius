@@ -12,7 +12,7 @@ to later phases — see [Deferred commands](#deferred-commands).
 
 - **Description:** Run a shell command in this session without sending it to the model.
 - **Usage:** `!ls -la /tmp` or `/run ls -la /tmp`
-- **TUI:** Output appears as a Shell tool card. While it runs, **Tab** moves typing into the PTY (sudo password, vim, htop). **Shift+Tab** returns to the composer. Esc still cancels the command when you are not focused in the PTY; when focused, Esc goes to the process.
+- **TUI:** Output appears as a Shell tool card. While it runs, **Tab** moves typing into the PTY (sudo password, vim, htop). **Shift+Tab** returns to the composer. Esc still cancels the command when you are not focused in the PTY; when focused, Esc goes to the process. (This interactive PTY focus works identically on both user `!` commands and model-driven `run_shell_command` tool cards, pausing auto-backgrounding while focused).
 - **Headless:** `sagittarius -p '!echo hi'` prints the command output and exits with the command's status.
 - **Not recorded:** The command and its output are not added to conversation history or session JSONL.
 

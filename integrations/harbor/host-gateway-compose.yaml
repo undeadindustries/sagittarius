@@ -1,0 +1,7 @@
+# Linux Docker does not define host.docker.internal. Harbor's Docker
+# environment does not add it either. Pass this file with
+# --extra-docker-compose so a trial can reach a server on the host.
+services:
+  main:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

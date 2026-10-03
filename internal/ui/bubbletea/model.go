@@ -1414,8 +1414,7 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			if m.ptyToolCallID != "" {
-				m.enterPtyFocus()
-				return m, nil
+				return m, m.enterPtyFocus()
 			}
 			return m.handleBusyTab()
 		case "ctrl+shift+m", "shift+tab", "ctrl+/":
@@ -2246,6 +2245,7 @@ func (m *model) handleStreamGen(gen uint64, ev ui.StreamEvent) (tea.Model, tea.C
 	if gen != m.activeStreamGen {
 		return m, nil
 	}
+	var clearCmd tea.Cmd
 	switch ev.Type {
 	case ui.StreamTextDelta:
 		// Response text streams in the scrollback; keep the working indicator
@@ -2352,8 +2352,8 @@ func (m *model) handleStreamGen(gen uint64, ev ui.StreamEvent) (tea.Model, tea.C
 		}
 		m.activeCard = nil
 		m.runningTool = ""
-		if isBangCallID(ev.ToolCallID) {
-			m.clearPtyFocus()
+		if ev.ToolCallID == m.ptyToolCallID || isBangCallID(ev.ToolCallID) {
+			clearCmd = m.clearPtyFocus()
 		}
 		m.syncViewportContent()
 		// Tool finished; the model will be queried again next.
@@ -2367,7 +2367,7 @@ func (m *model) handleStreamGen(gen uint64, ev ui.StreamEvent) (tea.Model, tea.C
 		m.activeCard = nil
 		m.runningTool = ""
 		m.clearAskState()
-		m.clearPtyFocus()
+		clearCmd = m.clearPtyFocus()
 		m.syncViewportContent()
 	case ui.StreamDone:
 		m.busy = false
@@ -2376,7 +2376,7 @@ func (m *model) handleStreamGen(gen uint64, ev ui.StreamEvent) (tea.Model, tea.C
 		m.runningTool = ""
 		m.thinking = ""
 		m.clearAskState()
-		m.clearPtyFocus()
+		clearCmd = m.clearPtyFocus()
 		m.clearTurn()
 		m.syncViewportContent()
 		m.closeResponse()
@@ -2385,14 +2385,20 @@ func (m *model) handleStreamGen(gen uint64, ev ui.StreamEvent) (tea.Model, tea.C
 		m.stream = nil
 		// Submit any messages the user queued while this turn was running.
 		if cmd := m.flushQueue(); cmd != nil {
+			if clearCmd != nil {
+				return m, tea.Batch(clearCmd, cmd)
+			}
 			return m, cmd
 		}
-		return m, nil
+		return m, clearCmd
 	}
 	if m.stream != nil {
+		if clearCmd != nil {
+			return m, tea.Batch(clearCmd, waitStream(m.stream, gen))
+		}
 		return m, waitStream(m.stream, gen)
 	}
-	return m, nil
+	return m, clearCmd
 }
 
 // refreshIdleStatus pulls the latest status bar from the app when it exposes
@@ -2545,8 +2551,12 @@ func (m *model) startToolCard(ev ui.StreamEvent) {
 			m.cardByID = make(map[string]*toolCard)
 		}
 		m.cardByID[card.callID] = card
-		if isBangCallID(card.callID) {
-			m.ptyToolCallID = card.callID
+		if isBangCallID(card.callID) || card.toolName == "run_shell_command" {
+			if m.app == nil {
+				m.ptyToolCallID = card.callID
+			} else if _, ok := m.app.(ui.ShellInputWriter); ok {
+				m.ptyToolCallID = card.callID
+			}
 		}
 	}
 	m.syncViewportContent()

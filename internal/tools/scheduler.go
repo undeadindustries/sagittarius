@@ -66,6 +66,10 @@ type Scheduler struct {
 	// for the child's lifetime (per-child cancel, AD-154). Nil disables it.
 	subagentCancelRegistry func(callID string, cancel context.CancelCauseFunc) (unregister func())
 
+	// shellStdinRegistry publishes an in-flight interactive shell tool's PTYStdin
+	// handle so the UI can route keystrokes into it. Nil disables it.
+	shellStdinRegistry func(callID string, stdin *PTYStdin) (unregister func())
+
 	// sessionGrants records tools the user approved "for this session" so later
 	// invocations of the same tool skip confirmation. Guarded by mu.
 	mu            sync.Mutex
@@ -168,6 +172,13 @@ var ErrSubagentCanceledByUser = errors.New("subagent canceled by user")
 // cancel (children share the batch context, the pre-AD-154 behavior).
 func WithSubagentCancelRegistry(fn func(callID string, cancel context.CancelCauseFunc) (unregister func())) SchedulerOption {
 	return func(s *Scheduler) { s.subagentCancelRegistry = fn }
+}
+
+// WithShellStdinRegistry installs a callback executed when an interactive shell tool
+// starts, registering its PTYStdin handle. The registry returns an unregister func
+// called when the shell tool settles. Nil disables registration.
+func WithShellStdinRegistry(fn func(callID string, stdin *PTYStdin) (unregister func())) SchedulerOption {
+	return func(s *Scheduler) { s.shellStdinRegistry = fn }
 }
 
 // SubagentBatchItem pairs a code_task call with its response slot for the
@@ -687,9 +698,19 @@ func (s *Scheduler) executeOne(
 	var result map[string]any
 	var execErr error
 
+	toolCtx := ctx
+	if s.interactive && s.shellStdinRegistry != nil && canonicalToolName(name) == ShellToolName {
+		stdin := &PTYStdin{}
+		unregister := s.shellStdinRegistry(id, stdin)
+		if unregister != nil {
+			defer unregister()
+		}
+		toolCtx = WithPTYStdin(ctx, stdin)
+	}
+
 	switch t := tool.(type) {
 	case BatchTool:
-		result, execErr = t.ExecuteBatch(ctx, args, s.runNested)
+		result, execErr = t.ExecuteBatch(toolCtx, args, s.runNested)
 	case InteractiveTool:
 		wrappedEmit := func(se ui.StreamEvent) {
 			if se.ToolCallID == "" {
@@ -700,14 +721,14 @@ func (s *Scheduler) executeOne(
 			}
 			emit(se)
 		}
-		result, execErr = t.ExecuteInteractive(ctx, args, s.interactive, wrappedEmit)
+		result, execErr = t.ExecuteInteractive(toolCtx, args, s.interactive, wrappedEmit)
 	case StreamingTool:
 		sink := func(text string) {
 			emit(ui.StreamEvent{Type: ui.StreamToolOutput, ToolName: name, ToolCallID: id, Text: text})
 		}
-		result, execErr = t.ExecuteStream(ctx, args, sink)
+		result, execErr = t.ExecuteStream(toolCtx, args, sink)
 	default:
-		result, execErr = tool.Execute(ctx, args)
+		result, execErr = tool.Execute(toolCtx, args)
 	}
 
 	if execErr != nil {

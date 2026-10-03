@@ -306,6 +306,11 @@ type Runner struct {
 	subagentCancelsMu sync.Mutex
 	subagentCancels   map[string]context.CancelCauseFunc
 
+	// shellStdins holds the PTYStdin handles of in-flight shell tool calls,
+	// keyed by tool call ID, so the TUI can route keystrokes into them.
+	shellStdinsMu sync.Mutex
+	shellStdins   map[string]*tools.PTYStdin
+
 	goalMu     sync.RWMutex
 	activeGoal *goal.Goal
 
@@ -513,6 +518,7 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		repoLocalGrants:       make(map[string]bool),
 		subagentAttempts:      make(map[string]int),
 		subagentCancels:       make(map[string]context.CancelCauseFunc),
+		shellStdins:           make(map[string]*tools.PTYStdin),
 		goplsHintPending:      needsGoplsHint(cfg.Settings, ws.Root()),
 		loadedMemoryFiles:     memoryFiles,
 		initialSessionGrants:  cfg.InitialSessionGrants,
@@ -1069,15 +1075,18 @@ func (r *Runner) RunHeadless(ctx context.Context, prompt string, out io.Writer) 
 // carried through so the AfterAgent/FirstTurn hook payloads describe the exchange
 // that just finished rather than the first one in the session.
 func (r *Runner) runAgentLoop(ctx context.Context, userInput string, out chan<- ui.StreamEvent) {
+	// turnOutcome is written once, from this defer, when the turn ends in
+	// StateDone. The max-rounds exit replaces the default before returning.
+	// Writing it here, and only here, keeps that replacement from being
+	// overwritten: a second SetOutcome("done") used to land after
+	// SetOutcome("max_rounds") and the $set merge kept the later value.
+	turnOutcome := session.OutcomeDone
 	defer func() {
 		r.cancelSidebar(sidebarCancelWait)
 		r.flushPendingSidebar()
 		r.turnActive.Store(false)
-		if r.sessionRecorder != nil {
-			state := r.State()
-			if state == StateDone {
-				_ = r.sessionRecorder.SetOutcome("done")
-			}
+		if r.sessionRecorder != nil && r.State() == StateDone {
+			_ = r.sessionRecorder.SetOutcome(turnOutcome)
 		}
 		close(out)
 	}()
@@ -1403,10 +1412,8 @@ outerLoop:
 	}
 
 	r.fireAfterAgentHooks(ctx, userInput, turnReply.String(), out)
+	turnOutcome = session.OutcomeMaxRounds
 	r.setState(StateDone)
-	if r.sessionRecorder != nil {
-		_ = r.sessionRecorder.SetOutcome("max_rounds")
-	}
 	r.verboseLog.LogInfo("max tool rounds exceeded")
 	out <- ui.StreamEvent{Type: ui.StreamError, Text: "max tool rounds exceeded"}
 	out <- ui.StreamEvent{Type: ui.StreamDone}
@@ -1913,6 +1920,7 @@ func (r *Runner) schedulerOptions() []tools.SchedulerOption {
 	if !r.isSubagent() {
 		opts = append(opts, tools.WithSubagentBatchFinalizer(r.runBatchReview))
 		opts = append(opts, tools.WithSubagentCancelRegistry(r.registerSubagentCancel))
+		opts = append(opts, tools.WithShellStdinRegistry(r.registerShellStdin))
 	}
 	if r.snap != nil {
 		opts = append(opts, tools.WithSnapshotter(r.snap))
@@ -1963,6 +1971,42 @@ func (r *Runner) CancelSubagent(callID string) bool {
 	}
 	cancel(tools.ErrSubagentCanceledByUser)
 	return true
+}
+
+// registerShellStdin publishes an in-flight shell tool call's PTYStdin handle
+// for the call's lifetime and returns the unregister func the scheduler defers.
+func (r *Runner) registerShellStdin(callID string, stdin *tools.PTYStdin) func() {
+	r.shellStdinsMu.Lock()
+	r.shellStdins[callID] = stdin
+	r.shellStdinsMu.Unlock()
+	return func() {
+		r.shellStdinsMu.Lock()
+		delete(r.shellStdins, callID)
+		r.shellStdinsMu.Unlock()
+	}
+}
+
+// WriteShellInput routes keystrokes into the active PTY master for the given
+// tool call ID. Returns tools.ErrPTYClosed when the call is not found.
+func (r *Runner) WriteShellInput(callID string, p []byte) error {
+	r.shellStdinsMu.Lock()
+	stdin, ok := r.shellStdins[callID]
+	r.shellStdinsMu.Unlock()
+	if !ok || stdin == nil {
+		return tools.ErrPTYClosed
+	}
+	_, err := stdin.Write(p)
+	return err
+}
+
+// SetShellFocus updates the focus state of the shell call's PTY handle.
+func (r *Runner) SetShellFocus(callID string, on bool) {
+	r.shellStdinsMu.Lock()
+	stdin := r.shellStdins[callID]
+	r.shellStdinsMu.Unlock()
+	if stdin != nil {
+		stdin.SetFocused(on)
+	}
 }
 
 // readOnlyPolicy reports whether the agent should force read-only tool gating.

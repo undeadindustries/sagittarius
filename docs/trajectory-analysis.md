@@ -2,6 +2,8 @@
 
 Sagittarius provides an ATIF (Agent Trajectory Interchange Format) analyzer to evaluate operational efficiency, tool health, coding hygiene, loop hazards, and terminal execution patterns.
 
+Exported files use Harbor's `schema_version` value `ATIF-v1.7`. Tool calls are `tool_call_id` and `function_name`, and `arguments` is always present. `observation.results` is a list. Reasoning tokens and total tokens are in `metrics.extra` and `final_metrics.extra`, because Harbor's models do not have those fields. `final_metrics.extra.outcome` is `done` or `max_rounds`.
+
 ## Commands
 
 ```bash
