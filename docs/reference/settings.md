@@ -80,7 +80,7 @@ them in `/models`.
 
 | Key | Type | Default | Purpose |
 |-----|------|---------|---------|
-| `thinkingBudgetTokens` | int (tokens) | unset | Reasoning tokens allowed per round. When set, it is advertised on every request as `reasoning_budget_tokens` (llama-server, with a wrap-up message) and as `ThinkingConfig.ThinkingBudget` (Gemini 2.5). `0` or absent means no budget. Gemini 3 takes a level, not a number — use `/reasoning` there. |
+| `thinkingBudgetTokens` | int (tokens) | unset | Reasoning tokens allowed per round. When set, it is advertised on every request as `reasoning_budget_tokens` (llama-server, with a wrap-up message) and as `ThinkingConfig.ThinkingBudget` (Gemini 2.5). `0` or absent means no budget. Gemini 3+ takes a level, not a number — use `/reasoning` there. |
 | `hardThinkingBudget` | bool | `false` | Enforce the budget client-side for servers that ignore the advertised one (vLLM, SGLang). The over-budget round is abandoned and re-issued with the model's partial reasoning quoted back and thinking switched off. Costs one extra round per cut, so leave it off unless a model actually loops. |
 
 A cut only happens while the model is still purely thinking; once answer text or

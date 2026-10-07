@@ -5,11 +5,28 @@ import "strings"
 // floatPtr returns a pointer to v (helper for the small default tables).
 func floatPtr(v float64) *float64 { return &v }
 
+// isGeminiLevelFamily reports whether model belongs to the Gemini 3+ family,
+// which ignores custom sampling parameters and rejects them in upcoming releases.
+func isGeminiLevelFamily(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if i := strings.LastIndex(m, "/"); i >= 0 {
+		m = m[i+1:]
+	}
+	if !strings.Contains(m, "gemini-") {
+		return false
+	}
+	if strings.Contains(m, "gemini-2.") || strings.Contains(m, "gemini-1.") || strings.Contains(m, "gemini-1-") || strings.Contains(m, "gemini-2-") {
+		return false
+	}
+	return true
+}
+
 // ModelTemperatureRule reports a model-family sampling opinion for a model id.
 //
 //   - omit=true: the family rejects or ignores custom temperature (send none).
-//     Examples: Gemini 3 / 2.5 (Google recommends the default 1.0; do not send a
-//     lower value), GPT-5 / o3 / o4 reasoning models, Anthropic Opus 4.7+.
+//     Examples: Gemini 3+ (upcoming models error on custom sampling parameters),
+//     Gemini 2.5 (Google recommends the default 1.0; do not send a lower value),
+//     GPT-5 / o3 / o4 reasoning models, Anthropic Opus 4.7+.
 //   - temp!=nil with omit=false: the family has a recommended fixed value
 //     (e.g. Qwen3-Coder -> 1.0).
 //   - matched=false: the family has no opinion; the caller should fall through
@@ -25,7 +42,7 @@ func ModelTemperatureRule(model string) (temp *float64, omit bool, matched bool)
 	}
 
 	switch {
-	case strings.Contains(m, "gemini-3"), strings.Contains(m, "gemini-2.5"):
+	case isGeminiLevelFamily(m), strings.Contains(m, "gemini-2.5"):
 		return nil, true, true
 	case strings.HasPrefix(m, "gpt-5"), strings.HasPrefix(m, "o3"), strings.HasPrefix(m, "o4"):
 		return nil, true, true
@@ -68,14 +85,22 @@ func VariantCompressionThreshold(variant string) float64 {
 
 // ResolveEffectiveTemperature computes the temperature to send for a model,
 // applying the resolution order:
-//  1. per-model override (providers.<id>.models.<model>.temperature)
-//  2. provider instance override (providers.<id>.temperature)
-//  3. model-family rule (families that reject custom values return nil)
-//  4. personality preset default
+//  1. model-family rule carve-out: Gemini 3+ rejects custom temperature on the wire
+//     with 400 errors, so omit strictly beats any user pin for Gemini 3+.
+//  2. per-model override (providers.<id>.models.<model>.temperature)
+//  3. provider instance override (providers.<id>.temperature)
+//  4. model-family rule (families that reject custom values return nil)
+//  5. personality preset default
 //
 // A nil result means "send no temperature" (let the server decide), which is the
 // correct behavior for families that reject custom values.
 func ResolveEffectiveTemperature(settings *Settings, providerID, model string) *float64 {
+	// Gemini 3+ models reject custom sampling parameters outright (returning 400).
+	// For these models, family omission strictly wins over user pins.
+	if isGeminiLevelFamily(model) {
+		return nil
+	}
+
 	if inst := settings.ProviderInstance(providerID); inst != nil {
 		if mc, ok := lookupModelConfig(inst, model); ok && mc.Temperature != nil {
 			return mc.Temperature

@@ -291,7 +291,7 @@ thinking rarely need them.
   message for llama.cpp-style servers, and `ThinkingConfig.ThinkingBudget` for
   Gemini 2.5. A server that enforces the budget itself steers the model into
   concluding mid-generation, which always beats cutting a stream after the fact.
-  Gemini 3 has no numeric budget — use `/reasoning` there instead.
+  Gemini 3+ has no numeric budget — use `/reasoning` there instead.
 - **`hardThinkingBudget`** — `true` adds a client-side backstop for servers that
   ignore the advertised budget (vLLM and SGLang currently do). Once the streamed
   reasoning passes the budget and the model has not yet started an answer or a

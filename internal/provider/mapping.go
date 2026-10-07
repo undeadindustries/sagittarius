@@ -166,7 +166,7 @@ func BuildGenerateContentConfig(req *GenerateRequest) *genai.GenerateContentConf
 	if req.SystemInstruction != "" {
 		cfg.SystemInstruction = genai.NewContentFromText(req.SystemInstruction, genai.RoleUser)
 	}
-	if req.Temperature != nil {
+	if req.Temperature != nil && !isGeminiLevelModel(req.Model) {
 		temp := float32(*req.Temperature)
 		cfg.Temperature = &temp
 	}
@@ -197,36 +197,71 @@ func BuildGenerateContentConfig(req *GenerateRequest) *genai.GenerateContentConf
 //
 // Gemini 2.5 takes a raw token count, so a configured budget maps straight
 // onto it — the native enforcement AD-077 deliberately declined to guess from
-// an effort string, but which a user-supplied number states outright. Gemini 3
+// an effort string, but which a user-supplied number states outright. Gemini 3+
 // has no numeric budget (it exposes ThinkingLevel instead), so a budget is
-// left to the level path there rather than sent as a value the API rejects.
+// never sent to level-based Gemini models to avoid 400 INVALID_ARGUMENT.
 func applyThinkingBudgetToThinkingConfig(tc *genai.ThinkingConfig, req *GenerateRequest) {
 	if req.SuppressThinking {
+		if isGeminiLevelModel(req.Model) {
+			// Gemini 3+ cannot disable thinking entirely; map to the lowest
+			// supported level for the model instead of sending ThinkingBudget=0.
+			tc.ThinkingBudget = nil
+			tc.ThinkingLevel = lowestGeminiThinkingLevel(req.Model)
+			return
+		}
 		off := int32(0)
 		tc.ThinkingBudget = &off
 		tc.ThinkingLevel = ""
 		return
 	}
-	if req.ThinkingBudgetTokens > 0 && !isGemini3Model(req.Model) {
+	if req.ThinkingBudgetTokens > 0 && !isGeminiLevelModel(req.Model) {
 		budget := int32(min(req.ThinkingBudgetTokens, maxThinkingBudgetTokens))
 		tc.ThinkingBudget = &budget
 	}
 }
 
 // applyReasoningToThinkingConfig translates a resolved ReasoningRequest into
-// Gemini's ThinkingConfig fields. Empty effort means adaptive/dynamic
-// (ThinkingBudget=-1, per config.ResolveReasoningRequest's Gemini-family
-// default); "none"/"off" disables thinking outright (ThinkingBudget=0, works
-// on both Gemini 3 and 2.5); any other level maps to ThinkingLevel, but only
-// for Gemini 3 models — 2.5's ThinkingBudget is a raw, model-specific token
-// count that cannot be safely derived from a generic effort string, so a
-// pinned level falls back to dynamic on 2.5 rather than guessing (AD-077;
-// see the plan's "out of scope" note on Gemini 2.5 fixed-level pinning).
+// Gemini's ThinkingConfig fields.
+//
+// For Gemini 3+ (level-based models):
+//   - Empty effort (adaptive/dynamic default): omit both ThinkingBudget and
+//     ThinkingLevel, allowing the model to use its native default.
+//   - "none"/"off": Gemini 3+ cannot disable thinking; set the model's lowest
+//     supported level.
+//   - Pinned levels ("minimal", "low", "medium", "high"): clamp to the model's
+//     supported levels and set ThinkingLevel.
+//   - ThinkingBudget is never set under any circumstance.
+//
+// For Gemini 2.5 (budget-based models):
+//   - Empty effort maps to dynamic (ThinkingBudget=-1).
+//   - "none"/"off" disables thinking (ThinkingBudget=0).
+//   - Pinned levels fall back to dynamic (ThinkingBudget=-1).
 func applyReasoningToThinkingConfig(tc *genai.ThinkingConfig, reasoning *ReasoningRequest, model string) {
 	if reasoning == nil || !reasoning.Enabled {
 		return
 	}
-	switch strings.ToLower(strings.TrimSpace(reasoning.Effort)) {
+	isLevelModel := isGeminiLevelModel(model)
+	effort := strings.ToLower(strings.TrimSpace(reasoning.Effort))
+
+	if isLevelModel {
+		tc.ThinkingBudget = nil
+		switch effort {
+		case "":
+			// Adaptive default: leave ThinkingLevel unset so the model uses its default.
+			tc.ThinkingLevel = ""
+		case "none", "off":
+			tc.ThinkingLevel = lowestGeminiThinkingLevel(model)
+		case "minimal", "low", "medium", "high":
+			tc.ThinkingLevel = clampGeminiThinkingLevel(model, effort)
+		default:
+			if level, ok := geminiThinkingLevel(effort); ok {
+				tc.ThinkingLevel = level
+			}
+		}
+		return
+	}
+
+	switch effort {
 	case "":
 		budget := int32(-1)
 		tc.ThinkingBudget = &budget
@@ -234,23 +269,128 @@ func applyReasoningToThinkingConfig(tc *genai.ThinkingConfig, reasoning *Reasoni
 		budget := int32(0)
 		tc.ThinkingBudget = &budget
 	case "minimal", "low", "medium", "high":
-		if level, ok := geminiThinkingLevel(reasoning.Effort); ok && isGemini3Model(model) {
-			tc.ThinkingLevel = level
-			return
-		}
 		budget := int32(-1)
 		tc.ThinkingBudget = &budget
 	}
 }
 
-// isGemini3Model reports whether model belongs to the Gemini 3 family, the
-// only one whose SDK/API supports ThinkingConfig.ThinkingLevel.
-func isGemini3Model(model string) bool {
+// isGeminiLevelModel reports whether model belongs to the Gemini 3+ family,
+// which uses ThinkingLevel and rejects ThinkingBudget and custom sampling parameters.
+// This matches any Gemini model that is not an older 1.x or 2.x generation.
+func isGeminiLevelModel(model string) bool {
 	m := strings.ToLower(strings.TrimSpace(model))
 	if i := strings.LastIndex(m, "/"); i >= 0 {
 		m = m[i+1:]
 	}
-	return strings.Contains(m, "gemini-3")
+	if !strings.Contains(m, "gemini-") {
+		return false
+	}
+	// Older budget-based or legacy families
+	if strings.Contains(m, "gemini-2.") || strings.Contains(m, "gemini-1.") || strings.Contains(m, "gemini-1-") || strings.Contains(m, "gemini-2-") {
+		return false
+	}
+	return true
+}
+
+// geminiSupportedLevels returns the supported thinking levels for known Gemini 3+ models.
+// The table mirrors "Controlling thinking" at
+// https://ai.google.dev/gemini-api/docs/thinking; update it when Google adds a row.
+// Gemini 2.5 is deliberately absent: although the docs table lists levels for it,
+// the deprecation notice only names the Gemini 3 series, so 2.5 keeps its token
+// budget (see isGeminiLevelModel) until Google says otherwise.
+// Returns nil if the model is unknown (allowing pass-through).
+func geminiSupportedLevels(model string) []genai.ThinkingLevel {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if i := strings.LastIndex(m, "/"); i >= 0 {
+		m = m[i+1:]
+	}
+
+	switch {
+	// gemini-3.8-flash, gemini-3.7-flash: low, medium, high (no minimal)
+	case strings.Contains(m, "gemini-3.8-flash"), strings.Contains(m, "gemini-3-8-flash"),
+		strings.Contains(m, "gemini-3.7-flash"), strings.Contains(m, "gemini-3-7-flash"):
+		return []genai.ThinkingLevel{genai.ThinkingLevelLow, genai.ThinkingLevelMedium, genai.ThinkingLevelHigh}
+	// gemini-3-pro-preview: low, high
+	case strings.Contains(m, "gemini-3-pro-preview"):
+		return []genai.ThinkingLevel{genai.ThinkingLevelLow, genai.ThinkingLevelHigh}
+	// gemini-3.1-pro-preview: low, medium, high
+	case strings.Contains(m, "gemini-3.1-pro"), strings.Contains(m, "gemini-3-1-pro"):
+		return []genai.ThinkingLevel{genai.ThinkingLevelLow, genai.ThinkingLevelMedium, genai.ThinkingLevelHigh}
+	// gemini-3.1-flash-lite-image: minimal, high
+	case strings.Contains(m, "gemini-3.1-flash-lite-image"), strings.Contains(m, "gemini-3-1-flash-lite-image"):
+		return []genai.ThinkingLevel{genai.ThinkingLevelMinimal, genai.ThinkingLevelHigh}
+	// Models supporting minimal, low, medium, high:
+	// gemini-3.6-flash, gemini-3.5-flash, gemini-3.5-flash-lite, gemini-3-flash-preview, etc.
+	case strings.Contains(m, "gemini-3.6-flash"), strings.Contains(m, "gemini-3-6-flash"),
+		strings.Contains(m, "gemini-3.5-flash"), strings.Contains(m, "gemini-3-5-flash"),
+		strings.Contains(m, "gemini-3-flash"):
+		return []genai.ThinkingLevel{genai.ThinkingLevelMinimal, genai.ThinkingLevelLow, genai.ThinkingLevelMedium, genai.ThinkingLevelHigh}
+	default:
+		return nil
+	}
+}
+
+// lowestGeminiThinkingLevel returns the lowest valid thinking level for a Gemini model.
+// If the model is unknown, it defaults to ThinkingLevelLow for safety.
+func lowestGeminiThinkingLevel(model string) genai.ThinkingLevel {
+	supported := geminiSupportedLevels(model)
+	if len(supported) > 0 {
+		return supported[0]
+	}
+	return genai.ThinkingLevelLow
+}
+
+// clampGeminiThinkingLevel clamps an effort string to the nearest supported thinking level
+// for the given model. If the model is unknown, it passes the effort through.
+func clampGeminiThinkingLevel(model, effort string) genai.ThinkingLevel {
+	reqLevel, ok := geminiThinkingLevel(effort)
+	if !ok {
+		return ""
+	}
+	supported := geminiSupportedLevels(model)
+	if len(supported) == 0 {
+		return reqLevel
+	}
+
+	for _, lvl := range supported {
+		if lvl == reqLevel {
+			return reqLevel
+		}
+	}
+
+	// Not directly supported: map to the nearest level.
+	// Ordered rank: minimal (1), low (2), medium (3), high (4).
+	levelRank := func(l genai.ThinkingLevel) int {
+		switch l {
+		case genai.ThinkingLevelMinimal:
+			return 1
+		case genai.ThinkingLevelLow:
+			return 2
+		case genai.ThinkingLevelMedium:
+			return 3
+		case genai.ThinkingLevelHigh:
+			return 4
+		default:
+			return 0
+		}
+	}
+
+	reqRank := levelRank(reqLevel)
+	best := supported[0]
+	bestDiff := 999
+	for _, cand := range supported {
+		cRank := levelRank(cand)
+		diff := cRank - reqRank
+		if diff < 0 {
+			diff = -diff
+		}
+		// Tie-break: if diff is equal, choose the lower rank to avoid over-thinking
+		if diff < bestDiff || (diff == bestDiff && cRank < levelRank(best)) {
+			best = cand
+			bestDiff = diff
+		}
+	}
+	return best
 }
 
 // geminiThinkingLevel maps a Sagittarius effort string to the genai

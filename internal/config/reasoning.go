@@ -16,9 +16,9 @@ const (
 	// ReasoningMechanismFixedEffort covers OpenAI Responses reasoning models
 	// (gpt-5 family, o3/o4): a discrete effort level, no true dynamic budget.
 	ReasoningMechanismFixedEffort ReasoningMechanism = "fixed-effort"
-	// ReasoningMechanismGeminiDynamic covers Gemini 3 / 2.5: genuine
-	// provider-native adaptive thinking via ThinkingBudget=-1, with an
-	// optional fixed ThinkingLevel pin (Gemini 3 only).
+	// ReasoningMechanismGeminiDynamic covers Gemini 3+ / 2.5: genuine
+	// provider-native adaptive thinking (omitted thinking_budget/level on Gemini 3+;
+	// ThinkingBudget=-1 on Gemini 2.5), with an optional fixed ThinkingLevel pin (Gemini 3+).
 	ReasoningMechanismGeminiDynamic ReasoningMechanism = "gemini-dynamic"
 	// ReasoningMechanismOpenRouter covers openai-chat models whose capability
 	// was discovered at runtime via OpenRouter's per-model `reasoning` object
@@ -63,7 +63,7 @@ func ModelReasoningRule(wireFormat WireFormat, model string) (profile ReasoningP
 
 	switch wireFormat {
 	case WireFormatGemini:
-		if strings.Contains(m, "gemini-3") || strings.Contains(m, "gemini-2.5") {
+		if isGeminiLevelFamily(m) || strings.Contains(m, "gemini-2.5") {
 			return ReasoningProfile{
 				Mechanism:       ReasoningMechanismGeminiDynamic,
 				ValidEfforts:    []string{"minimal", "low", "medium", "high"},

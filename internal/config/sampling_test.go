@@ -12,6 +12,8 @@ func TestModelTemperatureRule(t *testing.T) {
 	}{
 		{"gemini-3-pro", true, true, nil},
 		{"google/gemini-3-pro-preview", true, true, nil},
+		{"gemini-3.8-flash", true, true, nil},
+		{"google/gemini-4-flash", true, true, nil},
 		{"gemini-2.5-flash", true, true, nil},
 		{"gpt-5-codex", true, true, nil},
 		{"openai/gpt-5", true, true, nil},
@@ -43,9 +45,24 @@ func TestResolveEffectiveTemperature(t *testing.T) {
 			OpenAI: &ProviderInstanceConfig{Temperature: pin},
 		},
 	}
-	// User pin wins even for an omit-family model.
+	// User pin wins even for an omit-family model (e.g. gpt-5).
 	if got := ResolveEffectiveTemperature(settings, "openai", "gpt-5-codex"); got == nil || *got != 0.7 {
-		t.Fatalf("user pin should win: got %v", got)
+		t.Fatalf("user pin should win for gpt-5: got %v", got)
+	}
+
+	// Gemini 3+ strictly omits temperature even with a user pin to avoid 400 errors.
+	geminiSettings := &Settings{
+		Providers: &ProvidersSettings{
+			Active: "gemini-apikey",
+			GeminiAPIKey: &ProviderInstanceConfig{
+				Models: map[string]ProviderModelConfig{
+					"gemini-3.8-flash": {Temperature: pin},
+				},
+			},
+		},
+	}
+	if got := ResolveEffectiveTemperature(geminiSettings, "gemini-apikey", "gemini-3.8-flash"); got != nil {
+		t.Fatalf("Gemini 3+ should strictly omit temperature even with a pin: got %v", got)
 	}
 
 	// No pin: omit family -> nil.

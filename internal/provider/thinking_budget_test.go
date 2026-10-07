@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 
+	"google.golang.org/genai"
+
 	"github.com/undeadindustries/sagittarius/internal/config"
 )
 
@@ -204,40 +206,71 @@ func TestBuildGenerateContentConfigThinkingBudget(t *testing.T) {
 		}
 	})
 
-	t.Run("suppression disables thinking and thoughts", func(t *testing.T) {
+	t.Run("suppression disables thinking on Gemini 2.5 and sets lowest level on Gemini 3", func(t *testing.T) {
 		t.Parallel()
-		cfg := BuildGenerateContentConfig(&GenerateRequest{
+		cfg25 := BuildGenerateContentConfig(&GenerateRequest{
 			Model:                "gemini-2.5-pro",
 			Reasoning:            &ReasoningRequest{Enabled: true},
 			IncludeThoughts:      true,
 			ThinkingBudgetTokens: 4096,
 			SuppressThinking:     true,
 		})
-		if cfg.ThinkingConfig == nil {
-			t.Fatal("ThinkingConfig is nil, want non-nil")
+		if cfg25.ThinkingConfig == nil {
+			t.Fatal("ThinkingConfig is nil on 2.5, want non-nil")
 		}
-		if cfg.ThinkingConfig.ThinkingBudget == nil || *cfg.ThinkingConfig.ThinkingBudget != 0 {
-			t.Errorf("ThinkingBudget = %v, want 0", cfg.ThinkingConfig.ThinkingBudget)
+		if cfg25.ThinkingConfig.ThinkingBudget == nil || *cfg25.ThinkingConfig.ThinkingBudget != 0 {
+			t.Errorf("ThinkingBudget = %v, want 0 on 2.5", cfg25.ThinkingConfig.ThinkingBudget)
 		}
-		if cfg.ThinkingConfig.IncludeThoughts {
+		if cfg25.ThinkingConfig.IncludeThoughts {
 			t.Error("IncludeThoughts = true, want false when thinking is suppressed")
 		}
-		if cfg.ThinkingConfig.ThinkingLevel != "" {
-			t.Errorf("ThinkingLevel = %q, want empty when suppressed", cfg.ThinkingConfig.ThinkingLevel)
+		if cfg25.ThinkingConfig.ThinkingLevel != "" {
+			t.Errorf("ThinkingLevel = %q, want empty on 2.5 when suppressed", cfg25.ThinkingConfig.ThinkingLevel)
+		}
+
+		cfg3 := BuildGenerateContentConfig(&GenerateRequest{
+			Model:                "gemini-3.8-flash",
+			Reasoning:            &ReasoningRequest{Enabled: true},
+			IncludeThoughts:      true,
+			ThinkingBudgetTokens: 4096,
+			SuppressThinking:     true,
+		})
+		if cfg3.ThinkingConfig == nil {
+			t.Fatal("ThinkingConfig is nil on 3, want non-nil")
+		}
+		if cfg3.ThinkingConfig.ThinkingBudget != nil {
+			t.Errorf("ThinkingBudget = %v on Gemini 3, want nil", cfg3.ThinkingConfig.ThinkingBudget)
+		}
+		if cfg3.ThinkingConfig.ThinkingLevel != genai.ThinkingLevelLow {
+			t.Errorf("ThinkingLevel = %q, want LOW on Gemini 3.8 when suppressed", cfg3.ThinkingConfig.ThinkingLevel)
 		}
 	})
 
-	t.Run("suppression alone still emits a zero budget", func(t *testing.T) {
+	t.Run("suppression alone emits a zero budget on 2.5 and lowest level on 3", func(t *testing.T) {
 		t.Parallel()
-		cfg := BuildGenerateContentConfig(&GenerateRequest{
+		cfg25 := BuildGenerateContentConfig(&GenerateRequest{
 			Model:            "gemini-2.5-pro",
 			SuppressThinking: true,
 		})
-		if cfg.ThinkingConfig == nil {
+		if cfg25.ThinkingConfig == nil {
 			t.Fatal("ThinkingConfig is nil, want a zero budget even with no reasoning ask")
 		}
-		if cfg.ThinkingConfig.ThinkingBudget == nil || *cfg.ThinkingConfig.ThinkingBudget != 0 {
-			t.Errorf("ThinkingBudget = %v, want 0", cfg.ThinkingConfig.ThinkingBudget)
+		if cfg25.ThinkingConfig.ThinkingBudget == nil || *cfg25.ThinkingConfig.ThinkingBudget != 0 {
+			t.Errorf("ThinkingBudget = %v, want 0", cfg25.ThinkingConfig.ThinkingBudget)
+		}
+
+		cfg3 := BuildGenerateContentConfig(&GenerateRequest{
+			Model:            "gemini-3.8-flash",
+			SuppressThinking: true,
+		})
+		if cfg3.ThinkingConfig == nil {
+			t.Fatal("ThinkingConfig is nil on Gemini 3")
+		}
+		if cfg3.ThinkingConfig.ThinkingBudget != nil {
+			t.Errorf("ThinkingBudget = %v on Gemini 3, want nil", cfg3.ThinkingConfig.ThinkingBudget)
+		}
+		if cfg3.ThinkingConfig.ThinkingLevel != genai.ThinkingLevelLow {
+			t.Errorf("ThinkingLevel = %q on Gemini 3, want LOW", cfg3.ThinkingConfig.ThinkingLevel)
 		}
 	})
 }

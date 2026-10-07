@@ -23,6 +23,9 @@ var ErrGeminiRequired = errors.New("a Gemini API key is required to use this cap
 type GeminiUtilityClient struct {
 	client *genai.Client
 	model  string
+
+	// generateContentOverride allows tests to intercept GenerateContent calls.
+	generateContentOverride func(ctx context.Context, model string, contents []*genai.Content, config *genai.GenerateContentConfig) (*genai.GenerateContentResponse, error)
 }
 
 // NewGeminiUtilityClient constructs a utility client using the globally resolved
@@ -55,15 +58,20 @@ func NewGeminiUtilityClient(ctx context.Context, model string) (*GeminiUtilityCl
 	}, nil
 }
 
+func (c *GeminiUtilityClient) generateContent(ctx context.Context, model string, contents []*genai.Content, cfg *genai.GenerateContentConfig) (*genai.GenerateContentResponse, error) {
+	if c.generateContentOverride != nil {
+		return c.generateContentOverride(ctx, model, contents, cfg)
+	}
+	return c.client.Models.GenerateContent(ctx, model, contents, cfg)
+}
+
 // Search calls GenerateContent with the GoogleSearch tool enabled and returns the
 // synthesized response plus its grounding metadata (citations).
 func (c *GeminiUtilityClient) Search(ctx context.Context, query string) (string, *genai.GroundingMetadata, error) {
-	temp := float32(0.0)
 	cfg := &genai.GenerateContentConfig{
-		Temperature: &temp,
-		Tools:       []*genai.Tool{{GoogleSearch: &genai.GoogleSearch{}}},
+		Tools: []*genai.Tool{{GoogleSearch: &genai.GoogleSearch{}}},
 	}
-	resp, err := c.client.Models.GenerateContent(ctx, c.model, []*genai.Content{
+	resp, err := c.generateContent(ctx, c.model, []*genai.Content{
 		genai.NewContentFromText(query, genai.RoleUser),
 	}, cfg)
 	if err != nil {
@@ -78,12 +86,10 @@ func (c *GeminiUtilityClient) Search(ctx context.Context, query string) (string,
 // FetchURLContext calls GenerateContent with the URLContext tool enabled, allowing
 // Gemini to fetch and summarize authorized URLs embedded in the prompt.
 func (c *GeminiUtilityClient) FetchURLContext(ctx context.Context, prompt string) (string, *genai.GroundingMetadata, error) {
-	temp := float32(0.0)
 	cfg := &genai.GenerateContentConfig{
-		Temperature: &temp,
-		Tools:       []*genai.Tool{{URLContext: &genai.URLContext{}}},
+		Tools: []*genai.Tool{{URLContext: &genai.URLContext{}}},
 	}
-	resp, err := c.client.Models.GenerateContent(ctx, c.model, []*genai.Content{
+	resp, err := c.generateContent(ctx, c.model, []*genai.Content{
 		genai.NewContentFromText(prompt, genai.RoleUser),
 	}, cfg)
 	if err != nil {
@@ -98,11 +104,8 @@ func (c *GeminiUtilityClient) FetchURLContext(ctx context.Context, prompt string
 // Summarize is a pure LLM call used by the HTTP fallback fetch path to summarize
 // extracted HTML text.
 func (c *GeminiUtilityClient) Summarize(ctx context.Context, prompt string) (string, error) {
-	temp := float32(0.0)
-	cfg := &genai.GenerateContentConfig{
-		Temperature: &temp,
-	}
-	resp, err := c.client.Models.GenerateContent(ctx, c.model, []*genai.Content{
+	cfg := &genai.GenerateContentConfig{}
+	resp, err := c.generateContent(ctx, c.model, []*genai.Content{
 		genai.NewContentFromText(prompt, genai.RoleUser),
 	}, cfg)
 	if err != nil {

@@ -188,42 +188,82 @@ func TestGeminiStreamerReceivesIncludeThoughtsConfig(t *testing.T) {
 }
 
 // TestBuildGenerateContentConfigReasoningDynamic verifies an empty-effort,
-// enabled ReasoningRequest sets ThinkingBudget=-1 (adaptive/dynamic), the
-// Gemini-family default per config.ResolveReasoningRequest.
+// enabled ReasoningRequest sets ThinkingBudget=-1 on Gemini 2.5, but leaves
+// ThinkingBudget and ThinkingLevel completely unset on Gemini 3+ models so the
+// model applies its native default without triggering 400 errors.
 func TestBuildGenerateContentConfigReasoningDynamic(t *testing.T) {
 	t.Parallel()
 
-	cfg := BuildGenerateContentConfig(&GenerateRequest{
-		Model:     "gemini-3-pro",
-		Reasoning: &ReasoningRequest{Enabled: true},
+	t.Run("Gemini 3 leaves budget and level unset", func(t *testing.T) {
+		t.Parallel()
+		cfg := BuildGenerateContentConfig(&GenerateRequest{
+			Model:     "gemini-3-pro",
+			Reasoning: &ReasoningRequest{Enabled: true},
+		})
+		if cfg.ThinkingConfig == nil {
+			t.Fatal("ThinkingConfig is nil, want non-nil")
+		}
+		if cfg.ThinkingConfig.ThinkingBudget != nil {
+			t.Errorf("ThinkingBudget = %v, want nil on Gemini 3", cfg.ThinkingConfig.ThinkingBudget)
+		}
+		if cfg.ThinkingConfig.ThinkingLevel != "" {
+			t.Errorf("ThinkingLevel = %q, want empty when dynamic on Gemini 3", cfg.ThinkingConfig.ThinkingLevel)
+		}
 	})
-	if cfg.ThinkingConfig == nil {
-		t.Fatal("ThinkingConfig is nil, want non-nil")
-	}
-	if cfg.ThinkingConfig.ThinkingBudget == nil || *cfg.ThinkingConfig.ThinkingBudget != -1 {
-		t.Errorf("ThinkingBudget = %v, want -1 (dynamic)", cfg.ThinkingConfig.ThinkingBudget)
-	}
-	if cfg.ThinkingConfig.ThinkingLevel != "" {
-		t.Errorf("ThinkingLevel = %q, want empty when dynamic", cfg.ThinkingConfig.ThinkingLevel)
-	}
+
+	t.Run("Gemini 2.5 uses -1 dynamic budget", func(t *testing.T) {
+		t.Parallel()
+		cfg := BuildGenerateContentConfig(&GenerateRequest{
+			Model:     "gemini-2.5-pro",
+			Reasoning: &ReasoningRequest{Enabled: true},
+		})
+		if cfg.ThinkingConfig == nil {
+			t.Fatal("ThinkingConfig is nil, want non-nil")
+		}
+		if cfg.ThinkingConfig.ThinkingBudget == nil || *cfg.ThinkingConfig.ThinkingBudget != -1 {
+			t.Errorf("ThinkingBudget = %v, want -1 (dynamic)", cfg.ThinkingConfig.ThinkingBudget)
+		}
+		if cfg.ThinkingConfig.ThinkingLevel != "" {
+			t.Errorf("ThinkingLevel = %q, want empty on Gemini 2.5", cfg.ThinkingConfig.ThinkingLevel)
+		}
+	})
 }
 
 // TestBuildGenerateContentConfigReasoningDisabled verifies "none"/"off"
-// disables thinking via ThinkingBudget=0.
+// disables thinking via ThinkingBudget=0 on Gemini 2.5, and maps to the
+// lowest supported ThinkingLevel on Gemini 3+ (where thinking cannot be turned off).
 func TestBuildGenerateContentConfigReasoningDisabled(t *testing.T) {
 	t.Parallel()
 
 	for _, effort := range []string{"none", "off"} {
-		cfg := BuildGenerateContentConfig(&GenerateRequest{
-			Model:     "gemini-3-pro",
-			Reasoning: &ReasoningRequest{Enabled: true, Effort: effort},
+		t.Run("Gemini 2.5 effort="+effort, func(t *testing.T) {
+			cfg := BuildGenerateContentConfig(&GenerateRequest{
+				Model:     "gemini-2.5-pro",
+				Reasoning: &ReasoningRequest{Enabled: true, Effort: effort},
+			})
+			if cfg.ThinkingConfig == nil {
+				t.Fatalf("effort=%q: ThinkingConfig is nil, want non-nil", effort)
+			}
+			if cfg.ThinkingConfig.ThinkingBudget == nil || *cfg.ThinkingConfig.ThinkingBudget != 0 {
+				t.Errorf("effort=%q: ThinkingBudget = %v, want 0 (disabled)", effort, cfg.ThinkingConfig.ThinkingBudget)
+			}
 		})
-		if cfg.ThinkingConfig == nil {
-			t.Fatalf("effort=%q: ThinkingConfig is nil, want non-nil", effort)
-		}
-		if cfg.ThinkingConfig.ThinkingBudget == nil || *cfg.ThinkingConfig.ThinkingBudget != 0 {
-			t.Errorf("effort=%q: ThinkingBudget = %v, want 0 (disabled)", effort, cfg.ThinkingConfig.ThinkingBudget)
-		}
+
+		t.Run("Gemini 3 effort="+effort, func(t *testing.T) {
+			cfg := BuildGenerateContentConfig(&GenerateRequest{
+				Model:     "gemini-3.8-flash",
+				Reasoning: &ReasoningRequest{Enabled: true, Effort: effort},
+			})
+			if cfg.ThinkingConfig == nil {
+				t.Fatalf("effort=%q: ThinkingConfig is nil, want non-nil", effort)
+			}
+			if cfg.ThinkingConfig.ThinkingBudget != nil {
+				t.Errorf("effort=%q: ThinkingBudget = %v, want nil on Gemini 3", effort, cfg.ThinkingConfig.ThinkingBudget)
+			}
+			if cfg.ThinkingConfig.ThinkingLevel != genai.ThinkingLevelLow {
+				t.Errorf("effort=%q: ThinkingLevel = %q, want lowest level (LOW)", effort, cfg.ThinkingConfig.ThinkingLevel)
+			}
+		})
 	}
 }
 
@@ -245,6 +285,99 @@ func TestBuildGenerateContentConfigReasoningPinnedLevelGemini3(t *testing.T) {
 	}
 	if cfg.ThinkingConfig.ThinkingBudget != nil {
 		t.Errorf("ThinkingBudget = %v, want nil when ThinkingLevel is set", cfg.ThinkingConfig.ThinkingBudget)
+	}
+}
+
+// TestBuildGenerateContentConfigLevelClampingGemini3 verifies per-model
+// level clamping (e.g. 3.8-flash has no minimal, clamps to low; 3-pro has low/high, medium clamps to low).
+func TestBuildGenerateContentConfigLevelClampingGemini3(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		model     string
+		effort    string
+		wantLevel genai.ThinkingLevel
+	}{
+		{
+			name:      "3.8-flash minimal clamps to low",
+			model:     "gemini-3.8-flash",
+			effort:    "minimal",
+			wantLevel: genai.ThinkingLevelLow,
+		},
+		{
+			name:      "3.7-flash minimal clamps to low",
+			model:     "gemini-3.7-flash",
+			effort:    "minimal",
+			wantLevel: genai.ThinkingLevelLow,
+		},
+		{
+			name:      "3.8-flash high preserved",
+			model:     "gemini-3.8-flash",
+			effort:    "high",
+			wantLevel: genai.ThinkingLevelHigh,
+		},
+		{
+			name:      "3-pro medium clamps to low (tie-break lower)",
+			model:     "gemini-3-pro-preview",
+			effort:    "medium",
+			wantLevel: genai.ThinkingLevelLow,
+		},
+		{
+			name:      "3-pro minimal clamps to low",
+			model:     "gemini-3-pro-preview",
+			effort:    "minimal",
+			wantLevel: genai.ThinkingLevelLow,
+		},
+		{
+			name:      "3.6-flash minimal preserved",
+			model:     "gemini-3.6-flash",
+			effort:    "minimal",
+			wantLevel: genai.ThinkingLevelMinimal,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := BuildGenerateContentConfig(&GenerateRequest{
+				Model:     tc.model,
+				Reasoning: &ReasoningRequest{Enabled: true, Effort: tc.effort},
+			})
+			if cfg.ThinkingConfig == nil {
+				t.Fatal("ThinkingConfig is nil, want non-nil")
+			}
+			if cfg.ThinkingConfig.ThinkingLevel != tc.wantLevel {
+				t.Errorf("ThinkingLevel = %q, want %q", cfg.ThinkingConfig.ThinkingLevel, tc.wantLevel)
+			}
+			if cfg.ThinkingConfig.ThinkingBudget != nil {
+				t.Errorf("ThinkingBudget = %v, want nil", cfg.ThinkingConfig.ThinkingBudget)
+			}
+		})
+	}
+}
+
+// TestBuildGenerateContentConfigTemperatureDroppedOnGemini3 verifies that
+// Temperature is never emitted on Gemini 3+ models, even if present on GenerateRequest.
+func TestBuildGenerateContentConfigTemperatureDroppedOnGemini3(t *testing.T) {
+	t.Parallel()
+
+	temp := 0.7
+	cfg3 := BuildGenerateContentConfig(&GenerateRequest{
+		Model:       "gemini-3.8-flash",
+		Temperature: &temp,
+	})
+	if cfg3.Temperature != nil {
+		t.Errorf("Temperature = %v, want nil for Gemini 3+", *cfg3.Temperature)
+	}
+
+	cfg25 := BuildGenerateContentConfig(&GenerateRequest{
+		Model:       "gemini-2.5-flash",
+		Temperature: &temp,
+	})
+	if cfg25.Temperature == nil || *cfg25.Temperature != float32(0.7) {
+		t.Errorf("Temperature = %v, want 0.7 for Gemini 2.5", cfg25.Temperature)
 	}
 }
 
