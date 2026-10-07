@@ -1,6 +1,7 @@
 package bubbletea
 
 import (
+	"fmt"
 	"regexp"
 	"strings"
 
@@ -40,25 +41,33 @@ type tableBlock struct {
 	rows    [][]string
 }
 
-// codeWrapHint is shown under a fenced block only after its closing fence, and
-// only when a line in that block had to wrap. Emitting on the closer keeps the
-// hint from flickering under a block that is still streaming.
-const codeWrapHint = "wrapped to fit · /copy code for the exact text"
+// mdLine represents a rendered line of assistant markdown.
+// verbatim indicates code lines that should not receive synthetic continuation indents.
+type mdLine struct {
+	text     string
+	verbatim bool
+}
 
-// renderMarkdown converts assistant text into styled, width-wrapped lines.
-func renderMarkdown(text string, width int, th theme.Theme) []string {
+// renderMarkdownLines converts assistant text into styled, width-wrapped lines,
+// tracking whether each line is verbatim code.
+func renderMarkdownLines(text string, width int, th theme.Theme) []mdLine {
 	if width < 1 {
 		width = 1
 	}
-	var out []string
+	var out []mdLine
 	inCode := false
 	codeWrapped := false
+	blockIndex := 0
 	rawLines := strings.Split(text, "\n")
 	for i := 0; i < len(rawLines); i++ {
 		raw := rawLines[i]
 		if strings.HasPrefix(strings.TrimSpace(raw), "```") {
-			if inCode && codeWrapped {
-				out = append(out, renderCodeWrapHint(width, th))
+			if inCode {
+				if codeWrapped {
+					out = append(out, mdLine{text: renderCodeWrapHint(blockIndex, width, th), verbatim: false})
+				}
+			} else {
+				blockIndex++
 			}
 			inCode = !inCode
 			codeWrapped = false
@@ -69,24 +78,41 @@ func renderMarkdown(text string, width int, th theme.Theme) []string {
 			if len(rows) > 1 {
 				codeWrapped = true
 			}
-			out = append(out, rows...)
+			for _, r := range rows {
+				out = append(out, mdLine{text: r, verbatim: true})
+			}
 			continue
 		}
 		if isTableStart(rawLines, i) {
 			tbl, nextI := collectTable(rawLines, i)
-			out = append(out, renderTable(tbl, width, th)...)
+			for _, r := range renderTable(tbl, width, th) {
+				out = append(out, mdLine{text: r, verbatim: false})
+			}
 			i = nextI - 1
 			continue
 		}
-		out = append(out, renderProseLine(raw, width, th)...)
+		for _, r := range renderProseLine(raw, width, th) {
+			out = append(out, mdLine{text: r, verbatim: false})
+		}
 	}
 	return out
 }
 
-// renderCodeWrapHint returns the dim pointer to /copy code, truncated so it
+// renderMarkdown converts assistant text into styled, width-wrapped lines.
+func renderMarkdown(text string, width int, th theme.Theme) []string {
+	lines := renderMarkdownLines(text, width, th)
+	res := make([]string, len(lines))
+	for i, l := range lines {
+		res[i] = l.text
+	}
+	return res
+}
+
+// renderCodeWrapHint returns the dim pointer to /copy code [N], truncated so it
 // cannot overflow a narrow terminal.
-func renderCodeWrapHint(width int, th theme.Theme) string {
-	return th.Dim.Render(truncateVisible(codeWrapHint, width))
+func renderCodeWrapHint(blockIndex, width int, th theme.Theme) string {
+	hint := fmt.Sprintf("wrapped to fit · /copy code %d for the exact text", blockIndex)
+	return th.Dim.Render(truncateVisible(hint, width))
 }
 
 // renderCodeLine renders a verbatim code line, wrapping (not truncating) so

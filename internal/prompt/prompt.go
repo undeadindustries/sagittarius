@@ -112,10 +112,16 @@ type Options struct {
 	WaitUntilEnabled bool
 }
 
+const commandPresentationRules = "## Presenting Commands to the User\n" +
+	"- When giving commands for the user to run manually, ALWAYS put them inside markdown fenced code blocks (```bash ... ```). Keep lines under ~80 columns when practical.\n" +
+	"- For commands that exceed ~80 columns, break them across lines at token boundaries using trailing backslash (`\\`) continuations or write a short multi-line script. NEVER assume or tell the user their terminal will soft-wrap long lines cleanly — Sagittarius hard-wraps terminal output to terminal width, which copies with literal newlines and breaks pasted commands.\n" +
+	"- Prefer executing commands directly via `" + tools.ShellToolName + "` over asking the user to copy and paste them."
+
 // Build returns the system prompt base (without user memory or mode suffix,
 // which the runner appends). Unknown personalities fall back to programmer.
 func Build(opts Options) string {
-	return buildForPersonality(opts)
+	base := buildForPersonality(opts)
+	return joinSections([]string{base, commandPresentationRules})
 }
 
 // renderIdentity builds the self-identification block. roleNoun completes the

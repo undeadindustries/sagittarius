@@ -2913,22 +2913,33 @@ func (m *model) renderBlock(blk scrollBlock, width int) []string {
 	gw := lipgloss.Width(glyph)
 	indent := strings.Repeat(" ", gw)
 
-	var rendered []string
+	out := make([]string, 0)
 	switch blk.role {
 	case roleResponse:
-		rendered = renderMarkdown(blk.text, max(width-gw, 1), m.th)
+		lines := renderMarkdownLines(blk.text, max(width-gw, 1), m.th)
+		for i, line := range lines {
+			if i == 0 {
+				out = append(out, prefix.Render(glyph)+line.text)
+			} else if line.verbatim {
+				// Drop the 2-space continuation indent for verbatim code lines.
+				// This ensures mouse drag-selection copies code cleanly without prepended
+				// spaces on wrapped continuation lines.
+				out = append(out, line.text)
+			} else {
+				out = append(out, indent+line.text)
+			}
+		}
 	default:
+		rendered := make([]string, 0)
 		for _, line := range strings.Split(wrapText(blk.text, max(width-gw, 1)), "\n") {
 			rendered = append(rendered, body.Render(line))
 		}
-	}
-
-	out := make([]string, 0, len(rendered))
-	for i, line := range rendered {
-		if i == 0 {
-			out = append(out, prefix.Render(glyph)+line)
-		} else {
-			out = append(out, indent+line)
+		for i, line := range rendered {
+			if i == 0 {
+				out = append(out, prefix.Render(glyph)+line)
+			} else {
+				out = append(out, indent+line)
+			}
 		}
 	}
 	return out

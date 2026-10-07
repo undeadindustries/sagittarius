@@ -101,14 +101,61 @@ func TestCopyCodeNoFences(t *testing.T) {
 	}
 }
 
-func TestCopyCodeJoinsMultipleBlocks(t *testing.T) {
+func TestCopyCodeDefaultsToLastBlock(t *testing.T) {
 	t.Parallel()
 	deps, _, hooks := testDeps(t, nil)
 	hooks.lastAssistant = "```\nfirst\n```\n```\nsecond\n```"
 	p := slash.NewProcessor()
 
 	res := p.Process(context.Background(), "/copy code", deps)
-	if res.Clipboard != "first\n\nsecond" {
-		t.Fatalf("Clipboard = %q, want joined blocks", res.Clipboard)
+	if res.Clipboard != "second" {
+		t.Fatalf("Clipboard = %q, want last block 'second'", res.Clipboard)
+	}
+}
+
+func TestCopyCodeSpecificIndexAndAll(t *testing.T) {
+	t.Parallel()
+	deps, _, hooks := testDeps(t, nil)
+	hooks.lastAssistant = "```\nblock1\n```\nprose\n```\nblock2\n```\nprose\n```\nblock3\n```"
+	p := slash.NewProcessor()
+
+	tests := []struct {
+		input       string
+		wantClip    string
+		wantMsgPart string
+	}{
+		{input: "/copy code 1", wantClip: "block1"},
+		{input: "/copy code 2", wantClip: "block2"},
+		{input: "/copy code 3", wantClip: "block3"},
+		{input: "/copy code all", wantClip: "block1\n\nblock2\n\nblock3"},
+		{input: "/copy code 0", wantMsgPart: "Valid range is 1 to 3, or 'all'"},
+		{input: "/copy code 4", wantMsgPart: "Valid range is 1 to 3, or 'all'"},
+		{input: "/copy code foo", wantMsgPart: "Valid range is 1 to 3, or 'all'"},
+	}
+
+	for _, tc := range tests {
+		res := p.Process(context.Background(), tc.input, deps)
+		if tc.wantClip != "" && res.Clipboard != tc.wantClip {
+			t.Errorf("%s: Clipboard = %q, want %q", tc.input, res.Clipboard, tc.wantClip)
+		}
+		if tc.wantMsgPart != "" {
+			joined := strings.Join(res.Messages, "\n")
+			if !strings.Contains(joined, tc.wantMsgPart) {
+				t.Errorf("%s: message %q does not contain %q", tc.input, joined, tc.wantMsgPart)
+			}
+		}
+	}
+}
+
+func TestCopyCodeUnclosedFence(t *testing.T) {
+	t.Parallel()
+	deps, _, hooks := testDeps(t, nil)
+	hooks.lastAssistant = "```\nstarted block\nstill going"
+	p := slash.NewProcessor()
+
+	res := p.Process(context.Background(), "/copy code", deps)
+	want := "started block\nstill going"
+	if res.Clipboard != want {
+		t.Fatalf("Clipboard = %q, want %q", res.Clipboard, want)
 	}
 }

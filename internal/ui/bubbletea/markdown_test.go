@@ -167,7 +167,8 @@ func TestMarkdownFencedCodeDoesNotTruncate(t *testing.T) {
 			t.Errorf("line %d width %d exceeds %d: %q", i, w, width, stripANSI(line))
 		}
 	}
-	if !strings.Contains(joined, codeWrapHint) {
+	expectedHint := "wrapped to fit · /copy code 1 for the exact text"
+	if !strings.Contains(joined, expectedHint) {
 		t.Errorf("wrap hint missing after a block that wrapped:\n%s", joined)
 	}
 }
@@ -175,24 +176,39 @@ func TestMarkdownFencedCodeDoesNotTruncate(t *testing.T) {
 func TestMarkdownCodeWrapHintOnlyOnClosedWrappedBlock(t *testing.T) {
 	t.Parallel()
 
+	expectedHint := "wrapped to fit · /copy code 1 for the exact text"
+
 	short := renderMarkdown("```\nfmt.Println(\"hi\")\n```\n", 80, theme.Greyscale())
-	if strings.Contains(stripANSI(strings.Join(short, "\n")), codeWrapHint) {
+	if strings.Contains(stripANSI(strings.Join(short, "\n")), "wrapped to fit") {
 		t.Errorf("hint must not appear when nothing wrapped:\n%s", short)
 	}
 
 	open := renderMarkdown("```\n"+reportedFenceBody, 80, theme.Greyscale())
-	if strings.Contains(stripANSI(strings.Join(open, "\n")), codeWrapHint) {
+	if strings.Contains(stripANSI(strings.Join(open, "\n")), "wrapped to fit") {
 		t.Errorf("hint must not appear mid-stream on an unterminated fence:\n%s", open)
 	}
 
 	closed := renderMarkdown("```\n"+reportedFenceBody+"```\n", 80, theme.Greyscale())
 	plain := stripANSI(strings.Join(closed, "\n"))
-	if !strings.Contains(plain, codeWrapHint) {
+	if !strings.Contains(plain, expectedHint) {
 		t.Errorf("hint missing on a closed wrapped block:\n%s", plain)
 	}
-	if idx := strings.Index(plain, codeWrapHint); idx >= 0 {
+	if idx := strings.Index(plain, expectedHint); idx >= 0 {
 		if strings.Index(plain, "configured") > idx {
 			t.Error("hint appeared before the wrapped code it describes")
 		}
+	}
+}
+
+func TestMarkdownMultipleBlocksHintIndices(t *testing.T) {
+	t.Parallel()
+	md := "```\n" + reportedFenceBody + "```\nprose\n```\n" + reportedFenceBody + "```\n"
+	lines := renderMarkdown(md, 80, theme.Greyscale())
+	plain := stripANSI(strings.Join(lines, "\n"))
+	if !strings.Contains(plain, "/copy code 1") {
+		t.Errorf("expected block 1 hint in output:\n%s", plain)
+	}
+	if !strings.Contains(plain, "/copy code 2") {
+		t.Errorf("expected block 2 hint in output:\n%s", plain)
 	}
 }

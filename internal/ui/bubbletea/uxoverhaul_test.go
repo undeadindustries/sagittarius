@@ -138,3 +138,37 @@ func TestEscCancelsTurn(t *testing.T) {
 		t.Fatal("turnCancel should be cleared after cancel")
 	}
 }
+
+func TestRenderBlockVerbatimCodeRowsDropContinuationIndent(t *testing.T) {
+	t.Parallel()
+	m := newTestModel()
+	// Create an assistant response block with a fenced code block that wraps across lines
+	longLine := "for d in 6240802f9a00cee78381f2c33032eb6c f4659b44f675e4dca3b0024654ab9a39 756053aa26ed009a1690f575f016ade7; do rm -rf; done"
+	md := "Here is the command:\n```bash\n" + longLine + "\n```\nDone."
+	lines := m.renderBlock(scrollBlock{role: roleResponse, text: md}, 60)
+
+	// In the output, the first line should carry the "✦ " glyph
+	if !strings.HasPrefix(stripANSI(lines[0]), "✦ Here is the command:") {
+		t.Fatalf("first line missing glyph: %q", lines[0])
+	}
+
+	// Any wrapped code lines must NOT have the 2-space indent ("  ") prepended
+	foundCode := false
+	for _, l := range lines {
+		plain := stripANSI(l)
+		if strings.Contains(plain, "6240802f9a00cee78381f2c33032eb6c") {
+			foundCode = true
+			if strings.HasPrefix(plain, "  ") {
+				t.Errorf("code line unexpectedly has continuation indent: %q", plain)
+			}
+		}
+		if strings.Contains(plain, "do rm -rf; done") {
+			if strings.HasPrefix(plain, "  ") {
+				t.Errorf("continuation wrapped code line unexpectedly has continuation indent: %q", plain)
+			}
+		}
+	}
+	if !foundCode {
+		t.Fatalf("code block not found in rendered lines:\n%s", strings.Join(lines, "\n"))
+	}
+}

@@ -288,6 +288,35 @@ func TestKnownPersonalityAndVariant(t *testing.T) {
 	}
 }
 
+func TestCommandPresentationRulesPresentExactlyOnce(t *testing.T) {
+	t.Parallel()
+
+	personalities := []Personality{
+		PersonalityProgrammer,
+		PersonalitySysadmin,
+		PersonalityPersonalAssistant,
+		PersonalityCreativeAssistant,
+	}
+
+	for _, p := range personalities {
+		for _, v := range []Variant{VariantFull, VariantLite} {
+			out := Build(Options{
+				Personality: p,
+				Variant:     v,
+				Identity:    Identity{Model: "gpt-4o", ProviderName: "OpenRouter"},
+			})
+
+			count := strings.Count(out, "## Presenting Commands to the User")
+			if count != 1 {
+				t.Errorf("%s %s: expected '## Presenting Commands to the User' exactly once, got %d", p, v, count)
+			}
+			if !strings.Contains(out, "Sagittarius hard-wraps terminal output") {
+				t.Errorf("%s %s: expected wrap caveat in prompt", p, v)
+			}
+		}
+	}
+}
+
 func withPersonality(o Options, p Personality) Options {
 	o.Personality = p
 	return o

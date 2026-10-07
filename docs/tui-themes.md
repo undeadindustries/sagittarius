@@ -112,7 +112,7 @@ Assistant responses are rendered with a lightweight markdown subset: headings,
 bullet/numbered lists, fenced code blocks, and inline **bold**, *italic*, and
 `code`. Fenced code uses `Theme.Code` with no gutter (a copyable `│ ` bar made
 mouse-select paste unusable). Long code, diff, and command-output lines wrap
-instead of truncating; a dim `wrapped to fit · /copy code for the exact text`
+instead of truncating; a dim `wrapped to fit · /copy code N for the exact text`
 line appears under a fenced block only after it closes, and only when a line
 in that block wrapped. This is intentionally minimal — it is not a full
 CommonMark renderer. User input is always shown verbatim.
