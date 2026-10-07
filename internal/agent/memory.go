@@ -108,14 +108,40 @@ func discoverMemoryFiles(startDir string) ([]memoryFile, error) {
 	if content, ok := readMemoryFile(globalMem); ok {
 		files = append(files, memoryFile{path: globalMem, content: content, fromMemory: true})
 	}
-	if strings.TrimSpace(startDir) != "" {
-		projectMem := config.ProjectMemoryPath(startDir)
+	if projectMem, ok := distinctProjectMemoryPath(startDir, globalMem); ok {
 		if content, ok := readMemoryFile(projectMem); ok {
 			files = append(files, memoryFile{path: projectMem, content: content, fromMemory: true})
 		}
 	}
 
 	return files, nil
+}
+
+// distinctProjectMemoryPath returns workDir's project MEMORY.md path, or false
+// when there is no separate project tier. Launched from the home directory,
+// <workDir>/.sagittarius is the global ~/.sagittarius, so the "project" file
+// is the global one; treating it as a second source injected every entry
+// twice, listed it twice, and made /memory remove indices ambiguous.
+func distinctProjectMemoryPath(workDir, globalPath string) (string, bool) {
+	if strings.TrimSpace(workDir) == "" {
+		return "", false
+	}
+	projectPath := config.ProjectMemoryPath(workDir)
+	if sameMemoryFile(projectPath, globalPath) {
+		return "", false
+	}
+	return projectPath, true
+}
+
+// sameMemoryFile reports whether two paths name one file, following symlinks
+// when both exist so a linked home directory is still detected.
+func sameMemoryFile(a, b string) bool {
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
+	ai, errA := os.Stat(a)
+	bi, errB := os.Stat(b)
+	return errA == nil && errB == nil && os.SameFile(ai, bi)
 }
 
 func discoverProjectMemoryPaths(startDir string) ([]string, error) {
@@ -254,8 +280,8 @@ func memorySources(workDir string) ([]memorySource, error) {
 	sources := []memorySource{
 		{Scope: config.ScopeGlobal, Path: globalMem},
 	}
-	if strings.TrimSpace(workDir) != "" {
-		sources = append(sources, memorySource{Scope: config.ScopeProject, Path: config.ProjectMemoryPath(workDir)})
+	if projectMem, ok := distinctProjectMemoryPath(workDir, globalMem); ok {
+		sources = append(sources, memorySource{Scope: config.ScopeProject, Path: projectMem})
 	}
 	return sources, nil
 }
@@ -296,9 +322,19 @@ func AddMemory(scope config.SettingScope, workDir, text string, maxRunes int) (A
 		return AddMemoryResult{}, err
 	}
 	result := AddMemoryResult{Path: path}
+	if scope == config.ScopeProject {
+		if globalPath, gerr := config.ResolveGlobalMemoryPath(); gerr == nil && sameMemoryFile(path, globalPath) {
+			result.Warning = "no separate project memory here (the home directory uses the global one); saved globally"
+		}
+	}
 	if maxRunes > 0 && runes*memoryWarnDenom >= maxRunes*memoryWarnNumer {
-		result.Warning = fmt.Sprintf("memory file is at %d / %d runes (%d%%); /memory compact can shrink it",
+		capWarning := fmt.Sprintf("memory file is at %d / %d runes (%d%%); /memory compact can shrink it",
 			runes, maxRunes, runes*100/maxRunes)
+		if result.Warning != "" {
+			result.Warning += "; " + capWarning
+		} else {
+			result.Warning = capWarning
+		}
 	}
 	return result, nil
 }

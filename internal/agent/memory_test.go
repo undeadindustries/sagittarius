@@ -816,3 +816,88 @@ func mustAdd(t *testing.T, scope config.SettingScope, workDir, text string) {
 		t.Fatalf("AddMemory(%v, %q): %v", scope, text, err)
 	}
 }
+
+// TestMemoryFromHomeDirectoryHasNoProjectTier covers launching from the home
+// directory, where <workDir>/.sagittarius is the global ~/.sagittarius. The
+// same MEMORY.md must be read, listed, and injected once, not once per scope.
+func TestMemoryFromHomeDirectoryHasNoProjectTier(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SAGITTARIUS_HOME", home)
+
+	mustAdd(t, config.ScopeGlobal, home, "uses pnpm")
+
+	t.Run("discover lists the file once", func(t *testing.T) {
+		paths, err := DiscoverMemoryFiles(home)
+		if err != nil {
+			t.Fatalf("DiscoverMemoryFiles: %v", err)
+		}
+		memPath := filepath.Join(home, config.SagittariusDir, config.MemoryFileName)
+		count := 0
+		for _, p := range paths {
+			if p == memPath {
+				count++
+			}
+		}
+		if count != 1 {
+			t.Errorf("MEMORY.md listed %d times in %v, want 1", count, paths)
+		}
+	})
+
+	t.Run("system instruction injects the entry once", func(t *testing.T) {
+		got, err := DiscoverSystemInstruction(home)
+		if err != nil {
+			t.Fatalf("DiscoverSystemInstruction: %v", err)
+		}
+		if n := strings.Count(got, "uses pnpm"); n != 1 {
+			t.Errorf("entry injected %d times, want 1", n)
+		}
+	})
+
+	t.Run("list does not duplicate entries", func(t *testing.T) {
+		entries, usage, err := ListMemories(home, noMemoryCap)
+		if err != nil {
+			t.Fatalf("ListMemories: %v", err)
+		}
+		if len(entries) != 1 || len(usage) != 1 {
+			t.Errorf("entries = %#v, usage = %#v, want one of each", entries, usage)
+		}
+		if len(entries) == 1 && entries[0].Scope != config.ScopeGlobal {
+			t.Errorf("scope = %v, want global", entries[0].Scope)
+		}
+	})
+
+	t.Run("project add lands in the global file and says so", func(t *testing.T) {
+		res, err := AddMemory(config.ScopeProject, home, "second fact", noMemoryCap)
+		if err != nil {
+			t.Fatalf("AddMemory: %v", err)
+		}
+		if !strings.Contains(res.Warning, "global") {
+			t.Errorf("Warning = %q, want a note that it was saved globally", res.Warning)
+		}
+		entries, _, err := ListMemories(home, noMemoryCap)
+		if err != nil {
+			t.Fatalf("ListMemories: %v", err)
+		}
+		if len(entries) != 2 {
+			t.Errorf("entries = %#v, want 2", entries)
+		}
+	})
+}
+
+// TestMemoryProjectTierSurvivesDistinctDirectory pins that the home-directory
+// collapse does not swallow a real project MEMORY.md.
+func TestMemoryProjectTierSurvivesDistinctDirectory(t *testing.T) {
+	t.Setenv("SAGITTARIUS_HOME", t.TempDir())
+	workDir := t.TempDir()
+
+	mustAdd(t, config.ScopeGlobal, workDir, "g")
+	mustAdd(t, config.ScopeProject, workDir, "p")
+
+	paths, err := DiscoverMemoryFiles(workDir)
+	if err != nil {
+		t.Fatalf("DiscoverMemoryFiles: %v", err)
+	}
+	if len(paths) != 2 {
+		t.Errorf("paths = %v, want global and project MEMORY.md", paths)
+	}
+}
