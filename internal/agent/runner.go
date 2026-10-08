@@ -1247,6 +1247,10 @@ outerLoop:
 			toolCalls, modelText, modelParts := res.ToolCalls, res.Text, res.ModelParts
 			streamUsage, hadReasoning := res.Usage, res.HadReasoning
 			r.verboseLog.LogResponse(round, modelText, toolCalls, streamUsage)
+			if notice := provider.FinishNotice(res.FinishReason); notice != "" {
+				slog.Warn("provider ended reply abnormally", "provider", currentProvider, "model", currentModel, "reason", res.FinishReason)
+				out <- ui.StreamEvent{Type: ui.StreamInfo, Text: notice}
+			}
 			if modelText != "" {
 				turnReply.WriteString(modelText)
 			}
@@ -1310,6 +1314,7 @@ outerLoop:
 				LLMCalls:         llmCalls,
 				HadReasoning:     hadReasoning,
 				Reasoning:        res.Reasoning,
+				FinishReason:     res.FinishReason,
 				SystemPromptHash: sysHash,
 			}
 
@@ -2126,6 +2131,9 @@ type streamResult struct {
 	ModelParts   []provider.Part
 	Usage        *provider.Usage
 	HadReasoning bool
+	// FinishReason is the provider's abnormal stop reason for this round, or
+	// empty after a normal finish.
+	FinishReason string
 	// Reasoning holds the accumulated thinking text. It is populated only when
 	// the client-side thinking budget cut this round short, so the retry can
 	// hand the model back what it already worked out.
@@ -2184,6 +2192,9 @@ func (r *Runner) consumeStream(
 			}
 			if len(resp.ModelParts) > 0 {
 				res.ModelParts = resp.ModelParts
+			}
+			if resp.FinishReason != "" {
+				res.FinishReason = resp.FinishReason
 			}
 			res.ToolCalls = append(res.ToolCalls, resp.ToolCalls...)
 

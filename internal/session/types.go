@@ -70,7 +70,8 @@ type RoundTelemetry struct {
 	LatencyMs        int64   `json:"latencyMs,omitempty"`
 	LLMCalls         int     `json:"llmCalls,omitempty"` // count of inferences for this round (retries/cuts)
 	HadReasoning     bool    `json:"hadReasoning,omitempty"`
-	Reasoning        string  `json:"reasoning,omitempty"` // populated only when opted in
+	Reasoning        string  `json:"reasoning,omitempty"`    // populated only when opted in
+	FinishReason     string  `json:"finishReason,omitempty"` // provider's abnormal stop reason, empty for a normal finish
 	SystemPromptHash string  `json:"systemPromptHash,omitempty"`
 }
 

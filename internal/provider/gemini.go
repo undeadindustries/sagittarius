@@ -155,6 +155,7 @@ func (g *GeminiGenerator) GenerateContentStream(
 		stream := g.streamer.GenerateContentStream(streamCtx, model, contents, cfg)
 		var lastUsageMeta *genai.GenerateContentResponseUsageMetadata
 		var syntheticCallCounter int
+		var finishReason string
 		acc := newModelPartsAccumulator()
 		for resp, err := range stream {
 			if err != nil {
@@ -179,6 +180,9 @@ func (g *GeminiGenerator) GenerateContentStream(
 
 			if resp.UsageMetadata != nil {
 				lastUsageMeta = resp.UsageMetadata
+			}
+			if reason := abnormalGeminiFinish(resp); reason != "" {
+				finishReason = reason
 			}
 
 			// Accumulate the full model turn (text + functionCall parts with
@@ -216,7 +220,7 @@ func (g *GeminiGenerator) GenerateContentStream(
 		// the Gemini API natively so CostKnown remains false). The complete
 		// model parts ride on the same chunk so the runner records the turn
 		// with its thought signatures intact.
-		final := StreamResponse{ModelParts: acc.parts()}
+		final := StreamResponse{ModelParts: acc.parts(), FinishReason: finishReason}
 		if lastUsageMeta != nil {
 			final.Usage = &Usage{
 				InputTokens:     int(lastUsageMeta.PromptTokenCount),
@@ -225,7 +229,7 @@ func (g *GeminiGenerator) GenerateContentStream(
 				ReasoningTokens: int(lastUsageMeta.ThoughtsTokenCount),
 			}
 		}
-		if final.Usage != nil || len(final.ModelParts) > 0 {
+		if final.Usage != nil || len(final.ModelParts) > 0 || final.FinishReason != "" {
 			if !sendOrDone(streamCtx, ch, final) {
 				return
 			}

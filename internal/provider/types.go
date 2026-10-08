@@ -168,4 +168,9 @@ type StreamResponse struct {
 	// generators leave this nil and the runner falls back to text/tool-call
 	// reconstruction.
 	ModelParts []Part
+	// FinishReason is set once, near the end of the stream, only when the
+	// provider ended the reply abnormally (output limit, a recitation or safety
+	// stop, a blocked prompt). It is empty for a normal finish, so a non-empty
+	// value always warrants telling the user; see FinishNotice.
+	FinishReason string
 }

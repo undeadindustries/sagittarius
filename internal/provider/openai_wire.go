@@ -561,6 +561,13 @@ func flushSSEState(
 	if needsNonStreamRetry {
 		return true, nil
 	}
+	// A reply the server cut short (output limit, content filter) still closes
+	// the stream cleanly, so surface why before Done.
+	if openAIFinishIsAbnormal(state.lastFinish) {
+		if !onChunk(StreamResponse{FinishReason: state.lastFinish}) {
+			return false, nil
+		}
+	}
 	// Emit provider-reported usage (and optional OpenRouter cost) before Done.
 	if state.lastUsage != nil {
 		u := &Usage{
