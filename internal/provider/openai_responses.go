@@ -149,6 +149,15 @@ func (g *OpenAIResponsesGenerator) retryWithoutSummary(
 }
 
 // setLastResponseID stores the trailing Responses API response id for chaining.
+// ResetResponseChain forgets the server-side previous_response_id so the next
+// request starts a fresh server-side conversation. The caller must invoke it
+// whenever the client-side history is replaced out-of-band (a session switch or
+// /clear): a chained id would otherwise send the new history on top of the
+// old conversation's server state.
+func (g *OpenAIResponsesGenerator) ResetResponseChain() {
+	g.setLastResponseID("")
+}
+
 func (g *OpenAIResponsesGenerator) setLastResponseID(id string) {
 	g.chainMu.Lock()
 	g.lastResponseID = strings.TrimSpace(id)
