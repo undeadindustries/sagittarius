@@ -118,6 +118,8 @@ const (
 	DialogBackground DialogKind = "background"
 	// DialogSettings opens the curated settings browser.
 	DialogSettings DialogKind = "settings"
+	// DialogSessionPick opens the session/checkpoint switcher for /chat resume.
+	DialogSessionPick DialogKind = "session-pick"
 )
 
 // StreamEvent is a single streaming update rendered in the scrollback viewport.

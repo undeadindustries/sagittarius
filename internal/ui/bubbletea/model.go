@@ -27,6 +27,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/ui/modesdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/onboardingdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/providersdialog"
+	"github.com/undeadindustries/sagittarius/internal/ui/sessionpickdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/settingsdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/systempromptdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/theme"
@@ -86,6 +87,12 @@ type toolsDialogHost interface {
 // settings browser dependencies.
 type settingsDialogHost interface {
 	SettingsDialogDeps() settingsdialog.Deps
+}
+
+// sessionPickDialogHost is implemented by an App that can supply the
+// /chat resume switcher's session and checkpoint catalog.
+type sessionPickDialogHost interface {
+	SessionPickDialogDeps() sessionpickdialog.Deps
 }
 
 // onboardingHost is implemented by an App that can supply first-run setup deps.
@@ -352,6 +359,8 @@ type model struct {
 	bgProcOverlay *bgprocdialog.Model
 	// settingsOverlay holds the curated settings browser.
 	settingsOverlay *settingsdialog.Model
+	// sessionPickOverlay holds the /chat resume session and checkpoint switcher.
+	sessionPickOverlay *sessionpickdialog.Model
 	// onboardingOverlay holds the first-run provider setup wizard.
 	onboardingOverlay *onboardingdialog.Model
 }
@@ -362,7 +371,7 @@ func (m *model) hasOverlay() bool {
 		m.modelsOverlay != nil || m.modelPickOverlay != nil || m.modesOverlay != nil ||
 		m.subagentsOverlay != nil ||
 		m.systemPromptOverlay != nil || m.mcpOverlay != nil || m.toolsOverlay != nil ||
-		m.bgProcOverlay != nil || m.settingsOverlay != nil
+		m.bgProcOverlay != nil || m.settingsOverlay != nil || m.sessionPickOverlay != nil
 }
 
 // maxVisibleSuggestions caps the inline suggestion list height.
@@ -652,6 +661,10 @@ func (m *model) updateOverlay(msg tea.Msg) (tea.Model, tea.Cmd) {
 			o := m.settingsOverlay.SetSize(msg.Width, msg.Height)
 			m.settingsOverlay = &o
 		}
+		if m.sessionPickOverlay != nil {
+			o := m.sessionPickOverlay.SetSize(msg.Width, msg.Height)
+			m.sessionPickOverlay = &o
+		}
 		return m, nil
 	case streamEventMsg:
 		return m.handleStreamGen(msg.gen, msg.event)
@@ -782,7 +795,30 @@ func (m *model) updateOverlay(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	if m.sessionPickOverlay != nil {
+		return m.updateSessionPick(msg)
+	}
+
 	return m, nil
+}
+
+// updateSessionPick routes a message to the session switcher. A pick is
+// submitted as the ordinary "/chat resume <ref>" line, so the switch takes the
+// same path as typing it: the processor, the turn guard, and the refusals all
+// apply unchanged. Esc (or a refused pick) closes without submitting.
+func (m *model) updateSessionPick(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.sessionPickOverlay.Update(msg)
+	if !next.Done() {
+		m.sessionPickOverlay = &next
+		return m, cmd
+	}
+	m.closeOverlay("")
+	line := next.SubmitLine()
+	if line == "" {
+		return m, cmd
+	}
+	submit := func() tea.Msg { return submitMsg{line: line, display: line} }
+	return m, tea.Batch(cmd, submit)
 }
 
 // closeOverlay removes any active dialog, surfaces its closing status, and
@@ -799,6 +835,7 @@ func (m *model) closeOverlay(status string) {
 	m.toolsOverlay = nil
 	m.bgProcOverlay = nil
 	m.settingsOverlay = nil
+	m.sessionPickOverlay = nil
 	if status != "" {
 		m.addBlock(roleInfo, status)
 	}
@@ -924,6 +961,17 @@ func (m *model) openDialog(kind ui.DialogKind) tea.Cmd {
 		o = o.SetSize(m.width, m.height)
 		m.settingsOverlay = &o
 		return cmd
+	case ui.DialogSessionPick:
+		host, ok := m.app.(sessionPickDialogHost)
+		if !ok {
+			m.addBlock(roleInfo, "Session switcher is unavailable in this session.")
+			return nil
+		}
+		o, cmd := sessionpickdialog.New(ctx, host.SessionPickDialogDeps())
+		o = o.SetTheme(m.th)
+		o = o.SetSize(m.width, m.height)
+		m.sessionPickOverlay = &o
+		return cmd
 	case ui.DialogBackground:
 		host, ok := m.app.(interface {
 			ListBackgroundProcesses() []bgproc.Process
@@ -977,6 +1025,9 @@ func (m *model) View() string {
 	}
 	if m.settingsOverlay != nil {
 		return m.settingsOverlay.View()
+	}
+	if m.sessionPickOverlay != nil {
+		return m.sessionPickOverlay.View()
 	}
 	m.syncInputLayout()
 	m.syncInputPlaceholder()

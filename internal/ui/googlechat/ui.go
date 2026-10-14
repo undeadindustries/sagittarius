@@ -460,6 +460,10 @@ func (u *UI) processTurnEvent(t *turnSession, ev ui.StreamEvent) {
 	case ui.StreamOpenDialog:
 		// Explicitly notify that interactive dialogs are unavailable over chat
 		msg := "Dialog overlays are not available over Google Chat. Use `/modes override <mode> <model>` or edit settings directly in `.sagittarius/settings.json`."
+		if ev.Dialog == ui.DialogSessionPick {
+			// The switcher has a plain-text equivalent, so point at it instead.
+			msg = "The session switcher is not available over Google Chat. Use `/chat list` to see sessions, then `/chat resume <n|id|tag>` to switch."
+		}
 		_, _ = u.cfg.Client.CreateMessage(context.Background(), t.space, &gcapi.Message{
 			Text:   msg,
 			Thread: t.makeThread(),
