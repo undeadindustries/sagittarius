@@ -100,6 +100,11 @@ type Hooks interface {
 	// ResumeCheckpoint restores tag into the live session and returns a summary
 	// plus the restored conversation for scrollback repaint.
 	ResumeCheckpoint(ctx context.Context, tag string) (summary string, history []provider.Message, err error)
+	// ResumeSession switches the live session to the project session named by
+	// ref (a 1-based index from /chat list, or a full session id) and returns
+	// its conversation for scrollback repaint. It refuses the session already
+	// being recorded, and any session another live process holds.
+	ResumeSession(ctx context.Context, ref string) (summary string, history []provider.Message, err error)
 	DeleteCheckpoint(tag string) error
 	// RenameSession sets the current session's title (its Summary metadata).
 	// The title is sanitized before this hook is called.

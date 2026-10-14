@@ -1061,19 +1061,78 @@ func (h *appHooks) AgentList() []agents.Definition {
 
 // ListSessions lists sessions for the current working directory.
 func (h *appHooks) ListSessions() ([]session.SessionInfo, error) {
-	projectRoot, err := os.Getwd()
+	projectRoot, err := h.projectRoot()
 	if err != nil {
-		return nil, fmt.Errorf("resolve working directory: %w", err)
+		return nil, err
 	}
 	chatsDir, err := session.ChatsDir(projectRoot)
 	if err != nil {
 		return nil, err
 	}
-	currentID := ""
-	if h.app != nil {
-		currentID = h.app.sessionID
+	return session.ListSessions(chatsDir, h.currentSessionID())
+}
+
+// projectRoot is the workspace the session list and switcher read from. It is
+// the runner's workdir, not the process cwd, so the list and ResumeSession can
+// never disagree about which project's sessions they are looking at.
+func (h *appHooks) projectRoot() (string, error) {
+	if h.app != nil && h.app.runner != nil {
+		if wd := h.app.runner.WorkDir(); strings.TrimSpace(wd) != "" {
+			return wd, nil
+		}
 	}
-	return session.ListSessions(chatsDir, currentID)
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("resolve working directory: %w", err)
+	}
+	return wd, nil
+}
+
+// currentSessionID is the id the runner is recording to right now. The startup
+// id goes stale after /clear, /chat resume, or an in-process switch, so the
+// "current" marker must come from the runner, not from app.sessionID.
+func (h *appHooks) currentSessionID() string {
+	if h.app == nil {
+		return ""
+	}
+	if h.app.runner != nil {
+		return h.app.runner.CurrentSessionID()
+	}
+	return h.app.sessionID
+}
+
+// ResumeSession switches the live session to another session in this project.
+// ref is a 1-based index from /chat list or a full session id. It returns a
+// confirmation and the target's history for the scrollback repaint.
+func (h *appHooks) ResumeSession(ctx context.Context, ref string) (string, []provider.Message, error) {
+	_ = ctx
+	if h.app == nil || h.app.runner == nil {
+		return "", nil, fmt.Errorf("runner not available")
+	}
+	workDir := h.app.runner.WorkDir()
+	if strings.TrimSpace(workDir) == "" {
+		return "", nil, fmt.Errorf("no workspace available")
+	}
+	chatsDir, err := session.ChatsDir(workDir)
+	if err != nil {
+		return "", nil, err
+	}
+	selector := session.NewSelector(chatsDir, h.currentSessionID())
+	res, err := selector.ResolveSession(ref)
+	if err != nil {
+		return "", nil, err
+	}
+	if err := h.app.runner.SwitchSession(res); err != nil {
+		return "", nil, err
+	}
+	history := h.app.runner.History()
+	title := strings.TrimSpace(res.Record.Summary)
+	if title == "" {
+		title = res.Record.SessionID
+	}
+	// Snapshots are bound to this process, not to a session, so /undo does not
+	// follow the switch. Say so rather than let it look like it does.
+	return fmt.Sprintf("Switched to %q (%d messages). New turns record to that session. /undo still reverts this process's earlier writes.", title, len(history)), history, nil
 }
 
 // ClearHistory wipes the in-memory conversation history of the runner and

@@ -66,9 +66,13 @@ type mockHooks struct {
 	setModeCalls []modes.Mode
 	// savedTag and savedForce record the last SaveCheckpoint call so /chat save
 	// argument parsing can be asserted directly.
-	savedTag   string
-	savedForce bool
-	readOnly   bool
+	// resumedRef records the last ResumeSession ref; resumeSessionErr, when set,
+	// is returned from ResumeSession (used to simulate an unknown session).
+	resumedRef       string
+	resumeSessionErr error
+	savedTag         string
+	savedForce       bool
+	readOnly         bool
 	// contextFitNotice is the canned over-window warning appended to mode and
 	// model switch messages.
 	contextFitNotice string
@@ -283,6 +287,16 @@ func (m *mockHooks) ResumeCheckpoint(_ context.Context, tag string) (string, []p
 	return "Resumed " + tag, []provider.Message{
 		{Role: provider.RoleUser, Parts: []provider.Part{{Text: "hi"}}},
 		{Role: provider.RoleModel, Parts: []provider.Part{{Text: "hello"}}},
+	}, nil
+}
+
+func (m *mockHooks) ResumeSession(_ context.Context, ref string) (string, []provider.Message, error) {
+	m.resumedRef = ref
+	if m.resumeSessionErr != nil {
+		return "", nil, m.resumeSessionErr
+	}
+	return "Switched to session " + ref, []provider.Message{
+		{Role: provider.RoleUser, Parts: []provider.Part{{Text: "session prompt"}}},
 	}, nil
 }
 

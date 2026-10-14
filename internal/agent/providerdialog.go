@@ -40,6 +40,8 @@ func mapDialogKind(kind slash.DialogKind) ui.DialogKind {
 		return ui.DialogTools
 	case slash.DialogSettings:
 		return ui.DialogSettings
+	case slash.DialogSessionPick:
+		return ui.DialogSessionPick
 	default:
 		return ""
 	}

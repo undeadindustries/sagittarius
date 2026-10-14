@@ -91,7 +91,7 @@ func commandCompletion(level []Command, partial string, replaceFrom int) Complet
 			Label:       cmd.Name,
 			Description: cmd.Description,
 			Insert:      cmd.Name,
-			AppendSpace: len(visibleSubcommands(cmd)) > 0 || cmd.ArgComplete != nil,
+			AppendSpace: len(visibleSubcommands(cmd)) > 0 || (cmd.ArgComplete != nil && !cmd.OptionalArg),
 		})
 	}
 	return Completion{Items: items, ReplaceFrom: replaceFrom}

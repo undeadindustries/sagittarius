@@ -39,7 +39,9 @@ func TestChatResumeScrollback(t *testing.T) {
 	deps, _, _ := testDeps(t, nil)
 	p := slash.NewProcessor()
 
-	res := p.Process(context.Background(), "/chat resume mytag", deps)
+	// "alpha" is a checkpoint in the test hooks; an unknown ref would go to the
+	// session lookup instead and never reach the checkpoint repaint path.
+	res := p.Process(context.Background(), "/chat resume alpha", deps)
 	if res.Err != nil {
 		t.Fatalf("unexpected error: %v", res.Err)
 	}

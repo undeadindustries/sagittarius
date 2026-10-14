@@ -30,6 +30,8 @@ const (
 	DialogTools DialogKind = "tools"
 	// DialogSettings opens the curated settings browser.
 	DialogSettings DialogKind = "settings"
+	// DialogSessionPick opens the session/checkpoint switcher for /chat resume.
+	DialogSessionPick DialogKind = "session-pick"
 )
 
 // Result is the outcome of processing one slash command.

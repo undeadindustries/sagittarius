@@ -15,6 +15,11 @@ type Command struct {
 	// token already typed (empty after a trailing space). A nil ArgComplete
 	// means the command takes no completable arguments.
 	ArgComplete func(deps Deps, argPrefix string) []string
+	// OptionalArg marks a command whose ArgComplete candidates are suggestions
+	// rather than a required argument. Accepting such a command from the
+	// dropdown submits it as-is instead of waiting for a space: /chat resume
+	// with no argument opens the session menu, so Enter must run it directly.
+	OptionalArg bool
 }
 
 // MaxDescriptionLen is the fork limit for user-visible command descriptions.

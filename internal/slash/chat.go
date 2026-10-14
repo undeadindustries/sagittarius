@@ -2,6 +2,7 @@ package slash
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -43,15 +44,17 @@ func chatCommand() Command {
 			},
 			{
 				Name:        "resume",
-				Description: "Restore a saved checkpoint into the live session",
+				Description: "Switch session or restore a checkpoint; no argument opens the menu",
 				Handler:     handleChatResume,
 				ArgComplete: tagComplete,
+				OptionalArg: true,
 			},
 			{
 				Name:        "load",
-				Description: "Alias for /chat resume <tag>",
+				Description: "Alias for /chat resume",
 				Handler:     handleChatResume,
 				ArgComplete: tagComplete,
+				OptionalArg: true,
 			},
 			{
 				Name:        "delete",
@@ -123,6 +126,9 @@ func handleChatList(ctx *Context) Result {
 		fmt.Fprintf(&b, "(could not list sessions: %v)", err)
 	} else {
 		b.WriteString(session.FormatSessionList(infos))
+		if len(infos) > 0 {
+			b.WriteString("  Switch with /chat resume <n>, or /chat resume for a menu.\n")
+		}
 	}
 	return InfoResult(strings.TrimRight(b.String(), "\n"))
 }
@@ -170,22 +176,79 @@ func handleChatSave(ctx *Context) Result {
 	if err != nil {
 		return ErrorResult(err)
 	}
-	return InfoResult(fmt.Sprintf("Saved checkpoint %q → %s", tag, path))
+	msg := fmt.Sprintf("Saved checkpoint %q → %s", tag, path)
+	if isAllDigits(tag) {
+		// /chat resume checks checkpoint tags before session indexes, so an
+		// all-digit tag would hide the session with that index from /chat resume <n>.
+		msg += fmt.Sprintf("\nNote: a numeric tag shadows session #%s in /chat resume; use a name to avoid that.", tag)
+	}
+	return InfoResult(msg)
 }
 
-// handleChatResume restores a saved checkpoint into the live session and repaints
-// the restored conversation into the scrollback. Also serves /chat load.
+// isAllDigits reports whether s is a non-empty run of ASCII digits. Such a tag
+// is also a valid session index, which is why checkpoint-first resolution makes
+// it shadow that index.
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// handleChatResume switches the live session. With no argument it opens the
+// session/checkpoint menu. With an argument it restores a checkpoint when the
+// argument names one, and otherwise switches to the project session it names
+// (index from /chat list, or full id). Checkpoints win on a clash so existing
+// `/chat resume <tag>` usage keeps its meaning. Also serves /chat load.
 func handleChatResume(ctx *Context) Result {
 	if ctx.Deps.Hooks == nil {
 		return InfoResult("Chat commands unavailable.")
 	}
 	// Normalize the same way save does, so a name typed in two words resumes
 	// the checkpoint it created.
-	tag := normalizeCheckpointTag(ctx.Args)
-	if tag == "" {
-		return InfoResult("Usage: /chat resume <tag>")
+	ref := normalizeCheckpointTag(ctx.Args)
+	if ref == "" {
+		return DialogResult(DialogSessionPick)
 	}
-	summary, history, err := ctx.Deps.Hooks.ResumeCheckpoint(ctx.Ctx, tag)
+	if isCheckpointTag(ctx.Deps.Hooks, ref) {
+		summary, history, err := ctx.Deps.Hooks.ResumeCheckpoint(ctx.Ctx, ref)
+		return restoredResult(summary, history, err)
+	}
+	summary, history, err := ctx.Deps.Hooks.ResumeSession(ctx.Ctx, ref)
+	if err != nil {
+		var invalid *session.ErrInvalidSessionIdentifier
+		if errors.As(err, &invalid) || errors.Is(err, session.ErrNoSessions) {
+			return ErrorResult(fmt.Errorf("no checkpoint or session matches %q (see /chat list, or /chat resume for the menu)", ref))
+		}
+		return ErrorResult(err)
+	}
+	return restoredResult(summary, history, nil)
+}
+
+// isCheckpointTag reports whether ref names a saved checkpoint. A listing error
+// is treated as "no checkpoints" so a broken checkpoints dir cannot block
+// switching sessions.
+func isCheckpointTag(hooks Hooks, ref string) bool {
+	tags, err := hooks.ListCheckpoints()
+	if err != nil {
+		return false
+	}
+	for _, tag := range tags {
+		if tag == ref {
+			return true
+		}
+	}
+	return false
+}
+
+// restoredResult renders a completed restore: the summary line, and the restored
+// conversation replacing the visible scrollback.
+func restoredResult(summary string, history []provider.Message, err error) Result {
 	if err != nil {
 		return ErrorResult(err)
 	}
