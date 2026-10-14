@@ -199,7 +199,7 @@ func TestRenderMarkdownMathFractions(t *testing.T) {
 		lines := strings.Split(got, "\n")
 		var rawFracLines []string
 		for _, l := range lines {
-			if strings.Contains(l, `\frac`) && !strings.Contains(l, "wrapped to fit") {
+			if strings.Contains(l, `\frac`) {
 				rawFracLines = append(rawFracLines, l)
 			}
 		}

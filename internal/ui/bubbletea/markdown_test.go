@@ -167,83 +167,19 @@ func TestMarkdownFencedCodeDoesNotTruncate(t *testing.T) {
 			t.Errorf("line %d width %d exceeds %d: %q", i, w, width, stripANSI(line))
 		}
 	}
-	expectedHint := "wrapped to fit · /copy code 1 for the exact text"
-	if !strings.Contains(joined, expectedHint) {
-		t.Errorf("wrap hint missing after a block that wrapped:\n%s", joined)
-	}
 }
 
-func TestMarkdownCodeWrapHintOnlyOnClosedWrappedBlock(t *testing.T) {
-	t.Parallel()
-
-	expectedHint := "wrapped to fit · /copy code 1 for the exact text"
-
-	short := renderMarkdown("```\nfmt.Println(\"hi\")\n```\n", 80, theme.Greyscale())
-	if strings.Contains(stripANSI(strings.Join(short, "\n")), "wrapped to fit") {
-		t.Errorf("hint must not appear when nothing wrapped:\n%s", short)
-	}
-
-	open := renderMarkdown("```\n"+reportedFenceBody, 80, theme.Greyscale())
-	if strings.Contains(stripANSI(strings.Join(open, "\n")), "wrapped to fit") {
-		t.Errorf("hint must not appear mid-stream on an unterminated fence:\n%s", open)
-	}
-
-	closed := renderMarkdown("```\n"+reportedFenceBody+"```\n", 80, theme.Greyscale())
-	plain := stripANSI(strings.Join(closed, "\n"))
-	if !strings.Contains(plain, expectedHint) {
-		t.Errorf("hint missing on a closed wrapped block:\n%s", plain)
-	}
-	if idx := strings.Index(plain, expectedHint); idx >= 0 {
-		if strings.Index(plain, "configured") > idx {
-			t.Error("hint appeared before the wrapped code it describes")
-		}
-	}
-}
-
-func TestMarkdownMultipleBlocksHintIndices(t *testing.T) {
-	t.Parallel()
-	md := "```\n" + reportedFenceBody + "```\nprose\n```\n" + reportedFenceBody + "```\n"
-	lines := renderMarkdown(md, 80, theme.Greyscale())
-	plain := stripANSI(strings.Join(lines, "\n"))
-	if !strings.Contains(plain, "/copy code 1") {
-		t.Errorf("expected block 1 hint in output:\n%s", plain)
-	}
-	if !strings.Contains(plain, "/copy code 2") {
-		t.Errorf("expected block 2 hint in output:\n%s", plain)
-	}
-	// Both hints follow the reply. A hint between the blocks is copied when
-	// the user selects the message by hand.
-	if strings.Index(plain, "/copy code 1") < strings.Index(plain, "prose") {
-		t.Errorf("block 1 hint appeared before the prose that follows its fence:\n%s", plain)
-	}
-}
-
-// /copy code N numbers only fences with content, so the hint must too.
-func TestMarkdownHintIndexSkipsEmptyFences(t *testing.T) {
-	t.Parallel()
-	md := "```\n```\n```\n   \n\n```\n```\n" + reportedFenceBody + "```\n"
-	plain := stripANSI(strings.Join(renderMarkdown(md, 80, theme.Greyscale()), "\n"))
-	if !strings.Contains(plain, "/copy code 1") {
-		t.Errorf("hint should name block 1 (empty fences are not counted):\n%s", plain)
-	}
-	for _, wrong := range []string{"/copy code 2", "/copy code 3"} {
-		if strings.Contains(plain, wrong) {
-			t.Errorf("hint counted an empty fence (%q):\n%s", wrong, plain)
-		}
-	}
-}
-
-func TestMarkdownWrapHintsFollowTheWholeReply(t *testing.T) {
+// The scrollback never carries Sagittarius instructions. The /copy hint lives
+// in the status row (AD-163) because a hint between paragraphs lands in any
+// mouse selection of the reply.
+func TestMarkdownNeverRendersCopyHint(t *testing.T) {
 	t.Parallel()
 	md := "intro\n```\n" + reportedFenceBody + "```\nmiddle\n```\n" + reportedFenceBody + "```\noutro\n"
 	plain := stripANSI(strings.Join(renderMarkdown(md, 80, theme.Greyscale()), "\n"))
-	outro := strings.LastIndex(plain, "outro")
-	hint := strings.Index(plain, "wrapped to fit")
-	if outro < 0 || hint < 0 {
-		t.Fatalf("missing outro or hint:\n%s", plain)
-	}
-	if hint < outro {
-		t.Errorf("wrap hint at %d is before the end of the reply at %d:\n%s", hint, outro, plain)
+	for _, banned := range []string{"/copy", "wrapped to fit"} {
+		if strings.Contains(plain, banned) {
+			t.Errorf("scrollback must not contain %q:\n%s", banned, plain)
+		}
 	}
 }
 

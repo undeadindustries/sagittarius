@@ -312,6 +312,13 @@ type model struct {
 	// or rename) so it is not shown again this session.
 	titleDismissed bool
 
+	// copyHint is the status-row pointer to /copy for the most recent reply
+	// ("/copy reply · /copy code 1-N"). It is set once on StreamDone — never
+	// per frame — and cleared on submit and when the scrollback is replaced.
+	// The status row is outside the viewport, so a mouse selection of the
+	// reply can never pick it up (AD-163).
+	copyHint string
+
 	// history is the prompt-history navigator (Up/Down/Ctrl+P/Ctrl+N at the
 	// input boundaries). queue holds messages typed while a turn is in flight;
 	// they are submitted in order once the turn completes.
@@ -1661,6 +1668,8 @@ func (m *model) handleEnter() (tea.Model, tea.Cmd) {
 		// The user moved on to the next message; the title announcement has
 		// served its purpose and must not linger as a stale status line.
 		m.titleDismissed = true
+		// The copy hint pointed at the reply the user is now answering.
+		m.copyHint = ""
 	}
 	m.input.SetValue("")
 	m.pastes = newPasteStore() // reset paste store on submit
@@ -2380,6 +2389,7 @@ func (m *model) handleStreamGen(gen uint64, ev ui.StreamEvent) (tea.Model, tea.C
 		m.clearTurn()
 		m.syncViewportContent()
 		m.closeResponse()
+		m.copyHint = lastResponseCopyHint(m.blocks)
 		m.refreshIdleStatus()
 		m.status = m.idleStatus
 		m.stream = nil
@@ -2576,10 +2586,11 @@ func (m *model) toolCardFor(ev ui.StreamEvent) *toolCard {
 // clearScrollbackBlocks drops every scrollback block and closes any open
 // assistant response so a restored conversation (/chat resume) replaces the
 // visible history instead of being appended beneath it. The static welcome
-// banner is preserved.
+// banner is preserved. The copy hint dies with the reply it pointed at.
 func (m *model) clearScrollbackBlocks() {
 	m.blocks = nil
 	m.openResponseIdx = -1
+	m.copyHint = ""
 	m.syncViewportContent()
 }
 

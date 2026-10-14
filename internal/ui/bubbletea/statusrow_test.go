@@ -196,6 +196,70 @@ func TestTitleAnnouncementDismissedOnSubmit(t *testing.T) {
 	}
 }
 
+func TestLastResponseCopyHint(t *testing.T) {
+	t.Parallel()
+	const fenced = "```bash\necho hi\n```"
+	const twoBlocks = "```\nfirst\n```\ntext\n```\nsecond\n```"
+	tests := []struct {
+		name   string
+		blocks []scrollBlock
+		want   string
+	}{
+		{name: "no blocks", blocks: nil, want: ""},
+		{name: "plain reply", blocks: []scrollBlock{{role: roleResponse, text: "just prose"}}, want: "/copy reply"},
+		{name: "one fenced block", blocks: []scrollBlock{{role: roleResponse, text: "try:\n" + fenced}}, want: "/copy reply · /copy code"},
+		{name: "two fenced blocks", blocks: []scrollBlock{{role: roleResponse, text: twoBlocks}}, want: "/copy reply · /copy code 1-2"},
+		{name: "empty reply", blocks: []scrollBlock{{role: roleResponse, text: "  "}}, want: ""},
+		{
+			name: "latest reply wins",
+			blocks: []scrollBlock{
+				{role: roleResponse, text: "old"},
+				{role: roleInfo, text: "note"},
+				{role: roleResponse, text: "new\n" + fenced},
+			},
+			want: "/copy reply · /copy code",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := lastResponseCopyHint(tc.blocks); got != tc.want {
+				t.Errorf("lastResponseCopyHint = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCopyHintLifecycle drives a fenced reply through StreamDone and asserts
+// the hint reaches the status row, then that submitting the next message
+// clears it. The status row is outside the viewport, so a mouse selection of
+// the reply never copies the hint (AD-163).
+func TestCopyHintLifecycle(t *testing.T) {
+	t.Parallel()
+	m := newTestModel()
+	m.streamGen++
+	m.activeStreamGen = m.streamGen
+	const reply = "Run this:\n```bash\nsudo systemctl restart nginx\n```\n"
+	updated, _ := m.Update(streamEventMsg{gen: m.activeStreamGen, event: ui.StreamEvent{Type: ui.StreamTextDelta, Text: reply}})
+	m = updated.(*model)
+	updated, _ = m.Update(streamEventMsg{gen: m.activeStreamGen, event: ui.StreamEvent{Type: ui.StreamDone}})
+	m = updated.(*model)
+
+	if m.copyHint != "/copy reply · /copy code" {
+		t.Fatalf("copyHint = %q after fenced reply, want %q", m.copyHint, "/copy reply · /copy code")
+	}
+	if row := stripANSI(m.renderStatusRow()); !strings.Contains(row, "/copy reply · /copy code") {
+		t.Errorf("status row missing copy hint:\n%s", row)
+	}
+
+	m.input.SetValue("next question")
+	updated, _ = m.handleEnter()
+	m = updated.(*model)
+	if m.copyHint != "" {
+		t.Errorf("copy hint not cleared on submit: %q", m.copyHint)
+	}
+}
+
 func TestScrollShortcutHintsForGOOS(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

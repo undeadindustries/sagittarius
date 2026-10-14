@@ -191,21 +191,32 @@ and resets to off on the next launch.
 ### `/copy`
 
 - **Description:** Copy the last assistant reply to the clipboard, without the
-  TUI's scrollback chrome (no `✦` prefix, no fenced-code gutter).
+  TUI's scrollback chrome (no `✦` prefix, no hard-wrap newlines).
 - **Usage:**
   - `/copy`: the full last reply, including markdown fences and prose.
-  - `/copy code`: only the bodies of fenced code blocks in that reply (language
-    tags and ` ``` ` markers stripped). Multiple blocks are joined with a blank
-    line. Use this when the model asked you to paste commands into a shell or
-    another prompt.
-- **Notes:** Mouse-select in the TUI still copies whatever is on screen. A
+  - `/copy code`: the body of the **last** fenced code block in that reply
+    (language tags and fence markers stripped) — the safe default when a reply
+    holds both dry-run and destructive commands.
+  - `/copy code N`: block `N` only (1-based, in document order).
+  - `/copy code all`: every block, joined with a blank line.
+
+  Use these when the model asked you to paste commands into a shell or another
+  prompt.
+- **Notes:** After each reply the composer status row shows a `/copy reply`
+  hint, extended to `/copy reply · /copy code 1-N` when the reply has fenced
+  blocks; it clears when you submit your next message. The hint lives in the
+  status row, not the scrollback, so a mouse selection of the reply never
+  picks it up. Block numbering counts only fences with content (empty fences
+  are skipped) and treats a ```` ```markdown ```` block holding inner
+  ```` ```php ```` fences as **one** block — the whole document, inner fences
+  intact — matching how the reply rendered on screen. Tilde (`~~~`) fences
+  work too. Mouse-select in the TUI still copies whatever is on screen. A
   fenced line that wrapped pastes with a newline at each wrap point; `/copy`
   and `/copy code` copy the exact last reply (or its fenced bodies) without
   those wraps. `/copy code` only covers the last assistant reply, so the hint
-  under an older block still runs against the newest one. Fenced code is
-  styled with no copyable `│ ` gutter. Tool-card borders (write_file diffs)
-  are unchanged; `/copy` never includes those. If the last reply has no
-  fenced code, `/copy code` says so and copies nothing.
+  after an older block still runs against the newest one. Tool-card borders
+  (write_file diffs) are unchanged; `/copy` never includes those. If the last
+  reply has no fenced code, `/copy code` says so and copies nothing.
 
 ### `/providers`
 

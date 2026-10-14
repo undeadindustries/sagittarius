@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/undeadindustries/sagittarius/internal/mdfence"
 	"github.com/undeadindustries/sagittarius/internal/ui"
 	"github.com/undeadindustries/sagittarius/internal/ui/theme"
 )
@@ -147,6 +148,10 @@ func (m *model) statusRowParts() (left, right string) {
 			right = prependStatus(right, m.titleAnnouncement)
 		}
 	}
+	// Prepend last so the copy hint is the leftmost segment of the right side:
+	// fitLeftRight truncates the right segment from its right edge when it
+	// overflows, so the hint survives the narrowest terminals.
+	right = prependStatus(right, m.copyHint)
 
 	nWorking := 0
 	waiting := false
@@ -177,6 +182,34 @@ func prependStatus(right, status string) string {
 		return status
 	}
 	return status + "  ·  " + right
+}
+
+// lastResponseCopyHint builds the status-row copy hint for the most recent
+// assistant reply: "/copy reply" always, plus "· /copy code 1-N" when the reply
+// holds fenced code blocks. It runs once per turn (on StreamDone) rather than
+// per frame, and returns "" when the reply has no visible text (e.g. a
+// reasoning-only turn). Block numbering matches /copy code exactly because both
+// go through mdfence.Parse (empty fences dropped, nested fences counted once).
+func lastResponseCopyHint(blocks []scrollBlock) string {
+	for i := len(blocks) - 1; i >= 0; i-- {
+		if blocks[i].role != roleResponse {
+			continue
+		}
+		text := strings.TrimSpace(blocks[i].text)
+		if text == "" {
+			return ""
+		}
+		_, fenced := mdfence.Parse(text)
+		switch len(fenced) {
+		case 0:
+			return "/copy reply"
+		case 1:
+			return "/copy reply · /copy code"
+		default:
+			return fmt.Sprintf("/copy reply · /copy code 1-%d", len(fenced))
+		}
+	}
+	return ""
 }
 
 // renderStatusRow draws the composer status row shown between the scrollback and

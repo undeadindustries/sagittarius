@@ -1,7 +1,6 @@
 package bubbletea
 
 import (
-	"fmt"
 	"regexp"
 	"strings"
 
@@ -52,29 +51,22 @@ type mdLine struct {
 // renderMarkdownLines converts assistant text into styled, width-wrapped lines,
 // tracking whether each line is verbatim code. Fence parsing is shared with
 // /copy code via internal/mdfence, so a block the renderer shows as verbatim is
-// the same block that command copies (nested fences included).
+// the same block that command copies (nested fences included). The scrollback
+// itself never carries copy instructions — the /copy hint lives in the status
+// row, outside the viewport, so a mouse selection of the reply stays clean.
 func renderMarkdownLines(text string, width int, th theme.Theme) []mdLine {
 	if width < 1 {
 		width = 1
 	}
 	var out []mdLine
-	// Hints are held until the reply is fully rendered. Emitting one under each
-	// fence puts "/copy code N" in the middle of a message the user is selecting
-	// by hand, so the copied text contains the hint.
-	var wrapHints []mdLine
-	lines, blocks := mdfence.Parse(text)
-	wrapped := make(map[int]bool, len(blocks))
+	lines, _ := mdfence.Parse(text)
 	for i := 0; i < len(lines); i++ {
 		line := lines[i]
 		switch line.Kind {
 		case mdfence.LineFence:
 			continue // hide the fence markers themselves
 		case mdfence.LineCode:
-			rows := renderCodeLine(line.Text, width, th)
-			if len(rows) > 1 && line.Block >= 0 {
-				wrapped[line.Block] = true
-			}
-			for _, r := range rows {
+			for _, r := range renderCodeLine(line.Text, width, th) {
 				out = append(out, mdLine{text: r, verbatim: true})
 			}
 			continue
@@ -91,15 +83,7 @@ func renderMarkdownLines(text string, width int, th theme.Theme) []mdLine {
 			out = append(out, mdLine{text: r, verbatim: false})
 		}
 	}
-	// A hint is numbered by the kept blocks only: mdfence drops empty fences,
-	// which is exactly what /copy code skips, so the numbers always agree. An
-	// unterminated fence (mid-stream) gets no hint.
-	for i, blk := range blocks {
-		if blk.Closed && wrapped[i] {
-			wrapHints = append(wrapHints, mdLine{text: renderCodeWrapHint(i+1, width, th), verbatim: false})
-		}
-	}
-	return append(out, wrapHints...)
+	return out
 }
 
 // renderMarkdown converts assistant text into styled, width-wrapped lines.
@@ -110,13 +94,6 @@ func renderMarkdown(text string, width int, th theme.Theme) []string {
 		res[i] = l.text
 	}
 	return res
-}
-
-// renderCodeWrapHint returns the dim pointer to /copy code [N], truncated so it
-// cannot overflow a narrow terminal.
-func renderCodeWrapHint(blockIndex, width int, th theme.Theme) string {
-	hint := fmt.Sprintf("wrapped to fit · /copy code %d for the exact text", blockIndex)
-	return th.Dim.Render(truncateVisible(hint, width))
 }
 
 // renderCodeLine renders a verbatim code line, wrapping (not truncating) so
