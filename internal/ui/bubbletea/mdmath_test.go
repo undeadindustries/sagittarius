@@ -53,6 +53,17 @@ func TestRenderMathInProse(t *testing.T) {
 		{"currency hundred closed", "price $100$", "price $100$"},
 		{"shell path", "export $PATH and $HOME", "export $PATH and $HOME"},
 		{"unclosed dollar", "see $foo later", "see $foo later"},
+
+		// A closing $ followed by an identifier character starts the next
+		// variable (Pandoc tex_math_dollars); it does not end math.
+		{"php variables", "if ($new && !empty($last_customer_thread)) {", "if ($new && !empty($last_customer_thread)) {"},
+		{"shell copy vars", "cp $SRC $DST", "cp $SRC $DST"},
+		{"dollar before underscore", "echo $HOME$_tmp", "echo $HOME$_tmp"},
+		{"dollar before digit", "range $1$2 done", "range $1$2 done"},
+		// Both directions: ordinary math with a trailing comma or space still
+		// renders, so the guard cannot over-correct.
+		{"math then comma", "$x$, then prose", "x, then prose"},
+		{"math then space", `$\alpha$ and prose`, "α and prose"},
 		{"unknown command", `C:\Users\rob`, `C:\Users\rob`},
 		{"empty", "", ""},
 		{"plain prose", "no math here", "no math here"},

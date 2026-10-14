@@ -207,6 +207,13 @@ func scanDollarMath(runes []rune, i int) (string, int, bool) {
 		if j == i+1 {
 			continue
 		}
+		// Pandoc's tex_math_dollars rule: a closing $ immediately followed by
+		// a letter, digit, or _ starts the next shell/PHP variable rather than
+		// ending math. Without this, "$new && !empty($last_customer_thread)"
+		// loses its $ signs to a bogus "new && !empty(" span.
+		if j+1 < len(runes) && (unicode.IsLetter(runes[j+1]) || unicode.IsDigit(runes[j+1]) || runes[j+1] == '_') {
+			continue
+		}
 		inner := string(runes[i+1 : j])
 		if unicode.IsDigit(runes[i+1]) && !looksLikeMathInner(inner) {
 			return "", i, false
