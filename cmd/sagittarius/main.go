@@ -1282,8 +1282,10 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 	// process apart from an abandoned session. Best-effort: a nil release means
 	// we are simply not registered as the live holder (the process still runs).
 	var livenessRelease func()
+	var livenessDir string
 	if projectRoot != "" {
 		if tmpDir, err := storage.ProjectTmpDir(projectRoot); err == nil {
+			livenessDir = tmpDir
 			livenessRelease = session.Acquire(tmpDir, session.LivenessInfo{SessionID: sessID})
 		}
 	}
@@ -1332,6 +1334,8 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		Snapshotter:          snapMgr,
 		AllowFix:             allowFix,
 		LivenessRelease:      livenessRelease,
+		LivenessDir:          livenessDir,
+		LivenessKey:          sessID,
 		HooksRegistry:        hooksReg,
 		SpillDir:             spillDir,
 		ScriptToolEnabled:    config.ScriptToolEnabled(settings, nil),

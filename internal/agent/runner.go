@@ -131,6 +131,12 @@ type RunnerConfig struct {
 	// lets the kernel release it instead, which is exactly the unclean-exit
 	// signal the resume banner relies on. Nil-safe. Best-effort and idempotent.
 	LivenessRelease func()
+	// LivenessDir is the directory holding the per-session liveness locks
+	// (storage.ProjectTmpDir) and LivenessKey is the session id LivenessRelease
+	// holds. Together they let SwitchSession move the lock to another session.
+	// An empty LivenessDir disables switching, because liveness cannot be proven.
+	LivenessDir string
+	LivenessKey string
 	// HooksRegistry holds the lifecycle hooks registry.
 	HooksRegistry *hooks.Registry
 	// SpillDir is where truncated tool outputs are written. Empty disables
@@ -336,8 +342,14 @@ type Runner struct {
 	// livenessRelease drops the session liveness lock on Close(); nil when the
 	// lock was not acquired (best-effort acquisition) or recording is disabled.
 	livenessRelease func()
-	hooksRegistry   *hooks.Registry
-	firstTurnOnce   sync.Once
+	// livenessDir and livenessKey identify the held lock. livenessMu guards
+	// livenessRelease and livenessKey, which SwitchSession swaps while Close may
+	// run from another goroutine.
+	livenessDir   string
+	livenessKey   string
+	livenessMu    sync.Mutex
+	hooksRegistry *hooks.Registry
+	firstTurnOnce sync.Once
 	// hookSkipWarned keys untrusted-hook skip warnings so a denied project
 	// hook logs once per session instead of once per event.
 	hookSkipWarned sync.Map
@@ -427,9 +439,7 @@ func (r *Runner) Close() error {
 	// Drop the liveness lock on a normal shutdown. A crash or SIGHUP skips this
 	// and the kernel releases the lock instead — the distinction the resume
 	// banner keys off.
-	if r.livenessRelease != nil {
-		r.livenessRelease()
-	}
+	r.releaseLiveness()
 	return r.verboseLog.Close()
 }
 
@@ -524,6 +534,8 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		initialSessionGrants:  cfg.InitialSessionGrants,
 		verboseLog:            newVerboseLog(cfg.VerboseLog),
 		livenessRelease:       cfg.LivenessRelease,
+		livenessDir:           cfg.LivenessDir,
+		livenessKey:           cfg.LivenessKey,
 		hooksRegistry:         cfg.HooksRegistry,
 		systemPromptOverride:  cfg.SystemPromptOverride,
 		maxToolRoundsOverride: cfg.MaxToolRoundsOverride,
@@ -2829,8 +2841,7 @@ func (r *Runner) Stats() ui.SessionStats {
 // fresh session instead of being appended to the cleared conversation. No-op
 // when session recording is disabled.
 func (r *Runner) RotateSession() {
-	r.firstTurnOnce = sync.Once{}
-	r.resetSubagentAttempts()
+	r.resetSessionScopedRuntime()
 	if r.sessionRecorder != nil {
 		r.sessionRecorder.Rotate()
 
