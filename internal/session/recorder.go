@@ -178,6 +178,25 @@ func (r *Recorder) RotateToFile(sessionID, filename string) {
 	r.rotateLocked(sessionID, filename)
 }
 
+// AttachToFile points the recorder at an existing session file so subsequent
+// turns append to it. It is the in-process counterpart of resuming on launch
+// (NewManagerForResume), and unlike rotateLocked it writes no metadata header:
+// the file already has one, and a second header would make the loader report
+// the switch time as the session's start. The title is seeded in memory only so
+// auto-titling never overwrites a title already on disk.
+func (r *Recorder) AttachToFile(path, sessionID, summary string) error {
+	if strings.TrimSpace(path) == "" || strings.TrimSpace(sessionID) == "" {
+		return fmt.Errorf("session: attach requires a file path and session id")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.filePath = path
+	r.sessionID = sessionID
+	r.summary = summary
+	r.disabled = false
+	return nil
+}
+
 // rotateLocked performs the retarget shared by Rotate and RotateToFile; caller must
 // hold r.mu.
 func (r *Recorder) rotateLocked(newSessionID, filename string) {
