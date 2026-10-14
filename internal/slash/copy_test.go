@@ -159,3 +159,45 @@ func TestCopyCodeUnclosedFence(t *testing.T) {
 		t.Fatalf("Clipboard = %q, want %q", res.Clipboard, want)
 	}
 }
+
+// freeScoutIssueBody is the reported FreeScout failure shape: a GitHub issue
+// document with same-length ```php fences inside it.
+const freeScoutIssueBody = "### Title\n" +
+	"Merged customer keeps the deleted customer's last thread\n" +
+	"\n" +
+	"### Description\n" +
+	"When a customer is merged, the target record is deleted but the\n" +
+	"conversation list still shows the old thread. In `CustomerController.php`:\n" +
+	"\n" +
+	"```php\n" +
+	"$new = $request->input('new_customer_id');\n" +
+	"if ($new && !empty($last_customer_thread)) {\n" +
+	"    $last_customer_thread->customer_id = $new;\n" +
+	"    $last_customer_thread->save();\n" +
+	"}\n" +
+	"```\n" +
+	"\n" +
+	"The update never runs because `$last_customer_thread` is stale."
+
+// The model wraps the whole issue in a ```markdown fence for copying.
+const freeScoutIssueReply = "Here is the issue:\n```markdown\n" + freeScoutIssueBody + "\n```\n"
+
+func TestCopyCodeNestedMarkdownBlock(t *testing.T) {
+	t.Parallel()
+	deps, _, hooks := testDeps(t, nil)
+	hooks.lastAssistant = freeScoutIssueReply
+	p := slash.NewProcessor()
+
+	res := p.Process(context.Background(), "/copy code 2", deps)
+	if joined := strings.Join(res.Messages, "\n"); !strings.Contains(joined, "Only 1 block is available") {
+		t.Fatalf("inner fences must not count as blocks: %q", joined)
+	}
+
+	res = p.Process(context.Background(), "/copy code 1", deps)
+	if res.Err != nil {
+		t.Fatalf("unexpected error: %v", res.Err)
+	}
+	if res.Clipboard != freeScoutIssueBody {
+		t.Fatalf("Clipboard = %q, want full issue with inner fences %q", res.Clipboard, freeScoutIssueBody)
+	}
+}

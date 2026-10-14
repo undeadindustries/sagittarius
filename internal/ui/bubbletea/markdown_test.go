@@ -246,3 +246,52 @@ func TestMarkdownWrapHintsFollowTheWholeReply(t *testing.T) {
 		t.Errorf("wrap hint at %d is before the end of the reply at %d:\n%s", hint, outro, plain)
 	}
 }
+
+// freeScoutIssueReply is the reported failure shape: a model answers "write a
+// GitHub issue I can paste" by wrapping the whole document in a ```markdown
+// fence with same-length ```php fences inside it. A toggling fence parser
+// treats the first ```php as the closing fence, renders the PHP as prose, and
+// the math renderer then eats the $ variable signs.
+const freeScoutIssueReply = "Here is the issue:\n" +
+	"```markdown\n" +
+	"### Title\n" +
+	"Merged customer keeps the deleted customer's last thread\n" +
+	"\n" +
+	"### Description\n" +
+	"When a customer is merged, the target record is deleted but the\n" +
+	"conversation list still shows the old thread. In `CustomerController.php`:\n" +
+	"\n" +
+	"```php\n" +
+	"$new = $request->input('new_customer_id');\n" +
+	"if ($new && !empty($last_customer_thread)) {\n" +
+	"    $last_customer_thread->customer_id = $new;\n" +
+	"    $last_customer_thread->save();\n" +
+	"}\n" +
+	"```\n" +
+	"\n" +
+	"The update never runs because `$last_customer_thread` is stale.\n" +
+	"```\n"
+
+func TestMarkdownNestedMarkdownFenceKeepsRawDocument(t *testing.T) {
+	t.Parallel()
+	lines := renderMarkdown(freeScoutIssueReply, 100, theme.Greyscale())
+	joined := stripANSI(strings.Join(lines, "\n"))
+	// Everything between the outer fences is one verbatim block: headings keep
+	// their markers, inner fences stay visible, and $ variables survive.
+	for _, raw := range []string{
+		"### Title",
+		"### Description",
+		"```php",
+		"if ($new && !empty($last_customer_thread)) {",
+		"$last_customer_thread->save();",
+		"`$last_customer_thread` is stale.",
+	} {
+		if !strings.Contains(joined, raw) {
+			t.Errorf("raw content %q lost or rewritten:\n%s", raw, joined)
+		}
+	}
+	// Only the outer fence markers are hidden.
+	if strings.Contains(joined, "```markdown") {
+		t.Errorf("outer fence marker should be hidden:\n%s", joined)
+	}
+}

@@ -30,9 +30,17 @@ func TestExtractFencedCode(t *testing.T) {
 			count: 2,
 		},
 		{
-			name:  "indented fence",
+			// CommonMark 4.5: content is dedented by the opening fence's
+			// indentation, so a fence nested in a list copies the bare command.
+			name:  "indented fence dedents body",
 			in:    "  ```\n  sudo mount -a\n  ```",
-			want:  "  sudo mount -a",
+			want:  "sudo mount -a",
+			count: 1,
+		},
+		{
+			name:  "indent beyond the fence is kept",
+			in:    "  ```\n    indented once more\n  ```",
+			want:  "  indented once more",
 			count: 1,
 		},
 		{

@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
 
+	"github.com/undeadindustries/sagittarius/internal/mdfence"
 	"github.com/undeadindustries/sagittarius/internal/ui/theme"
 )
 
@@ -49,7 +50,9 @@ type mdLine struct {
 }
 
 // renderMarkdownLines converts assistant text into styled, width-wrapped lines,
-// tracking whether each line is verbatim code.
+// tracking whether each line is verbatim code. Fence parsing is shared with
+// /copy code via internal/mdfence, so a block the renderer shows as verbatim is
+// the same block that command copies (nested fences included).
 func renderMarkdownLines(text string, width int, th theme.Theme) []mdLine {
 	if width < 1 {
 		width = 1
@@ -59,51 +62,41 @@ func renderMarkdownLines(text string, width int, th theme.Theme) []mdLine {
 	// fence puts "/copy code N" in the middle of a message the user is selecting
 	// by hand, so the copied text contains the hint.
 	var wrapHints []mdLine
-	inCode := false
-	codeWrapped := false
-	// codeHasContent mirrors extractFencedCodeBlocks in internal/slash, which
-	// drops whitespace-only fences. blockIndex is the /copy code N number, so it
-	// must advance only for blocks that command will actually count.
-	codeHasContent := false
-	blockIndex := 0
-	rawLines := strings.Split(text, "\n")
-	for i := 0; i < len(rawLines); i++ {
-		raw := rawLines[i]
-		if strings.HasPrefix(strings.TrimSpace(raw), "```") {
-			if inCode && codeHasContent {
-				blockIndex++
-				if codeWrapped {
-					wrapHints = append(wrapHints, mdLine{text: renderCodeWrapHint(blockIndex, width, th), verbatim: false})
-				}
-			}
-			inCode = !inCode
-			codeWrapped = false
-			codeHasContent = false
+	lines, blocks := mdfence.Parse(text)
+	wrapped := make(map[int]bool, len(blocks))
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
+		switch line.Kind {
+		case mdfence.LineFence:
 			continue // hide the fence markers themselves
-		}
-		if inCode {
-			if strings.TrimSpace(raw) != "" {
-				codeHasContent = true
-			}
-			rows := renderCodeLine(raw, width, th)
-			if len(rows) > 1 {
-				codeWrapped = true
+		case mdfence.LineCode:
+			rows := renderCodeLine(line.Text, width, th)
+			if len(rows) > 1 && line.Block >= 0 {
+				wrapped[line.Block] = true
 			}
 			for _, r := range rows {
 				out = append(out, mdLine{text: r, verbatim: true})
 			}
 			continue
 		}
-		if isTableStart(rawLines, i) {
-			tbl, nextI := collectTable(rawLines, i)
+		if isTableStart(lines, i) {
+			tbl, nextI := collectTable(lines, i)
 			for _, r := range renderTable(tbl, width, th) {
 				out = append(out, mdLine{text: r, verbatim: false})
 			}
 			i = nextI - 1
 			continue
 		}
-		for _, r := range renderProseLine(raw, width, th) {
+		for _, r := range renderProseLine(line.Text, width, th) {
 			out = append(out, mdLine{text: r, verbatim: false})
+		}
+	}
+	// A hint is numbered by the kept blocks only: mdfence drops empty fences,
+	// which is exactly what /copy code skips, so the numbers always agree. An
+	// unterminated fence (mid-stream) gets no hint.
+	for i, blk := range blocks {
+		if blk.Closed && wrapped[i] {
+			wrapHints = append(wrapHints, mdLine{text: renderCodeWrapHint(i+1, width, th), verbatim: false})
 		}
 	}
 	return append(out, wrapHints...)
@@ -181,16 +174,17 @@ func truncateVisible(s string, width int) string {
 }
 
 // isTableStart reports whether line i is the header of a GFM table followed by
-// a valid separator row at line i+1.
-func isTableStart(lines []string, i int) bool {
+// a valid separator row at line i+1. Both lines must be prose: a pipe-heavy
+// line inside a code fence is verbatim content, never a table.
+func isTableStart(lines []mdfence.Line, i int) bool {
 	if i+1 >= len(lines) {
 		return false
 	}
-	headerTrimmed := strings.TrimSpace(lines[i])
-	if headerTrimmed == "" || !strings.Contains(headerTrimmed, "|") {
+	if lines[i].Kind != mdfence.LineProse || lines[i+1].Kind != mdfence.LineProse {
 		return false
 	}
-	if strings.HasPrefix(headerTrimmed, "```") {
+	headerTrimmed := strings.TrimSpace(lines[i].Text)
+	if headerTrimmed == "" || !strings.Contains(headerTrimmed, "|") {
 		return false
 	}
 	headerCells := splitTableRow(headerTrimmed)
@@ -208,7 +202,7 @@ func isTableStart(lines []string, i int) bool {
 		return false
 	}
 
-	sepAligns, isSep := isTableSeparator(lines[i+1])
+	sepAligns, isSep := isTableSeparator(lines[i+1].Text)
 	if !isSep {
 		return false
 	}
@@ -263,15 +257,18 @@ func splitTableRow(line string) []string {
 }
 
 // collectTable consumes a contiguous GFM table block starting at line i.
-func collectTable(lines []string, i int) (tableBlock, int) {
-	headerCells := splitTableRow(lines[i])
-	aligns, _ := isTableSeparator(lines[i+1])
+func collectTable(lines []mdfence.Line, i int) (tableBlock, int) {
+	headerCells := splitTableRow(lines[i].Text)
+	aligns, _ := isTableSeparator(lines[i+1].Text)
 
 	var rows [][]string
 	k := i + 2
 	for k < len(lines) {
-		line := strings.TrimSpace(lines[k])
-		if line == "" || strings.HasPrefix(line, "```") {
+		if lines[k].Kind != mdfence.LineProse {
+			break
+		}
+		line := strings.TrimSpace(lines[k].Text)
+		if line == "" {
 			break
 		}
 		if !strings.Contains(line, "|") {

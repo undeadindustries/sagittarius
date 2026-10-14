@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/undeadindustries/sagittarius/internal/mdfence"
 )
 
 func copyCommand() Command {
@@ -71,34 +73,15 @@ func copyLastAssistant(ctx *Context, codeOnly bool) Result {
 // extractFencedCodeBlocks returns the bodies of markdown fenced code blocks in text,
 // in document order. Fence markers and language tags are stripped. Empty fences are skipped.
 // An unclosed fence at EOF still yields its captured body so a truncated reply is copyable.
-// extractFencedCodeBlocks returns the bodies of markdown fenced code blocks in text,
-// in document order. Fence markers and language tags are stripped. Empty fences are skipped.
-// An unclosed fence at EOF still yields its captured body so a truncated reply is copyable.
+// The parser is shared with the TUI renderer (internal/mdfence), so the block
+// /copy code N extracts is the block the scrollback rendered as verbatim code.
 func extractFencedCodeBlocks(text string) []string {
-	var blocks []string
-	var cur []string
-	in := false
-	for _, raw := range strings.Split(text, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(raw), "```") {
-			if in {
-				if body := strings.Join(cur, "\n"); strings.TrimSpace(body) != "" {
-					blocks = append(blocks, body)
-				}
-				cur = nil
-			}
-			in = !in
-			continue
-		}
-		if in {
-			cur = append(cur, strings.TrimRight(raw, "\r"))
-		}
+	_, blocks := mdfence.Parse(text)
+	bodies := make([]string, len(blocks))
+	for i, b := range blocks {
+		bodies[i] = b.Body
 	}
-	if in {
-		if body := strings.Join(cur, "\n"); strings.TrimSpace(body) != "" {
-			blocks = append(blocks, body)
-		}
-	}
-	return blocks
+	return bodies
 }
 
 // extractFencedCode returns the joined bodies of markdown fenced code blocks in text,
