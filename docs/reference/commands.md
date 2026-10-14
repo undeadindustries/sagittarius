@@ -167,7 +167,13 @@ and resets to off on the next launch.
 - **Usage:**
   - `/chat list`: List saved checkpoints and recent sessions.
   - `/chat save <tag> [force]`: Save the current conversation as a named checkpoint (a trailing `force` overwrites an existing one). A tag becomes a filename, so it is limited to letters, digits, `.`, `_` and `-`; a multi-word name is joined with dashes (`/chat save sglang testing` saves `sglang-testing`) and the resolved tag is echoed back.
-  - `/chat resume <tag>` (alias `/chat load`): Restore a checkpoint into the live session. Tags are normalized as in `save`, so a two-word name resumes what it saved.
+  - `/chat resume` (alias `/chat load`): With no argument, opens a menu of this project's sessions (newest first) and saved checkpoints. Up/Down move, Enter switches, Esc cancels and changes nothing. Selecting `resume` from the `/chat ` dropdown with Enter opens the same menu.
+  - `/chat resume <n|id|tag>`: Switch directly. A checkpoint tag is tried first, then the session index shown by `/chat list`, then a full session id. Tags are normalized as in `save`, so a two-word name resumes what it saved. A tag that is all digits shadows the session with that index, and `save` warns when you pick one.
+    - Switching to a session moves this process's recording to that file and appends new turns there. It replaces the live conversation, goal, constraints, scratchpad, and read-only posture with the target's. The departing session is marked as cleanly exited.
+    - A session open in another terminal is refused, because two processes appending to one file would corrupt it. A switch is also refused while a turn is running (press Esc first) and when the target is the current session.
+    - `/undo` and `/diff` still cover writes made earlier in this process, not writes from the session you switched away from.
+    - Headless `--slash "/chat resume"` cannot open the menu; use `/chat resume <n|id|tag>` there.
+  - Restoring a checkpoint copies its history into the live runner and starts a fresh session file. It does not switch to an existing session.
   - `/chat delete <tag>`: Delete a saved checkpoint.
   - `/chat rename <title>`: Set the current session's title (shown in session lists). Titles are trimmed, capped at 80 characters, and have control characters stripped.
   - `/chat fork`: Copy the current conversation into a **new** session and switch recording to it. The forked session inherits the title with a `" (fork)"` suffix and the recorded git branch. End-of-conversation only; fork-from-a-message is not yet supported.
