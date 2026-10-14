@@ -55,25 +55,36 @@ func renderMarkdownLines(text string, width int, th theme.Theme) []mdLine {
 		width = 1
 	}
 	var out []mdLine
+	// Hints are held until the reply is fully rendered. Emitting one under each
+	// fence puts "/copy code N" in the middle of a message the user is selecting
+	// by hand, so the copied text contains the hint.
+	var wrapHints []mdLine
 	inCode := false
 	codeWrapped := false
+	// codeHasContent mirrors extractFencedCodeBlocks in internal/slash, which
+	// drops whitespace-only fences. blockIndex is the /copy code N number, so it
+	// must advance only for blocks that command will actually count.
+	codeHasContent := false
 	blockIndex := 0
 	rawLines := strings.Split(text, "\n")
 	for i := 0; i < len(rawLines); i++ {
 		raw := rawLines[i]
 		if strings.HasPrefix(strings.TrimSpace(raw), "```") {
-			if inCode {
-				if codeWrapped {
-					out = append(out, mdLine{text: renderCodeWrapHint(blockIndex, width, th), verbatim: false})
-				}
-			} else {
+			if inCode && codeHasContent {
 				blockIndex++
+				if codeWrapped {
+					wrapHints = append(wrapHints, mdLine{text: renderCodeWrapHint(blockIndex, width, th), verbatim: false})
+				}
 			}
 			inCode = !inCode
 			codeWrapped = false
+			codeHasContent = false
 			continue // hide the fence markers themselves
 		}
 		if inCode {
+			if strings.TrimSpace(raw) != "" {
+				codeHasContent = true
+			}
 			rows := renderCodeLine(raw, width, th)
 			if len(rows) > 1 {
 				codeWrapped = true
@@ -95,7 +106,7 @@ func renderMarkdownLines(text string, width int, th theme.Theme) []mdLine {
 			out = append(out, mdLine{text: r, verbatim: false})
 		}
 	}
-	return out
+	return append(out, wrapHints...)
 }
 
 // renderMarkdown converts assistant text into styled, width-wrapped lines.

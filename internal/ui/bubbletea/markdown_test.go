@@ -211,4 +211,38 @@ func TestMarkdownMultipleBlocksHintIndices(t *testing.T) {
 	if !strings.Contains(plain, "/copy code 2") {
 		t.Errorf("expected block 2 hint in output:\n%s", plain)
 	}
+	// Both hints follow the reply. A hint between the blocks is copied when
+	// the user selects the message by hand.
+	if strings.Index(plain, "/copy code 1") < strings.Index(plain, "prose") {
+		t.Errorf("block 1 hint appeared before the prose that follows its fence:\n%s", plain)
+	}
+}
+
+// /copy code N numbers only fences with content, so the hint must too.
+func TestMarkdownHintIndexSkipsEmptyFences(t *testing.T) {
+	t.Parallel()
+	md := "```\n```\n```\n   \n\n```\n```\n" + reportedFenceBody + "```\n"
+	plain := stripANSI(strings.Join(renderMarkdown(md, 80, theme.Greyscale()), "\n"))
+	if !strings.Contains(plain, "/copy code 1") {
+		t.Errorf("hint should name block 1 (empty fences are not counted):\n%s", plain)
+	}
+	for _, wrong := range []string{"/copy code 2", "/copy code 3"} {
+		if strings.Contains(plain, wrong) {
+			t.Errorf("hint counted an empty fence (%q):\n%s", wrong, plain)
+		}
+	}
+}
+
+func TestMarkdownWrapHintsFollowTheWholeReply(t *testing.T) {
+	t.Parallel()
+	md := "intro\n```\n" + reportedFenceBody + "```\nmiddle\n```\n" + reportedFenceBody + "```\noutro\n"
+	plain := stripANSI(strings.Join(renderMarkdown(md, 80, theme.Greyscale()), "\n"))
+	outro := strings.LastIndex(plain, "outro")
+	hint := strings.Index(plain, "wrapped to fit")
+	if outro < 0 || hint < 0 {
+		t.Fatalf("missing outro or hint:\n%s", plain)
+	}
+	if hint < outro {
+		t.Errorf("wrap hint at %d is before the end of the reply at %d:\n%s", hint, outro, plain)
+	}
 }
