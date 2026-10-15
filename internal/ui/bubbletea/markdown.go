@@ -43,9 +43,16 @@ type tableBlock struct {
 
 // mdLine represents a rendered line of assistant markdown.
 // verbatim indicates code lines that should not receive synthetic continuation indents.
+// cont marks a soft-wrapped continuation of the previous row, join is the
+// source whitespace the wrap consumed at that boundary, and indent counts the
+// synthetic leading columns (bullet hanging indent) that are not content; the
+// mouse selection uses these to copy the source text rather than the wrapping.
 type mdLine struct {
 	text     string
 	verbatim bool
+	cont     bool
+	join     string
+	indent   int
 }
 
 // renderMarkdownLines converts assistant text into styled, width-wrapped lines,
@@ -66,9 +73,7 @@ func renderMarkdownLines(text string, width int, th theme.Theme) []mdLine {
 		case mdfence.LineFence:
 			continue // hide the fence markers themselves
 		case mdfence.LineCode:
-			for _, r := range renderCodeLine(line.Text, width, th) {
-				out = append(out, mdLine{text: r, verbatim: true})
-			}
+			out = append(out, renderCodeRows(line.Text, width, th)...)
 			continue
 		}
 		if isTableStart(lines, i) {
@@ -79,9 +84,7 @@ func renderMarkdownLines(text string, width int, th theme.Theme) []mdLine {
 			i = nextI - 1
 			continue
 		}
-		for _, r := range renderProseLine(line.Text, width, th) {
-			out = append(out, mdLine{text: r, verbatim: false})
-		}
+		out = append(out, renderProseRows(line.Text, width, th)...)
 	}
 	return out
 }
@@ -96,51 +99,54 @@ func renderMarkdown(text string, width int, th theme.Theme) []string {
 	return res
 }
 
-// renderCodeLine renders a verbatim code line, wrapping (not truncating) so
+// renderCodeRows renders a verbatim code line, wrapping (not truncating) so
 // every character stays on screen. Indentation on the first visual row is
 // preserved; continuation rows get no synthetic indent, because spaces we
 // invent would corrupt a mouse-drag paste. There is no left-bar prefix: a
 // copyable "│ " gutter made mouse-select paste unusable for commands the
 // model asked the user to run. Theme.Code still distinguishes the block
 // from prose.
-func renderCodeLine(line string, width int, th theme.Theme) []string {
-	return wrapVerbatimStyled(line, width, th.Code)
+func renderCodeRows(line string, width int, th theme.Theme) []mdLine {
+	rows := wrapVerbatim(line, width)
+	joins := wrapJoins(sanitizeDisplayText(line), rows)
+	out := make([]mdLine, len(rows))
+	for i, r := range rows {
+		out[i] = mdLine{text: th.Code.Render(r), verbatim: true, cont: i > 0, join: joins[i]}
+	}
+	return out
 }
 
-// renderProseLine handles headings, bullets, and paragraphs with inline styling.
-func renderProseLine(line string, width int, th theme.Theme) []string {
-	if m := mdHeading.FindStringSubmatch(line); m != nil {
-		return wrapStyled(renderMathInProse(m[2]), width, th.Title)
-	}
+// renderProseRows handles headings, bullets, and paragraphs with inline styling.
+func renderProseRows(line string, width int, th theme.Theme) []mdLine {
+	style := lipgloss.Style{}
 	prefix := ""
 	body := line
-	if m := mdBullet.FindStringSubmatch(line); m != nil {
+	heading := false
+	if m := mdHeading.FindStringSubmatch(line); m != nil {
+		heading, style, body = true, th.Title, m[2]
+	} else if m := mdBullet.FindStringSubmatch(line); m != nil {
 		prefix = m[1] + "• "
 		body = m[2]
 	}
 	body = renderMathInProse(body)
 	pw := lipgloss.Width(prefix)
 	wrapped := strings.Split(wrapText(body, max(width-pw, 1)), "\n")
-	out := make([]string, 0, len(wrapped))
+	joins := wrapJoins(body, wrapped)
+	out := make([]mdLine, 0, len(wrapped))
 	for i, w := range wrapped {
-		styled := styleInline(w, th)
-		if i == 0 && prefix != "" {
-			out = append(out, th.Accent.Render(prefix)+styled)
-		} else if prefix != "" {
-			out = append(out, strings.Repeat(" ", pw)+styled)
-		} else {
-			out = append(out, styled)
+		row := mdLine{cont: i > 0, join: joins[i]}
+		switch {
+		case heading:
+			row.text = style.Render(w)
+		case i == 0 && prefix != "":
+			row.text = th.Accent.Render(prefix) + styleInline(w, th)
+		case prefix != "":
+			row.text = strings.Repeat(" ", pw) + styleInline(w, th)
+			row.indent = pw
+		default:
+			row.text = styleInline(w, th)
 		}
-	}
-	return out
-}
-
-// wrapStyled wraps plain text and applies a single style to each line.
-func wrapStyled(text string, width int, style lipgloss.Style) []string {
-	wrapped := strings.Split(wrapText(text, width), "\n")
-	out := make([]string, 0, len(wrapped))
-	for _, w := range wrapped {
-		out = append(out, style.Render(w))
+		out = append(out, row)
 	}
 	return out
 }

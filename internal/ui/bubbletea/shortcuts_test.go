@@ -146,8 +146,8 @@ func newShortcutModel(app ui.App) *model {
 func TestSetMouseTogglesAndReturnsCommand(t *testing.T) {
 	t.Parallel()
 	m := newTestModel()
-	if m.mouseEnabled {
-		t.Fatal("mouse should be off by default")
+	if !m.mouseEnabled {
+		t.Fatal("mouse should be on by default in the interactive TUI")
 	}
 	if cmd := m.setMouse(true); cmd == nil {
 		t.Fatal("enabling mouse should return a command")
@@ -171,7 +171,7 @@ func TestApplyMouseModeParsesArgument(t *testing.T) {
 	}{
 		{"on", true},
 		{"off", false},
-		{"toggle", true}, // from off -> on
+		{"toggle", false}, // from the on default -> off
 	}
 	for _, tc := range cases {
 		m := newTestModel()
@@ -185,6 +185,7 @@ func TestApplyMouseModeParsesArgument(t *testing.T) {
 func TestAltMKeyTogglesMouse(t *testing.T) {
 	t.Parallel()
 	m := newTestModel()
+	m.mouseEnabled = false
 	_, cmd := m.handleKey(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'m'}, Alt: true})
 	if cmd == nil {
 		t.Fatal("Alt+M should return a tea command")

@@ -128,7 +128,7 @@ These work in the interactive TUI in addition to the slash commands above.
 | `Ctrl+Shift+D` | Export the last provider request to a JSON file (works mid-turn; same as `/chat debug`) |
 | `Ctrl+O` | Expand or collapse a pasted text placeholder in place |
 | `Ctrl+X` | Cancel the selected subagent in a task group (select a card with Up/Down first); siblings keep running |
-| `Alt+M` | Toggle mouse-wheel scrolling (see below) |
+| `Alt+M` | Toggle mouse mode: wheel scrolling and drag-to-copy (on by default; see below) |
 | `Ctrl+B` | Open the background process viewer |
 | `PgUp` / `PgDn` / `Shift+Up` / `Shift+Down` | Scroll the conversation |
 | `Up` / `Down` / `Ctrl+P` / `Ctrl+N` | Navigate prompt history (at the input boundaries). Recalling a slash command does not open its completion menu, so the arrows keep moving through history; `Tab` opens the menu for the recalled line |
@@ -141,17 +141,47 @@ special characters for `Option+key` instead of Alt sequences, Sagittarius accept
 the characters `¡`, `™`, `£`, `¢` as aliases for `Alt+1..4`, `†` for `Alt+T`,
 and `µ` for `Alt+M`, so the shortcuts work out of the box.
 
-### Mouse scrolling vs. text selection
+### Mouse scrolling and selection
 
-Mouse-wheel scrolling is **off by default** so the terminal's native click-drag
-text selection works (for copy/paste). Enable wheel scrolling with `Alt+M` or
-`/mouse on`; while it is on, hold `Shift` to select text. Keyboard scrollback
-(`PgUp`/`PgDn`, `Shift+Up`/`Down`) works regardless. The setting is per-session
-and resets to off on the next launch.
+Mouse mode is **on by default** in the interactive TUI (off in
+`--screen-reader` mode). The wheel scrolls the conversation, and a click-drag
+selects text inside Sagittarius:
+
+- The selection is highlighted while you drag. Dragging to the top or bottom
+  row of the conversation scrolls it, and so does turning the wheel mid-drag,
+  so a selection can cover a reply longer than the window.
+- On release the selected text is copied, and the status row confirms it. A
+  plain click copies nothing.
+- The copy contains the source text, not the screen layout. Rows wrapped to
+  fit the window are rejoined (a wrapped command pastes as one line), and role
+  glyphs and tool-card borders are left out.
+
+For the terminal's own selection, hold `Shift` while dragging (`Option` in
+iTerm2) or turn mouse mode off with `Alt+M` / `/mouse off`. That selection
+only reaches the visible rows. Keyboard scrollback (`PgUp`/`PgDn`,
+`Shift+Up`/`Down`) works either way. `Alt+M` lasts for the session; the next
+launch starts with mouse mode on again.
+
+### Clipboard over SSH
+
+Every copy (`/copy`, `/copy code`, and drag selection) tries the local system
+clipboard. When the session is remote (`SSH_CONNECTION`, `SSH_TTY`, or
+`SSH_CLIENT` is set), or when no local clipboard is available, Sagittarius also
+writes an OSC 52 escape sequence to the terminal so the text reaches the
+clipboard on the machine you are typing on. Inside tmux the sequence is sent
+both plainly and wrapped in tmux passthrough. Inside GNU screen it is chunked
+into DCS strings. The terminal must allow OSC 52:
+
+- iTerm2: enable *Applications in terminal may access clipboard*.
+- tmux: `set -g set-clipboard on` (or `allow-passthrough on`).
+- kitty, WezTerm, Ghostty, Windows Terminal, and Alacritty allow it by default.
+
+The terminal sends no acknowledgement, so the confirmation says the text was
+*sent*. If nothing arrives, check the terminal setting above.
 
 ### `/mouse`
 
-- **Description:** Toggle mouse-wheel scrolling of the conversation.
+- **Description:** Toggle mouse mode (wheel scrolling and drag-to-copy).
 - **Usage:** `/mouse` (toggle), `/mouse on`, `/mouse off`, `/mouse show`.
 
 ### `/theme`
@@ -216,10 +246,11 @@ and resets to off on the next launch.
   are skipped) and treats a ```` ```markdown ```` block holding inner
   ```` ```php ```` fences as **one** block — the whole document, inner fences
   intact — matching how the reply rendered on screen. Tilde (`~~~`) fences
-  work too. Mouse-select in the TUI still copies whatever is on screen. A
-  fenced line that wrapped pastes with a newline at each wrap point; `/copy`
-  and `/copy code` copy the exact last reply (or its fenced bodies) without
-  those wraps. `/copy code` only covers the last assistant reply, so the hint
+  work too. A drag selection in mouse mode rejoins wrapped rows, but the
+  terminal's own selection (`Shift`+drag or mouse mode off) copies a newline
+  at each wrap point; `/copy` and `/copy code` always copy the exact last
+  reply (or its fenced bodies). Over SSH these copies go through OSC 52 (see
+  *Clipboard over SSH* above). `/copy code` only covers the last assistant reply, so the hint
   after an older block still runs against the newest one. Tool-card borders
   (write_file diffs) are unchanged; `/copy` never includes those. If the last
   reply has no fenced code, `/copy code` says so and copies nothing.

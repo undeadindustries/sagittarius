@@ -15,6 +15,8 @@ import (
 func TestCopyToClipboardIsAsync(t *testing.T) {
 	t.Parallel()
 	m := newTestModel()
+	m.localCopy = func(string) error { return nil }
+	m.getenv = func(string) string { return "" }
 	cmd := m.copyToClipboard("payload")
 	if cmd == nil {
 		t.Fatal("copyToClipboard returned nil cmd")
@@ -36,22 +38,23 @@ func TestHandleClipboardResult(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name      string
-		err       error
+		msg       clipboardResultMsg
 		wantBlock scrollRole
 		wantText  string
-		wantCmd   bool
 	}{
-		{"local", nil, roleInfo, "Copied to the clipboard.", false},
-		{"osc52", clipboard.ErrUnavailable, roleInfo, "OSC 52", true},
-		{"failure", errors.New("boom"), roleError, "Clipboard copy failed: boom", false},
+		{"local", clipboardResultMsg{}, roleInfo, "Copied to the clipboard."},
+		{"osc52 fallback", clipboardResultMsg{err: clipboard.ErrUnavailable, osc52: true}, roleInfo, "OSC 52"},
+		{"osc52 remote", clipboardResultMsg{osc52: true}, roleInfo, "OSC 52"},
+		{"failure", clipboardResultMsg{err: errors.New("boom")}, roleError, "Clipboard copy failed: boom"},
+		{"both fail", clipboardResultMsg{err: errors.New("boom"), osc52: true, oscErr: errors.New("tty gone")}, roleError, "tty gone"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			m := newTestModel()
-			cmd := m.handleClipboardResult(clipboardResultMsg{text: "x", err: tc.err})
-			if (cmd != nil) != tc.wantCmd {
-				t.Fatalf("cmd present = %v, want %v", cmd != nil, tc.wantCmd)
+			tc.msg.text = "x"
+			if cmd := m.handleClipboardResult(tc.msg); cmd != nil {
+				t.Fatal("handleClipboardResult should not return a command; OSC 52 is written directly")
 			}
 			if len(m.blocks) != 1 {
 				t.Fatalf("expected 1 block, got %d", len(m.blocks))
@@ -63,6 +66,67 @@ func TestHandleClipboardResult(t *testing.T) {
 				t.Fatalf("block text %q missing %q", m.blocks[0].text, tc.wantText)
 			}
 		})
+	}
+}
+
+// TestCopySinkWritesOSC52 pins when the OSC 52 sequence reaches the terminal:
+// always over SSH (a local copy there lands on the server), and locally only
+// as a fallback when the system clipboard is unavailable.
+func TestCopySinkWritesOSC52(t *testing.T) {
+	t.Parallel()
+	ok := func(string) error { return nil }
+	fail := func(string) error { return clipboard.ErrUnavailable }
+	tests := []struct {
+		name      string
+		local     func(string) error
+		env       map[string]string
+		wantOSC   bool
+		wantTmux  bool
+		wantLocal error
+	}{
+		{"local ok", ok, nil, false, false, nil},
+		{"local fails", fail, nil, true, false, clipboard.ErrUnavailable},
+		{"ssh", ok, map[string]string{"SSH_CONNECTION": "1 2 3 4"}, true, false, nil},
+		{"ssh in tmux", fail, map[string]string{"SSH_TTY": "/dev/pts/1", "TMUX": "/tmp/t,1,0"}, true, true, clipboard.ErrUnavailable},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var buf strings.Builder
+			sink := copySink{local: tc.local, out: &buf, getenv: func(k string) string { return tc.env[k] }}
+			res := sink.copy("hello", false)
+			if res.osc52 != tc.wantOSC {
+				t.Fatalf("osc52 = %v, want %v", res.osc52, tc.wantOSC)
+			}
+			if !errors.Is(res.err, tc.wantLocal) && res.err != tc.wantLocal {
+				t.Fatalf("err = %v, want %v", res.err, tc.wantLocal)
+			}
+			wrote := strings.Contains(buf.String(), clipboard.OSC52Sequence("hello"))
+			if wrote != tc.wantOSC {
+				t.Fatalf("wrote OSC 52 = %v, want %v (out %q)", wrote, tc.wantOSC, buf.String())
+			}
+			if got := strings.Contains(buf.String(), "\x1bPtmux;"); got != tc.wantTmux {
+				t.Fatalf("tmux passthrough = %v, want %v", got, tc.wantTmux)
+			}
+		})
+	}
+}
+
+// TestSilentClipboardResultUsesStatusRow verifies a selection copy reports in
+// the status row, never as a scrollback block that would shift the view.
+func TestSilentClipboardResultUsesStatusRow(t *testing.T) {
+	t.Parallel()
+	m := newTestModel()
+	m.handleClipboardResult(clipboardResultMsg{text: "héllo", silent: true})
+	if len(m.blocks) != 0 {
+		t.Fatalf("silent copy added %d blocks", len(m.blocks))
+	}
+	if m.copyHint != "Copied selection (5 chars)" {
+		t.Fatalf("copyHint = %q", m.copyHint)
+	}
+	m.handleClipboardResult(clipboardResultMsg{text: "x", silent: true, err: errors.New("boom")})
+	if !strings.Contains(m.copyHint, "boom") {
+		t.Fatalf("copyHint = %q, want the error", m.copyHint)
 	}
 }
 

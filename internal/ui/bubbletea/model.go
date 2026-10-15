@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -120,10 +123,16 @@ type turnDrainDoneMsg struct{ stalled bool }
 const abandonDrainTimeout = 3 * time.Second
 
 // clipboardResultMsg carries the outcome of an async clipboard copy started by
-// copyToClipboard, so the blocking copy runs off the UI goroutine.
+// copyToClipboard, so the blocking copy runs off the UI goroutine. err is the
+// local clipboard result; osc52 reports that an OSC 52 sequence was written to
+// the terminal (remote session or local failure), with oscErr its write error.
+// silent copies (mouse selection) report in the status row, not scrollback.
 type clipboardResultMsg struct {
-	text string
-	err  error
+	text   string
+	err    error
+	osc52  bool
+	oscErr error
+	silent bool
 }
 
 type statusMsg struct {
@@ -242,11 +251,24 @@ type model struct {
 	// does not yank the view away while the user is reading history.
 	followBottom bool
 
-	// mouseEnabled tracks whether mouse-wheel reporting is currently active.
-	// Mouse capture is OFF at launch so the terminal's native text selection
-	// works; Alt+M (or the /mouse command) toggles it via tea.EnableMouseCellMotion
-	// / tea.DisableMouse at runtime.
+	// mouseEnabled tracks whether mouse reporting is currently active. It is ON
+	// at launch: the wheel scrolls the conversation and a left-drag selects text
+	// in-app (selection.go), which, unlike the terminal's native selection, can
+	// span more than one screen. Alt+M (or /mouse) turns it off to hand
+	// selection back to the terminal.
 	mouseEnabled bool
+	// sel is the in-app mouse selection state (see selection.go); scrollLines
+	// is the last rendered scrollback with its per-row copy metadata.
+	sel         selectionState
+	scrollLines []scrollLine
+
+	// osc52Out receives OSC 52 clipboard sequences: the terminal in an
+	// interactive run, io.Discard otherwise so tests never emit escapes.
+	// getenv reads the environment for SSH / multiplexer detection.
+	// localCopy is the system clipboard write (clipboard.Copy).
+	osc52Out  io.Writer
+	getenv    func(string) string
+	localCopy func(string) error
 
 	busy     bool
 	quitting bool
@@ -425,6 +447,10 @@ func newModel(opts ui.Options, app ui.App, term *Terminal) *model {
 		followBottom:    true,
 		showThinking:    opts.ShowThinking,
 		pastes:          newPasteStore(),
+		mouseEnabled:    mouseDefaultOn(opts),
+		osc52Out:        io.Discard,
+		getenv:          os.Getenv,
+		localCopy:       clipboard.Copy,
 	}
 	m.syncInputPrompt(idleStatus.Mode)
 
@@ -500,19 +526,21 @@ func (m *model) beginQuit() tea.Cmd {
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.hasOverlay() {
+		if m.sel.dragging {
+			// The overlay swallows the release, so the drag could never end.
+			m.clearSelection()
+			m.refreshSelection()
+			m.followBottom = m.viewport.AtBottom()
+		}
 		return m.updateOverlay(msg)
 	}
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		return m.handleWindowSize(msg)
 	case tea.MouseMsg:
-		// Mouse-wheel scrolling of the conversation. The viewport only acts on
-		// wheel-press events; forward and track whether we are still pinned to
-		// the bottom so streamed output does not yank the view away.
-		var cmd tea.Cmd
-		m.viewport, cmd = m.viewport.Update(msg)
-		m.followBottom = m.viewport.AtBottom()
-		return m, cmd
+		return m.handleMouse(msg)
+	case selectionScrollTickMsg:
+		return m, m.handleSelectionScrollTick(msg)
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 	case toolkitScanMsg:
@@ -1356,6 +1384,8 @@ func (m *model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	m.viewport.Width = max(msg.Width-2, 1)
 	m.viewport.Height = m.bodyHeight()
 	m.syncInputLayout()
+	// A width change rewraps every row, so selection coordinates are stale.
+	m.clearSelection()
 	m.syncViewportContent()
 	return m, nil
 }
@@ -1378,8 +1408,9 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.exportRequestDebug()
 	}
 
-	// Alt+M toggles mouse-wheel scrolling in any state. It is off by default so
-	// the terminal's native click-drag text selection works. 'µ' is Mac Option+M.
+	// Alt+M toggles mouse reporting in any state. It is on by default (wheel
+	// scroll + in-app drag selection); off hands selection back to the
+	// terminal. 'µ' is Mac Option+M.
 	if msg.String() == "alt+m" || msg.String() == "µ" {
 		return m, m.setMouse(!m.mouseEnabled)
 	}
@@ -2557,26 +2588,69 @@ func scrollbackRoleToRole(r ui.ScrollbackRole) scrollRole {
 // so the copy runs inside the command and reports back via clipboardResultMsg
 // rather than blocking Update.
 func (m *model) copyToClipboard(text string) tea.Cmd {
+	return m.copyToClipboardMode(text, false)
+}
+
+// copyToClipboardMode is copyToClipboard with a silent flag for copies the user
+// did not type a command for (mouse selection), which report in the status row.
+func (m *model) copyToClipboardMode(text string, silent bool) tea.Cmd {
+	sink := copySink{local: m.localCopy, out: m.osc52Out, getenv: m.getenv}
 	return func() tea.Msg {
-		return clipboardResultMsg{text: text, err: clipboard.Copy(text)}
+		return sink.copy(text, silent)
 	}
 }
 
-// handleClipboardResult renders the outcome of an async clipboard copy, falling
-// back to an OSC 52 escape sequence (emitted via tea.Printf, the only
-// display-safe path) when no local clipboard mechanism is available.
+// copySink holds the clipboard destinations, captured on the UI goroutine so
+// the copy command reads no model state.
+type copySink struct {
+	local  func(string) error
+	out    io.Writer
+	getenv func(string) string
+}
+
+// copy writes text to the local clipboard and, when the session is
+// remote or the local copy failed, to the terminal via OSC 52. Over SSH a local
+// xclip/wl-copy either fails or fills the server's clipboard, so OSC 52 is the
+// path to the user's machine. The sequence is written straight to the terminal:
+// tea.Printf is dropped while the alternate screen is active. A single write
+// call keeps the sequence from interleaving with a renderer frame.
+func (s copySink) copy(text string, silent bool) clipboardResultMsg {
+	res := clipboardResultMsg{text: text, silent: silent, err: s.local(text)}
+	if clipboard.IsRemoteSession(s.getenv) || res.err != nil {
+		res.osc52 = true
+		res.oscErr = clipboard.WriteOSC52(s.out, text, s.getenv)
+	}
+	return res
+}
+
+// handleClipboardResult reports the outcome of an async clipboard copy.
 func (m *model) handleClipboardResult(msg clipboardResultMsg) tea.Cmd {
+	var role scrollRole
+	var text string
 	switch {
+	case msg.osc52 && msg.oscErr == nil:
+		// The terminal gives no acknowledgement, so this cannot claim success.
+		role, text = roleInfo, "Sent to the terminal clipboard (OSC 52). If nothing was copied, enable clipboard access (OSC 52) in your terminal."
 	case msg.err == nil:
-		m.addBlock(roleInfo, "Copied to the clipboard.")
-		return nil
-	case errors.Is(msg.err, clipboard.ErrUnavailable):
-		m.addBlock(roleInfo, "Copied via terminal clipboard (OSC 52).")
-		return tea.Printf("%s", clipboard.OSC52Sequence(msg.text))
+		role, text = roleInfo, "Copied to the clipboard."
+	case msg.oscErr != nil:
+		role, text = roleError, "Clipboard copy failed: "+errors.Join(msg.err, msg.oscErr).Error()
 	default:
-		m.addBlock(roleError, "Clipboard copy failed: "+msg.err.Error())
+		role, text = roleError, "Clipboard copy failed: "+msg.err.Error()
+	}
+	if msg.silent {
+		if role == roleError {
+			m.copyHint = text
+		} else {
+			m.copyHint = fmt.Sprintf("Copied selection (%d chars)", utf8.RuneCountInString(msg.text))
+			if msg.osc52 {
+				m.copyHint = fmt.Sprintf("Sent selection to terminal clipboard (%d chars, OSC 52)", utf8.RuneCountInString(msg.text))
+			}
+		}
 		return nil
 	}
+	m.addBlock(role, text)
+	return nil
 }
 
 func (m *model) addBlock(role scrollRole, text string) {
@@ -2742,7 +2816,8 @@ func (m *model) wrapWidth() int {
 
 func (m *model) syncViewportContent() {
 	m.viewport.Height = m.bodyHeight()
-	m.viewport.SetContent(m.renderScrollback(m.wrapWidth()))
+	m.scrollLines = m.renderScrollbackLines(m.wrapWidth())
+	m.viewport.SetContent(m.selectionContent())
 	if m.followBottom {
 		m.viewport.GotoBottom()
 	}
@@ -2896,17 +2971,18 @@ func (m *model) cycleTheme() (tea.Model, tea.Cmd) {
 }
 
 // setMouse turns mouse-wheel reporting on or off at runtime and returns the tea
-// command that applies it. When on, the conversation viewport scrolls with the
-// wheel but native click-drag selection requires holding Shift; when off, native
-// text selection works and scrollback uses the keyboard (PgUp/PgDn/Shift+arrows).
+// command that applies it. When on, the wheel scrolls the conversation and a
+// left-drag selects and copies in-app; when off, the terminal's native
+// selection works and scrollback uses the keyboard (PgUp/PgDn/Shift+arrows).
 func (m *model) setMouse(on bool) tea.Cmd {
 	m.mouseEnabled = on
+	m.clearSelection()
 	if on {
-		m.addBlock(roleInfo, "Mouse scroll on (Alt+M); hold Shift to select text.")
+		m.addBlock(roleInfo, "Mouse on (Alt+M): wheel scrolls, drag selects and copies.")
 		m.syncViewportContent()
 		return tea.EnableMouseCellMotion
 	}
-	m.addBlock(roleInfo, "Mouse scroll off (Alt+M); text selection enabled.")
+	m.addBlock(roleInfo, "Mouse off (Alt+M): terminal text selection, keyboard scrolling.")
 	m.syncViewportContent()
 	return tea.DisableMouse
 }
@@ -2928,19 +3004,27 @@ func (m *model) applyMouseMode(mode string) tea.Cmd {
 // prefix and color, wrapped to width. Wrapping runs on the plain text before
 // styling so embedded ANSI codes never throw off the wrap math.
 func (m *model) renderScrollback(width int) string {
-	lines := make([]string, 0, len(m.blocks)+4)
+	return joinScrollLines(m.renderScrollbackLines(width))
+}
+
+// renderScrollbackLines is renderScrollback with per-row copy metadata, used by
+// the mouse selection to map screen cells back to source text.
+func (m *model) renderScrollbackLines(width int) []scrollLine {
+	lines := make([]scrollLine, 0, len(m.blocks)+4)
 	if m.welcome != "" {
-		lines = append(lines, strings.Split(strings.TrimRight(m.welcome, "\n"), "\n")...)
+		for _, l := range strings.Split(strings.TrimRight(m.welcome, "\n"), "\n") {
+			lines = append(lines, scrollLine{text: l})
+		}
 	}
 	for i, blk := range m.blocks {
 		// Separate turns visually: a blank line before each user prompt except
 		// the first block, giving the conversation a readable rhythm.
 		if blk.role == roleUser && i > 0 {
-			lines = append(lines, "")
+			lines = append(lines, scrollLine{})
 		}
-		lines = append(lines, m.renderBlock(blk, width)...)
+		lines = append(lines, m.renderBlockLines(blk, width)...)
 	}
-	return strings.Join(lines, "\n")
+	return lines
 }
 
 // roleStyle returns the prefix glyph plus the prefix and body styles for a role.
@@ -2964,43 +3048,60 @@ func (m *model) roleStyle(role scrollRole) (glyph string, prefix, body lipgloss.
 // responses are run through the lightweight markdown renderer; all other roles
 // render as plain styled text.
 func (m *model) renderBlock(blk scrollBlock, width int) []string {
+	lines := m.renderBlockLines(blk, width)
+	out := make([]string, len(lines))
+	for i, l := range lines {
+		out[i] = l.text
+	}
+	return out
+}
+
+// renderBlockLines is renderBlock with per-row copy metadata. The role glyph
+// and the continuation indent under it are marked as synthetic columns so a
+// mouse selection copies the message text, not the chrome.
+func (m *model) renderBlockLines(blk scrollBlock, width int) []scrollLine {
 	if blk.role == roleToolCard && blk.card != nil {
-		return m.renderToolCard(blk.card, width)
+		return framedScrollLines(m.renderToolCard(blk.card, width))
 	}
 	if blk.role == roleTaskGroup && blk.taskGroup != nil {
-		return m.renderTaskGroup(blk.taskGroup, width)
+		return framedScrollLines(m.renderTaskGroup(blk.taskGroup, width))
 	}
 
 	glyph, prefix, body := m.roleStyle(blk.role)
 	gw := lipgloss.Width(glyph)
 	indent := strings.Repeat(" ", gw)
 
-	out := make([]string, 0)
+	out := make([]scrollLine, 0)
 	switch blk.role {
 	case roleResponse:
 		lines := renderMarkdownLines(blk.text, max(width-gw, 1), m.th)
 		for i, line := range lines {
-			if i == 0 {
-				out = append(out, prefix.Render(glyph)+line.text)
-			} else if line.verbatim {
+			row := scrollLine{cont: line.cont, join: line.join, indent: line.indent}
+			switch {
+			case i == 0:
+				row.text = prefix.Render(glyph) + line.text
+				row.indent += gw
+			case line.verbatim:
 				// Drop the 2-space continuation indent for verbatim code lines.
 				// This ensures mouse drag-selection copies code cleanly without prepended
 				// spaces on wrapped continuation lines.
-				out = append(out, line.text)
-			} else {
-				out = append(out, indent+line.text)
+				row.text = line.text
+			default:
+				row.text = indent + line.text
+				row.indent += gw
 			}
+			out = append(out, row)
 		}
 	default:
-		rendered := make([]string, 0)
-		for _, line := range strings.Split(wrapText(blk.text, max(width-gw, 1)), "\n") {
-			rendered = append(rendered, body.Render(line))
-		}
-		for i, line := range rendered {
-			if i == 0 {
-				out = append(out, prefix.Render(glyph)+line)
-			} else {
-				out = append(out, indent+line)
+		for _, src := range strings.Split(blk.text, "\n") {
+			wrapped := strings.Split(wrapText(src, max(width-gw, 1)), "\n")
+			joins := wrapJoins(src, wrapped)
+			for j, w := range wrapped {
+				lead := indent
+				if len(out) == 0 {
+					lead = prefix.Render(glyph)
+				}
+				out = append(out, scrollLine{text: lead + body.Render(w), cont: j > 0, join: joins[j], indent: gw})
 			}
 		}
 	}

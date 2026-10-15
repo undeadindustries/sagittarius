@@ -13,21 +13,21 @@ const (
 func mouseCommand() Command {
 	return Command{
 		Name:        "mouse",
-		Description: "Toggle mouse-wheel scrolling (off enables native text selection)",
+		Description: "Toggle mouse mode: wheel scrolling and drag-to-copy (on by default)",
 		SubCommands: []Command{
 			{
 				Name:        "on",
-				Description: "Enable mouse-wheel scrolling (hold Shift to select text)",
+				Description: "Enable wheel scrolling and in-app drag selection",
 				Handler:     func(ctx *Context) Result { return setMouse(mouseOn) },
 			},
 			{
 				Name:        "off",
-				Description: "Disable mouse capture so native text selection works",
+				Description: "Disable mouse capture so the terminal's own selection works",
 				Handler:     func(ctx *Context) Result { return setMouse(mouseOff) },
 			},
 			{
 				Name:        "toggle",
-				Description: "Toggle mouse-wheel scrolling on or off",
+				Description: "Toggle mouse mode on or off",
 				Handler:     func(ctx *Context) Result { return setMouse("toggle") },
 			},
 			{
@@ -41,9 +41,10 @@ func mouseCommand() Command {
 }
 
 func handleMouseShow() Result {
-	return InfoResult("Mouse-wheel scrolling is off by default so the terminal's " +
-		"native text selection works.\nUse /mouse on (or Alt+M) to enable wheel " +
-		"scrolling; hold Shift to select text while it is on.\n" +
+	return InfoResult("Mouse mode is on by default: the wheel scrolls the conversation, " +
+		"and click-drag selects text and copies it on release\n" +
+		"(dragging to the top or bottom edge scrolls; wrapped lines are rejoined).\n" +
+		"Hold Shift (Option in iTerm2) for the terminal's own selection, or /mouse off (Alt+M).\n" +
 		"Keyboard scrollback (PgUp/PgDn, Shift+Up/Down) always works.")
 }
 
@@ -68,14 +69,14 @@ func handleMouseRoot(ctx *Context) Result {
 }
 
 // setMouse returns a result carrying MouseMode so the UI applies the live
-// enable/disable. No persistence: mouse capture resets to off on each launch.
+// enable/disable. No persistence: mouse mode is on again at each launch.
 func setMouse(mode string) Result {
-	msg := "Mouse scroll toggled."
+	msg := "Mouse mode toggled."
 	switch mode {
 	case mouseOn:
-		msg = "Mouse scroll on (hold Shift to select text)."
+		msg = "Mouse mode on: wheel scrolls, drag selects and copies."
 	case mouseOff:
-		msg = "Mouse scroll off (text selection enabled)."
+		msg = "Mouse mode off: terminal text selection, keyboard scrolling."
 	}
 	return Result{Handled: true, Messages: []string{msg}, MouseMode: mode}
 }

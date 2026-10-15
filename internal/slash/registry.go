@@ -73,7 +73,7 @@ func (r *Registry) RenderHelp() string {
 	fmt.Fprintf(&b, "  %-28s %s\n", "Ctrl+/", "Cycle active models forward")
 	fmt.Fprintf(&b, "  %-28s %s\n", "Ctrl+Shift+P", "Cycle active models backward")
 	fmt.Fprintf(&b, "  %-28s %s\n", "Alt+T (or ⌥+T)", "Cycle color theme (default ↔ greyscale)")
-	fmt.Fprintf(&b, "  %-28s %s\n", "Alt+M (or ⌥+M)", "Toggle mouse-wheel scrolling")
+	fmt.Fprintf(&b, "  %-28s %s\n", "Alt+M (or ⌥+M)", "Toggle mouse mode (wheel scroll, drag-to-copy)")
 	fmt.Fprintf(&b, "  %-28s %s\n", "Ctrl+T", "Toggle thinking box")
 	fmt.Fprintf(&b, "  %-28s %s\n", "Ctrl+Shift+D", "Export last provider request (/chat debug)")
 	fmt.Fprintf(&b, "  %-28s %s\n", "Ctrl+O", "Expand/collapse pasted text in place")

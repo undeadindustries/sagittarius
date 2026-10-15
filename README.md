@@ -151,7 +151,7 @@ Interactive shortcuts, headless flags, and slash commands for the same features 
 | **Thinking / reasoning box** | `Ctrl+T` (persists `ui.showThinking`) | — (use `/settings` or per-model `showThinking` in `/models`) |
 | **Export last provider request** | `Ctrl+Shift+D`; or `/chat debug` (works while a turn is running) | — |
 | **Color theme** | `Alt+T` (persists `ui.theme`) | `/theme` (no startup flag) |
-| **Mouse-wheel scroll** | `Alt+M` (per session; off again on next launch) | `/mouse` (`on`, `off`, `toggle`, `show`) |
+| **Mouse (wheel scroll + drag-to-copy)** | On by default; `Alt+M` turns it off for the session (on again next launch) | `/mouse` (`on`, `off`, `toggle`, `show`) |
 | **Background processes** | `Ctrl+B` | — |
 | **Scroll conversation** | `PgUp` / `PgDn`, `Shift+Up` / `Shift+Down`; macOS: `Fn+Up` / `Fn+Down` on compact keyboards | — |
 | **Prompt history** | `Up` / `Down`, `Ctrl+P` / `Ctrl+N` (at input line boundaries). A recalled slash command loads without its menu, so the arrows keep stepping through history; press `Tab` to open the menu for it | — |
@@ -183,7 +183,7 @@ Most shortcuts match Windows/Linux. macOS terminals often send **Option** chords
 |-----------|---------|--------|
 | `Option+1` … `Option+4` | `Alt+1` … `Alt+4` | Switch mode (agent / plan / ask / debug) |
 | `Option+T` (`†`) | `Alt+T` | Cycle theme |
-| `Option+M` (`µ`) | `Alt+M` | Toggle mouse-wheel scrolling |
+| `Option+M` (`µ`) | `Alt+M` | Toggle mouse mode |
 | `Option+1` … `4` | | Also works via `¡`, `™`, `£`, `¢` when the terminal emits those instead |
 
 All `Ctrl+…` shortcuts behave the same as on Windows and Linux.
@@ -204,17 +204,15 @@ If the box is on and the model supports reasoning, you may briefly see "Listenin
 
 ### Why can't I copy and paste with my mouse?
 
-Sagittarius uses the terminal **alternate screen**, which takes over the full window while the session runs. Native terminal scrollback is hidden during that time, and **mouse tracking is off by default** so your terminal's normal **click-and-drag text selection** still works on the visible transcript.
+You can. Sagittarius uses the terminal **alternate screen**, which hides the terminal's own scrollback, so the terminal's native selection can only reach what is on screen. Sagittarius handles selection itself instead:
 
-**To copy text:**
+1. **Drag to copy (default):** click and drag over the conversation. The selection highlights, scrolls when you drag to the top or bottom edge (or turn the mouse wheel mid-drag), and is copied to the clipboard when you release. Text that was wrapped to fit the window is rejoined, so a long command pastes as one line. The status row confirms the copy.
+2. **Terminal-native selection:** hold **`Shift`** while dragging (in iTerm2, **`Option`**), or turn mouse mode off with **`Alt+M`** / **`/mouse off`** and drag normally. This only reaches the visible rows.
+3. **Last assistant reply:** run **`/copy`** to copy the most recent assistant message (raw markdown, no TUI chrome). Run **`/copy code`** to copy only fenced command/code blocks from that reply.
 
-1. **Default (recommended):** Leave mouse scrolling off. Click and drag in the terminal to select text, then copy with your terminal's usual shortcut (`Ctrl+Shift+C` in many Linux terminals, `Cmd+C` on macOS after selection, or right-click → Copy).
-2. **If you enabled mouse scrolling** (`Alt+M` or `/mouse on`): hold **`Shift`** while dragging to select text (standard xterm-style behavior when the app captures mouse events).
-3. **Last assistant reply:** run **`/copy`** to copy the most recent assistant message to the clipboard (raw markdown, no TUI chrome). Run **`/copy code`** to copy only fenced command/code blocks from that reply, so you can paste them into a shell without `│` bars or markdown fences.
+**Over SSH:** copies go to your local machine's clipboard through the terminal (OSC 52), including inside tmux and GNU screen. Your terminal has to allow it: iTerm2 needs *Applications in terminal may access clipboard*, tmux needs `set -g set-clipboard on` (or `allow-passthrough on`), and most other modern terminals (kitty, WezTerm, Ghostty, Windows Terminal, Alacritty) allow it by default.
 
-**To scroll:** use **`PgUp` / `PgDn`** or **`Shift+Up` / `Shift+Down`**, or enable wheel scrolling with **`Alt+M`** or **`/mouse on`**. Wheel scrolling is per-session and resets to off on the next launch.
-
-We chose this default because many users live in tmux, SSH, and IDE-integrated terminals where mouse capture breaks selection and copy/paste. Keyboard scrollback always works regardless of the mouse setting.
+**To scroll:** use the mouse wheel, **`PgUp` / `PgDn`**, or **`Shift+Up` / `Shift+Down`**. Keyboard scrollback works whether mouse mode is on or off.
 
 ### I can't scroll back
 
@@ -226,7 +224,7 @@ Sagittarius runs in the terminal **alternate screen**, so your terminal's normal
 |-----|--------|
 | `PgUp` / `PgDn` | Scroll up / down half a page |
 | `Shift+Up` / `Shift+Down` | Scroll one line at a time |
-| `Alt+M` | Toggle mouse-wheel scrolling (optional) |
+| `Alt+M` | Toggle mouse mode (wheel scrolling, on by default) |
 
 **macOS**
 
@@ -234,11 +232,11 @@ Sagittarius runs in the terminal **alternate screen**, so your terminal's normal
 |-----|--------|
 | `Fn+Up` / `Fn+Down` | Scroll up / down half a page (same as Page Up / Page Down on compact Mac keyboards) |
 | `Shift+Up` / `Shift+Down` | Scroll one line at a time |
-| `Option+M` (`µ`) or `Alt+M` | Toggle mouse-wheel scrolling (optional) |
+| `Option+M` (`µ`) or `Alt+M` | Toggle mouse mode (wheel scrolling, on by default) |
 
 On a full-size keyboard with dedicated Page Up / Page Down keys, those work too. The composer status row above the input shows a reminder (`Fn↑ Fn↓` on macOS, `Pg↑ Pg↓` elsewhere).
 
-If you prefer the mouse wheel, press **`Alt+M`** (or **`Option+M`** on macOS) or run **`/mouse on`**. Wheel scrolling is off again on the next launch unless you turn it on each session.
+The mouse wheel scrolls the conversation by default. If you turned mouse mode off with **`Alt+M`** (or **`Option+M`** on macOS), press it again or run **`/mouse on`**. It is on again at the next launch.
 
 ### Why doesn't my terminal scrollback show the conversation after I quit?
 
