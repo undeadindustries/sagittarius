@@ -207,7 +207,7 @@ func liteToolUsage(symbolsEnabled, editEnabled, scratchpadEnabled bool) string {
 		"",
 		"**No Diff Format:** NEVER send unified-diff lines (`+` / `-` prefixes) or UI diff previews to `write_file`. It is not a patch tool — send the entire file body.",
 		"",
-		"**Prefer editing over creating.** Do not create new files when you can update existing ones. Do not create documentation files unless explicitly asked.",
+		"**Prefer editing over creating.** Prefer updating existing source files over creating new ones. Creating test files is expected. Do not create documentation files unless explicitly asked.",
 		"",
 		workingMemoryGuidance(scratchpadEnabled),
 		"",
@@ -223,9 +223,13 @@ func liteWorkflow() string {
 		"1. **Understand**: Clarify ambiguous requirements before acting. Ask the user if unsure.",
 		"2. **Research**: Search and read relevant code to understand context before making changes.",
 		"3. **Implement**: Make targeted changes. Prefer small, incremental edits over large rewrites.",
-		"4. **Verify**: after EVERY write, re-run the project's checks (lint, format, typecheck, build, tests) on the final version of each changed file — `"+tools.ProjectChecksToolName+"`, or the project's own scripts (`make lint`, `npm test`). Discover the checker from the project's config before falling back to language defaults; if it is not installed, say so once with the install command rather than skipping. An earlier passing check does not cover later edits.",
+		"4. "+liteVerifyStep,
 	)
 }
+
+// liteVerifyStep is shared by every lite workflow so the after-every-write
+// check mandate stays worded identically wherever it appears.
+const liteVerifyStep = "**Verify**: after EVERY write, re-run the project's checks (lint, format, typecheck, build, tests) on the final version of each changed file — `" + tools.ProjectChecksToolName + "`, or the project's own scripts (`make lint`, `npm test`). Discover the checker from the project's config before falling back to language defaults; if it is not installed, say so once with the install command rather than skipping. An earlier passing check does not cover later edits."
 
 func liteShellSafety(interactive bool, waitUntilEnabled bool) string {
 	lines := []string{

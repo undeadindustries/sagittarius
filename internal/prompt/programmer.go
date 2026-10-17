@@ -19,7 +19,7 @@ func programmerLite(opts Options) string {
 	sections := []string{
 		renderIdentity(opts.Identity, programmerProfile.roleNoun, programmerProfile.helpClause),
 		liteToolUsage(opts.SymbolsEnabled, opts.EditEnabled, opts.ScratchpadEnabled),
-		liteWorkflow(),
+		programmerLiteWorkflow(),
 		liteEditRules(),
 		liteShellSafety(opts.Interactive, opts.WaitUntilEnabled),
 	}
@@ -29,20 +29,40 @@ func programmerLite(opts Options) string {
 	return joinSections(sections)
 }
 
+// programmerLiteWorkflow replaces the shared liteWorkflow for programmer lite.
+// Without an explicit Plan step, small models jump straight from reading to
+// patching and pick the quickest path on from-scratch builds; the shared
+// workflow stays generic because non-coding personas also use it.
+func programmerLiteWorkflow() string {
+	return join(
+		"## Workflow",
+		"",
+		"For each request:",
+		"1. **Understand**: Clarify ambiguous requirements before acting. Ask the user if unsure.",
+		"2. **Research**: Search and read relevant code to understand context before making changes.",
+		"3. **Plan**: Decide the data types, invariants, and how you will test the change before writing code.",
+		"4. **Implement**: Make targeted changes. Prefer small, incremental edits over large rewrites.",
+		"5. "+liteVerifyStep,
+	)
+}
+
 // liteEditRules covers editing conventions not already stated by
 // liteToolUsage (which owns tool selection and the write-format rules — read
 // before modifying, no placeholders, no diff format — so they are not
-// repeated here).
+// repeated here). The testing and no-suppression rules mirror the full
+// prompt's Core Mandates, which small models otherwise never see.
 func liteEditRules() string {
 	return join(
 		"## Editing Rules",
 		"",
 		"- Make one logical change at a time. Do not combine unrelated changes.",
 		"- Preserve existing code style, indentation, and conventions.",
+		"- Pick types that represent the domain exactly, and validate inputs at boundaries.",
+		"- Never suppress linter or type-checker warnings; fix the cause.",
+		"- Add or update tests for every change, creating a test file when none exists.",
 		"- After a successful write, a green/red diff in the transcript is normal UI feedback, not a mistake to apologize for.",
 		"- Add comments sparingly: explain *why*, not *what*. Never use comments to talk to the user or describe your changes.",
 		"- Do not edit comments that are separate from the code you are changing.",
-		"- Do not generate extremely long hashes, binary content, or non-textual code.",
 	)
 }
 

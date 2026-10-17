@@ -111,6 +111,40 @@ func TestProgrammerLiteAnchors(t *testing.T) {
 	assertNoUnported(t, out)
 }
 
+// TestProgrammerLiteQualityMandates guards the testing, typing, and planning
+// rules that small models skipped when only the full prompt stated them, and
+// keeps them out of the non-coding personas that share the lite helpers.
+func TestProgrammerLiteQualityMandates(t *testing.T) {
+	t.Parallel()
+
+	mandates := []string{
+		"Creating test files is expected",
+		"creating a test file when none exists",
+		"Never suppress linter or type-checker warnings",
+		"Pick types that represent the domain exactly",
+		"3. **Plan**",
+	}
+	codingOnly := mandates[1:]
+
+	lite := Build(Options{Personality: PersonalityProgrammer, Variant: VariantLite})
+	for _, m := range mandates {
+		if got := strings.Count(lite, m); got != 1 {
+			t.Errorf("programmer lite: %q appears %d times, want exactly 1", m, got)
+		}
+	}
+
+	for _, p := range []Personality{PersonalityPersonalAssistant, PersonalityCreativeAssistant} {
+		for _, v := range []Variant{VariantLite, VariantFull} {
+			out := Build(Options{Personality: p, Variant: v})
+			for _, m := range codingOnly {
+				if strings.Contains(out, m) {
+					t.Errorf("%s/%s: coding-only mandate %q leaked into persona prompt", p, v, m)
+				}
+			}
+		}
+	}
+}
+
 func TestIdentityFormatAndAbsenceOfBannedPhrases(t *testing.T) {
 	t.Parallel()
 
