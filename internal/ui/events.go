@@ -45,6 +45,9 @@ const (
 	// StreamSetMouse asks the TUI to enable/disable mouse-wheel reporting live;
 	// Text is "on", "off", or "toggle". Used by the /mouse command.
 	StreamSetMouse
+	// StreamSetScreen asks the TUI to change the terminal layout live. Text is
+	// "fullscreen", "inline", or "show". Used by /screen. show does not switch.
+	StreamSetScreen
 	// StreamAskUser prompts the user to answer a structured question posed by
 	// the ask_user tool during grill-me interrogation: AskQuestion + AskOptions
 	// describe the prompt, and the TUI sends the answer via AskReply.

@@ -192,5 +192,8 @@ func (r *Runner) recordAbortedRoundUsage(
 ) {
 	in := estimateMessageTokens(req.Messages)
 	out := contextmgmt.EstimateTokens([]provider.Part{{Text: reasoning}})
-	r.metrics.recordTurnUsage(providerID, model, mode, r.agentKind(), in, out, 0, false)
+	r.metrics.recordTurnUsage(
+		usageKey{provider: providerID, model: model, mode: mode, agentType: r.agentKind()},
+		provider.Usage{InputTokens: in, OutputTokens: out},
+	)
 }

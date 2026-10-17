@@ -438,8 +438,16 @@ func ToolDeclarationsToOpenAI(tools []ToolDeclaration) []openAITool {
 	return out
 }
 
-// MessagesToOpenAIMessages converts provider messages to OpenAI chat messages.
+// MessagesToOpenAIMessages converts provider messages to OpenAI chat messages
+// without replaying reasoning_content.
 func MessagesToOpenAIMessages(messages []Message, modelID string) []OpenAIMessage {
+	return MessagesToOpenAIMessagesWithReasoning(messages, modelID, false)
+}
+
+// MessagesToOpenAIMessagesWithReasoning converts provider messages to OpenAI
+// chat messages, optionally replaying Part.Reasoning as reasoning_content on
+// assistant turns.
+func MessagesToOpenAIMessagesWithReasoning(messages []Message, modelID string, keepReasoning bool) []OpenAIMessage {
 	out := make([]OpenAIMessage, 0, len(messages))
 	isMistral := IsMistralFamilyModel(modelID)
 
@@ -447,7 +455,7 @@ func MessagesToOpenAIMessages(messages []Message, modelID string) []OpenAIMessag
 	legacyIDs := make(map[string][]string)
 
 	for _, msg := range messages {
-		mapped := messageToOpenAIMessages(msg, &legacyCounter, legacyIDs)
+		mapped := messageToOpenAIMessages(msg, &legacyCounter, legacyIDs, keepReasoning)
 		for _, m := range mapped {
 			if isMistral &&
 				m.Role == OpenAIRoleUser &&
@@ -463,19 +471,27 @@ func MessagesToOpenAIMessages(messages []Message, modelID string) []OpenAIMessag
 	// Enforce tool-call/result integrity for every provider before applying the
 	// Mistral-specific role-bridging patches.
 	repaired := repairToolCallIntegrity(out)
+	return patchToolCallOrderOrMistral(repaired, modelID)
+}
+
+func patchToolCallOrderOrMistral(repaired []OpenAIMessage, modelID string) []OpenAIMessage {
 	return patchToolUserTransitionForMistral(repaired, modelID)
 }
 
-func messageToOpenAIMessages(msg Message, legacyCounter *int, legacyIDs map[string][]string) []OpenAIMessage {
+func messageToOpenAIMessages(msg Message, legacyCounter *int, legacyIDs map[string][]string, keepReasoning bool) []OpenAIMessage {
 	if len(msg.Parts) == 0 {
 		return nil
 	}
 
 	var textParts []string
+	var reasoningParts []string
 	var toolCalls []openAIToolCall
 	var out []OpenAIMessage
 
 	for _, part := range msg.Parts {
+		if part.Reasoning != "" {
+			reasoningParts = append(reasoningParts, part.Reasoning)
+		}
 		switch {
 		case part.FunctionResponse != nil:
 			rawID := part.FunctionResponse.CallID
@@ -517,26 +533,41 @@ func messageToOpenAIMessages(msg Message, legacyCounter *int, legacyIDs map[stri
 		}
 	}
 
+	var reasoningContent *string
+	if keepReasoning && msg.Role == RoleModel && len(reasoningParts) > 0 {
+		if joined := strings.Join(reasoningParts, ""); joined != "" {
+			reasoningContent = &joined
+		}
+	}
+
 	if len(toolCalls) > 0 {
 		var content *string
 		if joined := strings.Join(textParts, ""); joined != "" {
 			content = &joined
 		}
 		out = append(out, OpenAIMessage{
-			Role:      OpenAIRoleAssistant,
-			Content:   content,
-			ToolCalls: toolCalls,
+			Role:             OpenAIRoleAssistant,
+			Content:          content,
+			ReasoningContent: reasoningContent,
+			ToolCalls:        toolCalls,
 		})
 		return out
 	}
 
-	if len(textParts) > 0 {
-		joined := strings.Join(textParts, "")
+	if len(textParts) > 0 || reasoningContent != nil {
+		var content *string
+		if joined := strings.Join(textParts, ""); joined != "" {
+			content = &joined
+		}
 		role := OpenAIRoleUser
 		if msg.Role == RoleModel {
 			role = OpenAIRoleAssistant
 		}
-		out = append(out, OpenAIMessage{Role: role, Content: &joined})
+		out = append(out, OpenAIMessage{
+			Role:             role,
+			Content:          content,
+			ReasoningContent: reasoningContent,
+		})
 	}
 	return out
 }
@@ -548,7 +579,7 @@ func BuildOpenAIChatRequest(req *GenerateRequest, model string, parseMode config
 	_ = parseMode
 	body := openAIChatRequest{
 		Model:         model,
-		Messages:      MessagesToOpenAIMessages(req.Messages, model),
+		Messages:      MessagesToOpenAIMessagesWithReasoning(req.Messages, model, req.KeepReasoningHistory),
 		Stream:        true,
 		StreamOptions: &streamOptions{IncludeUsage: true},
 	}
@@ -573,6 +604,13 @@ func BuildOpenAIChatRequest(req *GenerateRequest, model string, parseMode config
 	if req.Reasoning != nil && req.Reasoning.Enabled {
 		body.Reasoning = &openAIReasoning{Effort: req.Reasoning.Effort, Enabled: true}
 	}
+	if len(req.ChatTemplateKwargs) > 0 {
+		kwargs := make(map[string]any, len(req.ChatTemplateKwargs))
+		for k, v := range req.ChatTemplateKwargs {
+			kwargs[k] = v
+		}
+		body.ChatTemplateKwargs = kwargs
+	}
 	applyThinkingBudgetToChatRequest(&body, req)
 	return body
 }
@@ -590,10 +628,12 @@ func BuildOpenAIChatRequest(req *GenerateRequest, model string, parseMode config
 func applyThinkingBudgetToChatRequest(body *openAIChatRequest, req *GenerateRequest) {
 	if req.SuppressThinking {
 		zero := 0
-		off := false
 		body.ReasoningBudgetTokens = &zero
 		body.Reasoning = &openAIReasoning{Enabled: false}
-		body.ChatTemplateKwargs = &chatTemplateKwargs{EnableThinking: &off}
+		if body.ChatTemplateKwargs == nil {
+			body.ChatTemplateKwargs = make(map[string]any, 1)
+		}
+		body.ChatTemplateKwargs["enable_thinking"] = false
 		return
 	}
 	if req.ThinkingBudgetTokens > 0 {

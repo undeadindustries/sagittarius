@@ -32,19 +32,21 @@ const (
 // These mirror the fork's EXEMPT_TOOLS; the corresponding tools are not yet
 // ported, but the names are kept stable for parity.
 const (
-	activateSkillToolName = "activate_skill"
-	askUserToolName       = "ask_user"
-	enterPlanModeToolName = "enter_plan_mode"
-	exitPlanModeToolName  = "exit_plan_mode"
+	activateSkillToolName    = "activate_skill"
+	askUserToolName          = "ask_user"
+	enterPlanModeToolName    = "enter_plan_mode"
+	exitPlanModeToolName     = "exit_plan_mode"
+	updateScratchpadToolName = "update_scratchpad"
 )
 
 // DefaultExemptTools returns the set of tools never subject to masking/ejection.
 func DefaultExemptTools() map[string]bool {
 	return map[string]bool{
-		activateSkillToolName: true,
-		askUserToolName:       true,
-		enterPlanModeToolName: true,
-		exitPlanModeToolName:  true,
+		activateSkillToolName:    true,
+		askUserToolName:          true,
+		enterPlanModeToolName:    true,
+		exitPlanModeToolName:     true,
+		updateScratchpadToolName: true,
 	}
 }
 

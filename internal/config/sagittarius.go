@@ -127,8 +127,29 @@ type SagittariusSettings struct {
 	// Memory configures the always-inject MEMORY.md tier.
 	Memory *SagittariusMemoryConfig `json:"memory,omitempty"`
 	// Chat configures external chat integrations (Google Chat, etc.).
-	Chat  *SagittariusChatConfig     `json:"chat,omitempty"`
+	Chat *SagittariusChatConfig `json:"chat,omitempty"`
+	// Debug configures developer/CI assertion flags.
+	Debug *SagittariusDebugConfig    `json:"debug,omitempty"`
 	Extra map[string]json.RawMessage `json:"-"`
+}
+
+// SagittariusDebugConfig holds developer and CI assertion flags under
+// "sagittarius.debug".
+type SagittariusDebugConfig struct {
+	// AssertPromptCache, when true, fails the turn on any unexpected prompt-prefix
+	// break between consecutive rounds. Used by e2e-mock to guard against accidental
+	// cache invalidation.
+	AssertPromptCache *bool                      `json:"assertPromptCache,omitempty"`
+	Extra             map[string]json.RawMessage `json:"-"`
+}
+
+// ResolveAssertPromptCache reports whether strict prompt-cache prefix assertion
+// is enabled in settings.
+func ResolveAssertPromptCache(s *Settings) bool {
+	if s != nil && s.Sagittarius != nil && s.Sagittarius.Debug != nil && s.Sagittarius.Debug.AssertPromptCache != nil {
+		return *s.Sagittarius.Debug.AssertPromptCache
+	}
+	return false
 }
 
 // SagittariusChatConfig configures external chat platform bridges.

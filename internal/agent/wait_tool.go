@@ -131,7 +131,7 @@ func (t *waitUntilTool) executeStreamFor(
 		return nil, admitErr
 	}
 	if needsConfirm {
-		if err := t.confirmUnknown(ctx, command, interval, timeout, interactive, emit); err != nil {
+		if err := t.confirmUnknown(ctx, tools.ConfirmGateFrom(ctx), command, interval, timeout, interactive, emit); err != nil {
 			return nil, err
 		}
 	}
@@ -141,11 +141,18 @@ func (t *waitUntilTool) executeStreamFor(
 
 func (t *waitUntilTool) confirmUnknown(
 	ctx context.Context,
+	gate tools.ConfirmGate,
 	command string,
 	interval, timeout time.Duration,
 	interactive bool,
 	emit func(ui.StreamEvent),
 ) error {
+	// admitWaitCommand already rejected mutating and dangerous commands.
+	// Yolo and a prior session grant cover every later unclassified check,
+	// including headless runs, where nobody can answer the prompt.
+	if gate.AutoApprove() || gate.Granted(tools.WaitUntilToolName) {
+		return nil
+	}
 	if !interactive || emit == nil {
 		return &tools.ToolError{
 			Code:    tools.ErrCodeInvalidArgs,
@@ -162,8 +169,11 @@ func (t *waitUntilTool) confirmUnknown(
 	case <-ctx.Done():
 		return ctx.Err()
 	case decision := <-replyCh:
-		if decision == ui.ConfirmDeny {
+		switch decision {
+		case ui.ConfirmDeny:
 			return &tools.ToolError{Code: tools.ErrCodeUserDenied, Message: "user denied wait_until command"}
+		case ui.ConfirmSession:
+			gate.Grant(tools.WaitUntilToolName)
 		}
 		return nil
 	}

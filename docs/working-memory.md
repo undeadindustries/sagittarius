@@ -20,10 +20,16 @@ currently in progress.
 
 ## The scratchpad
 
-The model calls `update_scratchpad` with the complete new text of its note. The
-note is then injected into the system prompt on every subsequent request, which
-is why compression, tool-output masking, and truncation cannot reach it — the
-system instruction is rebuilt from scratch each turn and never lives in history.
+The model calls `update_scratchpad` with the complete new text of its note. To
+keep the prompt prefix byte-stable for KV caching on local servers (vLLM,
+SGLang, llama.cpp) and cloud endpoints, the note is not spliced into the system
+prompt immediately. Instead, the `update_scratchpad` call and its full returned
+note stay unmasked in conversation history while the system prompt holds steady,
+and the updated note is baked into the system prompt at the next natural rebuild
+boundary (context compression, message truncation, session switch, or an
+explicit user command such as `/scratchpad clear` or `/memory reload`). When
+compression or truncation finally strips old history, the system prompt is
+rebuilt at that exact moment with the latest scratchpad note intact.
 
 What good use looks like: the plan and which step it is on, the exact paths it
 has already changed, a port or container name it discovered, a decision you made

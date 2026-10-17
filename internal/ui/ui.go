@@ -62,6 +62,19 @@ type Options struct {
 	// Used by --resume so the user can see the prior turns, not just have them
 	// silently loaded into the model's context.
 	InitialScrollback []ScrollbackEntry
+	// ScreenMode is the ui.screen setting: fullscreen, inline, or auto. Empty
+	// means fullscreen. The bubbletea layer resolves auto against the session
+	// (local vs SSH, terminal identity) before the first frame.
+	ScreenMode string
+	// MouseOff starts a full-screen session with in-app mouse capture disabled
+	// (settings ui.mouse false). Inline mode ignores it: the terminal owns the mouse.
+	MouseOff bool
+	// Inline is set by the bubbletea layer once ScreenMode has been resolved.
+	// Finished output is printed into the terminal's native scrollback.
+	Inline bool
+	// SSHCopyTipShown is ui.sshCopyTipShown: the one-time SSH copy dialog has
+	// already been offered, so this session must not open it again.
+	SSHCopyTipShown bool
 }
 
 // UI is the library-agnostic terminal interface. Agent code must depend on this

@@ -132,6 +132,9 @@ type Hooks interface {
 	// SetUITheme persists the chosen TUI theme ("default" or "greyscale") to
 	// settings. Used by /theme; the live switch is driven separately via the UI.
 	SetUITheme(name string) error
+	// SetUIMouse persists whether the next full-screen session starts with
+	// in-app mouse selection. Used by /mouse on and /mouse off.
+	SetUIMouse(on bool) error
 
 	// Background process viewer hooks
 	ListBackgroundProcesses() []bgproc.Process
@@ -209,4 +212,7 @@ type Deps struct {
 	Settings  *config.Settings
 	Documents *config.Documents
 	Hooks     Hooks
+	// ScreenReader is set for --screen-reader sessions. /screen refuses,
+	// because that mode stays in the plain terminal.
+	ScreenReader bool
 }

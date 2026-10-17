@@ -578,6 +578,17 @@ func mergeProviderInstance(global, project *ProviderInstanceConfig) *ProviderIns
 	merged.UseResponseChaining = overlayPtr(global.UseResponseChaining, project.UseResponseChaining)
 	merged.WireFormat = overlayStr(global.WireFormat, project.WireFormat)
 	merged.ShowThinking = overlayPtr(global.ShowThinking, project.ShowThinking)
+	merged.ReasoningHistory = overlayStr(global.ReasoningHistory, project.ReasoningHistory)
+	if len(project.ChatTemplateKwargs) > 0 {
+		kwargs := make(map[string]any, len(global.ChatTemplateKwargs)+len(project.ChatTemplateKwargs))
+		for k, v := range global.ChatTemplateKwargs {
+			kwargs[k] = v
+		}
+		for k, v := range project.ChatTemplateKwargs {
+			kwargs[k] = v
+		}
+		merged.ChatTemplateKwargs = kwargs
+	}
 	merged.Personality = overlayStr(global.Personality, project.Personality)
 	merged.ToolOutputMaskingEnabled = overlayPtr(global.ToolOutputMaskingEnabled, project.ToolOutputMaskingEnabled)
 	merged.ToolOutputMaskingProtectionFraction = overlayPtr(global.ToolOutputMaskingProtectionFraction, project.ToolOutputMaskingProtectionFraction)
@@ -631,6 +642,7 @@ func mergeSagittarius(global, project *SagittariusSettings) *SagittariusSettings
 	merged.Update = mergeUpdateConfig(global.Update, project.Update)
 	merged.Sessions = mergeSessionsConfig(global.Sessions, project.Sessions)
 	merged.Chat = mergeChatConfig(global.Chat, project.Chat)
+	merged.Debug = mergeDebugConfig(global.Debug, project.Debug)
 	// Web, Tools, Compression, Subagents: global-only in Phase 1.
 	return &merged
 }
@@ -787,6 +799,19 @@ func mergeMemoryConfig(global, project *SagittariusMemoryConfig) *SagittariusMem
 	}
 	merged := *global
 	merged.MaxRunes = overlayPtr(global.MaxRunes, project.MaxRunes)
+	merged.Extra = mergeRaw(global.Extra, project.Extra)
+	return &merged
+}
+
+func mergeDebugConfig(global, project *SagittariusDebugConfig) *SagittariusDebugConfig {
+	if project == nil {
+		return global
+	}
+	if global == nil {
+		return project
+	}
+	merged := *global
+	merged.AssertPromptCache = overlayPtr(global.AssertPromptCache, project.AssertPromptCache)
 	merged.Extra = mergeRaw(global.Extra, project.Extra)
 	return &merged
 }

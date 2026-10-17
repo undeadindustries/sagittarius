@@ -54,7 +54,11 @@ func (t *Terminal) Run(ctx context.Context, app ui.App) error {
 		t.mu.Unlock()
 	}()
 
-	m := newModel(t.opts, app, t)
+	opts := t.opts
+	if resolveForRun(opts) {
+		opts.Inline = true
+	}
+	m := newModel(opts, app, t)
 	m.ctx = ctx
 	t.mu.Lock()
 	t.model = m
@@ -62,14 +66,15 @@ func (t *Terminal) Run(ctx context.Context, app ui.App) error {
 
 	var progOpts []tea.ProgramOption
 	progOpts = append(progOpts, tea.WithContext(ctx))
-	if t.opts.Headless {
+	if opts.Headless {
 		progOpts = append(progOpts, tea.WithoutRenderer(), tea.WithInput(strings.NewReader("")))
-	} else if !t.opts.ScreenReader {
+	} else if !opts.ScreenReader && !opts.Inline {
 		// Alt-screen hides the terminal's native scrollback, and the terminal's
 		// own selection cannot scroll the viewport, so it is limited to one
 		// screen. Mouse reporting is ON so the wheel scrolls and a left-drag
 		// selects in-app across any length (selection.go). Alt+M / /mouse off
-		// hands selection back to the terminal.
+		// hands selection back to the terminal. Inline mode skips both and
+		// prints finished output into the normal scrollback instead.
 		progOpts = append(progOpts, tea.WithAltScreen())
 		if m.mouseEnabled {
 			progOpts = append(progOpts, tea.WithMouseCellMotion())

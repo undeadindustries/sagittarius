@@ -5,6 +5,11 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/bubbles/textarea"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
+	"github.com/muesli/termenv"
+
+	"github.com/undeadindustries/sagittarius/internal/ui"
 )
 
 func TestInputBoxHeightMatchesContent(t *testing.T) {
@@ -102,6 +107,81 @@ func TestInputWrapKeepsFirstLineVisible(t *testing.T) {
 	if !strings.HasPrefix(first, visibleInputPrefix(long)) {
 		t.Fatalf("first visible row %q does not start with %q\nfull view:\n%s", first, visibleInputPrefix(long), view)
 	}
+}
+
+func TestRenderInputSpansTerminalWidth(t *testing.T) {
+	t.Parallel()
+	// Other tests set the process color profile. Pin it so the placeholder
+	// tail is checked in the same mode as a real terminal.
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	cases := []struct {
+		name        string
+		value       string
+		placeholder string
+	}{
+		{name: "idle", placeholder: inputPlaceholderIdle},
+		{name: "busy", placeholder: inputPlaceholderBusy},
+		{name: "wait", placeholder: inputPlaceholderWait},
+		{name: "typed", value: "Test", placeholder: inputPlaceholderIdle},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := newColorInputModel()
+			m.input.Placeholder = tc.placeholder
+			if tc.value != "" {
+				m.input.SetValue(tc.value)
+			}
+			m.syncInputLayout()
+
+			raw := m.input.View()
+			view := m.renderInput()
+			lines := strings.Split(strings.TrimSuffix(view, "\n"), "\n")
+			if len(lines) == 0 {
+				t.Fatal("renderInput returned no lines")
+			}
+			for i, line := range lines {
+				if got := lipgloss.Width(line); got != m.width {
+					t.Errorf("line %d width = %d, want %d", i, got, m.width)
+				}
+			}
+			if !strings.Contains(view, inputBackgroundOpen(m)) {
+				t.Errorf("composer background missing from %q", view)
+			}
+			if tc.value != "" {
+				return
+			}
+			// The textarea viewport pads the empty row with plain spaces, so
+			// the background stops at the placeholder. The helper must be
+			// what paints that tail, or this test stops covering the bug.
+			rawLine := strings.Split(strings.TrimSuffix(raw, "\n"), "\n")[0]
+			gap := m.width - ansi.StringWidth(strings.TrimRight(ansi.Strip(rawLine), " "))
+			if gap <= 0 {
+				t.Fatalf("placeholder already filled, plain width %d", m.width-gap)
+			}
+			wantTail := m.input.FocusedStyle.Base.Render(strings.Repeat(" ", gap))
+			if !strings.HasSuffix(lines[0], wantTail) {
+				t.Errorf("placeholder row missing background tail\nline: %q\ntail: %q", lines[0], wantTail)
+			}
+		})
+	}
+}
+
+func newColorInputModel() *model {
+	m := newModel(ui.Options{}, quitApp{}, NewTerminal(ui.Options{}))
+	m.width = 80
+	m.height = 24
+	return m
+}
+
+// inputBackgroundOpen is the SGR prefix of one input-background cell.
+func inputBackgroundOpen(m *model) string {
+	sample := m.input.FocusedStyle.Base.Render(" ")
+	i := strings.Index(sample, " ")
+	if i <= 0 {
+		return sample
+	}
+	return sample[:i]
 }
 
 func TestInputScrollToTopResetsViewport(t *testing.T) {

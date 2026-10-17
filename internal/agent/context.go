@@ -90,6 +90,20 @@ func NewContextManager(
 		MaskingProtectionFraction: cm.MaskingProtectionFraction,
 		MaskingPrunableFraction:   cm.MaskingPrunableFraction,
 		MaskingProtectLatestTurn:  cm.MaskingProtectLatestTurn,
+		ReasoningPruneFn: func() bool {
+			m := ""
+			if modelFn != nil {
+				m = modelFn()
+			}
+			p := ""
+			if provFn != nil {
+				p = provFn()
+			} else if settings != nil {
+				p = settings.ActiveProvider()
+			}
+			_, prune, _ := config.ResolveReasoningHistory(settings, p, m)
+			return prune
+		},
 		// Write-file content ejection is disabled (AD-068). It rewrote the
 		// content arg of stale write_file calls in history, but models template
 		// off their own prior tool calls and copied whatever we left there into

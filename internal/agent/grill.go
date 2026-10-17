@@ -38,6 +38,7 @@ func (r *Runner) SetGrill(g *grill.Session) {
 	if r.sessionRecorder != nil {
 		_ = r.sessionRecorder.SetGrill(snap)
 	}
+	r.prefixDet.noteExpectedBreak("grill")
 	r.applyModeSystemSuffix()
 }
 
@@ -68,6 +69,7 @@ func (r *Runner) UpdateGrill(fn func(*grill.Session) error) error {
 	if r.sessionRecorder != nil {
 		_ = r.sessionRecorder.SetGrill(snap)
 	}
+	r.prefixDet.noteExpectedBreak("grill")
 	r.applyModeSystemSuffix()
 	return nil
 }

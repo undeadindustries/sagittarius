@@ -43,7 +43,36 @@ func Copy(text string) error {
 // that case a local clipboard binary (xclip, wl-copy) writes to the server's
 // display, not the user's, so OSC 52 is the only path to the user's clipboard.
 func IsRemoteSession(getenv func(string) string) bool {
+	if getenv == nil {
+		return false
+	}
 	return getenv("SSH_CONNECTION") != "" || getenv("SSH_TTY") != "" || getenv("SSH_CLIENT") != ""
+}
+
+// Native-selection phrases. Each one is meant to drop into "select with %s".
+const (
+	nativeSelectITerm   = "Option"
+	nativeSelectApple   = "Fn, or Cmd-R"
+	nativeSelectUnknown = "Fn in Terminal.app, Option in iTerm2, Shift in most others"
+)
+
+// NativeSelectionHint names how to select text with the terminal instead of the
+// program. iTerm2 is recognized from LC_TERMINAL, which OpenSSH forwards, or
+// from TERM_PROGRAM when the process is local. Terminal.app is recognized only
+// from TERM_PROGRAM, which SSH does not forward. Anything else gets the list
+// of keys, because the local terminal is unknown.
+func NativeSelectionHint(getenv func(string) string) string {
+	if getenv == nil {
+		return nativeSelectUnknown
+	}
+	switch {
+	case strings.EqualFold(getenv("LC_TERMINAL"), "iTerm2"), getenv("TERM_PROGRAM") == "iTerm.app":
+		return nativeSelectITerm
+	case getenv("TERM_PROGRAM") == "Apple_Terminal":
+		return nativeSelectApple
+	default:
+		return nativeSelectUnknown
+	}
 }
 
 // OSC52Sequence returns the OSC 52 terminal escape sequence that instructs a

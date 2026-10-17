@@ -42,6 +42,7 @@ func (r *Runner) AddConstraint(text string) error {
 			return err
 		}
 	}
+	r.prefixDet.noteExpectedBreak("constraints")
 	r.applyModeSystemSuffix()
 	return nil
 }
@@ -63,6 +64,7 @@ func (r *Runner) ClearConstraints() error {
 			return err
 		}
 	}
+	r.prefixDet.noteExpectedBreak("constraints")
 	r.applyModeSystemSuffix()
 	return nil
 }
@@ -82,6 +84,7 @@ func (r *Runner) SetReadOnly(enabled bool) error {
 			return err
 		}
 	}
+	r.prefixDet.noteExpectedBreak("readonly")
 	r.applyModeSystemSuffix()
 	return nil
 }

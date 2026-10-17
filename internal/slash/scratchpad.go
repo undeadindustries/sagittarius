@@ -50,5 +50,5 @@ func handleScratchpadClear(ctx *Context) Result {
 	if err := ctx.Deps.Hooks.ClearScratchpad(); err != nil {
 		return ErrorResult(fmt.Errorf("clear scratchpad: %w", err))
 	}
-	return InfoResult("Scratchpad cleared. It is gone from the next request's system prompt.")
+	return InfoResult("Scratchpad cleared. It is gone from the next request.")
 }

@@ -21,17 +21,18 @@ type Analysis struct {
 }
 
 type EfficiencyStats struct {
-	UserTurns       int     `json:"user_turns"`
-	AgentSteps      int     `json:"agent_steps"`
-	LLMCalls        int     `json:"llm_calls"`
-	StepsPerTurn    float64 `json:"steps_per_turn"`
-	TotalTokens     int     `json:"total_tokens"`
-	PromptTokens    int     `json:"prompt_tokens"`
-	CompTokens      int     `json:"completion_tokens"`
-	CachedTokens    int     `json:"cached_tokens"`
-	CacheHitRatio   float64 `json:"cache_hit_ratio"`
-	ReasoningTokens int     `json:"reasoning_tokens"`
-	TotalCostUSD    float64 `json:"total_cost_usd"`
+	UserTurns       int            `json:"user_turns"`
+	AgentSteps      int            `json:"agent_steps"`
+	LLMCalls        int            `json:"llm_calls"`
+	StepsPerTurn    float64        `json:"steps_per_turn"`
+	TotalTokens     int            `json:"total_tokens"`
+	PromptTokens    int            `json:"prompt_tokens"`
+	CompTokens      int            `json:"completion_tokens"`
+	CachedTokens    int            `json:"cached_tokens"`
+	CacheHitRatio   float64        `json:"cache_hit_ratio"`
+	ReasoningTokens int            `json:"reasoning_tokens"`
+	TotalCostUSD    float64        `json:"total_cost_usd"`
+	PrefixBreaks    map[string]int `json:"prefix_breaks,omitempty"`
 }
 
 type ToolHealthStats struct {
@@ -137,6 +138,7 @@ func Analyze(traj *Trajectory) *Analysis {
 	// Context trackers
 	var compEvents int
 	var truncEvents int
+	var prefixBreaks map[string]int
 
 	for _, step := range traj.Steps {
 		switch step.Source {
@@ -156,6 +158,15 @@ func Analyze(traj *Trajectory) *Analysis {
 				calls = *step.LLMCallCount
 			}
 			llmCalls += calls
+
+			if step.Extra != nil {
+				if reason, ok := step.Extra["prefix_break_reason"].(string); ok && reason != "" {
+					if prefixBreaks == nil {
+						prefixBreaks = make(map[string]int)
+					}
+					prefixBreaks[reason]++
+				}
+			}
 
 			if step.Metrics != nil {
 				if step.Metrics.PromptTokens != nil {
@@ -367,6 +378,7 @@ func Analyze(traj *Trajectory) *Analysis {
 		CachedTokens:    cachedTokens,
 		ReasoningTokens: reasoningTokens,
 		TotalCostUSD:    totalCost,
+		PrefixBreaks:    prefixBreaks,
 	}
 	if userTurns > 0 {
 		an.Efficiency.StepsPerTurn = float64(agentSteps) / float64(userTurns)

@@ -199,6 +199,177 @@ func TestWaitUntilUnknownConfirmInteractive(t *testing.T) {
 	}
 }
 
+func TestWaitUntilYoloSkipsUnknownConfirm(t *testing.T) {
+	t.Parallel()
+	for _, interactive := range []bool{true, false} {
+		t.Run(boolName(interactive), func(t *testing.T) {
+			t.Parallel()
+			var ran string
+			tool := &waitUntilTool{
+				runCheck: func(_ context.Context, command string) (int, string, error) {
+					ran = command
+					return 0, "ok", nil
+				},
+			}
+			ctx := tools.WithConfirmGate(testContext(t), tools.NewConfirmGate(true, nil, nil))
+			got, err := tool.ExecuteInteractive(ctx, map[string]any{
+				tools.WaitUntilParamCommand: "mystery-probe --ok",
+			}, interactive, func(ev ui.StreamEvent) {
+				if ev.Type == ui.StreamToolConfirm {
+					t.Error("yolo must not prompt for an unclassified wait_until command")
+				}
+			})
+			if err != nil {
+				t.Fatalf("ExecuteInteractive: %v", err)
+			}
+			if got["status"] != "ready" {
+				t.Fatalf("status = %v, want ready", got["status"])
+			}
+			if ran != "mystery-probe --ok" {
+				t.Fatalf("check ran %q", ran)
+			}
+		})
+	}
+}
+
+func TestWaitUntilYoloStillRejectsMutatingAndDangerous(t *testing.T) {
+	t.Parallel()
+	ctx := tools.WithConfirmGate(testContext(t), tools.NewConfirmGate(true, nil, nil))
+	cases := []struct {
+		cmd  string
+		want string
+	}{
+		{cmd: "rm -f x", want: "dangerous"},
+		{cmd: "systemctl restart nginx", want: "mutating"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.cmd, func(t *testing.T) {
+			t.Parallel()
+			called := false
+			tool := &waitUntilTool{
+				runCheck: func(context.Context, string) (int, string, error) {
+					called = true
+					return 0, "", nil
+				},
+			}
+			_, err := tool.executeStreamFor(ctx, map[string]any{
+				tools.WaitUntilParamCommand: tc.cmd,
+			}, nil, true, func(ui.StreamEvent) {
+				t.Error("a rejected command must not prompt")
+			}, time.Millisecond, time.Millisecond, time.Second, time.Second)
+			var te *tools.ToolError
+			if !errors.As(err, &te) || te.Code != tools.ErrCodeInvalidArgs {
+				t.Fatalf("err = %v, want INVALID_ARGS", err)
+			}
+			if !strings.Contains(te.Message, tc.want) {
+				t.Fatalf("message = %s, want substring %q", te.Message, tc.want)
+			}
+			if called {
+				t.Fatal("rejected command must not run")
+			}
+		})
+	}
+}
+
+func TestWaitUntilSessionGrantSkipsSecondPrompt(t *testing.T) {
+	t.Parallel()
+	var mu sync.Mutex
+	grants := map[string]bool{}
+	ctx := tools.WithConfirmGate(testContext(t), tools.NewConfirmGate(false,
+		func(name string) bool {
+			mu.Lock()
+			defer mu.Unlock()
+			return grants[name]
+		},
+		func(name string) {
+			mu.Lock()
+			defer mu.Unlock()
+			grants[name] = true
+		},
+	))
+	checks := 0
+	tool := &waitUntilTool{
+		runCheck: func(context.Context, string) (int, string, error) {
+			checks++
+			return 0, "ok", nil
+		},
+	}
+	prompts := 0
+	emit := func(ev ui.StreamEvent) {
+		if ev.Type != ui.StreamToolConfirm {
+			return
+		}
+		prompts++
+		if prompts > 1 {
+			t.Error("second wait_until must not prompt after a session grant")
+			return
+		}
+		ev.ConfirmReply <- ui.ConfirmSession
+	}
+	args := map[string]any{tools.WaitUntilParamCommand: "mystery-probe --ok"}
+	for range 2 {
+		got, err := tool.ExecuteInteractive(ctx, args, true, emit)
+		if err != nil {
+			t.Fatalf("ExecuteInteractive: %v", err)
+		}
+		if got["status"] != "ready" {
+			t.Fatalf("status = %v, want ready", got["status"])
+		}
+	}
+	if prompts != 1 {
+		t.Fatalf("prompts = %d, want 1", prompts)
+	}
+	if checks != 2 {
+		t.Fatalf("checks = %d, want 2", checks)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !grants[tools.WaitUntilToolName] {
+		t.Fatalf("grants = %v, want %s", grants, tools.WaitUntilToolName)
+	}
+}
+
+func TestWaitUntilConfirmOnceStillPromptsAgain(t *testing.T) {
+	t.Parallel()
+	granted := false
+	ctx := tools.WithConfirmGate(testContext(t), tools.NewConfirmGate(false,
+		func(string) bool { return false },
+		func(string) { granted = true },
+	))
+	tool := &waitUntilTool{
+		runCheck: func(context.Context, string) (int, string, error) {
+			return 0, "ok", nil
+		},
+	}
+	prompts := 0
+	emit := func(ev ui.StreamEvent) {
+		if ev.Type != ui.StreamToolConfirm {
+			return
+		}
+		prompts++
+		ev.ConfirmReply <- ui.ConfirmOnce
+	}
+	args := map[string]any{tools.WaitUntilParamCommand: "mystery-probe --ok"}
+	for range 2 {
+		if _, err := tool.ExecuteInteractive(ctx, args, true, emit); err != nil {
+			t.Fatalf("ExecuteInteractive: %v", err)
+		}
+	}
+	if prompts != 2 {
+		t.Fatalf("prompts = %d, want 2", prompts)
+	}
+	if granted {
+		t.Fatal("ConfirmOnce must not record a session grant")
+	}
+}
+
+func boolName(v bool) string {
+	if v {
+		return "interactive"
+	}
+	return "headless"
+}
+
 func TestWaitUntilMutatingDenied(t *testing.T) {
 	t.Parallel()
 	tool := newWaitUntilTool(t.TempDir())

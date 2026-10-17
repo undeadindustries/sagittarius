@@ -52,3 +52,16 @@ type ToolkitChecklistMarker interface {
 	// displayed once, so later launches do not auto-run it again.
 	MarkToolkitChecklistShown() error
 }
+
+// ScreenPreferenceStore is the optional App capability that remembers the SSH
+// copy dialog and the layout chosen from it. The TUI calls it from a tea.Cmd,
+// never from Update. Apps that do not implement it (tests, other UIs) still
+// switch the live session; they just do not persist the choice.
+type ScreenPreferenceStore interface {
+	// MarkSSHCopyTipShown records that the one-time SSH copy dialog has been
+	// offered, so later launches do not open it again.
+	MarkSSHCopyTipShown() error
+	// SaveScreenLayout writes ui.screen. The dialog passes "auto" so SSH
+	// sessions start inline and local sessions stay full screen.
+	SaveScreenLayout(mode string) error
+}

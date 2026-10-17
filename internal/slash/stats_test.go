@@ -17,6 +17,7 @@ func TestStatsRegistered(t *testing.T) {
 		{"stats", "session"},
 		{"stats", "model"},
 		{"stats", "tools"},
+		{"stats", "cache"},
 	}
 	for _, path := range paths {
 		cmd := reg.Lookup(path)
@@ -48,6 +49,7 @@ func TestStatsPassesSection(t *testing.T) {
 		{"/stats session", "stats[session]"},
 		{"/stats model", "stats[model]"},
 		{"/stats tools", "stats[tools]"},
+		{"/stats cache", "stats[cache]"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {

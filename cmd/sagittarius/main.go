@@ -63,6 +63,7 @@ func run(args []string) int {
 	showVersionShort := fs.Bool("v", false, "print version and exit")
 	selfUpdate := fs.Bool("self-update", false, "download and install the latest update, then exit")
 	screenReader := fs.Bool("screen-reader", false, "plain terminal mode for screen readers (reduced TUI)")
+	screenFlag := fs.String("screen", "", "terminal layout for this run: fullscreen|inline|auto (default: ui.screen, or fullscreen)")
 	prompt := fs.String("prompt", "", "non-interactive prompt; writes streamed text to stdout")
 	promptShort := fs.String("p", "", "shorthand for --prompt")
 	modelFlag := fs.String("model", "", "override active provider model")
@@ -207,16 +208,27 @@ func run(args []string) int {
 		return 2
 	}
 
+	screenOverride := ""
+	if raw := strings.TrimSpace(*screenFlag); raw != "" {
+		parsed, err := config.ParseUIScreen(raw)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "sagittarius:", err)
+			return 2
+		}
+		screenOverride = parsed
+	}
+
 	opts := runnerOptions{
-		modelOverride: modelOverride,
-		resume:        resume,
-		approvalMode:  approvalMode,
-		modeOverride:  modeOverride,
-		logVerbose:    *logVerbose,
-		readOnly:      readOnlyFlag,
-		googleChat:    *googleChatFlag,
-		atifOut:       *atifOutFlag,
-		noRedact:      *noRedactFlag,
+		modelOverride:  modelOverride,
+		resume:         resume,
+		approvalMode:   approvalMode,
+		modeOverride:   modeOverride,
+		screenOverride: screenOverride,
+		logVerbose:     *logVerbose,
+		readOnly:       readOnlyFlag,
+		googleChat:     *googleChatFlag,
+		atifOut:        *atifOutFlag,
+		noRedact:       *noRedactFlag,
 	}
 
 	googleChat := *googleChatFlag
@@ -903,6 +915,7 @@ func runInteractive(screenReader bool, debug bool, opts runnerOptions) int {
 		Documents:      docs,
 		SessionID:      sessID,
 		BaseProviderID: baseProviderID,
+		ScreenReader:   screenReader,
 	})
 
 	var notice string
@@ -930,8 +943,22 @@ func runInteractive(screenReader bool, debug bool, opts runnerOptions) int {
 	}
 
 	uiCfg := docs.Merged().UI()
+	screenMode := uiCfg.Screen
+	if opts.screenOverride != "" {
+		screenMode = opts.screenOverride
+	}
+	if parsed, err := config.ParseUIScreen(screenMode); err != nil {
+		slog.Warn("ignoring invalid ui.screen", "value", screenMode, "error", err)
+		screenMode = config.UIScreenFullscreen
+	} else {
+		screenMode = parsed
+	}
+	mouseOff := uiCfg.Mouse != nil && !*uiCfg.Mouse
 	termUI := bubbletea.NewTerminal(ui.Options{
 		ScreenReader:              screenReader,
+		ScreenMode:                screenMode,
+		MouseOff:                  mouseOff,
+		SSHCopyTipShown:           uiCfg.SSHCopyTipShown,
 		BannerTitle:               "Sagittarius",
 		Version:                   version.String(),
 		InitialStatus:             app.Status(),
@@ -1076,10 +1103,12 @@ type runnerOptions struct {
 	// logVerbose enables --log-verbose: a full request/response/tool-result
 	// transcript written to disk for bug reports (see openVerboseChatLog).
 	logVerbose bool
-	readOnly   *bool
-	googleChat bool
-	atifOut    string
-	noRedact   bool
+	// screenOverride is --screen for this process. Empty uses ui.screen.
+	screenOverride string
+	readOnly       *bool
+	googleChat     bool
+	atifOut        string
+	noRedact       bool
 }
 
 // buildRunner constructs a Runner, optionally loading a resumed session.

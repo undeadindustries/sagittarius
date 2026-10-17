@@ -112,6 +112,32 @@ func TestCopySinkWritesOSC52(t *testing.T) {
 	}
 }
 
+func TestClipboardResultWordingFollowsScreenMode(t *testing.T) {
+	t.Parallel()
+	remote := func(key string) string {
+		if key == "SSH_CONNECTION" {
+			return "1.2.3.4 1 5.6.7.8 22"
+		}
+		return ""
+	}
+	inline := newTestModel()
+	inline.inline = true
+	inline.getenv = remote
+	inline.handleClipboardResult(clipboardResultMsg{text: "x", osc52: true})
+	if !strings.Contains(inline.blocks[0].text, "select the text above") {
+		t.Fatalf("inline remote copy = %q", inline.blocks[0].text)
+	}
+	full := newTestModel()
+	full.getenv = remote
+	full.handleClipboardResult(clipboardResultMsg{text: "x", osc52: true})
+	if !strings.Contains(full.blocks[0].text, "Terminal.app") || !strings.Contains(full.blocks[0].text, "/screen inline") {
+		t.Fatalf("fullscreen remote copy = %q", full.blocks[0].text)
+	}
+	if !full.copyTipPending {
+		t.Fatal("first remote OSC 52 copy should arm the SSH dialog")
+	}
+}
+
 // TestSilentClipboardResultUsesStatusRow verifies a selection copy reports in
 // the status row, never as a scrollback block that would shift the view.
 func TestSilentClipboardResultUsesStatusRow(t *testing.T) {

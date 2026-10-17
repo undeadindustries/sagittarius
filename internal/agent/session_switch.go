@@ -174,6 +174,8 @@ func (r *Runner) restoreStandingState(rec *session.ConversationRecord) {
 
 	r.scratchpadMu.Lock()
 	r.scratchpad = sanitizeScratchpad(rec.Scratchpad)
+	r.scratchpadRendered = r.scratchpad
+	r.scratchpadClearedNoticePending = false
 	r.scratchpadMu.Unlock()
 
 	posture := r.readOnlyForRecord(rec)
@@ -200,6 +202,8 @@ func (r *Runner) resetSessionScopedRuntime() {
 	r.resetSubagentAttempts()
 	r.contextManager().ResetCompressionFailure()
 	r.resetResponseChain()
+	r.prefixDet.reset()
+	r.metrics.resetCacheBreaks()
 }
 
 // resetResponseChain drops the Responses API previous_response_id when the

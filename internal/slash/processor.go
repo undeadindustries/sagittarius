@@ -67,6 +67,10 @@ type Result struct {
 	// MouseMode, when non-empty, asks the UI to enable/disable mouse-wheel
 	// reporting live ("on", "off", or "toggle"). Set by /mouse.
 	MouseMode string
+	// ScreenMode, when non-empty, asks the UI to change the terminal layout
+	// live ("fullscreen", "inline", or "show"). Set by /screen. show reports
+	// the current layout and does not switch. The choice is not saved.
+	ScreenMode string
 	// CompleteGrillAfter asks the agent layer to mark the active grill session
 	// StatusComplete once the SubmitPrompt turn finishes (set by /grill done,
 	// whose SubmitPrompt writes the spec file as the turn's only action).

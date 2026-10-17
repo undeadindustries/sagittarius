@@ -20,6 +20,8 @@ func TestMouseDefaultOn(t *testing.T) {
 		{"interactive", ui.Options{}, true},
 		{"headless", ui.Options{Headless: true}, false},
 		{"screen reader", ui.Options{ScreenReader: true}, false},
+		{"inline", ui.Options{Inline: true}, false},
+		{"mouse off", ui.Options{MouseOff: true}, false},
 	}
 	for _, tc := range tests {
 		if got := mouseDefaultOn(tc.opts); got != tc.want {

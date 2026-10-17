@@ -30,6 +30,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/ui/modesdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/onboardingdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/providersdialog"
+	"github.com/undeadindustries/sagittarius/internal/ui/screendialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/sessionpickdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/settingsdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/systempromptdialog"
@@ -257,6 +258,36 @@ type model struct {
 	// span more than one screen. Alt+M (or /mouse) turns it off to hand
 	// selection back to the terminal.
 	mouseEnabled bool
+	// mouseWanted is the full-screen mouse preference. Inline mode leaves the
+	// terminal's mouse alone; switching back to full screen restores this.
+	mouseWanted bool
+
+	// inline prints finished blocks into the terminal's native scrollback and
+	// redraws only the uncommitted tail. committed is the prefix already
+	// printed. printInFlight keeps prints in order. printGeneration invalidates
+	// a print that was in flight across /clear.
+	inline          bool
+	committed       int
+	printInFlight   bool
+	printGeneration uint64
+	welcomePending  bool
+	inlineQuit      bool
+	inlineAlt       bool
+	deferAltScreen  bool
+	// inlineBootPending prints the welcome on the first sized frame when the
+	// session started inline. Nothing prints at width 0.
+	inlineBootPending bool
+	// pendingFullscreen waits for an in-flight print or an open dialog before
+	// entering the alternate screen.
+	pendingFullscreen bool
+	// usedInline is set once this session has printed into the native
+	// scrollback, so quitting from full screen afterwards flushes the tail.
+	usedInline bool
+	// copyTipPending opens the SSH copy dialog once the UI is idle.
+	// copyTipOpened keeps it to once per session.
+	copyTipPending bool
+	copyTipOpened  bool
+	screenOverlay  *screendialog.Model
 	// sel is the in-app mouse selection state (see selection.go); scrollLines
 	// is the last rendered scrollback with its per-row copy metadata.
 	sel         selectionState
@@ -393,7 +424,8 @@ func (m *model) hasOverlay() bool {
 		m.modelsOverlay != nil || m.modelPickOverlay != nil || m.modesOverlay != nil ||
 		m.subagentsOverlay != nil ||
 		m.systemPromptOverlay != nil || m.mcpOverlay != nil || m.toolsOverlay != nil ||
-		m.bgProcOverlay != nil || m.settingsOverlay != nil || m.sessionPickOverlay != nil
+		m.bgProcOverlay != nil || m.settingsOverlay != nil || m.sessionPickOverlay != nil ||
+		m.screenOverlay != nil
 }
 
 // maxVisibleSuggestions caps the inline suggestion list height.
@@ -430,27 +462,30 @@ func newModel(opts ui.Options, app ui.App, term *Terminal) *model {
 	}
 
 	m := &model{
-		opts:            opts,
-		app:             app,
-		term:            term,
-		th:              th,
-		welcome:         welcome,
-		openResponseIdx: -1,
-		cardByID:        make(map[string]*toolCard),
-		input:           ti,
-		viewport:        vp,
-		spin:            newWorkingSpinner(th),
-		status:          idleStatus,
-		idleStatus:      idleStatus,
-		suggestionIdx:   -1,
-		history:         newInputHistory(),
-		followBottom:    true,
-		showThinking:    opts.ShowThinking,
-		pastes:          newPasteStore(),
-		mouseEnabled:    mouseDefaultOn(opts),
-		osc52Out:        io.Discard,
-		getenv:          os.Getenv,
-		localCopy:       clipboard.Copy,
+		opts:              opts,
+		app:               app,
+		term:              term,
+		th:                th,
+		welcome:           welcome,
+		openResponseIdx:   -1,
+		cardByID:          make(map[string]*toolCard),
+		input:             ti,
+		viewport:          vp,
+		spin:              newWorkingSpinner(th),
+		status:            idleStatus,
+		idleStatus:        idleStatus,
+		suggestionIdx:     -1,
+		history:           newInputHistory(),
+		followBottom:      true,
+		showThinking:      opts.ShowThinking,
+		pastes:            newPasteStore(),
+		mouseEnabled:      mouseDefaultOn(opts),
+		mouseWanted:       fullscreenMouseWanted(opts),
+		inline:            opts.Inline,
+		inlineBootPending: opts.Inline,
+		osc52Out:          io.Discard,
+		getenv:            os.Getenv,
+		localCopy:         clipboard.Copy,
 	}
 	m.syncInputPrompt(idleStatus.Mode)
 
@@ -504,6 +539,10 @@ func (m *model) Init() tea.Cmd {
 	cmds := []tea.Cmd{textarea.Blink}
 	if m.opts.NeedsOnboarding {
 		m.openOnboarding()
+		if m.inline {
+			m.inlineAlt = true
+			cmds = append(cmds, tea.EnterAltScreen)
+		}
 		return tea.Batch(cmds...)
 	}
 	if !m.opts.ToolkitChecklistDismissed {
@@ -521,10 +560,46 @@ func (m *model) beginQuit() tea.Cmd {
 		m.quitting = true
 		m.exitSummary = m.renderExitSummary()
 	}
+	if m.inline {
+		m.inlineQuit = true
+		if m.printInFlight {
+			return nil
+		}
+		return m.flushInlineAndQuit()
+	}
+	if m.usedInline {
+		return m.flushScrollbackAndQuit()
+	}
 	return tea.Quit
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if printed, ok := msg.(inlinePrintedMsg); ok {
+		next, cmd := m.handleInlinePrinted(printed)
+		updated, ok := next.(*model)
+		if !ok {
+			return next, cmd
+		}
+		return updated, tea.Batch(cmd, updated.maybeOpenCopyTip())
+	}
+	wasOverlay := m.hasOverlay()
+	wasInline := m.inline
+	next, cmd := m.update(msg)
+	updated, ok := next.(*model)
+	if !ok {
+		return next, cmd
+	}
+	extra := updated.screenFollowUp(wasInline, wasOverlay)
+	return updated, tea.Batch(cmd, extra, updated.maybeOpenCopyTip())
+}
+
+func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case sshCopyTipSavedMsg:
+		return m, nil
+	case screenLayoutSavedMsg:
+		return m, m.handleScreenLayoutSaved(msg)
+	}
 	if m.hasOverlay() {
 		if m.sel.dragging {
 			// The overlay swallows the release, so the drag could never end.
@@ -693,6 +768,11 @@ func (m *model) updateOverlay(msg tea.Msg) (tea.Model, tea.Cmd) {
 			o := m.sessionPickOverlay.SetSize(msg.Width, msg.Height)
 			m.sessionPickOverlay = &o
 		}
+		if m.screenOverlay != nil {
+			o := m.screenOverlay.SetSize(msg.Width, msg.Height)
+			o = o.SetTheme(m.th)
+			m.screenOverlay = &o
+		}
 		return m, nil
 	case streamEventMsg:
 		return m.handleStreamGen(msg.gen, msg.event)
@@ -827,6 +907,10 @@ func (m *model) updateOverlay(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.updateSessionPick(msg)
 	}
 
+	if m.screenOverlay != nil {
+		return m.updateScreenOverlay(msg)
+	}
+
 	return m, nil
 }
 
@@ -864,6 +948,7 @@ func (m *model) closeOverlay(status string) {
 	m.bgProcOverlay = nil
 	m.settingsOverlay = nil
 	m.sessionPickOverlay = nil
+	m.screenOverlay = nil
 	if status != "" {
 		m.addBlock(roleInfo, status)
 	}
@@ -1057,12 +1142,18 @@ func (m *model) View() string {
 	if m.sessionPickOverlay != nil {
 		return m.sessionPickOverlay.View()
 	}
+	if m.screenOverlay != nil {
+		return m.screenOverlay.View()
+	}
+	if m.inline {
+		return m.inlineView()
+	}
 	m.syncInputLayout()
 	m.syncInputPlaceholder()
 
 	header := renderHeader(m.opts, m.th, m.width)
 	footer := renderFooter(m.statusWithMetrics(), m.th, m.width)
-	inputLine := m.input.View()
+	inputLine := m.renderInput()
 	suggestions := m.renderSuggestions()
 
 	bodyHeight := m.bodyHeight()
@@ -1387,6 +1478,9 @@ func (m *model) handleWindowSize(msg tea.WindowSizeMsg) (tea.Model, tea.Cmd) {
 	// A width change rewraps every row, so selection coordinates are stale.
 	m.clearSelection()
 	m.syncViewportContent()
+	if m.inlineBootPending && !m.hasOverlay() {
+		return m, m.beginInlineSession()
+	}
 	return m, nil
 }
 
@@ -1412,6 +1506,9 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	// scroll + in-app drag selection); off hands selection back to the
 	// terminal. 'µ' is Mac Option+M.
 	if msg.String() == "alt+m" || msg.String() == "µ" {
+		if m.inline {
+			return m, m.setMouse(false)
+		}
 		return m, m.setMouse(!m.mouseEnabled)
 	}
 
@@ -2378,6 +2475,12 @@ func (m *model) handleStreamGen(gen uint64, ev ui.StreamEvent) (tea.Model, tea.C
 			return m, tea.Batch(cmd, waitStream(m.stream, gen))
 		}
 		return m, cmd
+	case ui.StreamSetScreen:
+		cmd := m.applyScreenMode(ev.Text)
+		if m.stream != nil {
+			return m, tea.Batch(cmd, waitStream(m.stream, gen))
+		}
+		return m, cmd
 	case ui.StreamQuit:
 		m.busy = false
 		m.syncViewportContent()
@@ -2627,7 +2730,13 @@ func (s copySink) copy(text string, silent bool) clipboardResultMsg {
 func (m *model) handleClipboardResult(msg clipboardResultMsg) tea.Cmd {
 	var role scrollRole
 	var text string
+	remote := clipboard.IsRemoteSession(m.getenv)
+	if msg.osc52 && msg.oscErr == nil && remote {
+		m.noteSSHCopyTip(msg)
+	}
 	switch {
+	case msg.osc52 && msg.oscErr == nil && remote:
+		role, text = roleInfo, m.osc52CopyText()
 	case msg.osc52 && msg.oscErr == nil:
 		// The terminal gives no acknowledgement, so this cannot claim success.
 		role, text = roleInfo, "Sent to the terminal clipboard (OSC 52). If nothing was copied, enable clipboard access (OSC 52) in your terminal."
@@ -2642,9 +2751,10 @@ func (m *model) handleClipboardResult(msg clipboardResultMsg) tea.Cmd {
 		if role == roleError {
 			m.copyHint = text
 		} else {
-			m.copyHint = fmt.Sprintf("Copied selection (%d chars)", utf8.RuneCountInString(msg.text))
-			if msg.osc52 {
-				m.copyHint = fmt.Sprintf("Sent selection to terminal clipboard (%d chars, OSC 52)", utf8.RuneCountInString(msg.text))
+			n := utf8.RuneCountInString(msg.text)
+			m.copyHint = fmt.Sprintf("Copied selection (%d chars)", n)
+			if msg.osc52 && remote {
+				m.copyHint = m.osc52SilentHint(n)
 			}
 		}
 		return nil
@@ -2716,6 +2826,10 @@ func (m *model) clearScrollbackBlocks() {
 	m.blocks = nil
 	m.openResponseIdx = -1
 	m.copyHint = ""
+	m.committed = 0
+	m.printInFlight = false
+	m.welcomePending = false
+	m.printGeneration++
 	m.syncViewportContent()
 }
 
@@ -2815,6 +2929,9 @@ func (m *model) wrapWidth() int {
 }
 
 func (m *model) syncViewportContent() {
+	if m.inline {
+		return
+	}
 	m.viewport.Height = m.bodyHeight()
 	m.scrollLines = m.renderScrollbackLines(m.wrapWidth())
 	m.viewport.SetContent(m.selectionContent())
@@ -2828,6 +2945,14 @@ func (m *model) syncViewportContent() {
 // true when key was a scroll command so handleKey can return early. Scrolling
 // up unpins followBottom; reaching the bottom re-pins it.
 func (m *model) handleScrollKey(key string) bool {
+	if m.inline {
+		switch key {
+		case "pgup", "pgdown", "shift+up", "shift+down":
+			return true
+		default:
+			return false
+		}
+	}
 	switch key {
 	case "pgup":
 		m.viewport.HalfPageUp()
@@ -2975,7 +3100,12 @@ func (m *model) cycleTheme() (tea.Model, tea.Cmd) {
 // left-drag selects and copies in-app; when off, the terminal's native
 // selection works and scrollback uses the keyboard (PgUp/PgDn/Shift+arrows).
 func (m *model) setMouse(on bool) tea.Cmd {
+	if m.inline {
+		m.addBlock(roleInfo, inlineMouseHint)
+		return nil
+	}
 	m.mouseEnabled = on
+	m.mouseWanted = on
 	m.clearSelection()
 	if on {
 		m.addBlock(roleInfo, "Mouse on (Alt+M): wheel scrolls, drag selects and copies.")
@@ -3076,7 +3206,7 @@ func (m *model) renderBlockLines(blk scrollBlock, width int) []scrollLine {
 	case roleResponse:
 		lines := renderMarkdownLines(blk.text, max(width-gw, 1), m.th)
 		for i, line := range lines {
-			row := scrollLine{cont: line.cont, join: line.join, indent: line.indent}
+			row := scrollLine{cont: line.cont, join: line.join, indent: line.indent, verbatim: line.verbatim}
 			switch {
 			case i == 0:
 				row.text = prefix.Render(glyph) + line.text
@@ -3212,9 +3342,13 @@ func (m *model) inputHeight() int {
 }
 
 func (m *model) bodyHeight() int {
-	// Baseline 6 covers header, a single input row, and the two-line footer;
-	// add the extra input rows when the box has grown for a multi-line prompt.
-	chrome := 6 + m.suggestionRows() + m.statusRowRows() + m.activityRows() + separatorRows + (m.inputHeight() - 1)
+	// Baseline 6 covers header, a single input row, and the two-line footer.
+	// Inline mode has no header row, so the live tail gets that row back.
+	headerRows := 1
+	if m.inline {
+		headerRows = 0
+	}
+	chrome := 5 + headerRows + m.suggestionRows() + m.statusRowRows() + m.activityRows() + separatorRows + (m.inputHeight() - 1)
 	h := m.height - chrome
 	if h < 3 {
 		return 3
@@ -3358,19 +3492,21 @@ func renderHeader(opts ui.Options, th theme.Theme, width int) string {
 // statusWithMetrics augments the footer with live token usage and optional cost.
 //
 // Footer line 1 (Right): last-turn "↑{in} ↓{out}" + optional " ${cost}" when
-// OpenRouter cost is known, + optional "  {pct}% context" when a limit exists.
-// Footer line 2 (Detail): existing system-prompt preset label + "  Σ {in}/{out}"
+// OpenRouter cost is known, + optional "  {n} tok/s" (wide terminals, active
+// turn only) + optional "  {pct}% ctx" when a limit exists.
+// Footer line 2 (Detail): current settings (screen, thinking, mouse) + the
+// system-prompt preset label + "  Σ {in}/{out}"
 // session total + optional " ${cost}" when the active provider has reported
 // cost this session (ShowSessionCostInFooter). The detail line is always shown
 // even when no context limit is available (e.g. Gemini).
 //
-// On narrow terminals (< 80 cols) the session-total and cost parts are dropped to
-// keep the footer readable.
+// On narrow terminals (< 80 cols) the session-total, cost, and tok/s parts are
+// dropped to keep the footer readable.
 func (m *model) statusWithMetrics() ui.StatusBar {
 	status := m.status
 	mp, ok := m.app.(ui.MetricsProvider)
 	if !ok {
-		status.Detail = footerDetailWithShortcuts(status.Detail)
+		status.Detail = footerDetailWithSettings(status.Detail, m.footerSettings())
 		return status
 	}
 	stats := mp.SessionMetrics()
@@ -3379,11 +3515,26 @@ func (m *model) statusWithMetrics() ui.StatusBar {
 	// ── Line 1: per-turn usage + optional context% ────────────────────────────
 	var right string
 	if stats.LastInputTokens > 0 || stats.LastOutputTokens > 0 {
+		inStr := ui.CompactCount(stats.LastInputTokens)
+		if wide {
+			if cachePct := stats.LastCacheHitPercent(); cachePct >= 0 {
+				inStr = fmt.Sprintf("%s (%d%% cached)", inStr, cachePct)
+			}
+		}
 		right = fmt.Sprintf("↑%s ↓%s",
-			ui.CompactCount(stats.LastInputTokens),
+			inStr,
 			ui.CompactCount(stats.LastOutputTokens))
 		if wide && stats.LastCostKnown {
 			right += "  " + ui.FormatCostUSD(stats.LastCostUSD)
+		}
+	}
+	if wide {
+		if speed := ui.FormatTokensPerSec(stats.TokensPerSec); speed != "" {
+			if right != "" {
+				right = right + "  ·  " + speed
+			} else {
+				right = speed
+			}
 		}
 	}
 	if pct := stats.ContextPercent(); pct >= 0 {
@@ -3415,19 +3566,19 @@ func (m *model) statusWithMetrics() ui.StatusBar {
 		}
 	}
 
-	status.Detail = footerDetailWithShortcuts(status.Detail)
+	status.Detail = footerDetailWithSettings(status.Detail, m.footerSettings())
 	return status
 }
 
-// footerDetailWithShortcuts prepends OS-specific scroll hints to the footer
-// detail line (the bottom row) so shortcuts stay visible even when the status
-// row above the input is clipped or overlooked.
-func footerDetailWithShortcuts(detail string) string {
-	hints := scrollShortcutHints()
+// footerDetailWithSettings prepends the current settings (layout, thinking,
+// mouse) to the footer detail line. The key hints live in the status row above
+// the composer, so the footer answers "what is set" and the row above answers
+// "what do I press".
+func footerDetailWithSettings(detail, settings string) string {
 	if strings.TrimSpace(detail) == "" {
-		return hints
+		return settings
 	}
-	return hints + "  ·  " + detail
+	return settings + "  ·  " + detail
 }
 
 func renderFooter(status ui.StatusBar, th theme.Theme, width int) string {
@@ -3437,7 +3588,9 @@ func renderFooter(status ui.StatusBar, th theme.Theme, width int) string {
 	left, right := fitLeftRight(status.Left, status.Right, width)
 
 	// Measure raw string widths before injecting ANSI so the gap is accurate.
-	gap := max(width-lipgloss.Width(left)-lipgloss.Width(right), 1)
+	// fitLeftRight leaves a gap whenever a left side remains; with it dropped
+	// the right side may fill the row, so the gap can be 0.
+	gap := max(width-lipgloss.Width(left)-lipgloss.Width(right), 0)
 
 	leftRendered := th.Secondary.Render(left)
 	var rightRendered string
@@ -3453,7 +3606,7 @@ func renderFooter(status ui.StatusBar, th theme.Theme, width int) string {
 		return line
 	}
 
-	detailText := ansi.Truncate(status.Detail, max(width, 1), "")
+	detailText := truncateAtSeparator(status.Detail, width)
 	var detail string
 	if len(th.TitleGradient) > 0 {
 		detail = th.GradientText(detailText, th.Secondary, th.TitleGradient)

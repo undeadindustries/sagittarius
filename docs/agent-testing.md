@@ -91,6 +91,22 @@ emits one extra `info` line reminding the model to verify before finishing:
 
 The reminder fires at most once per turn and never runs checks automatically.
 
+## Verifying prompt-cache stability (`assertPromptCache`)
+
+Set `sagittarius.debug.assertPromptCache` to `true` in `settings.json` (or via
+`/settings`) to assert that Sagittarius never mutates the sent prompt prefix
+unexpectedly between rounds:
+
+- Before every model request, Sagittarius hashes the system prompt, the tool
+  schema list, and each message in history.
+- On rounds after the first, if the system prompt hash, tool list hash, or any
+  prior message hash changes without an expected lifecycle cause (`compression`,
+  `truncation`, `reasoning-prune`, `user-command`, `mode-switch`, `model-switch`,
+  `mcp-reload`, `session-switch`, or `budget-cut-retry`), the turn fails fast
+  with an error naming the round and reason (for example,
+  `prompt cache assertion failed on round 3: unexpected prefix break (history-mutated@msg[1])`).
+- Inspect the prefix stability summary at any time with `--slash "/stats cache"`.
+
 ## Paired interactive workflow
 
 For the full TUI (themes, dialogs, confirm prompts) the agent does not automate

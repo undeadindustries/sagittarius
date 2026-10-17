@@ -7,6 +7,34 @@ import (
 	"time"
 )
 
+// Screen-layout values for ui.screen. Empty means fullscreen, the default
+// everywhere including SSH. auto is the opt-in that uses inline scrollback
+// over SSH unless the terminal is known to allow OSC 52, and full screen locally.
+const (
+	UIScreenAuto       = "auto"
+	UIScreenFullscreen = "fullscreen"
+	UIScreenInline     = "inline"
+)
+
+// ValidUIScreens is the /settings choice list for ui.screen. fullscreen is
+// first because it is the default.
+var ValidUIScreens = []string{UIScreenFullscreen, UIScreenInline, UIScreenAuto}
+
+// ParseUIScreen normalizes a ui.screen value. Empty means fullscreen. Anything
+// else that is not auto or inline is an error.
+func ParseUIScreen(raw string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", UIScreenFullscreen:
+		return UIScreenFullscreen, nil
+	case UIScreenAuto:
+		return UIScreenAuto, nil
+	case UIScreenInline:
+		return UIScreenInline, nil
+	default:
+		return "", fmt.Errorf("ui.screen must be fullscreen, inline, or auto")
+	}
+}
+
 // UISettings is the typed view of the passthrough "ui" section of settings.json.
 // Only the keys Sagittarius consumes are modeled; unknown ui.* keys round-trip
 // untouched via Settings.Raw.
@@ -14,6 +42,14 @@ type UISettings struct {
 	// Theme selects the color theme ("default" or "greyscale"). Empty means the
 	// default purple theme. Resolved against NO_COLOR in the bubbletea layer.
 	Theme string `json:"theme,omitempty"`
+	// Screen selects the terminal layout: fullscreen, inline, or auto. Empty
+	// means fullscreen. A change applies on the next launch. /screen changes
+	// the running session without writing this key.
+	Screen string `json:"screen,omitempty"`
+	// Mouse is the persisted in-app mouse preference for full-screen sessions.
+	// Nil means the default (on). A false value starts the next full-screen
+	// session with the terminal's own selection.
+	Mouse *bool `json:"mouse,omitempty"`
 	// HideBanner suppresses the ASCII launch banner when true.
 	HideBanner bool `json:"hideBanner,omitempty"`
 	// HideTips suppresses the welcome tips block when true.
@@ -27,6 +63,9 @@ type UISettings struct {
 	EscapeAtOnPaste bool `json:"escapeAtOnPaste,omitempty"`
 	// ToolkitChecklistDismissed marks whether the user has permanently dismissed the host toolkit checklist.
 	ToolkitChecklistDismissed bool `json:"toolkitChecklistDismissed,omitempty"`
+	// SSHCopyTipShown records that the one-time "copying over SSH" dialog has
+	// been offered. It is not a layout preference and does not appear in /settings.
+	SSHCopyTipShown bool `json:"sshCopyTipShown,omitempty"`
 	// UpdateCheckedAt is the RFC3339 timestamp of the last background update
 	// check, used to throttle checks to at most once per day. Global-only cache,
 	// not a user preference.
@@ -47,6 +86,7 @@ func (s *Settings) UI() UISettings {
 	}
 	_ = json.Unmarshal(raw, &ui)
 	ui.Theme = strings.TrimSpace(ui.Theme)
+	ui.Screen = strings.ToLower(strings.TrimSpace(ui.Screen))
 	return ui
 }
 
@@ -154,6 +194,54 @@ func (s *Settings) ClearUIField(field string) error {
 	}
 	return s.mutateUISection(func(ui map[string]json.RawMessage) error {
 		delete(ui, field)
+		return nil
+	})
+}
+
+// SetUIScreen records the terminal layout under ui.screen. Empty or "fullscreen"
+// clears the key (fullscreen is the implicit default). "auto" is stored, because
+// it is no longer the default. The caller flushes via Loader.Save.
+func (s *Settings) SetUIScreen(name string) error {
+	parsed, err := ParseUIScreen(name)
+	if err != nil {
+		return err
+	}
+	return s.mutateUISection(func(ui map[string]json.RawMessage) error {
+		if parsed == UIScreenFullscreen {
+			delete(ui, "screen")
+			return nil
+		}
+		encoded, err := json.Marshal(parsed)
+		if err != nil {
+			return fmt.Errorf("encode ui screen: %w", err)
+		}
+		ui["screen"] = encoded
+		return nil
+	})
+}
+
+// SetUISSHCopyTipShown records that the one-time SSH copy dialog has been
+// offered. False clears the key. The caller flushes via Loader.Save.
+func (s *Settings) SetUISSHCopyTipShown(shown bool) error {
+	return s.mutateUISection(func(ui map[string]json.RawMessage) error {
+		if !shown {
+			delete(ui, "sshCopyTipShown")
+			return nil
+		}
+		ui["sshCopyTipShown"] = []byte("true")
+		return nil
+	})
+}
+
+// SetUIMouse records whether full-screen sessions start with in-app mouse
+// selection. True clears the key (on is the implicit default).
+func (s *Settings) SetUIMouse(on bool) error {
+	return s.mutateUISection(func(ui map[string]json.RawMessage) error {
+		if on {
+			delete(ui, "mouse")
+			return nil
+		}
+		ui["mouse"] = json.RawMessage("false")
 		return nil
 	})
 }

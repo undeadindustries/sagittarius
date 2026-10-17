@@ -130,6 +130,13 @@ func ConvertToProviderHistory(record *ConversationRecord) []provider.Message {
 
 		case MessageTypeModel:
 			parts := buildProviderParts(msg.Content)
+			if msg.Round != nil && msg.Round.Reasoning != "" {
+				if len(parts) > 0 && parts[0].FunctionCall == nil && parts[0].FunctionResponse == nil {
+					parts[0].Reasoning = msg.Round.Reasoning
+				} else {
+					parts = append([]provider.Part{{Reasoning: msg.Round.Reasoning}}, parts...)
+				}
+			}
 			if len(parts) == 0 {
 				continue
 			}

@@ -48,8 +48,9 @@ func (t *updateScratchpadTool) Description() string {
 		"Replace your scratchpad: a short working note that survives context compression, "+
 			"unlike anything said in the conversation. Use it for state you must not lose on a long task — "+
 			"the plan and which step you are on, exact paths, ports, ids, and decisions already made. "+
-			"You always see the current note in your system prompt, so send the full replacement text "+
-			"(there is no append mode); send an empty string to clear it. Capped at %d characters.",
+			"You see your current note in the system prompt, or in your latest `update_scratchpad` result "+
+			"if you changed it since, so send the full replacement text (there is no append mode); "+
+			"send an empty string to clear it. Capped at %d characters.",
 		ScratchpadMaxRunes,
 	)
 }

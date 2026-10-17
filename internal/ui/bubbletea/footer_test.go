@@ -180,7 +180,7 @@ func TestFooterContextPercentStillShown(t *testing.T) {
 	}
 }
 
-func TestFooterDetailShowsScrollHints(t *testing.T) {
+func TestFooterDetailShowsSettingsNotHints(t *testing.T) {
 	t.Parallel()
 
 	app := footerMetricsApp{
@@ -195,8 +195,136 @@ func TestFooterDetailShowsScrollHints(t *testing.T) {
 	m.width = 100
 	status := m.statusWithMetrics()
 	detail := stripANSI(status.Detail)
-	hints := scrollShortcutHints()
-	if !strings.Contains(detail, hints) {
-		t.Errorf("footer Detail missing scroll hints %q\n%s", hints, detail)
+	for _, want := range []string{"screen: full", "thinking:", "mouse: on"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("footer Detail missing %q\n%s", want, detail)
+		}
+	}
+	// The keys belong to the status row above the composer, not this row.
+	for _, banned := range []string{"Ctrl+T", "Alt+M", "/screen"} {
+		if strings.Contains(detail, banned) {
+			t.Errorf("footer Detail repeats key hint %q\n%s", banned, detail)
+		}
+	}
+}
+
+func TestFooterSettingsFollowLiveState(t *testing.T) {
+	t.Parallel()
+	m := newModel(ui.Options{ThemeName: "greyscale"}, quitApp{}, NewTerminal(ui.Options{}))
+
+	if got := m.footerSettings(); got != "screen: full · thinking: hidden · mouse: on" {
+		t.Fatalf("default settings = %q", got)
+	}
+	m.mouseEnabled = false
+	m.showThinking, m.thinkingToggled = true, true
+	if got := m.footerSettings(); got != "screen: full · thinking: shown · mouse: off" {
+		t.Fatalf("toggled settings = %q", got)
+	}
+	m.inline = true
+	if got := m.footerSettings(); got != "screen: inline · thinking: shown · mouse: terminal" {
+		t.Fatalf("inline settings = %q", got)
+	}
+}
+
+func TestFooterCachedTokensShownWhenReported(t *testing.T) {
+	t.Parallel()
+
+	app := footerMetricsApp{
+		stats: ui.SessionStats{
+			LastInputTokens:   1000,
+			LastOutputTokens:  200,
+			LastCachedTokens:  910,
+			LastCacheReported: true,
+		},
+	}
+	m := newModel(ui.Options{ThemeName: "greyscale"}, app, NewTerminal(ui.Options{}))
+	m.width = 100
+	right := stripANSI(m.statusWithMetrics().Right)
+	if !strings.Contains(right, "↑1.0k (91% cached) ↓200") {
+		t.Errorf("footer Right missing cached percentage: %q", right)
+	}
+
+	// Narrow terminals omit the cached parenthetical to preserve space.
+	m.width = 60
+	narrowRight := stripANSI(m.statusWithMetrics().Right)
+	if strings.Contains(narrowRight, "cached") {
+		t.Errorf("narrow footer Right should omit cached parenthetical: %q", narrowRight)
+	}
+}
+
+func TestFooterCachedTokensHiddenWhenUnreported(t *testing.T) {
+	t.Parallel()
+
+	app := footerMetricsApp{
+		stats: ui.SessionStats{
+			LastInputTokens:   1000,
+			LastOutputTokens:  200,
+			LastCachedTokens:  0,
+			LastCacheReported: false,
+		},
+	}
+	m := newModel(ui.Options{ThemeName: "greyscale"}, app, NewTerminal(ui.Options{}))
+	m.width = 100
+	right := stripANSI(m.statusWithMetrics().Right)
+	if strings.Contains(right, "cached") {
+		t.Errorf("footer Right should not show cached when unreported: %q", right)
+	}
+}
+
+func TestFooterTokensPerSecBeforeContext(t *testing.T) {
+	t.Parallel()
+
+	app := footerMetricsApp{
+		stats: ui.SessionStats{
+			LastInputTokens:  1000,
+			LastOutputTokens: 400,
+			TokensPerSec:     42,
+			ContextTokens:    5000,
+			ContextLimit:     10000,
+		},
+	}
+	m := newModel(ui.Options{ThemeName: "greyscale"}, app, NewTerminal(ui.Options{}))
+	m.width = 100
+	right := stripANSI(m.statusWithMetrics().Right)
+	speed := strings.Index(right, "42 tok/s")
+	ctx := strings.Index(right, "50% ctx")
+	if speed < 0 || ctx < 0 || speed > ctx {
+		t.Errorf("tok/s should sit directly before %% ctx: %q", right)
+	}
+	if !strings.Contains(right, "↓400  ·  42 tok/s  ·  50% ctx") {
+		t.Errorf("footer Right = %q, want speed between usage and context", right)
+	}
+}
+
+func TestFooterTokensPerSecHiddenWhenZeroOrNarrow(t *testing.T) {
+	t.Parallel()
+
+	app := footerMetricsApp{
+		stats: ui.SessionStats{
+			LastInputTokens:  1000,
+			LastOutputTokens: 400,
+			TokensPerSec:     0,
+			ContextTokens:    5000,
+			ContextLimit:     10000,
+		},
+	}
+	m := newModel(ui.Options{ThemeName: "greyscale"}, app, NewTerminal(ui.Options{}))
+	m.width = 100
+	right := stripANSI(m.statusWithMetrics().Right)
+	if strings.Contains(right, "tok/s") {
+		t.Errorf("zero speed should be omitted: %q", right)
+	}
+	if !strings.Contains(right, "50% ctx") {
+		t.Errorf("context gauge should remain: %q", right)
+	}
+
+	app.stats.TokensPerSec = 42
+	m.width = 79
+	narrow := stripANSI(m.statusWithMetrics().Right)
+	if strings.Contains(narrow, "tok/s") {
+		t.Errorf("narrow footer should omit tok/s: %q", narrow)
+	}
+	if !strings.Contains(narrow, "50% ctx") {
+		t.Errorf("narrow footer should keep context gauge: %q", narrow)
 	}
 }

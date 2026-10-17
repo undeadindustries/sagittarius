@@ -116,6 +116,11 @@ func mockHome(t *testing.T, baseURL, model string) string {
 				"model":   model,
 			},
 		},
+		"sagittarius": map[string]any{
+			"debug": map[string]any{
+				"assertPromptCache": true,
+			},
+		},
 	}
 	data, _ := json.MarshalIndent(settings, "", "  ")
 	if err := os.WriteFile(filepath.Join(dir, "settings.json"), data, 0o600); err != nil {
@@ -317,5 +322,21 @@ func TestE2E_MockSlashDiffUndo(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(work, "note.txt")); !os.IsNotExist(err) {
 		t.Fatalf("note.txt present after /undo (stat err=%v)", err)
+	}
+}
+
+func TestE2E_MockSlashStatsCache(t *testing.T) {
+	skipUnlessMock(t)
+	bin := sagittariusBin(t)
+	srv := mockChatServer(t, mockModel, "e2e.txt", "ok")
+	home := mockHome(t, srv.URL, mockModel)
+	work := t.TempDir()
+
+	res := invoke(t, bin, work, mockEnv(home, ""), "--slash", "/stats cache")
+	if res.exitCode != 0 {
+		t.Fatalf("exit=%d stderr=%s", res.exitCode, res.stderr)
+	}
+	if !strings.Contains(res.stdout, "Prompt cache:") || !strings.Contains(res.stdout, "Prefix breaks: 0") {
+		t.Fatalf("/stats cache output unexpected:\n%s", res.stdout)
 	}
 }

@@ -25,10 +25,11 @@ const (
 
 // OpenAIMessage is one message in an OpenAI chat completions request.
 type OpenAIMessage struct {
-	Role       OpenAIRole       `json:"role"`
-	Content    *string          `json:"content,omitempty"`
-	ToolCalls  []openAIToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string           `json:"tool_call_id,omitempty"`
+	Role             OpenAIRole       `json:"role"`
+	Content          *string          `json:"content,omitempty"`
+	ReasoningContent *string          `json:"reasoning_content,omitempty"`
+	ToolCalls        []openAIToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string           `json:"tool_call_id,omitempty"`
 }
 
 type openAIToolCall struct {
@@ -77,9 +78,10 @@ type openAIChatRequest struct {
 	ReasoningBudgetTokens  *int   `json:"reasoning_budget_tokens,omitempty"`
 	ReasoningBudgetMessage string `json:"reasoning_budget_message,omitempty"`
 	// ChatTemplateKwargs passes Jinja arguments to servers that render the
-	// chat template per request (vLLM, SGLang). It is the only lever that
-	// disables thinking on Qwen-family templates.
-	ChatTemplateKwargs *chatTemplateKwargs `json:"chat_template_kwargs,omitempty"`
+	// chat template per request (vLLM, SGLang, llama-server). Used to carry
+	// template-level thinking flags (e.g. preserve_thinking, clear_thinking,
+	// enable_thinking) and user overrides.
+	ChatTemplateKwargs map[string]any `json:"chat_template_kwargs,omitempty"`
 }
 
 // openAIReasoning is OpenRouter's unified reasoning request object: Effort
@@ -91,14 +93,6 @@ type openAIChatRequest struct {
 type openAIReasoning struct {
 	Effort  string `json:"effort,omitempty"`
 	Enabled bool   `json:"enabled"`
-}
-
-// chatTemplateKwargs carries chat-template arguments for servers that render
-// the template at request time.
-type chatTemplateKwargs struct {
-	// EnableThinking is a pointer because the value worth sending is false,
-	// which omitempty would drop on a plain bool.
-	EnableThinking *bool `json:"enable_thinking,omitempty"`
 }
 
 type streamOptions struct {
@@ -576,6 +570,7 @@ func flushSSEState(
 		}
 		if state.lastUsage.PromptTokensDetails != nil {
 			u.CachedTokens = state.lastUsage.PromptTokensDetails.CachedTokens
+			u.CachedReported = true
 		}
 		if state.lastUsage.CompletionTokensDetails != nil {
 			u.ReasoningTokens = state.lastUsage.CompletionTokensDetails.ReasoningTokens

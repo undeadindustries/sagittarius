@@ -32,7 +32,10 @@ func fitLeftRight(left, right string, width int) (string, string) {
 		return "", ansi.Truncate(right, width, "")
 	}
 	leftBudget := max(width-rw-1, 0)
-	return ansi.Truncate(left, leftBudget, ""), right
+	if leftBudget == 0 {
+		return "", right
+	}
+	return truncateAtSeparator(left, leftBudget), right
 }
 
 // composerStatus reads the optional composer status (approval policy + skill
@@ -47,9 +50,8 @@ func (m *model) composerStatus() (ui.ComposerStatus, bool) {
 }
 
 // approvalHint maps a tool-approval policy to a short, plain-language label for
-// the left side of the status row. Sagittarius does not have gemini-cli's
-// Shift+Tab approval cycling, so the label states the policy rather than a
-// cycle hint.
+// the footer settings. Sagittarius does not have gemini-cli's Shift+Tab
+// approval cycling, so the label states the policy rather than a cycle hint.
 func approvalHint(mode string) string {
 	switch strings.TrimSpace(strings.ToLower(mode)) {
 	case "autoedit", "auto_edit":
@@ -84,46 +86,110 @@ func plural(n int, one, many string) string {
 	return many
 }
 
-// scrollShortcutHints is the compact legend for scrollback keys on the composer
-// status row. Page keys differ by OS; Alt+M toggles mouse-wheel scrolling on all.
-func scrollShortcutHints() string {
+// scrollShortcutHints is the compact legend for the composer status row.
+// Full screen shows the scroll keys and the mouse toggle. Inline mode shows
+// /screen, because page keys and mouse capture do nothing there.
+func (m *model) scrollShortcutHints() string {
+	if m != nil && m.inline {
+		return inlineShortcuts
+	}
 	return scrollShortcutHintsForGOOS(runtime.GOOS)
 }
 
-// toggleHints labels the two live toggles after the scroll keys: Alt+M / ⌥M
-// toggles mouse-wheel scrolling (both PC and Mac keyboards are shown so Mac
-// users SSH'd into Linux still see the key they press), and Ctrl+T toggles the
-// reasoning ("thinking") view. Each key group is followed by a plain-word label
-// rather than an icon: no single-width glyph for "mouse"/"thinking" renders
-// reliably across terminal fonts, so words stay terminal-safe.
-const toggleHints = "Alt+M or ⌥M mouse · Ctrl+T thinking"
+// Status-row key hints, ordered by how much a user needs them: the layout and
+// thinking keys come first, so a narrow terminal drops the mouse and scroll
+// keys before them (see truncateAtSeparator). Alt+M / ⌥M shows both PC and Mac
+// keyboards so a Mac user SSH'd into Linux sees the key they press. Words, not
+// icons: no single-width glyph for "mouse"/"thinking" renders reliably across
+// terminal fonts.
+const (
+	hintScreen   = "/screen display mode"
+	hintThinking = "Ctrl+T show thinking"
+	hintMouse    = "Alt+M or ⌥M mouse"
+
+	// readOnlyLiftHint leads the key hints while the read-only posture is on.
+	readOnlyLiftHint = "/readonly off to lift"
+)
 
 func scrollShortcutHintsForGOOS(goos string) string {
-	switch goos {
-	case "darwin":
-		return "Fn↑ Fn↓ · " + toggleHints
-	default:
-		return "Pg↑ Pg↓ · " + toggleHints
+	scrollKeys := "Pg↑ Pg↓"
+	if goos == "darwin" {
+		scrollKeys = "Fn↑ Fn↓"
 	}
+	return strings.Join([]string{hintScreen, hintThinking, hintMouse, scrollKeys}, " · ")
 }
 
-// statusRowLine builds the unstyled (left, right) halves of the composer status
-// row. Scroll shortcuts sit on the left (beside the tool-policy hint) so they
-// stay visible on narrow terminals; AGENTS.md/skill counts stay on the right.
+// toolPolicyLabel is the footer's tool-approval entry: the read-only posture
+// when it is on, else the approval mode. Empty when the app reports no
+// composer status (headless demos, tests), so the entry is simply omitted.
+func (m *model) toolPolicyLabel() string {
+	cs, ok := m.composerStatus()
+	if !ok {
+		return ""
+	}
+	if cs.ReadOnlyPosture {
+		return "Tools: read-only"
+	}
+	return approvalHint(cs.ApprovalMode)
+}
+
+// footerSettings is the current-state group at the start of the footer detail
+// line: the tool policy, the layout, the thinking-box state, and who owns the
+// mouse. It reads live model state, so it changes the moment /screen, Ctrl+T,
+// or Alt+M does. Inline mode never captures the mouse, so it reports the
+// terminal as owner. The order is the drop order on a narrow terminal, last
+// entry first, so the tool policy is the last of these to go.
+func (m *model) footerSettings() string {
+	screen, mouse := "full", "off"
+	switch {
+	case m.inline:
+		screen, mouse = "inline", "terminal"
+	case m.mouseEnabled:
+		mouse = "on"
+	}
+	thinking := "hidden"
+	if m.effectiveShowThinking() {
+		thinking = "shown"
+	}
+	entries := []string{"screen: " + screen, "thinking: " + thinking, "mouse: " + mouse}
+	if tools := m.toolPolicyLabel(); tools != "" {
+		entries = append([]string{tools}, entries...)
+	}
+	return strings.Join(entries, " · ")
+}
+
+// truncateAtSeparator shortens a plain status line to width cells without
+// cutting an entry in half. Entries are split by a "·" with spaces around it.
+// When the line does not fit, whole entries are dropped from the end. If even
+// the first entry overflows, it is cut at width. It never wraps, because a
+// wrapped status line corrupts Bubble Tea's frame accounting.
+func truncateAtSeparator(s string, width int) string {
+	width = max(width, 1)
+	if ansi.StringWidth(s) <= width {
+		return s
+	}
+	cut := ansi.Truncate(s, width, "")
+	// The cut landed exactly on an entry boundary, so the kept entries are whole.
+	if rest := s[len(cut):]; strings.HasPrefix(rest, " ") && strings.HasPrefix(strings.TrimLeft(rest, " "), "·") {
+		return strings.TrimRight(cut, " ")
+	}
+	if i := strings.LastIndex(cut, "·"); i > 0 {
+		return strings.TrimRight(cut[:i], " ")
+	}
+	return cut
+}
+
+// statusRowParts builds the unstyled (left, right) halves of the composer status
+// row. The left side is only keys to press; current settings, including the
+// tool policy, live in the footer (see footerSettings). AGENTS.md/skill counts
+// stay on the right.
 func (m *model) statusRowParts() (left, right string) {
 	cs, ok := m.composerStatus()
-	hints := scrollShortcutHints()
-	if ok {
-		if cs.ReadOnlyPosture {
-			left = "Tools: read-only · /readonly off to lift"
-		} else {
-			left = approvalHint(cs.ApprovalMode)
-		}
-	}
-	if left != "" {
-		left = left + "  ·  " + hints
-	} else {
-		left = hints
+	left = m.scrollShortcutHints()
+	// The read-only posture itself is a setting (footer); the key that lifts it
+	// is a hint, so it leads this row while the posture is on.
+	if ok && cs.ReadOnlyPosture {
+		left = readOnlyLiftHint + "  ·  " + left
 	}
 
 	if m.pastes.expanded != nil {
@@ -225,7 +291,9 @@ func renderStatusRowLine(left, right string, th theme.Theme, width int) string {
 		width = 1
 	}
 	left, right = fitLeftRight(left, right, width)
-	gap := max(width-lipgloss.Width(left)-lipgloss.Width(right), 1)
+	// fitLeftRight already leaves a gap whenever a left side remains. With the
+	// left side dropped the right side may fill the row, so the gap can be 0.
+	gap := max(width-lipgloss.Width(left)-lipgloss.Width(right), 0)
 	return th.Dim.Render(left) + strings.Repeat(" ", gap) + th.Dim.Render(right)
 }
 

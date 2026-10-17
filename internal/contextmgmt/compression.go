@@ -454,12 +454,32 @@ func functionResponseString(fr *FunctionResponse) string {
 }
 
 func buildCompressedHistory(summary string, keep []Message) []Message {
-	out := make([]Message, 0, len(keep)+2)
+	cleanedKeep := stripReasoningBeforeLastUser(keep)
+	out := make([]Message, 0, len(cleanedKeep)+2)
 	out = append(out,
 		Message{Role: RoleUser, Parts: []Part{{Text: frameCompressedSummary(summary)}}},
 		Message{Role: RoleModel, Parts: []Part{{Text: compressedSummaryAck}}},
 	)
-	return append(out, keep...)
+	return append(out, cleanedKeep...)
+}
+
+// stripReasoningBeforeLastUser clears Part.Reasoning on every message in keep
+// that precedes the latest user message, matching the Qwen3.8 / GLM-4.7
+// template rule ("clear thinking prior to the last user message") while
+// preserving reasoning inside an active tool loop after the latest user turn.
+func stripReasoningBeforeLastUser(keep []Message) []Message {
+	lastUserIdx := lastGenuineUserIndex(keep)
+	if lastUserIdx <= 0 {
+		return keep
+	}
+	out := make([]Message, len(keep))
+	copy(out, keep)
+	for i := 0; i < lastUserIdx; i++ {
+		if messageReasoningTokens(out[i], EstimateTokens) > 0 {
+			out[i] = stripMessageReasoning(out[i])
+		}
+	}
+	return out
 }
 
 // frameCompressedSummary labels the summary as reference material and closes it

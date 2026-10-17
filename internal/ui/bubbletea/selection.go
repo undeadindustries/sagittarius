@@ -37,6 +37,9 @@ type scrollLine struct {
 	indent int
 	clip   int
 	chrome bool
+	// verbatim marks a code row. Inline printing joins continuation rows of a
+	// verbatim line into one physical line so a copied code line stays exact.
+	verbatim bool
 }
 
 // selPos is a selection endpoint: a scrollback row and a cell column.
@@ -65,9 +68,17 @@ type selectionScrollTickMsg struct{ gen uint64 }
 
 // mouseDefaultOn reports whether mouse reporting starts enabled: in the
 // interactive full-screen TUI only. Screen-reader mode keeps the terminal's
-// own handling, and headless runs have no terminal.
+// own handling, headless runs have no terminal, inline mode leaves selection
+// to the terminal, and ui.mouse false starts full screen with capture off.
 func mouseDefaultOn(opts ui.Options) bool {
-	return !opts.Headless && !opts.ScreenReader
+	return !opts.Headless && !opts.ScreenReader && !opts.Inline && !opts.MouseOff
+}
+
+// fullscreenMouseWanted is the mouse preference full screen restores after an
+// inline stretch. It ignores the current layout: inline starts with capture
+// off, and switching back turns it on unless ui.mouse is false.
+func fullscreenMouseWanted(opts ui.Options) bool {
+	return !opts.Headless && !opts.ScreenReader && !opts.MouseOff
 }
 
 func joinScrollLines(lines []scrollLine) string {

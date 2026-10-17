@@ -43,6 +43,8 @@ func unmarshalProviderInstance(raw json.RawMessage) (*ProviderInstanceConfig, er
 		},
 		"reasoningEffort":     func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.ReasoningEffort) },
 		"showThinking":        func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.ShowThinking) },
+		"reasoningHistory":    func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.ReasoningHistory) },
+		"chatTemplateKwargs":  func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.ChatTemplateKwargs) },
 		"useResponseChaining": func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.UseResponseChaining) },
 		"wireFormat":          func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.WireFormat) },
 		"toolOutputMaskingEnabled": func(b json.RawMessage) error {
@@ -110,6 +112,8 @@ func marshalProviderInstance(cfg *ProviderInstanceConfig) (json.RawMessage, erro
 		{"systemPromptOverride", cfg.SystemPromptOverride},
 		{"reasoningEffort", cfg.ReasoningEffort},
 		{"showThinking", cfg.ShowThinking},
+		{"reasoningHistory", cfg.ReasoningHistory},
+		{"chatTemplateKwargs", cfg.ChatTemplateKwargs},
 		{"useResponseChaining", cfg.UseResponseChaining},
 		{"wireFormat", cfg.WireFormat},
 		{"toolOutputMaskingEnabled", cfg.ToolOutputMaskingEnabled},
@@ -418,6 +422,8 @@ func isEmptyValue(v any) bool {
 	case []string:
 		return len(t) == 0
 	case map[string]string:
+		return len(t) == 0
+	case map[string]any:
 		return len(t) == 0
 	case map[string]ProviderModelConfig:
 		return len(t) == 0

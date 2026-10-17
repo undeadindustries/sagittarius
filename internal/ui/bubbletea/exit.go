@@ -81,6 +81,12 @@ func (m *model) renderExitStats(stats ui.SessionStats) string {
 	b.WriteString("\n\n")
 	b.WriteString(m.sectionHeader("Performance"))
 	writeRow("Duration", ui.FormatDuration(stats.Duration))
+	if stats.CacheReported && stats.InputTokens > 0 {
+		writeRow("Prompt cache", fmt.Sprintf("%s of %s input tokens (%s)",
+			ui.CompactCount(stats.CachedTokens),
+			ui.CompactCount(stats.InputTokens),
+			ui.FormatCacheHitPercent(stats.CachedTokens, stats.InputTokens, true)))
+	}
 	if stats.SessionCostKnown {
 		writeRow("Session cost", ui.FormatCostUSD(stats.SessionCostUSD))
 	}
@@ -127,54 +133,60 @@ func (m *model) renderModelUsage(stats []ui.ModelUsageStat) string {
 	b.WriteString("\n")
 	col := m.th.Secondary
 	if showCost {
-		b.WriteString(col.Render(fmt.Sprintf("  %-32s  %4s  %7s  %7s  %9s", "Model", "Reqs", "In", "Out", "Cost")))
+		b.WriteString(col.Render(fmt.Sprintf("  %-32s  %4s  %7s  %7s  %7s  %9s", "Model", "Reqs", "In", "Out", "Cached", "Cost")))
 	} else {
-		b.WriteString(col.Render(fmt.Sprintf("  %-32s  %4s  %7s  %7s", "Model", "Reqs", "In", "Out")))
+		b.WriteString(col.Render(fmt.Sprintf("  %-32s  %4s  %7s  %7s  %7s", "Model", "Reqs", "In", "Out", "Cached")))
 	}
 
 	for _, row := range rows {
 		b.WriteString("\n")
+		rowCached := ui.FormatCacheHitPercent(row.CachedTokens, row.InTokens, row.CacheReported)
 		if showCost {
 			costStr := ""
 			if row.CostKnown {
 				costStr = ui.FormatCostUSD(row.CostUSD)
 			}
-			b.WriteString(primary.Render(fmt.Sprintf("  %-32s  %4d  %7s  %7s  %9s",
+			b.WriteString(primary.Render(fmt.Sprintf("  %-32s  %4d  %7s  %7s  %7s  %9s",
 				truncate(row.Label, 32),
 				row.Requests,
 				ui.CompactCount(row.InTokens),
 				ui.CompactCount(row.OutTokens),
+				rowCached,
 				costStr,
 			)))
 		} else {
-			b.WriteString(primary.Render(fmt.Sprintf("  %-32s  %4d  %7s  %7s",
+			b.WriteString(primary.Render(fmt.Sprintf("  %-32s  %4d  %7s  %7s  %7s",
 				truncate(row.Label, 32),
 				row.Requests,
 				ui.CompactCount(row.InTokens),
 				ui.CompactCount(row.OutTokens),
+				rowCached,
 			)))
 		}
 
 		for _, k := range row.Modes {
 			b.WriteString("\n")
+			modeCached := ui.FormatCacheHitPercent(k.CachedTokens, k.InTokens, k.CacheReported)
 			if showCost {
 				childCost := ""
 				if k.CostKnown {
 					childCost = ui.FormatCostUSD(k.CostUSD)
 				}
-				b.WriteString(dim.Render(fmt.Sprintf("    ↳ %-28s  %4d  %7s  %7s  %9s",
+				b.WriteString(dim.Render(fmt.Sprintf("    ↳ %-28s  %4d  %7s  %7s  %7s  %9s",
 					k.Mode,
 					k.Requests,
 					ui.CompactCount(k.InTokens),
 					ui.CompactCount(k.OutTokens),
+					modeCached,
 					childCost,
 				)))
 			} else {
-				b.WriteString(dim.Render(fmt.Sprintf("    ↳ %-28s  %4d  %7s  %7s",
+				b.WriteString(dim.Render(fmt.Sprintf("    ↳ %-28s  %4d  %7s  %7s  %7s",
 					k.Mode,
 					k.Requests,
 					ui.CompactCount(k.InTokens),
 					ui.CompactCount(k.OutTokens),
+					modeCached,
 				)))
 			}
 		}

@@ -940,3 +940,69 @@ func TestInitialSessionGrantsSurviveSetRegistry(t *testing.T) {
 		t.Fatalf("SessionGrants after SetRegistry = %v, want [write_file]", grants)
 	}
 }
+
+func TestConsumeStreamChunkTimes(t *testing.T) {
+	t.Parallel()
+
+	t.Run("content", func(t *testing.T) {
+		t.Parallel()
+		r := &Runner{}
+		ch := make(chan provider.StreamResponse, 5)
+		ch <- provider.StreamResponse{ReasoningDelta: "think"}
+		ch <- provider.StreamResponse{TextDelta: "hello"}
+		ch <- provider.StreamResponse{ToolCalls: []provider.ToolCall{{ID: "1", Name: "read_file"}}}
+		ch <- provider.StreamResponse{Usage: &provider.Usage{OutputTokens: 8}}
+		ch <- provider.StreamResponse{Done: true}
+		close(ch)
+
+		res, err := r.consumeStream(context.Background(), ch, make(chan ui.StreamEvent, 8), 0)
+		if err != nil {
+			t.Fatalf("consumeStream: %v", err)
+		}
+		if res.FirstChunkAt.IsZero() || res.LastChunkAt.IsZero() {
+			t.Fatal("content stream left chunk times unset")
+		}
+		if res.LastChunkAt.Before(res.FirstChunkAt) {
+			t.Fatalf("last %v before first %v", res.LastChunkAt, res.FirstChunkAt)
+		}
+	})
+
+	t.Run("usage only", func(t *testing.T) {
+		t.Parallel()
+		r := &Runner{}
+		ch := make(chan provider.StreamResponse, 2)
+		ch <- provider.StreamResponse{Usage: &provider.Usage{OutputTokens: 8}}
+		ch <- provider.StreamResponse{Done: true}
+		close(ch)
+
+		res, err := r.consumeStream(context.Background(), ch, make(chan ui.StreamEvent, 4), 0)
+		if err != nil {
+			t.Fatalf("consumeStream: %v", err)
+		}
+		if !res.FirstChunkAt.IsZero() || !res.LastChunkAt.IsZero() {
+			t.Fatalf("usage-only chunk set times first=%v last=%v", res.FirstChunkAt, res.LastChunkAt)
+		}
+	})
+}
+
+func TestGeneratedTokensForDecode(t *testing.T) {
+	t.Parallel()
+
+	reported := &provider.Usage{OutputTokens: 40, ReasoningTokens: 10}
+	if got := generatedTokensForDecode(reported, "ignored text that must not be counted", "", nil, nil); got != 40 {
+		t.Errorf("reported GeneratedTokens = %d, want 40", got)
+	}
+
+	gemini := &provider.Usage{OutputTokens: 20, ReasoningTokens: 30, ReasoningSeparate: true}
+	if got := generatedTokensForDecode(gemini, "", "", nil, nil); got != 50 {
+		t.Errorf("gemini GeneratedTokens = %d, want 50", got)
+	}
+
+	text := strings.Repeat("abcd", 20)
+	if got := generatedTokensForDecode(nil, text, "", nil, nil); got != 20 {
+		t.Errorf("missing usage estimate = %d, want 20", got)
+	}
+	if got := generatedTokensForDecode(&provider.Usage{}, text, "", nil, nil); got != 20 {
+		t.Errorf("zero usage estimate = %d, want 20", got)
+	}
+}

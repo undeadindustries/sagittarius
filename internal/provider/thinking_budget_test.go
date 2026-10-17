@@ -63,8 +63,7 @@ func TestBuildOpenAIChatRequestThinkingBudget(t *testing.T) {
 		if body.Reasoning == nil || body.Reasoning.Enabled {
 			t.Errorf("Reasoning = %+v, want enabled=false", body.Reasoning)
 		}
-		if body.ChatTemplateKwargs == nil || body.ChatTemplateKwargs.EnableThinking == nil ||
-			*body.ChatTemplateKwargs.EnableThinking {
+		if enabled, ok := body.ChatTemplateKwargs["enable_thinking"].(bool); !ok || enabled {
 			t.Errorf("ChatTemplateKwargs = %+v, want enable_thinking=false", body.ChatTemplateKwargs)
 		}
 	})

@@ -10,15 +10,28 @@ import (
 // ModelUsageStat holds token counts (and optional cost) for one
 // (provider, model, mode) triple observed during the session.
 type ModelUsageStat struct {
-	Provider  string
-	Model     string
-	Mode      string // "agent", "plan", "ask", "debug"
-	Agent     string // "main", "subagent"
-	Requests  int
-	InTokens  int
-	OutTokens int
-	CostUSD   float64
-	CostKnown bool
+	Provider      string
+	Model         string
+	Mode          string // "agent", "plan", "ask", "debug"
+	Agent         string // "main", "subagent"
+	Requests      int
+	InTokens      int
+	OutTokens     int
+	CachedTokens  int
+	CacheReported bool
+	CostUSD       float64
+	CostKnown     bool
+}
+
+// CacheBreakStat records one prompt-prefix break observed during the session,
+// rendered by `/stats cache`.
+type CacheBreakStat struct {
+	Round             int
+	Reason            string
+	Position          int
+	NextInputTokens   int
+	NextCachedTokens  int
+	NextCacheReported bool
 }
 
 // SessionStats is a UI-facing snapshot of session telemetry. It carries no
@@ -33,9 +46,13 @@ type SessionStats struct {
 	ToolCalls    int
 	ToolFailures int
 
-	// InputTokens / OutputTokens are cumulative session totals.
-	InputTokens  int
-	OutputTokens int
+	// InputTokens / OutputTokens / CachedTokens are cumulative session totals.
+	// CacheReported is true when at least one request reported cached-token
+	// details (distinguishing a real 0% hit rate from an unreported metric).
+	InputTokens   int
+	OutputTokens  int
+	CachedTokens  int
+	CacheReported bool
 
 	// SessionCostUSD / SessionCostKnown are the cumulative session cost.
 	// SessionCostKnown is true only when at least one request reported a cost
@@ -43,11 +60,13 @@ type SessionStats struct {
 	SessionCostUSD   float64
 	SessionCostKnown bool
 
-	// LastInputTokens / LastOutputTokens are the token counts for the most
-	// recently completed main turn (not compression). Shown in the footer
-	// next to the model label.
-	LastInputTokens  int
-	LastOutputTokens int
+	// LastInputTokens / LastOutputTokens / LastCachedTokens are the token counts
+	// for the most recently completed main turn (not compression). Shown in the
+	// footer next to the model label.
+	LastInputTokens   int
+	LastOutputTokens  int
+	LastCachedTokens  int
+	LastCacheReported bool
 
 	// LastCostUSD / LastCostKnown are the cost for the last main turn.
 	LastCostUSD   float64
@@ -59,12 +78,21 @@ type SessionStats struct {
 	ContextTokens int
 	ContextLimit  int
 
+	// TokensPerSec is the active turn's decode rate (generated tokens divided
+	// by time from the first content chunk to the last). Zero means unknown:
+	// the turn has not started, the provider buffered the reply into one chunk,
+	// or the turn is still below the minimum size. The footer omits it then.
+	TokensPerSec float64
+
 	// Duration is the wall-clock session length.
 	Duration time.Duration
 
 	// ModelUsage breaks down token counts by provider+model+mode.
 	// Empty when no generate calls have been recorded.
 	ModelUsage []ModelUsageStat
+
+	// CacheBreaks lists prompt-prefix breaks observed across main-agent rounds.
+	CacheBreaks []CacheBreakStat
 }
 
 // ShowSessionCostInFooter is true when cumulative known cost exists and the
@@ -187,6 +215,19 @@ func FormatCostUSD(usd float64) string {
 	return fmt.Sprintf("$%.4f", usd)
 }
 
+// FormatTokensPerSec renders a decode rate for the footer. Rates under 10 keep
+// one decimal (7.5 tok/s); larger rates are whole numbers (42 tok/s). Zero and
+// negative rates return "" so the footer can omit an unknown figure.
+func FormatTokensPerSec(tps float64) string {
+	if tps <= 0 {
+		return ""
+	}
+	if tps < 10 {
+		return fmt.Sprintf("%.1f tok/s", tps)
+	}
+	return fmt.Sprintf("%.0f tok/s", tps)
+}
+
 // FormatDuration renders a session duration rounded to whole seconds, returning
 // "" for non-positive durations so callers can omit the field.
 func FormatDuration(d time.Duration) string {
@@ -207,16 +248,47 @@ func ToolCallsSummary(stats SessionStats) string {
 	return fmt.Sprintf("%d (%d%% ok)", stats.ToolCalls, pct)
 }
 
+// LastCacheHitPercent returns the cached-token share for the most recent turn
+// (0–100), or -1 when the provider did not report cached tokens or no input
+// tokens were recorded.
+func (s SessionStats) LastCacheHitPercent() int {
+	if !s.LastCacheReported || s.LastInputTokens <= 0 {
+		return -1
+	}
+	return clampPercent(s.LastCachedTokens * 100 / s.LastInputTokens)
+}
+
+// FormatCacheHitPercent formats a cached-token share for tables, returning "-"
+// when cached tokens were not reported or no input tokens were recorded.
+func FormatCacheHitPercent(cached, in int, reported bool) string {
+	if !reported || in <= 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%d%%", clampPercent(cached*100/in))
+}
+
+func clampPercent(pct int) int {
+	if pct > 100 {
+		return 100
+	}
+	if pct < 0 {
+		return 0
+	}
+	return pct
+}
+
 // ModelUsageRow is a per-model aggregation of ModelUsageStat across modes,
 // used by both the exit screen and /stats.
 type ModelUsageRow struct {
-	Label     string // "{provider}/{model}", or bare model when provider is empty
-	Requests  int
-	InTokens  int
-	OutTokens int
-	CostUSD   float64
-	CostKnown bool
-	Modes     []ModelUsageStat // sorted by Mode
+	Label         string // "{provider}/{model}", or bare model when provider is empty
+	Requests      int
+	InTokens      int
+	OutTokens     int
+	CachedTokens  int
+	CacheReported bool
+	CostUSD       float64
+	CostKnown     bool
+	Modes         []ModelUsageStat // sorted by Mode
 }
 
 // AggregateModelUsage groups raw per-(provider,model,mode) stats into per-model
@@ -242,6 +314,10 @@ func AggregateModelUsage(stats []ModelUsageStat) (rows []ModelUsageRow, showCost
 		row.Requests += s.Requests
 		row.InTokens += s.InTokens
 		row.OutTokens += s.OutTokens
+		row.CachedTokens += s.CachedTokens
+		if s.CacheReported {
+			row.CacheReported = true
+		}
 		row.CostUSD += s.CostUSD
 		if s.CostKnown {
 			row.CostKnown = true
@@ -276,13 +352,16 @@ func modelUsageLabel(provider, model string) string {
 
 // FormatSessionStats renders session telemetry as plain text (no ANSI) for the
 // /stats command. section selects the block: "" or "session" for the full
-// summary, "model" for the per-model token table, "tools" for tool-call counts.
+// summary, "model" for the per-model token table, "tools" for tool-call counts,
+// "cache" for prompt-cache hit rates and prefix breaks.
 func FormatSessionStats(stats SessionStats, section string) string {
 	switch section {
 	case "model":
 		return formatModelSection(stats)
 	case "tools":
 		return formatToolsSection(stats)
+	case "cache":
+		return formatCacheSection(stats)
 	default:
 		return formatSessionSection(stats)
 	}
@@ -301,6 +380,15 @@ func formatSessionSection(stats SessionStats) string {
 		{"Turns", fmt.Sprintf("%d", stats.Turns)},
 		{"Tool calls", ToolCallsSummary(stats)},
 		{"Duration", FormatDuration(stats.Duration)},
+	}
+	if stats.CacheReported && stats.InputTokens > 0 {
+		rows = append(rows, [2]string{
+			"Prompt cache",
+			fmt.Sprintf("%s of %s input tokens (%s)",
+				CompactCount(stats.CachedTokens),
+				CompactCount(stats.InputTokens),
+				FormatCacheHitPercent(stats.CachedTokens, stats.InputTokens, true)),
+		})
 	}
 	if stats.SessionCostKnown {
 		rows = append(rows, [2]string{"Session cost", FormatCostUSD(stats.SessionCostUSD)})
@@ -346,6 +434,34 @@ func formatToolsSection(stats SessionStats) string {
 	return b.String()
 }
 
+// formatCacheSection renders the prompt-cache hit rate and the chronological
+// list of prefix breaks observed during the session.
+func formatCacheSection(stats SessionStats) string {
+	var b strings.Builder
+	switch {
+	case stats.CacheReported && stats.InputTokens > 0:
+		fmt.Fprintf(&b, "Prompt cache: %s of %s input tokens (%s)",
+			CompactCount(stats.CachedTokens),
+			CompactCount(stats.InputTokens),
+			FormatCacheHitPercent(stats.CachedTokens, stats.InputTokens, true))
+	case stats.InputTokens > 0:
+		b.WriteString("Prompt cache: - (not reported by provider)")
+	default:
+		b.WriteString("Prompt cache: no requests recorded yet")
+	}
+
+	fmt.Fprintf(&b, "\nPrefix breaks: %d", len(stats.CacheBreaks))
+	if len(stats.CacheBreaks) == 0 {
+		return b.String()
+	}
+	fmt.Fprintf(&b, "\n  %5s  %-22s  %8s  %8s", "Round", "Reason", "Position", "Next hit")
+	for _, br := range stats.CacheBreaks {
+		hit := FormatCacheHitPercent(br.NextCachedTokens, br.NextInputTokens, br.NextCacheReported)
+		fmt.Fprintf(&b, "\n  %5d  %-22s  %8d  %8s", br.Round, br.Reason, br.Position, hit)
+	}
+	return b.String()
+}
+
 // formatModelTable renders the shared per-model/per-mode usage breakdown as
 // plain text, appending a cost column only when any row carries a known cost.
 func formatModelTable(stats []ModelUsageStat) string {
@@ -353,32 +469,33 @@ func formatModelTable(stats []ModelUsageStat) string {
 	var b strings.Builder
 	b.WriteString("Model Usage")
 	if showCost {
-		fmt.Fprintf(&b, "\n  %-32s  %5s  %8s  %8s  %9s", "Model", "Reqs", "In", "Out", "Cost")
+		fmt.Fprintf(&b, "\n  %-32s  %5s  %8s  %8s  %7s  %9s", "Model", "Reqs", "In", "Out", "Cached", "Cost")
 	} else {
-		fmt.Fprintf(&b, "\n  %-32s  %5s  %8s  %8s", "Model", "Reqs", "In", "Out")
+		fmt.Fprintf(&b, "\n  %-32s  %5s  %8s  %8s  %7s", "Model", "Reqs", "In", "Out", "Cached")
 	}
 	for _, row := range rows {
-		writeModelTableRow(&b, "  "+row.Label, row.Requests, row.InTokens, row.OutTokens, row.CostUSD, row.CostKnown, showCost)
+		writeModelTableRow(&b, "  "+row.Label, row.Requests, row.InTokens, row.OutTokens, row.CachedTokens, row.CacheReported, row.CostUSD, row.CostKnown, showCost)
 		for _, mode := range row.Modes {
 			lbl := mode.Mode
 			if mode.Agent != "" && mode.Agent != "main" {
 				lbl += " (" + mode.Agent + ")"
 			}
-			writeModelTableRow(&b, "    ↳ "+lbl, mode.Requests, mode.InTokens, mode.OutTokens, mode.CostUSD, mode.CostKnown, showCost)
+			writeModelTableRow(&b, "    ↳ "+lbl, mode.Requests, mode.InTokens, mode.OutTokens, mode.CachedTokens, mode.CacheReported, mode.CostUSD, mode.CostKnown, showCost)
 		}
 	}
 	return b.String()
 }
 
 // writeModelTableRow appends one aligned usage line (parent or mode child) to b.
-func writeModelTableRow(b *strings.Builder, label string, reqs, in, out int, costUSD float64, costKnown, showCost bool) {
+func writeModelTableRow(b *strings.Builder, label string, reqs, in, out, cached int, cacheReported bool, costUSD float64, costKnown, showCost bool) {
+	cachedStr := FormatCacheHitPercent(cached, in, cacheReported)
 	if showCost {
 		cost := ""
 		if costKnown {
 			cost = FormatCostUSD(costUSD)
 		}
-		fmt.Fprintf(b, "\n%-34s  %5d  %8s  %8s  %9s", label, reqs, CompactCount(in), CompactCount(out), cost)
+		fmt.Fprintf(b, "\n%-34s  %5d  %8s  %8s  %7s  %9s", label, reqs, CompactCount(in), CompactCount(out), cachedStr, cost)
 		return
 	}
-	fmt.Fprintf(b, "\n%-34s  %5d  %8s  %8s", label, reqs, CompactCount(in), CompactCount(out))
+	fmt.Fprintf(b, "\n%-34s  %5d  %8s  %8s  %7s", label, reqs, CompactCount(in), CompactCount(out), cachedStr)
 }

@@ -30,6 +30,7 @@ var reservedSagittariusKeys = map[string]struct{}{
 	"scratchpadEnabled":            {},
 	"memory":                       {},
 	"chat":                         {},
+	"debug":                        {},
 }
 
 var reservedSagittariusModeKeys = map[string]struct{}{
@@ -1117,6 +1118,12 @@ func unmarshalSagittarius(raw json.RawMessage) (*SagittariusSettings, error) {
 				return nil, err
 			}
 			s.Chat = c
+		case "debug":
+			dc, err := unmarshalDebugConfig(val)
+			if err != nil {
+				return nil, err
+			}
+			s.Debug = dc
 		default:
 			if _, reserved := reservedSagittariusKeys[key]; reserved {
 				continue
@@ -1290,6 +1297,13 @@ func marshalSagittarius(s *SagittariusSettings) (json.RawMessage, error) {
 			return nil, err
 		}
 		obj["chat"] = b
+	}
+	if s.Debug != nil {
+		b, err := marshalDebugConfig(s.Debug)
+		if err != nil {
+			return nil, err
+		}
+		obj["debug"] = b
 	}
 	for key, val := range s.Extra {
 		obj[key] = val
@@ -1568,6 +1582,52 @@ func unmarshalMemoryConfig(data []byte) (*SagittariusMemoryConfig, error) {
 		c.Extra = nil
 	}
 	return &c, nil
+}
+
+func unmarshalDebugConfig(data []byte) (*SagittariusDebugConfig, error) {
+	var c SagittariusDebugConfig
+	c.Extra = make(map[string]json.RawMessage)
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("decode sagittarius.debug: %w", err)
+	}
+	for key, val := range raw {
+		switch key {
+		case "assertPromptCache":
+			var b bool
+			if err := json.Unmarshal(val, &b); err != nil {
+				return nil, fmt.Errorf("decode sagittarius.debug.assertPromptCache: %w", err)
+			}
+			c.AssertPromptCache = &b
+		default:
+			c.Extra[key] = val
+		}
+	}
+	if len(c.Extra) == 0 {
+		c.Extra = nil
+	}
+	return &c, nil
+}
+
+func marshalDebugConfig(c *SagittariusDebugConfig) (json.RawMessage, error) {
+	if c == nil {
+		return nil, nil
+	}
+	obj := make(map[string]json.RawMessage)
+	if c.AssertPromptCache != nil {
+		b, err := json.Marshal(*c.AssertPromptCache)
+		if err != nil {
+			return nil, err
+		}
+		obj["assertPromptCache"] = b
+	}
+	for key, val := range c.Extra {
+		obj[key] = val
+	}
+	if len(obj) == 0 {
+		return json.RawMessage("{}"), nil
+	}
+	return json.Marshal(obj)
 }
 
 func marshalMemoryConfig(c *SagittariusMemoryConfig) (json.RawMessage, error) {

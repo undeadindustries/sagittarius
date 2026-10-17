@@ -80,6 +80,7 @@ var settingsMenu = []settingItem{
 	{label: "temperature", key: "temperature"},
 	{label: "contextLimit (tokens)", key: "contextLimit"},
 	{label: "reasoningEffort", key: "reasoningEffort"},
+	{label: "reasoningHistory", key: "reasoningHistory"},
 	{label: "showThinking (true/false)", key: "showThinking"},
 	{label: "thinkingBudgetTokens (0 = off)", key: "thinkingBudgetTokens"},
 	{label: "hardThinkingBudget (true/false)", key: "hardThinkingBudget"},
@@ -217,9 +218,27 @@ func (m Model) selectSetting() (Model, tea.Cmd) {
 		return m.back()
 	case "reasoningEffort":
 		return m.openReasoningPicker()
+	case "reasoningHistory":
+		return m.openReasoningHistoryPicker()
 	default:
 		return m.openEditField(item)
 	}
+}
+
+func (m Model) openReasoningHistoryPicker() (Model, tea.Cmd) {
+	opts := []pickOption{
+		{label: "default (inherit)", value: pickInheritValue},
+		{label: "auto (model-family default + prune)", value: "auto"},
+		{label: "keep (replay reasoning_content + prune older)", value: "keep"},
+		{label: "keep-all (replay all turns, never prune)", value: "keep-all"},
+		{label: "none (strip reasoning_content)", value: "none"},
+	}
+	m.pickKey = "reasoningHistory"
+	m.pickTitle = fmt.Sprintf("Reasoning history for %s", m.targetModel)
+	m.pickOptions = opts
+	m.cursor = 0
+	m.screen = screenPickValue
+	return m, nil
 }
 
 func (m Model) openReasoningPicker() (Model, tea.Cmd) {

@@ -53,25 +53,71 @@ func TestContextSummaryOmitsZero(t *testing.T) {
 	}
 }
 
-func TestRenderStatusRowShowsApprovalAndCounts(t *testing.T) {
+func TestRenderStatusRowShowsHintsAndCountsNotPolicy(t *testing.T) {
 	t.Parallel()
 	opts := ui.Options{ThemeName: "greyscale", LoadedMemoryFiles: []string{"/a/AGENTS.md", "/b/AGENTS.md"}}
 	app := statusApp{cs: ui.ComposerStatus{ApprovalMode: "yolo", SkillCount: 4}}
 	m := newModel(opts, app, NewTerminal(ui.Options{}))
 	// Wide terminal so the full composed row fits; clamping at narrow widths is
 	// covered by TestStatusRowNeverExceedsWidth.
-	m.width = 120
+	m.width = 150
 	m.height = 24
 
 	if m.statusRowRows() != 1 {
 		t.Fatalf("statusRowRows = %d, want 1", m.statusRowRows())
 	}
 	row := stripANSI(m.renderStatusRow())
-	hints := scrollShortcutHints()
-	for _, want := range []string{"auto-approve all (yolo)", hints, "2 AGENTS.md files", "4 skills"} {
+	hints := m.scrollShortcutHints()
+	for _, want := range []string{hints, "2 AGENTS.md files", "4 skills"} {
 		if !strings.Contains(row, want) {
 			t.Errorf("status row missing %q\n%s", want, row)
 		}
+	}
+	// The tool policy is a setting, so it lives in the footer, not here.
+	for _, banned := range []string{"Tools:", "yolo"} {
+		if strings.Contains(row, banned) {
+			t.Errorf("status row should not show setting %q\n%s", banned, row)
+		}
+	}
+}
+
+func TestToolPolicyMovesToFooterSettings(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		cs   ui.ComposerStatus
+		want string
+	}{
+		{"yolo", ui.ComposerStatus{ApprovalMode: "yolo"}, "Tools: auto-approve all (yolo) · screen: full"},
+		{"default", ui.ComposerStatus{ApprovalMode: "default"}, "Tools: confirm before run · screen: full"},
+		{"read-only wins", ui.ComposerStatus{ApprovalMode: "yolo", ReadOnlyPosture: true}, "Tools: read-only · screen: full"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := newModel(ui.Options{ThemeName: "greyscale"}, statusApp{cs: tc.cs}, NewTerminal(ui.Options{}))
+			if got := m.footerSettings(); !strings.HasPrefix(got, tc.want) {
+				t.Errorf("footerSettings = %q, want prefix %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestReadOnlyLiftKeyStaysInStatusRow(t *testing.T) {
+	t.Parallel()
+	opts := ui.Options{ThemeName: "greyscale"}
+	m := newModel(opts, statusApp{cs: ui.ComposerStatus{ReadOnlyPosture: true}}, NewTerminal(ui.Options{}))
+	left, _ := m.statusRowParts()
+	if !strings.HasPrefix(left, readOnlyLiftHint+"  ·  ") {
+		t.Errorf("status row left = %q, want it to lead with %q", left, readOnlyLiftHint)
+	}
+	if strings.Contains(left, "Tools:") {
+		t.Errorf("status row repeats the posture label: %q", left)
+	}
+
+	m = newModel(opts, statusApp{}, NewTerminal(ui.Options{}))
+	if left, _ := m.statusRowParts(); strings.Contains(left, readOnlyLiftHint) {
+		t.Errorf("lift hint shown while read-only is off: %q", left)
 	}
 }
 
@@ -80,7 +126,7 @@ func TestRenderStatusRowShowsScrollHintsWithoutComposerStatus(t *testing.T) {
 	m := newTestModel()
 	m.width = 80
 	row := stripANSI(m.renderStatusRow())
-	hints := scrollShortcutHints()
+	hints := m.scrollShortcutHints()
 	if !strings.Contains(row, hints) {
 		t.Errorf("status row missing scroll hints %q\n%s", hints, row)
 	}
@@ -89,8 +135,8 @@ func TestRenderStatusRowShowsScrollHintsWithoutComposerStatus(t *testing.T) {
 	}
 }
 
-// TestStatusRowNeverExceedsWidth reproduces the ghosting bug: with the default
-// approval policy plus a skill count, the status row's left hints + right counts
+// TestStatusRowNeverExceedsWidth reproduces the ghosting bug: with the key
+// hints plus a skill count, the status row's left hints + right counts
 // exceed an 80-col terminal, soft-wrap, and leave duplicate footer/status rows.
 // renderStatusRowLine must clamp to width.
 func TestStatusRowNeverExceedsWidth(t *testing.T) {
@@ -103,6 +149,91 @@ func TestStatusRowNeverExceedsWidth(t *testing.T) {
 		if got := lipgloss.Width(m.renderStatusRow()); got > w {
 			t.Errorf("status row width = %d at terminal width %d (overflows → ghosting)", got, w)
 		}
+	}
+}
+
+// TestTruncateAtSeparator keeps whole entries and never cuts one in half. The
+// line is "screen: full · thinking: hidden · mouse: on" (12, 16, and 9 cells
+// plus two 3-cell separators, 43 in all).
+func TestTruncateAtSeparator(t *testing.T) {
+	t.Parallel()
+	const line = "screen: full · thinking: hidden · mouse: on"
+	cases := []struct {
+		name  string
+		width int
+		want  string
+	}{
+		{"fits", 80, line},
+		{"exact fit", 43, line},
+		{"drops last entry", 42, "screen: full · thinking: hidden"},
+		{"cut lands on a boundary", 31, "screen: full · thinking: hidden"},
+		{"cut lands inside the separator", 14, "screen: full"},
+		{"cut lands inside the next entry", 20, "screen: full"},
+		{"first entry only", 12, "screen: full"},
+		{"first entry overflows", 6, "screen"},
+		{"zero width keeps one cell", 0, "s"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := truncateAtSeparator(line, tc.width)
+			if got != tc.want {
+				t.Errorf("truncateAtSeparator(%d) = %q, want %q", tc.width, got, tc.want)
+			}
+			if w := lipgloss.Width(got); w > max(tc.width, 1) {
+				t.Errorf("width %d overflows %d", w, tc.width)
+			}
+		})
+	}
+}
+
+// TestKeyAndSettingsRowsTruncateNotWrap checks every composer row at widths
+// from tiny to wide: no row is wider than the terminal and none contains a
+// newline, so nothing wraps.
+func TestKeyAndSettingsRowsTruncateNotWrap(t *testing.T) {
+	t.Parallel()
+	opts := ui.Options{ThemeName: "default", LoadedMemoryFiles: []string{"/a/AGENTS.md", "/b/AGENTS.md"}}
+	app := footerMetricsApp{stats: ui.SessionStats{
+		LastInputTokens:  1000,
+		LastOutputTokens: 400,
+		InputTokens:      100,
+		OutputTokens:     40,
+		TokensPerSec:     42,
+		ContextTokens:    5000,
+		ContextLimit:     10000,
+	}}
+	for _, inline := range []bool{false, true} {
+		for _, w := range []int{1, 8, 20, 30, 45, 60, 80, 120} {
+			m := newModel(opts, app, NewTerminal(ui.Options{}))
+			m.inline = inline
+			m.width = w
+			m.status = ui.StatusBar{Left: "~/src/test", Right: "gemini - gemini-3.8-flash", Detail: "System Prompt: System administrator"}
+
+			row := m.renderStatusRow()
+			if strings.Contains(row, "\n") || lipgloss.Width(row) > w {
+				t.Errorf("inline=%v w=%d status row wraps or overflows (%d): %q", inline, w, lipgloss.Width(row), stripANSI(row))
+			}
+			footer := renderFooter(m.statusWithMetrics(), m.th, w)
+			for i, line := range strings.Split(footer, "\n") {
+				if got := lipgloss.Width(line); got > w {
+					t.Errorf("inline=%v w=%d footer line %d width %d overflows: %q", inline, w, i, got, stripANSI(line))
+				}
+			}
+		}
+	}
+}
+
+// TestFitLeftRightDropsWholeHints verifies the status row sheds trailing hints
+// before it cuts a word.
+func TestFitLeftRightDropsWholeHints(t *testing.T) {
+	t.Parallel()
+	left := readOnlyLiftHint + "  ·  " + scrollShortcutHintsForGOOS("linux")
+	// 111 cells leaves 80 for the left side: through "show thinking" (69) fits,
+	// the mouse hint would end at 88.
+	gotLeft, _ := fitLeftRight(left, "2 AGENTS.md files · 119 skills", 111)
+	want := "/readonly off to lift  ·  /screen display mode · Ctrl+T show thinking"
+	if gotLeft != want {
+		t.Errorf("fitted left = %q, want %q", gotLeft, want)
 	}
 }
 
@@ -266,10 +397,10 @@ func TestScrollShortcutHintsForGOOS(t *testing.T) {
 		goos string
 		want string
 	}{
-		{"darwin", "Fn↑ Fn↓ · Alt+M or ⌥M mouse · Ctrl+T thinking"},
-		{"windows", "Pg↑ Pg↓ · Alt+M or ⌥M mouse · Ctrl+T thinking"},
-		{"linux", "Pg↑ Pg↓ · Alt+M or ⌥M mouse · Ctrl+T thinking"},
-		{"freebsd", "Pg↑ Pg↓ · Alt+M or ⌥M mouse · Ctrl+T thinking"},
+		{"darwin", "/screen display mode · Ctrl+T show thinking · Alt+M or ⌥M mouse · Fn↑ Fn↓"},
+		{"windows", "/screen display mode · Ctrl+T show thinking · Alt+M or ⌥M mouse · Pg↑ Pg↓"},
+		{"linux", "/screen display mode · Ctrl+T show thinking · Alt+M or ⌥M mouse · Pg↑ Pg↓"},
+		{"freebsd", "/screen display mode · Ctrl+T show thinking · Alt+M or ⌥M mouse · Pg↑ Pg↓"},
 	}
 	for _, tc := range cases {
 		tc := tc

@@ -67,8 +67,8 @@ func (t *saveMemoryTool) Execute(ctx context.Context, args map[string]any) (map[
 		return nil, fmt.Errorf("save memory: %w", err)
 	}
 	path := result.Path
-	if err := t.runner.ReloadSystemInstruction(); err != nil {
-		return nil, fmt.Errorf("memory saved to %s, but reload failed: %w", path, err)
+	if t.runner != nil {
+		t.runner.MarkSystemInstructionDirty()
 	}
 
 	out := map[string]any{

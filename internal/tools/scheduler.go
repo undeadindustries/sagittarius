@@ -707,6 +707,16 @@ func (s *Scheduler) executeOne(
 		}
 		toolCtx = WithPTYStdin(ctx, stdin)
 	}
+	// Tools that prompt from inside Execute (wait_until) need the same yolo
+	// bit and session grants as a scheduler-level confirm. NeedsConfirmation
+	// is the wrong signal here: it is also false for tools that simply do
+	// not require a prompt, which would skip the tool's own confirm in every
+	// mode. Yolo is the only mode that auto-approves.
+	toolCtx = WithConfirmGate(toolCtx, NewConfirmGate(
+		s.policy.Mode == ApprovalYolo,
+		s.sessionGranted,
+		s.grantSession,
+	))
 
 	switch t := tool.(type) {
 	case BatchTool:

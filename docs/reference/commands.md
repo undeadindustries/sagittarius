@@ -128,7 +128,7 @@ These work in the interactive TUI in addition to the slash commands above.
 | `Ctrl+Shift+D` | Export the last provider request to a JSON file (works mid-turn; same as `/chat debug`) |
 | `Ctrl+O` | Expand or collapse a pasted text placeholder in place |
 | `Ctrl+X` | Cancel the selected subagent in a task group (select a card with Up/Down first); siblings keep running |
-| `Alt+M` | Toggle mouse mode: wheel scrolling and drag-to-copy (on by default; see below) |
+| `Alt+M` | Toggle mouse mode: wheel scrolling and drag-to-copy (on by default in full-screen mode; see below) |
 | `Ctrl+B` | Open the background process viewer |
 | `PgUp` / `PgDn` / `Shift+Up` / `Shift+Down` | Scroll the conversation |
 | `Up` / `Down` / `Ctrl+P` / `Ctrl+N` | Navigate prompt history (at the input boundaries). Recalling a slash command does not open its completion menu, so the arrows keep moving through history; `Tab` opens the menu for the recalled line |
@@ -143,9 +143,9 @@ and `µ` for `Alt+M`, so the shortcuts work out of the box.
 
 ### Mouse scrolling and selection
 
-Mouse mode is **on by default** in the interactive TUI (off in
-`--screen-reader` mode). The wheel scrolls the conversation, and a click-drag
-selects text inside Sagittarius:
+Mouse mode is **on by default** in the full-screen TUI (off in
+`--screen-reader` mode, and unused in inline mode). The wheel scrolls the
+conversation, and a click-drag selects text inside Sagittarius:
 
 - The selection is highlighted while you drag. Dragging to the top or bottom
   row of the conversation scrolls it, and so does turning the wheel mid-drag,
@@ -156,11 +156,15 @@ selects text inside Sagittarius:
   fit the window are rejoined (a wrapped command pastes as one line), and role
   glyphs and tool-card borders are left out.
 
-For the terminal's own selection, hold `Shift` while dragging (`Option` in
-iTerm2) or turn mouse mode off with `Alt+M` / `/mouse off`. That selection
-only reaches the visible rows. Keyboard scrollback (`PgUp`/`PgDn`,
-`Shift+Up`/`Down`) works either way. `Alt+M` lasts for the session; the next
-launch starts with mouse mode on again.
+For the terminal's own selection, hold `Fn` in Terminal.app (`Cmd-R` toggles
+View > Allow Mouse Reporting when `Fn` is not available), `Option` in iTerm2,
+or `Shift` in most other terminals. You can also turn mouse mode off with
+`Alt+M` / `/mouse off`. That selection only reaches the visible rows.
+Keyboard scrollback (`PgUp`/`PgDn`, `Shift+Up`/`Down`) works either way.
+`/mouse on` and `/mouse off` are
+remembered (`ui.mouse`). `Alt+M` and `/mouse` with no argument last for this
+session only. The next full-screen launch starts from the remembered choice,
+which defaults to on.
 
 ### Clipboard over SSH
 
@@ -179,10 +183,64 @@ into DCS strings. The terminal must allow OSC 52:
 The terminal sends no acknowledgement, so the confirmation says the text was
 *sent*. If nothing arrives, check the terminal setting above.
 
+macOS Terminal.app does not implement OSC 52. Full screen is still the
+default over SSH. The first OSC 52 copy in an SSH session opens a dialog
+once: keep full screen, or use inline mode for later SSH sessions. That
+choice is saved as `ui.screen` = `auto`, so a local session stays full
+screen. In full screen, copy the visible rows with the terminal: `Fn` in
+Terminal.app, or `Cmd-R` (View > Allow Mouse Reporting). iTerm2 uses
+`Option`. Most other terminals use `Shift`. iTerm2 accepts OSC 52 after
+*Applications in terminal may access clipboard* is turned on. Ghostty, kitty,
+WezTerm, and foot allow OSC 52 by default.
+
+### Screen layout
+
+`ui.screen` is `fullscreen` (the default), `inline`, or `auto`. `--screen`
+overrides it for one run. `/screen` changes the running session and does not
+save the choice. The setting applies on the next launch.
+
+- `fullscreen` is the alternate-screen TUI: in-app scrolling, drag selection,
+  and dialogs. This is the default everywhere, including SSH, because copy
+  goes out over OSC 52 and the layout stays in place.
+- `inline` prints each finished block into the terminal's own scrollback and
+  keeps the composer, status row, and the current turn on screen. Prose is
+  word-wrapped the same way as full screen. Each source line of a code block
+  is one physical line, so the terminal wraps it and a copy of that line stays
+  one line. Tool cards keep their frames. A terminal selection of prose or a
+  card includes those line breaks and the frame. `/copy` and a full-screen
+  drag selection still copy the source text. The terminal handles scrolling
+  and selection, so `Cmd-C` / `Ctrl-Shift-C` copies what you select. Dialogs
+  still open on the alternate screen and close back to the scrollback. Text
+  already printed does not recolor when you change theme, and `/clear` clears
+  the live session without erasing the terminal's history.
+- `auto` is full screen on a local session. Over SSH it asks the terminal
+  for its name (XTVERSION). kitty, WezTerm, Ghostty, and foot stay full
+  screen. Anything else, including no answer, Terminal.app, and iTerm2, gets
+  inline mode. tmux and GNU screen skip the probe and use inline mode, because
+  they would answer for the outer terminal.
+
+The first OSC 52 copy over SSH, while full screen, opens **Copying over SSH**
+once. **Keep full screen** dismisses it. **Use inline mode over SSH** switches
+this session and saves `auto`. `ui.sshCopyTipShown` records that the dialog
+has been offered. It is not a row in `/settings`. If a project's
+`.sagittarius/settings.json` defines `ui`, that object replaces the global
+`ui` object, so the saved choice does not apply in that project.
+
+`/screen fullscreen` and `/screen inline` switch the current session only.
+Screen reader mode stays in the plain terminal and refuses the switch.
+
 ### `/mouse`
 
-- **Description:** Toggle mouse mode (wheel scrolling and drag-to-copy).
-- **Usage:** `/mouse` (toggle), `/mouse on`, `/mouse off`, `/mouse show`.
+- **Description:** Toggle mouse mode (wheel scrolling and drag-to-copy) in full-screen mode.
+- **Usage:** `/mouse` (toggle for this session), `/mouse on`, `/mouse off`, `/mouse show`.
+- **Persistence:** `/mouse on` and `/mouse off` are saved globally and apply on the next full-screen launch. Inline mode does not capture the mouse; the terminal's own selection is used there. `/mouse show` names the selection key for this terminal when it can tell (`Option` for iTerm2, `Fn, or Cmd-R` for Terminal.app) and otherwise lists the candidates.
+
+### `/screen`
+
+- **Description:** Switch the terminal layout for this session. The choice is not saved.
+- **Usage:** `/screen` (show the current layout), `/screen fullscreen`, `/screen inline`, `/screen help`.
+- **Help:** `/screen help` explains what each layout is for, how they differ, and recommends inline. It changes nothing and works in screen reader mode.
+- **Notes:** Full screen draws the conversation in place. Inline prints finished output into the terminal scrollback. See [Screen layout](#screen-layout). Screen reader mode refuses the switch. To make later SSH sessions start inline, use the copy dialog or set `ui.screen` to `auto`. Setting it to `inline` makes every session inline, including local ones.
 
 ### `/theme`
 
@@ -247,7 +305,7 @@ The terminal sends no acknowledgement, so the confirmation says the text was
   ```` ```php ```` fences as **one** block — the whole document, inner fences
   intact — matching how the reply rendered on screen. Tilde (`~~~`) fences
   work too. A drag selection in mouse mode rejoins wrapped rows, but the
-  terminal's own selection (`Shift`+drag or mouse mode off) copies a newline
+  terminal's own selection (`Fn` in Terminal.app, `Option` in iTerm2, `Shift` in most others, or mouse mode off) copies a newline
   at each wrap point; `/copy` and `/copy code` always copy the exact last
   reply (or its fenced bodies). Over SSH these copies go through OSC 52 (see
   *Clipboard over SSH* above). `/copy code` only covers the last assistant reply, so the hint
@@ -320,12 +378,45 @@ The terminal sends no acknowledgement, so the confirmation says the text was
 
 ### `/models`
 
-- **Description:** Edit **per-model settings** — temperature, context limit,
-  reasoning effort, thinking-box visibility, and the thinking budget — for any
-  active `{Provider}/{Model}` pair.
+- **Description:** Edit **per-model settings** -- temperature, context limit,
+  reasoning effort, reasoning history retention, thinking-box visibility, and
+  the thinking budget -- for any active `{Provider}/{Model}` pair.
 - **Menu-first:** `/models` opens a global model list. Select a model to open its
   settings submenu. Changes are saved to `providers.<id>.models.<model>` in
   `settings.json` and take effect immediately for the active model.
+
+#### Reasoning history (`reasoningHistory`)
+
+Local and open-weight reasoning models (Qwen 3 / 3.5 / 3.6, GLM 4.5+ / 5, Kimi
+K2 / K2.5, DeepSeek R1 / V3.2, MiniMax M2.5, Gemma 4) use Jinja chat templates
+that inspect prior assistant messages for `reasoning_content`. Stripping
+reasoning on every round can change how the template formats the conversation or
+cause the model to re-derive earlier steps. Keeping every reasoning trace forever
+fills the context window and triggers frequent prefix-cache invalidations.
+
+`reasoningHistory` controls how `openai-chat` replays `reasoning_content` across
+rounds:
+
+- **`auto` (default):** Enables preserved-thinking replay for model families
+  whose chat templates support it (Qwen 3/3.5/3.6, GLM 4.5+/5, Kimi K2/K2.5,
+  MiniMax M2.5, Gemma 4) and sends the matching `chat_template_kwargs`
+  (`preserve_thinking: true` or `clear_thinking: false`). For models whose
+  templates strip prior reasoning before the last user message (such as
+  DeepSeek R1) or cloud routers that manage reasoning server-side (OpenRouter),
+  `auto` resolves to `none`.
+- **`keep`:** Replays `reasoning_content` on assistant messages and uses
+  batched retention pruning. Completed turns' reasoning is kept byte-identical
+  until older reasoning exceeds a token window (~8,000 tokens or 20% of the
+  context limit), then pruned in a single batch so intermediate rounds keep hitting
+  the KV prefix cache. Reasoning after the latest user message (the active tool
+  loop) is always kept intact.
+- **`keep-all`:** Replays `reasoning_content` on every assistant message without
+  batched pruning (until context compression summarizes old turns).
+- **`none`:** Never sends `reasoning_content` in request history.
+
+Advanced template overrides can also be set per provider or per model via
+`chatTemplateKwargs` in `settings.json`; user-specified keys always win over
+the automatic family defaults.
 
 #### Thinking budget
 
@@ -442,7 +533,7 @@ again.
   - `Ctrl+L` — Clears the key from the selected scope only; the other scope or
     the built-in default takes over.
 - **Categories:** General (`sagittarius.maxToolRounds`: default 100, `0` = no cap; interactive sessions show a Continue prompt at the cap), UI (`ui.theme`,
-  `ui.showThinking`, `ui.hideBanner`), Security (`security.projectBoundary.enforce`),
+  `ui.screen`, `ui.mouse`, `ui.showThinking`, `ui.hideBanner`), Security (`security.projectBoundary.enforce`),
   Snapshots (`sagittarius.snapshots.*`), Verify (`sagittarius.edit.enabled`
 `sagittarius.verify.*`),
   Symbols (`sagittarius.symbols.*`), Secrets (Brave Search API key).
@@ -784,6 +875,16 @@ See also: [MCP server configuration](../tools/mcp-server.md).
   - **Description:** Export the current session and any child subagents as a Harbor ATIF v1.7 trajectory JSON file. If `path` is omitted, the trajectory is saved to `~/.sagittarius/chats/<session-id>.atif.json`. Sensitive tokens and keys are automatically redacted unless `--no-redact` was supplied at startup.
   - **Usage:** `/export atif` or `/export atif /tmp/session.atif.json`
 
+### `/stats`
+
+- **Description:** Show live session token, tool, model, and prompt-cache statistics.
+- **Usage:** `/stats [session|model|tools|cache]`
+- **Sub-commands:**
+  - **`session`** (or bare `/stats`): Total input, output, cached, and reasoning tokens, round count, tool calls, and estimated cost when reported by the provider. When the provider reports cached prompt tokens (`usage.prompt_tokens_details.cached_tokens` on `openai-chat`, `usage.input_tokens_details.cached_tokens` on `openai-responses`, or `CachedContentTokenCount` on Gemini), the hit rate (`cached / input`) is shown even when `0%` so a cold cache is distinguishable from a server that does not report cache usage.
+  - **`model`**: Per-model and per-mode token breakdown, including a `Cached` column whenever any active model reports prompt-cache usage.
+  - **`tools`**: Tool call counts, successes, failures, and cumulative latency.
+  - **`cache`**: Client-side prompt prefix stability and provider-reported cache hits. Tracks SHA-256 fingerprints of the system prompt and tool declarations plus incremental FNV-64a message hashes across rounds, separating expected prefix invalidations (`compression`, `truncation`, `reasoning-prune`, `user-command`, `mode-switch`, `model-switch`, `mcp-reload`) from unexpected prefix mutations.
+
 ### `/diff`
 
 - **Description:** Show the net unified diff of files Sagittarius changed this session (Sagittarius-specific; no fork equivalent).
@@ -858,6 +959,7 @@ exercise it. See [agent-testing.md](../agent-testing.md) for end-to-end recipes.
 | `--google-chat` | Attach Google Chat DM bridge alongside the TUI; multiplexes turns via an internal hub. Refuses `--yolo`. See [docs/google-chat.md](../google-chat.md). |
 | `--google-chat-only` | Run headless Google Chat bridge without a terminal (for systemd or screen daemons). Refuses `--yolo`. |
 | `--slash <command>` | Run a single slash command headlessly (e.g. `--slash "/mode show"`, `--slash "/diff"`, `--slash "/undo"`) and exit. Mutually exclusive with `-p`. Commands that open an interactive dialog (bare `/providers`, `/models`) print a message and exit 2. |
+| `--screen <fullscreen\|inline\|auto>` | Terminal layout for this run. `fullscreen` is the default. `auto` is full screen locally, and inline scrollback over SSH unless the terminal is known to allow OSC 52. Overrides `ui.screen` for this process. See [Screen layout](#screen-layout). |
 | `-d`, `--debug` | Raise `slog`'s level to debug for operational log lines (interactive: `~/.sagittarius/logs/sagittarius.log`; headless: stderr). Independent of `--log-verbose` below. |
 | `--log-verbose` | Write a full, human-readable transcript of every request sent to the model, every response, and every tool result to `~/.sagittarius/logs/chat-verbose-<session>.log`. Works with or without `--debug`, in interactive, headless (`-p`), and `--slash` runs. Intended for attaching to bug reports; rarely needed otherwise. Appends across `--resume` of the same session; a failure to open the file is a non-fatal warning, not a startup error. |
 
@@ -894,7 +996,7 @@ Implemented: `/about`, `/agent`, `/ask`, `/chat`, `/clear`, `/compress`,
 `/copy` (`code`), `/debug`, `/diff`, `/export atif`, `/goal`,
 `/grill`, `/init`, `/memory add|list|remove|reload`, `/mcp` (list, reload, add/edit/remove wizard),
 `/mode` (show, switch), `/modes` (override, clear headlessly), `/model`, `/models`, `/mouse`, `/plan`, `/reasoning`,
-`/resume`, `/settings` (curated browser), `/skills` (list, reload), `/agents`
+`/resume`, `/screen` (fullscreen, inline), `/settings` (curated browser), `/skills` (list, reload), `/agents`
 (list, reload), `/stats`, `/subagents` (show, set, clear, reset headlessly),
 `/system-prompt`, `/theme`, `/tools` (list, desc,
 enable/disable), `/undo`, `activate_skill` tool, `ask_user` tool, `save_memory` tool,

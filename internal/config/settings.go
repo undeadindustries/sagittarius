@@ -47,6 +47,13 @@ type ProviderInstanceConfig struct {
 	// ShowThinking reveals the model reasoning box for this provider. Nil
 	// inherits the global ui.showThinking; per-model entries can override it.
 	ShowThinking *bool `json:"showThinking,omitempty"`
+	// ReasoningHistory controls whether assistant reasoning_content is replayed
+	// in history and whether older reasoning is pruned ("auto", "keep",
+	// "keep-all", "none"). Empty defaults to "auto".
+	ReasoningHistory string `json:"reasoningHistory,omitempty"`
+	// ChatTemplateKwargs passes Jinja template flags on the openai-chat request
+	// body (chat_template_kwargs). Per-model entries override keys by name.
+	ChatTemplateKwargs map[string]any `json:"chatTemplateKwargs,omitempty"`
 
 	// Personality selects the system-prompt personality for this provider
 	// (e.g. "programmer"). Empty falls back to sagittarius.systemPrompt.personality.
@@ -92,6 +99,13 @@ type ProviderModelConfig struct {
 	// ShowThinking overrides the provider/global thinking-box visibility for
 	// this model only. Nil inherits the provider instance value.
 	ShowThinking *bool `json:"showThinking,omitempty"`
+	// ReasoningHistory overrides the provider-level reasoningHistory policy for
+	// this model ("auto", "keep", "keep-all", "none"). Empty inherits provider.
+	ReasoningHistory string `json:"reasoningHistory,omitempty"`
+	// ChatTemplateKwargs passes per-model Jinja template flags on the
+	// openai-chat request body (chat_template_kwargs), overriding auto-detected
+	// or provider-level keys of the same name.
+	ChatTemplateKwargs map[string]any `json:"chatTemplateKwargs,omitempty"`
 	// ThinkingBudgetTokens caps the tokens this model may spend reasoning in a
 	// single round. It is advertised to the provider on every request; servers
 	// that understand it (llama.cpp reasoning_budget_tokens, Gemini
@@ -133,6 +147,7 @@ type ProviderModelConfig struct {
 func (c ProviderModelConfig) IsEmpty() bool {
 	return c.Personality == "" && c.PromptMode == "" && c.Temperature == nil &&
 		c.ContextLimit == nil && c.ReasoningEffort == "" && c.ShowThinking == nil &&
+		c.ReasoningHistory == "" && len(c.ChatTemplateKwargs) == 0 &&
 		c.ThinkingBudgetTokens == nil && c.HardThinkingBudget == nil &&
 		c.ReasoningSupported == nil && c.ReasoningMandatory == nil &&
 		len(c.ReasoningEfforts) == 0 && c.ReasoningDefaultEffort == "" &&
@@ -174,6 +189,14 @@ func (c *ProviderModelConfig) UnmarshalJSON(data []byte) error {
 			}
 		case "showThinking":
 			if err := json.Unmarshal(val, &c.ShowThinking); err != nil {
+				return err
+			}
+		case "reasoningHistory":
+			if err := json.Unmarshal(val, &c.ReasoningHistory); err != nil {
+				return err
+			}
+		case "chatTemplateKwargs":
+			if err := json.Unmarshal(val, &c.ChatTemplateKwargs); err != nil {
 				return err
 			}
 		case "thinkingBudgetTokens":
@@ -260,6 +283,20 @@ func (c ProviderModelConfig) MarshalJSON() ([]byte, error) {
 			return nil, err
 		}
 		obj["showThinking"] = b
+	}
+	if c.ReasoningHistory != "" {
+		b, err := json.Marshal(c.ReasoningHistory)
+		if err != nil {
+			return nil, err
+		}
+		obj["reasoningHistory"] = b
+	}
+	if len(c.ChatTemplateKwargs) > 0 {
+		b, err := json.Marshal(c.ChatTemplateKwargs)
+		if err != nil {
+			return nil, err
+		}
+		obj["chatTemplateKwargs"] = b
 	}
 	if c.ThinkingBudgetTokens != nil {
 		b, err := json.Marshal(*c.ThinkingBudgetTokens)

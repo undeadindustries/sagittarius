@@ -7,6 +7,8 @@ import (
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // inputContentLines counts how many display rows the current input value occupies
@@ -46,9 +48,10 @@ func inputBoxHeight(contentLines int) int {
 
 // syncInputLayout sizes the textarea to the terminal width and the computed box
 // height, then resets internal scroll when the full prompt fits without needing
-// a clipped viewport.
+// a clipped viewport. The width matches the separator and footer so the input
+// background reaches both edges of the terminal.
 func (m *model) syncInputLayout() {
-	w := max(m.width-2, 1)
+	w := max(m.width, 1)
 	m.input.SetWidth(w)
 
 	contentLines := inputContentLines(m.input)
@@ -80,6 +83,47 @@ func inputScrollToTop(input *textarea.Model) {
 		return
 	}
 	vp.GotoTop()
+}
+
+// renderInput draws the composer at the full terminal width. A typed row is
+// padded inside the input background. The empty placeholder row is not: the
+// textarea viewport then fills the rest of the line with plain spaces, so the
+// background stops at the placeholder until the first character. Those plain
+// spaces are replaced here with the input background (a color on themed
+// terminals, reverse video on greyscale).
+func (m *model) renderInput() string {
+	view := m.input.View()
+	if view == "" {
+		return view
+	}
+	target := max(m.width, 1)
+	fill := m.input.FocusedStyle.Base
+	// A trailing newline ends the widget; it is not an extra blank row.
+	trailingNL := strings.HasSuffix(view, "\n")
+	body := strings.TrimSuffix(view, "\n")
+	lines := strings.Split(body, "\n")
+	for i, line := range lines {
+		lines[i] = padInputLine(line, target, fill)
+	}
+	out := strings.Join(lines, "\n")
+	if trailingNL {
+		out += "\n"
+	}
+	return out
+}
+
+// padInputLine extends line to target cells with fill. The textarea viewport
+// pads a short row to its width, and that pad may be plain spaces or spaces
+// wrapped in an empty style, depending on the color profile. Either way the
+// background stops at the last non-space cell, so the tail is rebuilt here.
+func padInputLine(line string, target int, fill lipgloss.Style) string {
+	keep := ansi.StringWidth(strings.TrimRight(ansi.Strip(line), " "))
+	cut := ansi.Truncate(line, keep, "")
+	pad := target - lipgloss.Width(cut)
+	if pad <= 0 {
+		return cut
+	}
+	return cut + fill.Render(strings.Repeat(" ", pad))
 }
 
 // visibleInputPrefix returns the first word of s, used by tests to assert the

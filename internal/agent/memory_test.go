@@ -19,9 +19,11 @@ const noMemoryCap = 0
 
 func today() string { return time.Now().Format(memoryDateLayout) }
 
-// TestSaveMemoryToolAppendsAndReloads drives save_memory end to end through
-// the scheduler (as the model would call it) and asserts the entry lands in
-// MEMORY.md and is picked up by the very next request's system instruction.
+// TestSaveMemoryToolDefersReloadUntilRebuildPoint drives save_memory end to end
+// through the scheduler (as the model would call it) and asserts the entry
+// lands in MEMORY.md immediately, keeps r.system byte-identical across normal
+// follow-up turns (preserving the prompt cache prefix), and is picked up at the
+// next rebuild point.
 func TestSaveMemoryToolAppendsAndReloads(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("SAGITTARIUS_HOME", home)
@@ -44,6 +46,10 @@ func TestSaveMemoryToolAppendsAndReloads(t *testing.T) {
 				{TextDelta: "anything else answer"},
 				{Done: true},
 			},
+			{
+				{TextDelta: "after rebuild answer"},
+				{Done: true},
+			},
 		},
 	}
 
@@ -57,6 +63,8 @@ func TestSaveMemoryToolAppendsAndReloads(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
+
+	sysBefore := systemInstruction(t, runner)
 
 	events, err := runner.RunTurn(testContext(t), "remember that I prefer pnpm")
 	if err != nil {
@@ -90,14 +98,27 @@ func TestSaveMemoryToolAppendsAndReloads(t *testing.T) {
 		t.Fatalf("global MEMORY.md missing the saved memory:\n%s", string(data))
 	}
 
-	// A second turn's system instruction should include the freshly saved
-	// memory, proving ReloadSystemInstruction actually ran.
-	if _, err := runner.RunTurn(testContext(t), "anything else?"); err != nil {
+	// Between rebuild points, r.system stays byte-identical so the prompt cache
+	// prefix is not invalidated mid-task.
+	evs2, err := runner.RunTurn(testContext(t), "anything else?")
+	if err != nil {
 		t.Fatalf("RunTurn (2nd): %v", err)
 	}
+	collectEvents(t, evs2)
+	if req := gen.lastRequest(); req == nil || req.SystemInstruction != sysBefore {
+		t.Fatalf("system instruction changed before a rebuild point")
+	}
+
+	// At the next rebuild point, the dirty memory is flushed into r.system.
+	runner.refreshSystemAtRebuild("compression")
+	evs3, err := runner.RunTurn(testContext(t), "after rebuild?")
+	if err != nil {
+		t.Fatalf("RunTurn (3rd): %v", err)
+	}
+	collectEvents(t, evs3)
 	req := gen.lastRequest()
 	if req == nil || !strings.Contains(req.SystemInstruction, "prefers pnpm over npm") {
-		t.Fatalf("system instruction should include the saved memory after reload:\n%v", req)
+		t.Fatalf("system instruction should include the saved memory after rebuild:\n%v", req)
 	}
 }
 

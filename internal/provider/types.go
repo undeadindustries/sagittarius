@@ -15,7 +15,11 @@ const (
 
 // Part is a single content fragment within a Message.
 type Part struct {
-	Text             string
+	Text string
+	// Reasoning carries model thinking/reasoning text for this assistant turn
+	// (populated on the openai-chat path so it can be replayed as
+	// reasoning_content when ReasoningHistory resolves to keep).
+	Reasoning        string
 	FunctionCall     *ToolCall
 	FunctionResponse *FunctionResponse
 	// ThoughtSignature is Gemini-only metadata: an opaque, encrypted handle for
@@ -86,6 +90,13 @@ type GenerateRequest struct {
 	// again. Adapters send every suppression key they know, because no single
 	// key works across llama.cpp, OpenRouter and Qwen-on-vLLM.
 	SuppressThinking bool
+	// KeepReasoningHistory instructs the openai-chat wire mapper to replay
+	// Part.Reasoning as reasoning_content on assistant messages.
+	KeepReasoningHistory bool
+	// ChatTemplateKwargs carries resolved per-model or auto-detected
+	// chat_template_kwargs for servers that render a Jinja chat template
+	// (vLLM, SGLang, llama-server).
+	ChatTemplateKwargs map[string]any
 }
 
 // ThinkingBudgetMessage is the wrap-up text a server injects at the end of a
@@ -139,9 +150,25 @@ type Usage struct {
 	InputTokens     int
 	OutputTokens    int
 	CachedTokens    int
+	CachedReported  bool
 	ReasoningTokens int
-	CostUSD         float64
-	CostKnown       bool
+	// ReasoningSeparate is true when ReasoningTokens are not already included
+	// in OutputTokens. Gemini reports candidate and thought counts apart;
+	// OpenAI-style APIs fold reasoning into completion tokens, so the flag
+	// stays false there and GeneratedTokens does not double-count.
+	ReasoningSeparate bool
+	CostUSD           float64
+	CostKnown         bool
+}
+
+// GeneratedTokens returns the tokens produced while the model was decoding
+// this response. Gemini's candidate count excludes thinking tokens, so those
+// are added only when ReasoningSeparate is set.
+func (u Usage) GeneratedTokens() int {
+	if u.ReasoningSeparate {
+		return u.OutputTokens + u.ReasoningTokens
+	}
+	return u.OutputTokens
 }
 
 // StreamResponse is one chunk emitted from GenerateContentStream.

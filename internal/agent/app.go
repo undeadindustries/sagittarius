@@ -54,6 +54,8 @@ type AppConfig struct {
 	// SessionID keys the context manager's adaptive state and offload dirs. It
 	// is reused across provider switches so offload paths stay stable.
 	SessionID string
+	// ScreenReader is true for --screen-reader. /screen refuses in that mode.
+	ScreenReader bool
 	// BaseProviderID is the canonical provider id that was active at startup
 	// before any mode-driven provider override. buildRunner resolves this and
 	// passes it here; SetInteractionMode uses it to return to the right base
@@ -70,6 +72,7 @@ var (
 	_ ui.ComposerStatusProvider = (*App)(nil)
 	_ ui.ShellInputWriter       = (*App)(nil)
 	_ ui.SidebarAsker           = (*App)(nil)
+	_ ui.ScreenPreferenceStore  = (*App)(nil)
 )
 
 // App adapts Runner to ui.App for interactive TUI sessions.
@@ -132,10 +135,11 @@ func NewApp(cfg AppConfig) *App {
 			Mode:   mode.String(),
 		},
 		deps: slash.Deps{
-			Loader:    cfg.Loader,
-			Settings:  cfg.Settings,
-			Documents: cfg.Documents,
-			Hooks:     &appHooks{app: nil},
+			Loader:       cfg.Loader,
+			Settings:     cfg.Settings,
+			Documents:    cfg.Documents,
+			Hooks:        &appHooks{app: nil},
+			ScreenReader: cfg.ScreenReader,
 		},
 	}
 	app.deps.Hooks = &appHooks{app: app}
@@ -562,6 +566,9 @@ func (a *App) emitSlashResult(ctx context.Context, result slash.Result, out chan
 	if result.MouseMode != "" {
 		out <- ui.StreamEvent{Type: ui.StreamSetMouse, Text: result.MouseMode}
 	}
+	if result.ScreenMode != "" {
+		out <- ui.StreamEvent{Type: ui.StreamSetScreen, Text: result.ScreenMode}
+	}
 	if result.SubmitPrompt != "" {
 		// Hand off to a real model turn (e.g. /init analyzing the project) by
 		// merging RunTurn's events into this stream. RunTurn emits its own
@@ -892,6 +899,14 @@ func (h *appHooks) SetUITheme(name string) error {
 		return fmt.Errorf("settings not loaded")
 	}
 	return h.app.persistGlobal(func(s *config.Settings) error { return s.SetUITheme(name) })
+}
+
+// SetUIMouse implements slash.Hooks: it persists the full-screen mouse default.
+func (h *appHooks) SetUIMouse(on bool) error {
+	if h.app == nil {
+		return fmt.Errorf("settings not loaded")
+	}
+	return h.app.persistGlobal(func(s *config.Settings) error { return s.SetUIMouse(on) })
 }
 
 // formatCompressionResult renders a CompressionInfo as a user-facing line.
@@ -2067,6 +2082,29 @@ func (a *App) MarkToolkitChecklistShown() error {
 	})
 }
 
+// MarkSSHCopyTipShown implements ui.ScreenPreferenceStore. A missing settings
+// document (tests) is a no-op. The caller runs this off the UI goroutine.
+func (a *App) MarkSSHCopyTipShown() error {
+	if a.docs == nil {
+		return nil
+	}
+	return a.docs.MutateGlobal(func(s *config.Settings) error {
+		return s.SetUISSHCopyTipShown(true)
+	})
+}
+
+// SaveScreenLayout implements ui.ScreenPreferenceStore. It writes ui.screen in
+// the global settings file. A missing settings document is an error so the UI
+// does not claim the choice was remembered.
+func (a *App) SaveScreenLayout(mode string) error {
+	if a.docs == nil {
+		return fmt.Errorf("save screen layout: settings not loaded")
+	}
+	return a.docs.MutateGlobal(func(s *config.Settings) error {
+		return s.SetUIScreen(mode)
+	})
+}
+
 func (h *appHooks) CheckForUpdate(ctx context.Context, force bool) (*selfupdate.CheckResult, error) {
 	if h.app == nil || h.app.docs == nil {
 		return nil, fmt.Errorf("app or docs not available")
@@ -2333,6 +2371,7 @@ func (r *Runner) SetModel(model string) {
 	if model == "" {
 		return
 	}
+	r.prefixDet.noteExpectedBreak("model-change")
 	r.modelMu.Lock()
 	r.model = model
 	r.modelMu.Unlock()
@@ -2384,6 +2423,7 @@ func (r *Runner) SetRegistry(registry *tools.Registry) {
 	// that always includes find_symbol, then main.go swaps in the real registry
 	// which may exclude it when sagittarius.symbols.enabled is false. Recompose
 	// the system prompt off the registry lock so it reflects the new registry.
+	r.prefixDet.noteExpectedBreak("tools-change")
 	r.rebuildSystem()
 }
 
@@ -2401,8 +2441,10 @@ func (r *Runner) ReloadSystemInstruction() error {
 	if err != nil {
 		return err
 	}
+	r.prefixDet.noteExpectedBreak("memory-reload")
 	r.modelMu.Lock()
 	r.memory = memory
+	r.systemDirty = false
 	r.modelMu.Unlock()
 	r.rebuildSystem()
 	return nil

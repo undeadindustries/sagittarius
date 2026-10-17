@@ -11,6 +11,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/credentials"
 	"github.com/undeadindustries/sagittarius/internal/goal"
 	"github.com/undeadindustries/sagittarius/internal/modes"
+	"github.com/undeadindustries/sagittarius/internal/provider"
 	"github.com/undeadindustries/sagittarius/internal/tools"
 	"github.com/undeadindustries/sagittarius/internal/ui/settingsdialog"
 )
@@ -126,6 +127,16 @@ func listSettings(docs *config.Documents, scope config.SettingScope) []settingsd
 			Kind:         settingsdialog.KindEnum,
 			Choices:      []string{"agent", "plan", "ask", "debug"},
 		}, sagDefaultMode(scopeSettings), sagDefaultMode(global), sagDefaultMode(project)),
+		row(settingsdialog.SettingEntry{
+			Key:          activeProviderReasoningHistoryKey(docs),
+			Label:        "Reasoning history (active provider)",
+			Description:  "Replay assistant reasoning_content on openai-chat and prune older reasoning turns (auto, keep, keep-all, none)",
+			DefaultValue: string(config.ReasoningHistoryAuto),
+			Kind:         settingsdialog.KindEnum,
+			Choices:      config.ValidReasoningHistoryPolicies,
+		}, providerReasoningHistory(scopeSettings, activeProviderIDForSettings(docs)),
+			providerReasoningHistory(global, activeProviderIDForSettings(docs)),
+			providerReasoningHistory(project, activeProviderIDForSettings(docs))),
 
 		{Label: "UI", Kind: settingsdialog.KindHeader},
 		row(settingsdialog.SettingEntry{
@@ -136,6 +147,21 @@ func listSettings(docs *config.Documents, scope config.SettingScope) []settingsd
 			Kind:         settingsdialog.KindEnum,
 			Choices:      []string{"default", "greyscale"},
 		}, scopeSettings.UI().Theme, global.UI().Theme, projectUITheme(project)),
+		row(settingsdialog.SettingEntry{
+			Key:          "ui.screen",
+			Label:        "Screen layout",
+			Description:  "fullscreen, inline, or auto. fullscreen is the default. auto is inline over SSH unless the terminal allows OSC 52, and full screen locally. /screen changes this session. This setting applies on the next launch.",
+			DefaultValue: config.UIScreenFullscreen,
+			Kind:         settingsdialog.KindEnum,
+			Choices:      config.ValidUIScreens,
+		}, uiScreen(scopeSettings), uiScreen(global), uiScreen(project)),
+		row(settingsdialog.SettingEntry{
+			Key:          "ui.mouse",
+			Label:        "Mouse selection",
+			Description:  "Start full-screen sessions with in-app drag selection. Off uses the terminal's own selection. Applies on next launch.",
+			DefaultValue: "true",
+			Kind:         settingsdialog.KindBool,
+		}, uiMouse(scopeSettings), uiMouse(global), uiMouse(project)),
 		row(settingsdialog.SettingEntry{
 			Key:          "ui.showThinking",
 			Label:        "Show thinking box",
@@ -552,6 +578,18 @@ func applySettingValue(s *config.Settings, key, value string) error {
 		if err := s.SetUITheme(value); err != nil {
 			return err
 		}
+	case "ui.screen":
+		if err := s.SetUIScreen(value); err != nil {
+			return err
+		}
+	case "ui.mouse":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("mouse must be true/false: %w", err)
+		}
+		if err := s.SetUIMouse(b); err != nil {
+			return err
+		}
 	case "ui.showThinking":
 		b, err := strconv.ParseBool(value)
 		if err != nil {
@@ -897,6 +935,9 @@ func applySettingValue(s *config.Settings, key, value string) error {
 		}
 		ensureGoalConfig(s).EvaluatorTimeout = &n
 	default:
+		if provID, ok := parseProviderReasoningHistoryKey(key); ok {
+			return provider.SetProviderReasoningHistory(s, provID, value)
+		}
 		return fmt.Errorf("unknown setting key %q", key)
 	}
 	return nil
@@ -947,6 +988,10 @@ func clearSettingValue(s *config.Settings, key string) error {
 		if err := s.SetUITheme(""); err != nil {
 			return err
 		}
+	case "ui.screen":
+		return s.SetUIScreen("")
+	case "ui.mouse":
+		return s.SetUIMouse(true)
 	case "ui.showThinking":
 		return s.ClearUIField("showThinking")
 	case "ui.hideBanner":
@@ -1104,9 +1149,48 @@ func clearSettingValue(s *config.Settings, key string) error {
 			s.Sagittarius.Goal.EvaluatorTimeout = nil
 		}
 	default:
+		if provID, ok := parseProviderReasoningHistoryKey(key); ok {
+			return provider.ClearProviderReasoningHistory(s, provID)
+		}
 		return fmt.Errorf("unknown setting key %q", key)
 	}
 	return nil
+}
+
+func activeProviderIDForSettings(docs *config.Documents) string {
+	if docs != nil && docs.Merged() != nil {
+		if id := config.NormalizeProviderID(docs.Merged().ActiveProvider()); id != "" {
+			return id
+		}
+	}
+	return string(config.BuiltInOpenAI)
+}
+
+func activeProviderReasoningHistoryKey(docs *config.Documents) string {
+	return "providers." + activeProviderIDForSettings(docs) + ".reasoningHistory"
+}
+
+func parseProviderReasoningHistoryKey(key string) (string, bool) {
+	const prefix = "providers."
+	const suffix = ".reasoningHistory"
+	if !strings.HasPrefix(key, prefix) || !strings.HasSuffix(key, suffix) {
+		return "", false
+	}
+	id := strings.TrimSuffix(strings.TrimPrefix(key, prefix), suffix)
+	if id == "" || strings.Contains(id, ".") {
+		return "", false
+	}
+	return id, true
+}
+
+func providerReasoningHistory(s *config.Settings, providerID string) string {
+	if s == nil {
+		return ""
+	}
+	if inst := s.ProviderInstance(providerID); inst != nil {
+		return inst.ReasoningHistory
+	}
+	return ""
 }
 
 func ensureGoalConfig(s *config.Settings) *config.SagittariusGoalConfig {
@@ -1175,6 +1259,20 @@ func sagDefaultMode(s *config.Settings) string {
 		return sag.DefaultMode
 	}
 	return ""
+}
+
+func uiScreen(s *config.Settings) string {
+	if s == nil {
+		return ""
+	}
+	return s.UI().Screen
+}
+
+func uiMouse(s *config.Settings) string {
+	if s == nil || s.UI().Mouse == nil {
+		return ""
+	}
+	return fmtBool(*s.UI().Mouse)
 }
 
 func projectUITheme(s *config.Settings) string {

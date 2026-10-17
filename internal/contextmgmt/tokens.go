@@ -61,12 +61,21 @@ func EstimateRequestOverhead(system string, tools []provider.ToolDeclaration) in
 
 func estimatePartTokens(part provider.Part) float64 {
 	switch {
-	case part.Text != "":
-		return estimateTextTokens(part.Text)
 	case part.FunctionResponse != nil:
 		return estimateFunctionResponseTokens(part.FunctionResponse)
-	default:
+	case part.FunctionCall != nil:
 		return jsonLen(part) / defaultCharsPerToken
+	case part.Text != "" || part.Reasoning != "":
+		var total float64
+		if part.Text != "" {
+			total += estimateTextTokens(part.Text)
+		}
+		if part.Reasoning != "" {
+			total += estimateTextTokens(part.Reasoning)
+		}
+		return total
+	default:
+		return 0
 	}
 }
 

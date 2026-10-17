@@ -384,6 +384,7 @@ func MapResponsesSseEvent(event ResponsesSseEvent, state *ResponsesSseMapperStat
 			}
 			if event.Response.Usage.InputTokenDetails != nil {
 				u.CachedTokens = event.Response.Usage.InputTokenDetails.CachedTokens
+				u.CachedReported = true
 			}
 			if event.Response.Usage.OutputTokenDetails != nil {
 				u.ReasoningTokens = event.Response.Usage.OutputTokenDetails.ReasoningTokens

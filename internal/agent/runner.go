@@ -2,8 +2,6 @@ package agent
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -207,10 +205,12 @@ type Runner struct {
 	// system is the full system instruction sent to the provider:
 	// systemBase + mode suffix. systemBase is the personality prompt + memory.
 	// memory is the AGENTS.md content alone (re-composed on rebuild). All three
-	// are guarded by modelMu (read alongside model in buildGenerateRequest).
+	// (plus systemDirty) are guarded by modelMu (read alongside model in
+	// buildGenerateRequest).
 	system      string
 	systemBase  string
 	memory      string
+	systemDirty bool
 	approval    ApprovalMode
 	interactive bool
 	workDir     string
@@ -235,6 +235,7 @@ type Runner struct {
 	lastRequestMu   sync.RWMutex
 	sessionRecorder *session.Recorder
 	metrics         *sessionMetrics
+	prefixDet       prefixDetector
 	projectBoundary bool
 	snap            *snapshot.Manager
 	// writeLease is nil for the parent and non-nil for a coding subagent, whose
@@ -329,12 +330,14 @@ type Runner struct {
 	constraintsMu sync.RWMutex
 	constraints   []string
 
-	// scratchpadMu guards scratchpad, the model's own working-memory note. It
-	// lives outside history for the same reason constraints do: history is
-	// masked, compressed, and truncated, and this text exists precisely to
-	// survive all three. See scratchpad.go.
-	scratchpadMu sync.RWMutex
-	scratchpad   string
+	// scratchpadMu guards scratchpad (the model's live working-memory note),
+	// scratchpadRendered (the copy currently baked into r.system as of the last
+	// rebuild point), and scratchpadClearedNoticePending (armed by /scratchpad
+	// clear and consumed on the next user message). See scratchpad.go.
+	scratchpadMu                   sync.RWMutex
+	scratchpad                     string
+	scratchpadRendered             string
+	scratchpadClearedNoticePending bool
 
 	// verboseLog is the optional --log-verbose transcript sink; nil-safe (see
 	// verboselog.go) so hot-path call sites never need to check for nil.
@@ -758,6 +761,7 @@ func (r *Runner) InteractionMode() modes.Mode {
 
 // SetInteractionMode switches mode and refreshes the resolved model.
 func (r *Runner) SetInteractionMode(mode modes.Mode) string {
+	r.prefixDet.noteExpectedBreak("mode-change")
 	if r.modeState != nil {
 		r.modeState.SetMode(mode)
 	}
@@ -773,6 +777,7 @@ func (r *Runner) SetInteractionMode(mode modes.Mode) string {
 // replaces the pointer atomically under settingsMu; s must be a fresh document
 // that the caller will not mutate afterwards (see settingsSnapshot's contract).
 func (r *Runner) SetSettings(s *config.Settings) {
+	r.prefixDet.noteExpectedBreak("settings-change")
 	r.settingsMu.Lock()
 	r.settings = s
 	r.settingsMu.Unlock()
@@ -790,6 +795,7 @@ func (r *Runner) SetProviderDefaultModel(model string) {
 	if model == "" {
 		return
 	}
+	r.prefixDet.noteExpectedBreak("model-change")
 	r.modelMu.Lock()
 	r.providerDefaultModel = model
 	pinned := r.modelPinned
@@ -1028,6 +1034,13 @@ func (r *Runner) RunTurn(ctx context.Context, userInput string) (<-chan ui.Strea
 	r.resetEditLoopStats()
 	r.clearThinkingCut()
 	r.recordBranch()
+	if notice, ok := r.takeScratchpadClearedNotice(); ok {
+		if len(parts) > 0 && parts[len(parts)-1].Text != "" {
+			parts[len(parts)-1].Text += "\n\n" + notice
+		} else {
+			parts = append(parts, provider.Part{Text: notice})
+		}
+	}
 	r.historyMu.Lock()
 	r.history = append(r.history, provider.Message{
 		Role:  provider.RoleUser,
@@ -1149,12 +1162,19 @@ func (r *Runner) runAgentLoop(ctx context.Context, userInput string, out chan<- 
 outerLoop:
 	for {
 		for round := 0; uncapped || round < maxRounds; round++ {
+			r.dropUnreplayedReasoning()
 			r.prepareContext(ctx, out)
 			if !r.pinned() {
-				r.refreshModelFromMode()
+				r.syncModeModel()
 			}
 			req := r.enforceRequestBudget(r.buildGenerateRequest(), out)
 			r.storeLastRequest(req)
+			prefixObs, err := r.observeRoundPrefix(req)
+			if err != nil {
+				r.verboseLog.LogError(err)
+				out <- ui.StreamEvent{Type: ui.StreamError, Err: err}
+				return
+			}
 			currentModel := r.Model()
 			currentProvider := r.activeProviderID()
 			currentMode := r.InteractionMode().String()
@@ -1206,6 +1226,7 @@ outerLoop:
 						r.capOversizedHistoryLocked(target)
 					}
 					r.historyMu.Unlock()
+					r.refreshSystemAtRebuild("truncation")
 					if out != nil {
 						out <- ui.StreamEvent{
 							Type: ui.StreamInfo,
@@ -1214,6 +1235,14 @@ outerLoop:
 					}
 					r.syncContextGauge()
 					req = r.enforceRequestBudget(r.buildGenerateRequest(), out)
+					r.storeLastRequest(req)
+					prefixObs, err = r.observeRoundPrefix(req)
+					if err != nil {
+						cancelStream()
+						r.verboseLog.LogError(err)
+						out <- ui.StreamEvent{Type: ui.StreamError, Err: err}
+						return
+					}
 					respCh, err = gen.GenerateContentStream(streamCtx, req)
 				}
 				if err != nil {
@@ -1254,6 +1283,9 @@ outerLoop:
 			// A round that completed normally re-arms the budget: the cut is
 			// latched only against an immediate second cut, which is what could
 			// otherwise loop, not against protecting later rounds in the turn.
+			if thinkingCutPending {
+				r.prefixDet.noteExpectedBreak("thinking-cut")
+			}
 			thinkingCutPending = false
 			r.clearThinkingCut()
 			toolCalls, modelText, modelParts := res.ToolCalls, res.Text, res.ModelParts
@@ -1267,28 +1299,25 @@ outerLoop:
 				turnReply.WriteString(modelText)
 			}
 			// Record token usage: prefer provider-reported counts; fall back to heuristics.
+			uKey := usageKey{provider: currentProvider, model: currentModel, mode: currentMode, agentType: r.agentKind()}
 			if streamUsage != nil {
-				r.metrics.recordTurnUsage(currentProvider, currentModel, currentMode, r.agentKind(),
-					streamUsage.InputTokens, streamUsage.OutputTokens,
-					streamUsage.CostUSD, streamUsage.CostKnown)
+				r.metrics.recordTurnUsage(uKey, *streamUsage)
 			} else {
 				inTok := estimateMessageTokens(req.Messages)
 				outTok := 0
 				if modelText != "" {
 					outTok = contextmgmt.EstimateTokens([]provider.Part{{Text: modelText}})
 				}
-				r.metrics.recordTurnUsage(currentProvider, currentModel, currentMode, r.agentKind(),
-					inTok, outTok, 0, false)
+				r.metrics.recordTurnUsage(uKey, provider.Usage{InputTokens: inTok, OutputTokens: outTok})
+			}
+			if !res.FirstChunkAt.IsZero() && !res.LastChunkAt.IsZero() {
+				genTok := generatedTokensForDecode(streamUsage, modelText, res.Reasoning, toolCalls, modelParts)
+				r.metrics.recordDecode(genTok, res.LastChunkAt.Sub(res.FirstChunkAt))
 			}
 
 			// Build RoundTelemetry
 			var roundTelem *session.RoundTelemetry
 			latencyMs := time.Since(roundStart).Milliseconds()
-			sysHash := ""
-			if req.SystemInstruction != "" {
-				h := sha256.Sum256([]byte(req.SystemInstruction))
-				sysHash = hex.EncodeToString(h[:])
-			}
 			inTok := 0
 			outTok := 0
 			cachedTok := 0
@@ -1310,6 +1339,10 @@ outerLoop:
 					outTok = contextmgmt.EstimateTokens([]provider.Part{{Text: modelText}})
 				}
 			}
+			roundTelemReasoning := ""
+			if config.SessionsRecordReasoning(r.settingsSnapshot(), nil) {
+				roundTelemReasoning = res.Reasoning
+			}
 			roundTelem = &session.RoundTelemetry{
 				Provider:         currentProvider,
 				Model:            currentModel,
@@ -1325,18 +1358,27 @@ outerLoop:
 				LatencyMs:        latencyMs,
 				LLMCalls:         llmCalls,
 				HadReasoning:     hadReasoning,
-				Reasoning:        res.Reasoning,
+				Reasoning:        roundTelemReasoning,
 				FinishReason:     res.FinishReason,
-				SystemPromptHash: sysHash,
+				SystemPromptHash: prefixObs.SystemHash,
+				ToolsHash:        prefixObs.ToolsHash,
+			}
+			if prefixObs.Broken {
+				roundTelem.PrefixBreak = prefixObs.BreakIndex
+				roundTelem.PrefixBreakReason = prefixObs.Reason
 			}
 
 			// Prefer the provider's verbatim model parts (carries Gemini thought
-			// signatures) when supplied; otherwise reconstruct from text + tool
-			// calls (OpenAI-family path).
+			// signatures) when supplied; otherwise reconstruct from text +
+			// reasoning + tool calls (OpenAI-family path).
 			if len(modelParts) > 0 {
 				r.appendModelParts(modelParts, modelText, toolCalls, roundTelem)
 			} else {
-				r.appendModelMessage(modelText, toolCalls, roundTelem)
+				replayReasoning := ""
+				if req.KeepReasoningHistory {
+					replayReasoning = res.Reasoning
+				}
+				r.appendModelMessageWithReasoning(modelText, replayReasoning, toolCalls, roundTelem)
 			}
 
 			if len(toolCalls) == 0 {
@@ -1459,7 +1501,7 @@ func (r *Runner) prepareContext(ctx context.Context, out chan<- ui.StreamEvent) 
 	counter := r.turnCounter
 	r.historyMu.RUnlock()
 
-	prepared, err := mgr.PrepareTurn(ctx, current, counter)
+	prepared, rep, err := mgr.PrepareTurnWithReport(ctx, current, counter)
 
 	r.historyMu.Lock()
 	r.turnCounter++
@@ -1467,6 +1509,11 @@ func (r *Runner) prepareContext(ctx context.Context, out chan<- ui.StreamEvent) 
 		r.history = prepared
 	}
 	r.historyMu.Unlock()
+	if rep.Compressed {
+		r.refreshSystemAtRebuild("compression")
+	} else if reason := rep.PrimaryBreakReason(); reason != "" {
+		r.prefixDet.noteExpectedBreak(reason)
+	}
 	if err != nil {
 		// PrepareTurn already logged; proceed with the (best-effort) history.
 		// The latch means this fires once: after it, Compress takes the
@@ -1555,6 +1602,7 @@ func (r *Runner) enforceRequestBudget(req *provider.GenerateRequest, out chan<- 
 	if res.DroppedCount == 0 && cappedCount == 0 {
 		return req
 	}
+	r.refreshSystemAtRebuild("truncation")
 
 	var infoText string
 	switch {
@@ -1603,8 +1651,25 @@ func (r *Runner) buildGenerateRequest() *provider.GenerateRequest {
 	r.historyMu.RUnlock()
 	messages, trimmed := trimTrailingModelText(messages)
 	if trimmed > 0 {
+		r.prefixDet.noteExpectedBreak("trailing-model-trim")
 		slog.Warn("request: dropped trailing assistant text; a request must end on a user or tool message",
 			"count", trimmed, "provider", providerID, "model", model)
+	}
+	if notice, ok := r.takeScratchpadClearedNotice(); ok {
+		if n := len(messages); n > 0 && messages[n-1].Role == provider.RoleUser && len(messages[n-1].Parts) > 0 {
+			lastParts := append([]provider.Part(nil), messages[n-1].Parts...)
+			if lastParts[len(lastParts)-1].Text != "" {
+				lastParts[len(lastParts)-1].Text += "\n\n" + notice
+			} else {
+				lastParts = append(lastParts, provider.Part{Text: notice})
+			}
+			messages[n-1].Parts = lastParts
+		} else {
+			messages = append(messages, provider.Message{
+				Role:  provider.RoleUser,
+				Parts: []provider.Part{{Text: notice}},
+			})
+		}
 	}
 	req := &provider.GenerateRequest{
 		Model:             model,
@@ -1615,6 +1680,9 @@ func (r *Runner) buildGenerateRequest() *provider.GenerateRequest {
 	// Resolve temperature against the live model so mid-session model changes
 	// (mode routing) apply the right sampling without rebuilding the generator.
 	req.Temperature = config.ResolveEffectiveTemperature(settings, providerID, model)
+	keepReasoning, _, templateKwargs := config.ResolveReasoningHistory(settings, providerID, model)
+	req.KeepReasoningHistory = keepReasoning
+	req.ChatTemplateKwargs = templateKwargs
 	// Resolve adaptive/fixed reasoning defaults per round so a mid-session
 	// model or /reasoning change takes effect on the very next request; see
 	// config.ResolveReasoningRequest for the precedence order.
@@ -1695,6 +1763,88 @@ func (r *Runner) refreshModelFromMode() {
 	r.rebuildSystem()
 }
 
+// syncModeModel re-resolves the active model for the current mode during a turn
+// and rebuilds the system prompt only if the resolved model actually changed.
+// Avoiding an unconditional rebuildSystem on every round keeps deferred
+// system-prompt updates (scratchpad, memory) cache-stable within the session.
+func (r *Runner) syncModeModel() {
+	mode := r.InteractionMode()
+	providerID := r.activeProviderID()
+	r.modelMu.RLock()
+	providerDefault := r.providerDefaultModel
+	prevModel := r.model
+	r.modelMu.RUnlock()
+	resolved := modes.ResolveModel(mode, r.sagittariusSettings(), providerID, providerDefault)
+	if resolved == prevModel {
+		return
+	}
+	modes.LogModeSelection(mode, resolved, providerID, providerDefault)
+	r.prefixDet.noteExpectedBreak("model-change")
+	r.modelMu.Lock()
+	r.model = resolved
+	r.modelMu.Unlock()
+	r.rebuildSystem()
+}
+
+// observeRoundPrefix records the outbound request's prefix fingerprint, logs
+// any break, and enforces sagittarius.debug.assertPromptCache when enabled.
+func (r *Runner) observeRoundPrefix(req *provider.GenerateRequest) (prefixObservation, error) {
+	obs := r.prefixDet.observe(req)
+	if !obs.Broken {
+		return obs, nil
+	}
+	r.metrics.recordCacheBreak(obs.Round, obs.Reason, obs.BreakIndex)
+	if obs.Unexpected {
+		slog.Warn("unexpected prompt cache prefix break",
+			"round", obs.Round, "reason", obs.Reason, "position", obs.BreakIndex)
+		if config.ResolveAssertPromptCache(r.settingsSnapshot()) {
+			return obs, fmt.Errorf("prompt cache assertion failed on round %d: %s at position %d",
+				obs.Round, obs.Reason, obs.BreakIndex)
+		}
+	} else {
+		slog.Debug("prompt cache prefix break",
+			"round", obs.Round, "reason", obs.Reason, "position", obs.BreakIndex)
+	}
+	return obs, nil
+}
+
+// MarkSystemInstructionDirty records that MEMORY.md was modified by save_memory
+// so the next rebuild point re-reads it from disk without breaking the prompt
+// prefix cache mid-task.
+func (r *Runner) MarkSystemInstructionDirty() {
+	r.modelMu.Lock()
+	r.systemDirty = true
+	r.modelMu.Unlock()
+}
+
+func (r *Runner) flushDirtyMemoryIfNeeded() {
+	r.modelMu.RLock()
+	dirty := r.systemDirty
+	r.modelMu.RUnlock()
+	if !dirty {
+		return
+	}
+	memory, err := DiscoverSystemInstruction(r.workDir)
+	if err != nil {
+		slog.Warn("system: failed to reload dirty memory at rebuild point", "error", err)
+		return
+	}
+	r.modelMu.Lock()
+	r.memory = memory
+	r.systemDirty = false
+	r.modelMu.Unlock()
+}
+
+// refreshSystemAtRebuild flushes any deferred model-initiated system updates
+// (scratchpad, save_memory) at a natural cache-miss boundary and notes the
+// expected prefix break reason.
+func (r *Runner) refreshSystemAtRebuild(reason string) {
+	if reason != "" {
+		r.prefixDet.noteExpectedBreak(reason)
+	}
+	r.applyModeSystemSuffix()
+}
+
 // rebuildSystem recomposes the base prompt (personality + memory) and then the
 // full system instruction (base + mode suffix). Call it whenever the model,
 // provider, settings, mode, or memory change.
@@ -1715,6 +1865,7 @@ func (r *Runner) maxToolRounds() int {
 }
 
 func (r *Runner) rebuildBasePrompt() {
+	r.flushDirtyMemoryIfNeeded()
 	if r.systemPromptOverride != "" {
 		r.modelMu.Lock()
 		r.systemBase = r.systemPromptOverride
@@ -1762,6 +1913,12 @@ func (r *Runner) rebuildBasePrompt() {
 }
 
 func (r *Runner) applyModeSystemSuffix() {
+	r.modelMu.RLock()
+	dirty := r.systemDirty
+	r.modelMu.RUnlock()
+	if dirty {
+		r.rebuildBasePrompt()
+	}
 	if r.systemPromptOverride != "" {
 		r.modelMu.Lock()
 		r.system = r.systemBase
@@ -1781,7 +1938,8 @@ func (r *Runner) applyModeSystemSuffix() {
 	suffix = appendDirective(suffix, r.subagentCharter)
 	// The scratchpad is the model's own note, so it sits below the charter (which
 	// says what the model is) and above constraints (which outrank everything).
-	if pad := r.Scratchpad(); pad != "" && r.scratchpadToolRegistered() {
+	// syncRenderedScratchpad copies live -> rendered at every rebuild point.
+	if pad := r.syncRenderedScratchpad(); pad != "" && r.scratchpadToolRegistered() {
 		suffix = appendDirective(suffix, renderScratchpadDirective(pad))
 	}
 	// Standing session constraints go last (highest recency) in the suffix,
@@ -2150,6 +2308,13 @@ type streamResult struct {
 	// the client-side thinking budget cut this round short, so the retry can
 	// hand the model back what it already worked out.
 	Reasoning string
+	// FirstChunkAt and LastChunkAt bound the decode window: the arrival of the
+	// first and last chunks that carried text, reasoning, or a tool call. A
+	// usage-only final chunk is excluded so a provider that reports usage after
+	// the reply does not stretch the clock. Both stay zero when the stream had
+	// no content, which hides tok/s for a single buffered reply.
+	FirstChunkAt time.Time
+	LastChunkAt  time.Time
 }
 
 // consumeStream drains one provider stream, forwarding UI events as it goes
@@ -2167,7 +2332,6 @@ func (r *Runner) consumeStream(
 ) (streamResult, error) {
 	var modelText strings.Builder
 	var reasoningText strings.Builder
-	recordReasoning := config.SessionsRecordReasoning(r.settingsSnapshot(), nil)
 	var res streamResult
 	watch := newThinkingBudgetWatch(budget)
 	streamDone := false
@@ -2189,12 +2353,17 @@ func (r *Runner) consumeStream(
 			if resp.Error != nil {
 				return fail(resp.Error)
 			}
+			if streamChunkHasContent(resp) {
+				now := time.Now()
+				if res.FirstChunkAt.IsZero() {
+					res.FirstChunkAt = now
+				}
+				res.LastChunkAt = now
+			}
 			if resp.ReasoningDelta != "" {
 				res.HadReasoning = true
 				watch.add(resp.ReasoningDelta)
-				if recordReasoning {
-					reasoningText.WriteString(resp.ReasoningDelta)
-				}
+				reasoningText.WriteString(resp.ReasoningDelta)
 			}
 			if resp.TextDelta != "" {
 				modelText.WriteString(resp.TextDelta)
@@ -2235,16 +2404,77 @@ func (r *Runner) consumeStream(
 	}
 
 	res.Text = modelText.String()
-	if recordReasoning {
-		res.Reasoning = reasoningText.String()
-	}
+	res.Reasoning = reasoningText.String()
 	return res, nil
 }
 
-func (r *Runner) appendModelMessage(text string, toolCalls []provider.ToolCall, telemetry ...*session.RoundTelemetry) {
+// streamChunkHasContent reports whether a chunk carries generated content.
+// Usage-only frames (the final usage object on OpenAI-style streams) are not
+// content: counting them would start or extend the decode clock after the
+// model has already finished.
+func streamChunkHasContent(resp provider.StreamResponse) bool {
+	return resp.TextDelta != "" || resp.ReasoningDelta != "" || len(resp.ToolCalls) > 0
+}
+
+// generatedTokensForDecode prefers the provider's generated-token count and
+// falls back to a character estimate when usage is missing or reports zero.
+// The estimate covers answer text, reasoning, and tool calls so a streaming
+// endpoint that never sends usage can still show tok/s.
+func generatedTokensForDecode(usage *provider.Usage, text, reasoning string, calls []provider.ToolCall, modelParts []provider.Part) int {
+	if usage != nil {
+		if n := usage.GeneratedTokens(); n > 0 {
+			return n
+		}
+	}
+	return contextmgmt.EstimateTokens(decodeEstimateParts(text, reasoning, calls, modelParts))
+}
+
+// decodeEstimateParts builds the parts a missing-usage round should count.
+// Verbatim model parts win when the provider sent them; reasoning is prepended
+// when those parts omit it (Gemini thoughts travel as a separate stream).
+func decodeEstimateParts(text, reasoning string, calls []provider.ToolCall, modelParts []provider.Part) []provider.Part {
+	if len(modelParts) > 0 {
+		if reasoning == "" {
+			return modelParts
+		}
+		parts := make([]provider.Part, 0, 1+len(modelParts))
+		parts = append(parts, provider.Part{Reasoning: reasoning})
+		return append(parts, modelParts...)
+	}
+	parts := make([]provider.Part, 0, 1+len(calls))
+	if text != "" || reasoning != "" {
+		parts = append(parts, provider.Part{Text: text, Reasoning: reasoning})
+	}
+	for i := range calls {
+		parts = append(parts, provider.Part{FunctionCall: &calls[i]})
+	}
+	return parts
+}
+
+// dropUnreplayedReasoning clears stored reasoning when the live model will not
+// receive it, so context budgeting only counts tokens that go on the wire.
+// History gains reasoning only under a model that replays it, so this matters
+// after a switch to a model that does not, or after --resume restores
+// recorded reasoning. Reasoning is excluded from prefix fingerprints when
+// replay is off, so the strip never registers as a cache break.
+func (r *Runner) dropUnreplayedReasoning() {
+	r.modelMu.RLock()
+	model := r.model
+	r.modelMu.RUnlock()
+	if keep, _, _ := config.ResolveReasoningHistory(r.settingsSnapshot(), r.activeProviderID(), model); keep {
+		return
+	}
+	r.historyMu.Lock()
+	defer r.historyMu.Unlock()
+	if stripped, n := contextmgmt.StripAllReasoning(r.history); n > 0 {
+		r.history = stripped
+	}
+}
+
+func (r *Runner) appendModelMessageWithReasoning(text, reasoning string, toolCalls []provider.ToolCall, telemetry ...*session.RoundTelemetry) {
 	parts := make([]provider.Part, 0, 1+len(toolCalls))
-	if text != "" {
-		parts = append(parts, provider.Part{Text: text})
+	if text != "" || reasoning != "" {
+		parts = append(parts, provider.Part{Text: text, Reasoning: reasoning})
 	}
 	for _, call := range toolCalls {
 		callCopy := call
@@ -2359,6 +2589,8 @@ func (r *Runner) ClearHistory() {
 	r.turnCounter = 0
 	r.hookTurnIndex = 0
 	r.resetSubagentAttempts()
+	r.prefixDet.reset()
+	r.metrics.resetCacheBreaks()
 }
 
 // History returns a defensive copy of the current conversation history. The
@@ -2485,6 +2717,7 @@ func (r *Runner) ForceCompress(ctx context.Context) (contextmgmt.CompressionInfo
 		r.historyMu.Lock()
 		r.history = newHistory
 		r.historyMu.Unlock()
+		r.refreshSystemAtRebuild("compression")
 		r.refreshContextGaugeAfterCompress(info)
 	}
 	return info, nil
@@ -2788,7 +3021,10 @@ func needsGoplsHint(settings *config.Settings, root string) bool {
 // carry the optional OpenRouter cost. Attributed as auxiliary (compression) usage
 // so it does not overwrite the last-turn footer snapshot.
 func (r *Runner) RecordUsage(prov, model, mode string, inTok, outTok int, costUSD float64, costKnown bool) {
-	r.metrics.recordAuxUsage(prov, model, mode, r.agentKind(), inTok, outTok, costUSD, costKnown)
+	r.metrics.recordAuxUsage(
+		usageKey{provider: prov, model: model, mode: mode, agentType: r.agentKind()},
+		provider.Usage{InputTokens: inTok, OutputTokens: outTok, CostUSD: costUSD, CostKnown: costKnown},
+	)
 }
 
 // setTitleAnnouncement records the title to announce to the user in prompt
@@ -2813,27 +3049,10 @@ func (r *Runner) TitleAnnouncement() string {
 }
 
 func (r *Runner) Stats() ui.SessionStats {
-	turns, toolCalls, toolFailures, inTok, outTok, ctxTok,
-		costUSD, costKnown, dur,
-		lastIn, lastOut, lastCost, lastCostKnown := r.metrics.snapshot()
-	return ui.SessionStats{
-		Model:            r.Model(),
-		Turns:            turns,
-		ToolCalls:        toolCalls,
-		ToolFailures:     toolFailures,
-		InputTokens:      inTok,
-		OutputTokens:     outTok,
-		SessionCostUSD:   costUSD,
-		SessionCostKnown: costKnown,
-		LastInputTokens:  lastIn,
-		LastOutputTokens: lastOut,
-		LastCostUSD:      lastCost,
-		LastCostKnown:    lastCostKnown,
-		ContextTokens:    ctxTok,
-		ContextLimit:     r.contextManager().ContextLimit(),
-		Duration:         dur,
-		ModelUsage:       r.metrics.usageSnapshot(),
-	}
+	stats := r.metrics.snapshot()
+	stats.Model = r.Model()
+	stats.ContextLimit = r.contextManager().ContextLimit()
+	return stats
 }
 
 // RotateSession starts a new session-recording file, abandoning the current

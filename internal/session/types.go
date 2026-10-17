@@ -73,6 +73,11 @@ type RoundTelemetry struct {
 	Reasoning        string  `json:"reasoning,omitempty"`    // populated only when opted in
 	FinishReason     string  `json:"finishReason,omitempty"` // provider's abnormal stop reason, empty for a normal finish
 	SystemPromptHash string  `json:"systemPromptHash,omitempty"`
+	ToolsHash        string  `json:"toolsHash,omitempty"`
+	// PrefixBreak is the first differing message index (or 0 for system/tools)
+	// when PrefixBreakReason is non-empty. Omitted when zero-value.
+	PrefixBreak       int    `json:"prefixBreak,omitempty"`
+	PrefixBreakReason string `json:"prefixBreakReason,omitempty"`
 }
 
 // ToolResultTelemetry carries per-tool execution telemetry.

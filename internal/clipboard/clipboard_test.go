@@ -42,6 +42,35 @@ func envFrom(m map[string]string) func(string) string {
 	return func(k string) string { return m[k] }
 }
 
+func TestNativeSelectionHint(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{"nil", nil, nativeSelectUnknown},
+		{"unknown ssh", map[string]string{"SSH_CONNECTION": "1 2 3 4"}, nativeSelectUnknown},
+		{"iterm lc", map[string]string{"LC_TERMINAL": "iTerm2"}, nativeSelectITerm},
+		{"iterm lc case", map[string]string{"LC_TERMINAL": "iterm2"}, nativeSelectITerm},
+		{"iterm local", map[string]string{"TERM_PROGRAM": "iTerm.app"}, nativeSelectITerm},
+		{"terminal.app", map[string]string{"TERM_PROGRAM": "Apple_Terminal"}, nativeSelectApple},
+		{"iterm wins over apple", map[string]string{"LC_TERMINAL": "iTerm2", "TERM_PROGRAM": "Apple_Terminal"}, nativeSelectITerm},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			var getenv func(string) string
+			if tc.env != nil {
+				getenv = envFrom(tc.env)
+			}
+			if got := NativeSelectionHint(getenv); got != tc.want {
+				t.Fatalf("NativeSelectionHint = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestIsRemoteSession(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

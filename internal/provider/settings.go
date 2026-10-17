@@ -921,6 +921,17 @@ func SetModelConfig(settings *config.Settings, providerID, model, key, value str
 			return err
 		}
 		mc.ShowThinking = b
+	case "reasoningHistory":
+		normalized := strings.ToLower(strings.TrimSpace(value))
+		if normalized == "" || normalized == "default" {
+			mc.ReasoningHistory = ""
+			break
+		}
+		if !config.IsValidReasoningHistoryPolicy(normalized) {
+			return fmt.Errorf("set model config: reasoningHistory %q must be one of: %s",
+				value, strings.Join(config.ValidReasoningHistoryPolicies, ", "))
+		}
+		mc.ReasoningHistory = normalized
 	case "thinkingBudgetTokens":
 		n, err := parseInt(key, value)
 		if err != nil {
@@ -996,6 +1007,8 @@ func ClearModelConfig(settings *config.Settings, providerID, model, key string) 
 		mc.ReasoningEffort = ""
 	case "showThinking":
 		mc.ShowThinking = nil
+	case "reasoningHistory":
+		mc.ReasoningHistory = ""
 	case "thinkingBudgetTokens":
 		mc.ThinkingBudgetTokens = nil
 	case "hardThinkingBudget":
@@ -1039,6 +1052,9 @@ func ModelConfigValues(settings *config.Settings, providerID, model string) map[
 	if mc.ShowThinking != nil {
 		out["showThinking"] = strconv.FormatBool(*mc.ShowThinking)
 	}
+	if mc.ReasoningHistory != "" {
+		out["reasoningHistory"] = mc.ReasoningHistory
+	}
 	if mc.ThinkingBudgetTokens != nil {
 		out["thinkingBudgetTokens"] = strconv.Itoa(*mc.ThinkingBudgetTokens)
 	}
@@ -1065,6 +1081,41 @@ func SetProviderReasoningEffort(settings *config.Settings, providerID, level str
 		return err
 	}
 	cfg.ReasoningEffort = level
+	return setProviderInstance(settings, providerID, cfg)
+}
+
+// SetProviderReasoningHistory persists reasoningHistory for providerID.
+func SetProviderReasoningHistory(settings *config.Settings, providerID, policy string) error {
+	policy = strings.ToLower(strings.TrimSpace(policy))
+	if !config.IsValidReasoningHistoryPolicy(policy) {
+		return fmt.Errorf("reasoningHistory %q must be one of: %s",
+			policy, strings.Join(config.ValidReasoningHistoryPolicies, ", "))
+	}
+	if settings == nil {
+		return fmt.Errorf("set provider reasoning history: settings are required")
+	}
+	cfg, err := ensureProviderInstance(settings, providerID)
+	if err != nil {
+		return err
+	}
+	cfg.ReasoningHistory = policy
+	return setProviderInstance(settings, providerID, cfg)
+}
+
+// ClearProviderReasoningHistory removes reasoningHistory for providerID.
+func ClearProviderReasoningHistory(settings *config.Settings, providerID string) error {
+	if settings == nil {
+		return nil
+	}
+	inst := providerInstance(settings, config.NormalizeProviderID(providerID))
+	if inst == nil {
+		return nil
+	}
+	cfg, err := ensureProviderInstance(settings, providerID)
+	if err != nil {
+		return err
+	}
+	cfg.ReasoningHistory = ""
 	return setProviderInstance(settings, providerID, cfg)
 }
 

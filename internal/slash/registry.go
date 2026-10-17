@@ -144,6 +144,7 @@ func (r *Registry) registerBuiltins() {
 		modeCommand(),
 		themeCommand(),
 		mouseCommand(),
+		screenCommand(),
 		settingsCommand(),
 		goalCommand(),
 		grillCommand(),

@@ -7,6 +7,26 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/config"
 )
 
+// TestGeneratedTokens verifies Gemini adds separate thought tokens while an
+// OpenAI-style usage leaves them inside OutputTokens.
+func TestGeneratedTokens(t *testing.T) {
+	t.Parallel()
+
+	gemini := Usage{
+		OutputTokens:      20,
+		ReasoningTokens:   80,
+		ReasoningSeparate: true,
+	}
+	if got := gemini.GeneratedTokens(); got != 100 {
+		t.Errorf("gemini GeneratedTokens = %d, want 100", got)
+	}
+
+	openai := Usage{OutputTokens: 20, ReasoningTokens: 80}
+	if got := openai.GeneratedTokens(); got != 20 {
+		t.Errorf("openai GeneratedTokens = %d, want 20 (reasoning already in OutputTokens)", got)
+	}
+}
+
 // TestOpenAIChatUsageParsed verifies that a standard OpenAI-chat stream with a
 // trailing usage object emits a StreamResponse with non-zero token counts.
 func TestOpenAIChatUsageParsed(t *testing.T) {
@@ -36,6 +56,7 @@ func TestOpenAIChatUsageParsed(t *testing.T) {
 	}
 	if usageResp == nil {
 		t.Fatal("expected a StreamResponse with Usage set, got none")
+		return
 	}
 	if usageResp.Usage.InputTokens != 10 {
 		t.Errorf("InputTokens = %d, want 10", usageResp.Usage.InputTokens)
@@ -46,11 +67,64 @@ func TestOpenAIChatUsageParsed(t *testing.T) {
 	if usageResp.Usage.CachedTokens != 4 {
 		t.Errorf("CachedTokens = %d, want 4", usageResp.Usage.CachedTokens)
 	}
+	if !usageResp.Usage.CachedReported {
+		t.Error("CachedReported = false, want true when prompt_tokens_details is present")
+	}
 	if usageResp.Usage.ReasoningTokens != 2 {
 		t.Errorf("ReasoningTokens = %d, want 2", usageResp.Usage.ReasoningTokens)
 	}
 	if usageResp.Usage.CostKnown {
 		t.Error("CostKnown should be false for plain OpenAI (no cost field)")
+	}
+}
+
+// TestOpenAIChatCachedReportedTruthTable verifies that CachedReported distinguishes
+// an omitted prompt_tokens_details (unreported) from an explicit 0 cached_tokens.
+func TestOpenAIChatCachedReportedTruthTable(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		usageJSON    string
+		wantCached   int
+		wantReported bool
+	}{
+		{
+			name:         "no-details-unreported",
+			usageJSON:    `{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}`,
+			wantCached:   0,
+			wantReported: false,
+		},
+		{
+			name:         "zero-cached-reported",
+			usageJSON:    `{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15,"prompt_tokens_details":{"cached_tokens":0}}`,
+			wantCached:   0,
+			wantReported: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			sse := "data: {\"id\":\"1\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":" + tt.usageJSON + "}\n\ndata: [DONE]\n\n"
+			var u *Usage
+			_, err := parseSSEStream(strings.NewReader(sse), config.ToolCallParsingLenient, nil, func(r StreamResponse) bool {
+				if r.Usage != nil {
+					u = r.Usage
+				}
+				return true
+			})
+			if err != nil {
+				t.Fatalf("parseSSEStream: %v", err)
+			}
+			if u == nil {
+				t.Fatal("expected Usage, got nil")
+				return
+			}
+			if u.CachedTokens != tt.wantCached || u.CachedReported != tt.wantReported {
+				t.Errorf("got CachedTokens=%d CachedReported=%v, want %d %v",
+					u.CachedTokens, u.CachedReported, tt.wantCached, tt.wantReported)
+			}
+		})
 	}
 }
 
@@ -144,6 +218,9 @@ func TestOpenAIResponsesUsageParsed(t *testing.T) {
 	}
 	if usageChunk.Usage.CachedTokens != 8 {
 		t.Errorf("CachedTokens = %d, want 8", usageChunk.Usage.CachedTokens)
+	}
+	if !usageChunk.Usage.CachedReported {
+		t.Error("CachedReported = false, want true when input_token_details is present")
 	}
 	if usageChunk.Usage.ReasoningTokens != 6 {
 		t.Errorf("ReasoningTokens = %d, want 6", usageChunk.Usage.ReasoningTokens)

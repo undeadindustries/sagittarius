@@ -142,14 +142,13 @@ func (r *Runner) generateTitle(ctx context.Context, userText, assistantText stri
 	// Attribute the call so /stats reflects the titling cost rather than letting
 	// it vanish. When the provider reports no usage, estimate from the prompt.
 	prov, model := r.auxAttribution()
+	key := usageKey{provider: prov, model: model, mode: r.InteractionMode().String(), agentType: r.agentKind()}
 	if usage != nil {
-		r.metrics.recordAuxUsage(prov, model, r.InteractionMode().String(), r.agentKind(),
-			usage.InputTokens, usage.OutputTokens, usage.CostUSD, usage.CostKnown)
+		r.metrics.recordAuxUsage(key, *usage)
 	} else {
 		inTok := estimateTitleTokens(titleSystemPrompt + prompt)
 		outTok := estimateTitleTokens(sb.String())
-		r.metrics.recordAuxUsage(prov, model, r.InteractionMode().String(), r.agentKind(),
-			inTok, outTok, 0, false)
+		r.metrics.recordAuxUsage(key, provider.Usage{InputTokens: inTok, OutputTokens: outTok})
 	}
 
 	return sanitizeTitle(sb.String())

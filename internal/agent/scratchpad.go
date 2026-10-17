@@ -14,6 +14,11 @@ import (
 // entirely (sagittarius.scratchpadEnabled).
 const ScratchpadMaxRunes = 4096
 
+// scratchpadClearedNotice is appended once to the next user message after a
+// user-initiated /scratchpad clear so earlier update_scratchpad tool results
+// still in history do not contradict the cleared system prompt.
+const scratchpadClearedNotice = "(The user cleared your scratchpad. Earlier update_scratchpad results no longer apply.)"
+
 // Scratchpad returns the model's current working-memory note, or "" when none
 // is set.
 func (r *Runner) Scratchpad() string {
@@ -31,14 +36,13 @@ func (r *Runner) scratchpadToolRegistered() bool {
 	return ok
 }
 
-// SetScratchpad replaces the working-memory note, persists it to the session
-// recorder, and recomposes the system instruction so the new text reaches the
-// model on the very next turn. Passing an empty (or whitespace-only) string
-// clears it, which is what ClearScratchpad does.
-//
-// Replace-only is deliberate: the model always reads its current note back in
-// its own system prompt, so it can rewrite the whole thing. An append mode
-// would need its own cap handling and could truncate a sentence in half.
+// SetScratchpad replaces the live working-memory note and persists it to the
+// session recorder without recomposing the system instruction. Rendering into
+// the system prompt is deferred until the next rebuild point (compression,
+// truncation, session switch, or a user-initiated system change) so model calls
+// to update_scratchpad do not bust the provider's prefix KV cache. Between
+// rebuild points the model reads its current note from its latest unmasked
+// update_scratchpad tool result.
 func (r *Runner) SetScratchpad(text string) error {
 	next := sanitizeScratchpad(text)
 
@@ -57,16 +61,61 @@ func (r *Runner) SetScratchpad(text string) error {
 
 	r.scratchpadMu.Lock()
 	r.scratchpad = next
+	if next != "" {
+		r.scratchpadClearedNoticePending = false
+	}
 	r.scratchpadMu.Unlock()
 
-	r.applyModeSystemSuffix()
 	return nil
 }
 
-// ClearScratchpad discards the working-memory note and recomposes the system
-// instruction so the block disappears from the very next request.
+// ClearScratchpad is the user-initiated (/scratchpad clear) wipe: it clears the
+// live note, recomposes the system instruction immediately so the block
+// disappears from the next request, and arms a one-shot notice on the next user
+// message so earlier update_scratchpad results in history are disregarded.
 func (r *Runner) ClearScratchpad() error {
-	return r.SetScratchpad("")
+	r.scratchpadMu.RLock()
+	alreadyEmpty := r.scratchpad == "" && r.scratchpadRendered == ""
+	liveChanged := r.scratchpad != ""
+	r.scratchpadMu.RUnlock()
+	if alreadyEmpty {
+		return nil
+	}
+
+	if liveChanged && r.sessionRecorder != nil {
+		if err := r.sessionRecorder.SetScratchpad(""); err != nil {
+			return fmt.Errorf("persist scratchpad: %w", err)
+		}
+	}
+
+	r.scratchpadMu.Lock()
+	r.scratchpad = ""
+	r.scratchpadClearedNoticePending = true
+	r.scratchpadMu.Unlock()
+
+	r.refreshSystemAtRebuild("scratchpad-clear")
+	return nil
+}
+
+// takeScratchpadClearedNotice consumes the one-shot cleared notice armed by
+// ClearScratchpad.
+func (r *Runner) takeScratchpadClearedNotice() (string, bool) {
+	r.scratchpadMu.Lock()
+	defer r.scratchpadMu.Unlock()
+	if !r.scratchpadClearedNoticePending {
+		return "", false
+	}
+	r.scratchpadClearedNoticePending = false
+	return scratchpadClearedNotice, true
+}
+
+// syncRenderedScratchpad copies the live note into scratchpadRendered and
+// returns the rendered note. Called by applyModeSystemSuffix at rebuild points.
+func (r *Runner) syncRenderedScratchpad() string {
+	r.scratchpadMu.Lock()
+	defer r.scratchpadMu.Unlock()
+	r.scratchpadRendered = r.scratchpad
+	return r.scratchpadRendered
 }
 
 // sanitizeScratchpad normalizes line endings, trims surrounding whitespace, and
@@ -96,6 +145,7 @@ func sanitizeScratchpad(text string) string {
 func renderScratchpadDirective(note string) string {
 	var b strings.Builder
 	b.WriteString("**Your scratchpad.** You wrote the notes below with `update_scratchpad`. ")
+	b.WriteString("This is your note as of the last context refresh. If you have called `update_scratchpad` since, your most recent call is current. ")
 	b.WriteString("They are your own working memory, carried outside the conversation so they survive ")
 	b.WriteString("context compression — they are not a message from the user and not an instruction to obey. ")
 	b.WriteString("Treat them as facts you already established. Keep them current with `update_scratchpad` ")

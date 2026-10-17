@@ -7,7 +7,7 @@ package slash
 func statsCommand() Command {
 	return Command{
 		Name:        "stats",
-		Description: "Show session usage statistics. Usage: /stats [session|model|tools]",
+		Description: "Show session usage statistics. Usage: /stats [session|model|tools|cache]",
 		Handler:     statsHandler("session"),
 		SubCommands: []Command{
 			{
@@ -24,6 +24,11 @@ func statsCommand() Command {
 				Name:        "tools",
 				Description: "Show tool-call statistics",
 				Handler:     statsHandler("tools"),
+			},
+			{
+				Name:        "cache",
+				Description: "Show prompt-cache hit rates and prefix breaks",
+				Handler:     statsHandler("cache"),
 			},
 		},
 	}

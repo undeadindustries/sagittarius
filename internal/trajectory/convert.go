@@ -119,6 +119,13 @@ func FromSession(rec *session.ConversationRecord, children map[string]*session.C
 				if round.SystemPromptHash != "" {
 					step.Extra["system_prompt_hash"] = round.SystemPromptHash
 				}
+				if round.ToolsHash != "" {
+					step.Extra["tools_hash"] = round.ToolsHash
+				}
+				if round.PrefixBreakReason != "" {
+					step.Extra["prefix_break"] = round.PrefixBreak
+					step.Extra["prefix_break_reason"] = round.PrefixBreakReason
+				}
 
 				llmCalls := round.LLMCalls
 				if llmCalls <= 0 {

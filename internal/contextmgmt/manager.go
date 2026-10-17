@@ -39,6 +39,14 @@ type ManagerConfig struct {
 	// MaskingProtectLatestTurn skips the latest turn when true.
 	MaskingProtectLatestTurn bool
 
+	// ReasoningPruneEnabled toggles batched reasoning retention pruning when
+	// ReasoningPruneFn is nil.
+	ReasoningPruneEnabled bool
+	// ReasoningPruneFn, when set, dynamically reports whether batched reasoning
+	// retention pruning is active for the live model (true for "keep", or
+	// "auto" on a keep-by-default family; false for "keep-all" or "none").
+	ReasoningPruneFn func() bool
+
 	// EjectionEnabled toggles write-file content ejection.
 	EjectionEnabled bool
 	// EjectionMinAgeTurns is the minimum age before a write_file call is ejected.
@@ -276,19 +284,53 @@ func (m *Manager) ForceCompress(ctx context.Context, history []Message) ([]Messa
 	return history, res.Info, nil
 }
 
+// PrepareTurnReport summarizes which context defenses mutated history during PrepareTurn.
+type PrepareTurnReport struct {
+	EjectedCount int
+	MaskedCount  int
+	PrunedCount  int
+	Compressed   bool
+}
+
+// PrimaryBreakReason returns the highest-impact defense that mutated history
+// during PrepareTurn, or "" when history was untouched.
+func (r PrepareTurnReport) PrimaryBreakReason() string {
+	switch {
+	case r.Compressed:
+		return "compression"
+	case r.MaskedCount > 0:
+		return "masking"
+	case r.PrunedCount > 0:
+		return "reasoning-prune"
+	case r.EjectedCount > 0:
+		return "ejection"
+	default:
+		return ""
+	}
+}
+
 // PrepareTurn applies ejection, masking, and (when over budget) compression to
 // history before a generate request. It returns the transformed history and a
 // best-effort error; callers should proceed with the returned history even when
 // err is non-nil (the defenses degrade gracefully). It is a no-op when disabled.
 func (m *Manager) PrepareTurn(ctx context.Context, history []Message, turnIndex int) ([]Message, error) {
+	out, _, err := m.PrepareTurnWithReport(ctx, history, turnIndex)
+	return out, err
+}
+
+// PrepareTurnWithReport is PrepareTurn plus a summary of which defenses mutated history.
+func (m *Manager) PrepareTurnWithReport(ctx context.Context, history []Message, turnIndex int) ([]Message, PrepareTurnReport, error) {
+	var rep PrepareTurnReport
 	if m == nil || !m.cfg.Enabled || len(history) == 0 {
-		return history, nil
+		return history, rep, nil
 	}
 
-	history = m.applyEjection(history)
-	history = m.applyMasking(history)
-	history, err := m.applyBudgetCompression(ctx, history, turnIndex)
-	return history, err
+	history, rep.EjectedCount = m.applyEjection(history)
+	history, rep.MaskedCount = m.applyMasking(history)
+	history, rep.PrunedCount = m.applyReasoningPrune(history)
+	var err error
+	history, rep.Compressed, err = m.applyBudgetCompression(ctx, history, turnIndex)
+	return history, rep, err
 }
 
 // ejectionTriggerFraction is the share of the context limit that must be in use
@@ -298,17 +340,17 @@ func (m *Manager) PrepareTurn(ctx context.Context, history []Message, turnIndex 
 // before threshold compression, which triggers higher, at ProactiveCompressAt).
 const ejectionTriggerFraction = 0.6
 
-func (m *Manager) applyEjection(history []Message) []Message {
+func (m *Manager) applyEjection(history []Message) ([]Message, int) {
 	if !m.cfg.EjectionEnabled || m.cfg.WriteFileToolName == "" {
-		return history
+		return history, 0
 	}
-	// Only eject under real budget pressure. With headroom, retaining write_file
+	// Only eject under real budget pressure. With retaining headroom, write_file
 	// content keeps the model's recent writes visible and avoids needlessly
 	// mutating its prior tool calls.
 	if m.contextLimit() > 0 {
 		historyTokens := EstimateTokens(flattenParts(history))
 		if float64(historyTokens) < ejectionTriggerFraction*float64(m.BudgetLimit()) {
-			return history
+			return history, 0
 		}
 	}
 	res := EjectStaleWriteFileContent(history, WriteFileEjectionOptions{
@@ -322,12 +364,12 @@ func (m *Manager) applyEjection(history []Message) []Message {
 		m.logger.Debug("context: ejected stale write_file content",
 			"ejected", res.EjectedCount, "tokensSaved", res.TokensSaved)
 	}
-	return res.NewHistory
+	return res.NewHistory, res.EjectedCount
 }
 
-func (m *Manager) applyMasking(history []Message) []Message {
+func (m *Manager) applyMasking(history []Message) ([]Message, int) {
 	if m.masker == nil {
-		return history
+		return history, 0
 	}
 	protectionFraction := m.cfg.MaskingProtectionFraction
 	if protectionFraction <= 0 {
@@ -347,13 +389,50 @@ func (m *Manager) applyMasking(history []Message) []Message {
 	res, err := m.masker.Mask(history, cfg)
 	if err != nil {
 		m.logger.Warn("context: tool-output masking failed", "error", err)
-		return history
+		return history, 0
 	}
 	if res.MaskedCount > 0 {
 		m.logger.Debug("context: masked tool outputs",
 			"masked", res.MaskedCount, "tokensSaved", res.TokensSaved)
 	}
-	return res.NewHistory
+	return res.NewHistory, res.MaskedCount
+}
+
+func (m *Manager) reasoningPruneEnabled() bool {
+	if m.cfg.ReasoningPruneFn != nil {
+		return m.cfg.ReasoningPruneFn()
+	}
+	return m.cfg.ReasoningPruneEnabled
+}
+
+func (m *Manager) applyReasoningPrune(history []Message) ([]Message, int) {
+	if !m.reasoningPruneEnabled() {
+		return history, 0
+	}
+	protectionFraction := m.cfg.MaskingProtectionFraction
+	if protectionFraction <= 0 {
+		protectionFraction = DefaultLocalMaskingProtectionFraction
+	}
+	prunableFraction := m.cfg.MaskingPrunableFraction
+	if prunableFraction <= 0 {
+		prunableFraction = DefaultLocalMaskingPrunableFraction
+	}
+	maskCfg := GetLocalMaskingDefaults(LocalMaskingSettings{
+		ContextLimit:       m.BudgetLimit(),
+		Enabled:            true,
+		ProtectionFraction: protectionFraction,
+		PrunableFraction:   prunableFraction,
+		ProtectLatestTurn:  true,
+	})
+	res := PruneReasoning(history, ReasoningPruneConfig{
+		ProtectionThresholdTokens:  maskCfg.ProtectionThresholdTokens,
+		MinPrunableThresholdTokens: maskCfg.MinPrunableThresholdTokens,
+	}, EstimateTokens)
+	if res.PrunedCount > 0 {
+		m.logger.Debug("context: pruned older reasoning turns",
+			"pruned", res.PrunedCount, "tokensSaved", res.TokensSaved)
+	}
+	return res.NewHistory, res.PrunedCount
 }
 
 const minCompressionReductionFraction = 0.1 // OpenCode's loop guard, issue #27924
@@ -369,9 +448,9 @@ func unproductive(info CompressionInfo) bool {
 	return false
 }
 
-func (m *Manager) applyBudgetCompression(ctx context.Context, history []Message, turnIndex int) ([]Message, error) {
+func (m *Manager) applyBudgetCompression(ctx context.Context, history []Message, turnIndex int) ([]Message, bool, error) {
 	if m.compressor == nil {
-		return history, nil
+		return history, false, nil
 	}
 
 	historyTokens := EstimateTokens(flattenParts(history))
@@ -411,7 +490,7 @@ func (m *Manager) applyBudgetCompression(ctx context.Context, history []Message,
 	if err != nil {
 		m.setFailedCompression(true)
 		m.logger.Warn("context: compression failed", "error", err)
-		return history, err
+		return history, false, err
 	}
 
 	// Latch the failure flag on any unproductive outcome when not manual/forced.
@@ -426,9 +505,9 @@ func (m *Manager) applyBudgetCompression(ctx context.Context, history []Message,
 	if res.NewHistory != nil {
 		m.logger.Debug("context: compressed history",
 			"before", res.Info.OriginalTokenCount, "after", res.Info.NewTokenCount)
-		return res.NewHistory, nil
+		return res.NewHistory, true, nil
 	}
-	return history, nil
+	return history, false, nil
 }
 
 func (m *Manager) effectiveThreshold(turnIndex int) float64 {

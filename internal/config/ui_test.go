@@ -100,3 +100,90 @@ func TestSetUIThemeNil(t *testing.T) {
 		t.Error("SetUITheme on nil Settings = nil error, want error")
 	}
 }
+
+func TestParseUIScreen(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		raw     string
+		want    string
+		wantErr bool
+	}{
+		{"", UIScreenFullscreen, false},
+		{"auto", UIScreenAuto, false},
+		{" FULLSCREEN ", UIScreenFullscreen, false},
+		{"inline", UIScreenInline, false},
+		{"split", "", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.raw, func(t *testing.T) {
+			t.Parallel()
+			got, err := ParseUIScreen(tc.raw)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseUIScreen: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSetUIScreenAndMouse(t *testing.T) {
+	s := &Settings{}
+	if err := s.SetUIScreen("inline"); err != nil {
+		t.Fatalf("SetUIScreen: %v", err)
+	}
+	if got := s.UI().Screen; got != UIScreenInline {
+		t.Fatalf("screen = %q", got)
+	}
+	if err := s.SetUIMouse(false); err != nil {
+		t.Fatalf("SetUIMouse: %v", err)
+	}
+	ui := s.UI()
+	if ui.Mouse == nil || *ui.Mouse {
+		t.Fatalf("mouse = %v, want false", ui.Mouse)
+	}
+	if err := s.SetUIScreen("auto"); err != nil {
+		t.Fatalf("set auto: %v", err)
+	}
+	if got := s.UI().Screen; got != UIScreenAuto {
+		t.Fatalf("auto screen = %q", got)
+	}
+	if err := s.SetUIScreen("fullscreen"); err != nil {
+		t.Fatalf("clear screen: %v", err)
+	}
+	if err := s.SetUIMouse(true); err != nil {
+		t.Fatalf("clear mouse: %v", err)
+	}
+	ui = s.UI()
+	if ui.Screen != "" || ui.Mouse != nil {
+		t.Fatalf("defaults not cleared: %+v", ui)
+	}
+	if err := s.SetUIScreen(""); err != nil {
+		t.Fatalf("empty screen: %v", err)
+	}
+	if got := s.UI().Screen; got != "" {
+		t.Fatalf("empty SetUIScreen stored %q", got)
+	}
+	if err := s.SetUISSHCopyTipShown(true); err != nil {
+		t.Fatalf("set copy tip: %v", err)
+	}
+	if !s.UI().SSHCopyTipShown {
+		t.Fatal("ssh copy tip not stored")
+	}
+	if err := s.SetUISSHCopyTipShown(false); err != nil {
+		t.Fatalf("clear copy tip: %v", err)
+	}
+	if s.UI().SSHCopyTipShown {
+		t.Fatal("ssh copy tip not cleared")
+	}
+	if err := s.SetUIScreen("nope"); err == nil {
+		t.Fatal("invalid screen accepted")
+	}
+}

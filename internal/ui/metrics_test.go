@@ -50,6 +50,29 @@ func TestFormatCostUSD(t *testing.T) {
 	}
 }
 
+func TestFormatTokensPerSec(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		tps  float64
+		want string
+	}{
+		{"unknown", 0, ""},
+		{"negative", -3, ""},
+		{"under ten", 7.5, "7.5 tok/s"},
+		{"ten", 10, "10 tok/s"},
+		{"whole", 42, "42 tok/s"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := FormatTokensPerSec(tt.tps); got != tt.want {
+				t.Errorf("FormatTokensPerSec(%v) = %q, want %q", tt.tps, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestShowSessionCostInFooter(t *testing.T) {
 	t.Parallel()
 	openrouterCost := []ModelUsageStat{
@@ -316,6 +339,76 @@ func TestFormatSessionStats(t *testing.T) {
 		out := FormatSessionStats(SessionStats{}, "tools")
 		if out != "No tool calls recorded yet." {
 			t.Errorf("tools empty-state = %q", out)
+		}
+	})
+
+	t.Run("cache-reporting-and-section", func(t *testing.T) {
+		t.Parallel()
+		withCache := SessionStats{
+			SessionID:     "sess-cache",
+			Provider:      "OpenAI",
+			Model:         "gpt-5-codex",
+			Turns:         2,
+			InputTokens:   1000,
+			OutputTokens:  200,
+			CachedTokens:  900,
+			CacheReported: true,
+			ModelUsage: []ModelUsageStat{
+				{
+					Provider:      "openai",
+					Model:         "gpt-5-codex",
+					Mode:          "agent",
+					Requests:      2,
+					InTokens:      1000,
+					OutTokens:     200,
+					CachedTokens:  900,
+					CacheReported: true,
+				},
+				{
+					Provider:      "local",
+					Model:         "unreported-model",
+					Mode:          "plan",
+					Requests:      1,
+					InTokens:      500,
+					OutTokens:     50,
+					CachedTokens:  0,
+					CacheReported: false,
+				},
+			},
+			CacheBreaks: []CacheBreakStat{
+				{
+					Round:             2,
+					Reason:            "compression",
+					Position:          0,
+					NextInputTokens:   400,
+					NextCachedTokens:  200,
+					NextCacheReported: true,
+				},
+			},
+		}
+
+		sessionOut := FormatSessionStats(withCache, "session")
+		for _, want := range []string{
+			"Prompt cache:  900 of 1.0k input tokens (90%)",
+			"Cached",
+			"90%",
+			"      -",
+		} {
+			if !strings.Contains(sessionOut, want) {
+				t.Errorf("session output missing %q\n%s", want, sessionOut)
+			}
+		}
+
+		cacheOut := FormatSessionStats(withCache, "cache")
+		for _, want := range []string{
+			"Prompt cache: 900 of 1.0k input tokens (90%)",
+			"Prefix breaks: 1",
+			"compression",
+			"50%",
+		} {
+			if !strings.Contains(cacheOut, want) {
+				t.Errorf("cache output missing %q\n%s", want, cacheOut)
+			}
 		}
 	})
 }

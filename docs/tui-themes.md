@@ -186,17 +186,46 @@ The footer has two lines:
 response — `↑{in} ↓{out}` — and, when the request was routed through
 OpenRouter, a cost figure (e.g. `$0.0021`). When a context limit is known
 (OpenAI-compatible providers with a configured `contextLimit`), the context
-gauge `{pct}% ctx` is also appended. The gauge uses `ContextTokens / ContextLimit`
+gauge `{pct}% ctx` is also appended. On terminals at least 80 columns wide, the
+active turn's decode rate is placed just before that gauge (`42 tok/s`, or
+`7.5 tok/s` when the rate is under 10). The gauge uses `ContextTokens / ContextLimit`
 (capped at 100%). `ContextTokens` comes from the provider's last main-turn
 `prompt_tokens` when reported; after `/compress` or automatic defenses in
 `prepareContext`, it is refreshed from `CompressionInfo.NewTokenCount` or a local
 history estimate so the figure drops immediately without waiting for the next
 API turn (AD-070; gemini-cli parity).
 
-**Line 2 (detail, wide terminals ≥ 80 cols):** Running session totals — `Σ
-{in}/{out}` — followed by the cumulative session cost when OpenRouter cost is
-known. The system-prompt preset label (when set) appears on the same line before
-the token figures.
+The rate is generated tokens divided by the time from the first streamed
+content chunk to the last. The wait before the first token is not included.
+No provider sends this number. Sagittarius computes it. When a provider omits
+token usage, the count is a character estimate of the answer, reasoning, and
+tool calls. A new turn clears the figure until that turn has at least 16
+generated tokens and 500ms of decode time. A reply that arrives in one chunk
+has no decode interval, so the rate stays hidden. Providers that send large
+chunks (Gemini) read slightly high, because the first chunk's tokens were
+generated before the clock started. The figure updates when the round
+finishes, at the same time as `% ctx`. It does not tick while the reply is
+still streaming.
+
+**Line 2 (detail):** The current settings, then the system-prompt preset label
+(when set), then (on terminals ≥ 80 cols) the running session totals `Σ
+{in}/{out}` and the cumulative session cost when OpenRouter cost is known. The
+settings read live state: the tool policy (`Tools: auto-approve all (yolo)`,
+`Tools: confirm before run`, `Tools: read-only`), `screen: full` or `inline`,
+`thinking: shown` or `hidden`, and `mouse: on`, `off`, or `terminal` (inline
+mode leaves the mouse to the terminal). For example: `Tools: auto-approve all
+(yolo) · screen: full · thinking: hidden · mouse: on  ·  System Prompt: System
+administrator`.
+
+The row above the composer is the opposite half: it only says which keys to
+press (`/screen display mode · Ctrl+T show thinking · Alt+M or ⌥M mouse · Pg↑
+Pg↓`). While the read-only posture is on, `/readonly off to lift` leads that row.
+Inline mode shows only the first two hints, since page keys and mouse capture do
+nothing there.
+
+On a narrow terminal both rows truncate instead of wrapping. They drop whole
+entries from the end first (the scroll keys, then the mouse hint, and so on), and
+cut text only when the first entry itself does not fit.
 
 Token counts come from the provider's reported usage when available (all three
 supported providers return them), falling back to the stdlib heuristic estimator

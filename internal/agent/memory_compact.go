@@ -173,12 +173,14 @@ func (r *Runner) generateCompact(ctx context.Context, before []memoryLine) (stri
 	// letting it vanish.
 	prov, model := r.auxAttribution()
 	mode := r.InteractionMode().String()
+	key := usageKey{provider: prov, model: model, mode: mode, agentType: r.agentKind()}
 	if usage != nil {
-		r.metrics.recordAuxUsage(prov, model, mode, r.agentKind(),
-			usage.InputTokens, usage.OutputTokens, usage.CostUSD, usage.CostKnown)
+		r.metrics.recordAuxUsage(key, *usage)
 	} else {
-		r.metrics.recordAuxUsage(prov, model, mode, r.agentKind(),
-			estimateTitleTokens(memoryCompactSystemPrompt+prompt), estimateTitleTokens(sb.String()), 0, false)
+		r.metrics.recordAuxUsage(key, provider.Usage{
+			InputTokens:  estimateTitleTokens(memoryCompactSystemPrompt + prompt),
+			OutputTokens: estimateTitleTokens(sb.String()),
+		})
 	}
 
 	return sb.String(), nil

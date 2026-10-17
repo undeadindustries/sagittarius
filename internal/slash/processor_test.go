@@ -34,6 +34,7 @@ type mockHooks struct {
 	workDir       string
 	lastAssistant string
 	lastUITheme   string
+	lastUIMouse   *bool
 	renamedTitle  string
 
 	// interactionMode backs InteractionMode(); defaults to modes.ModeAgent
@@ -321,6 +322,11 @@ func (m *mockHooks) SessionStatsText(section string) string { return "stats[" + 
 
 func (m *mockHooks) SetUITheme(name string) error {
 	m.lastUITheme = name
+	return nil
+}
+
+func (m *mockHooks) SetUIMouse(on bool) error {
+	m.lastUIMouse = &on
 	return nil
 }
 
