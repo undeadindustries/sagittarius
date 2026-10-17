@@ -30,13 +30,8 @@ func (d *mcpDialogDeps) docs() *config.Documents    { return d.app.docs }
 // serverScope returns the scope that owns the named server: Project if it is
 // defined in the project settings file, Global otherwise.
 func (d *mcpDialogDeps) serverScope(name string) config.SettingScope {
-	docs := d.docs()
-	if docs != nil && docs.Project != nil {
-		if servers, err := docs.Project.MCPServers(); err == nil {
-			if _, ok := servers[name]; ok {
-				return config.ScopeProject
-			}
-		}
+	if docs := d.docs(); docs != nil {
+		return docs.MCPServerScope(name)
 	}
 	return config.ScopeGlobal
 }

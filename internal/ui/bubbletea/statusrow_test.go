@@ -124,7 +124,8 @@ func TestReadOnlyLiftKeyStaysInStatusRow(t *testing.T) {
 func TestRenderStatusRowShowsScrollHintsWithoutComposerStatus(t *testing.T) {
 	t.Parallel()
 	m := newTestModel()
-	m.width = 80
+	// The dual keyboard hint is 85 cells, so 80 drops the scroll entry.
+	m.width = 100
 	row := stripANSI(m.renderStatusRow())
 	hints := m.scrollShortcutHints()
 	if !strings.Contains(row, hints) {
@@ -227,7 +228,7 @@ func TestKeyAndSettingsRowsTruncateNotWrap(t *testing.T) {
 // before it cuts a word.
 func TestFitLeftRightDropsWholeHints(t *testing.T) {
 	t.Parallel()
-	left := readOnlyLiftHint + "  ·  " + scrollShortcutHintsForGOOS("linux")
+	left := readOnlyLiftHint + "  ·  " + fullscreenShortcuts
 	// 111 cells leaves 80 for the left side: through "show thinking" (69) fits,
 	// the mouse hint would end at 88.
 	gotLeft, _ := fitLeftRight(left, "2 AGENTS.md files · 119 skills", 111)
@@ -391,24 +392,11 @@ func TestCopyHintLifecycle(t *testing.T) {
 	}
 }
 
-func TestScrollShortcutHintsForGOOS(t *testing.T) {
+func TestFullscreenHintsNameBothKeyboards(t *testing.T) {
 	t.Parallel()
-	cases := []struct {
-		goos string
-		want string
-	}{
-		{"darwin", "/screen display mode · Ctrl+T show thinking · Alt+M or ⌥M mouse · Fn↑ Fn↓"},
-		{"windows", "/screen display mode · Ctrl+T show thinking · Alt+M or ⌥M mouse · Pg↑ Pg↓"},
-		{"linux", "/screen display mode · Ctrl+T show thinking · Alt+M or ⌥M mouse · Pg↑ Pg↓"},
-		{"freebsd", "/screen display mode · Ctrl+T show thinking · Alt+M or ⌥M mouse · Pg↑ Pg↓"},
-	}
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.goos, func(t *testing.T) {
-			t.Parallel()
-			if got := scrollShortcutHintsForGOOS(tc.goos); got != tc.want {
-				t.Fatalf("scrollShortcutHintsForGOOS(%q) = %q, want %q", tc.goos, got, tc.want)
-			}
-		})
+	for _, want := range []string{"Pg↑ Pg↓", "Fn↑ Fn↓", "Alt+M", "⌥M"} {
+		if !strings.Contains(fullscreenShortcuts, want) {
+			t.Fatalf("fullscreen hints = %q, missing %q", fullscreenShortcuts, want)
+		}
 	}
 }

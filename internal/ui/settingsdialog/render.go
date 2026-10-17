@@ -11,39 +11,40 @@ import (
 
 // View renders the settings browser overlay.
 func (m Model) View() string {
-	dim := m.th.Dim
-	var b strings.Builder
-	b.WriteString(overlay.Title(m.th, "Settings") + "\n\n")
-
 	if m.editing {
-		b.WriteString(m.viewEdit())
-	} else {
-		b.WriteString(m.viewList())
+		body := overlay.Title(m.th, "Settings") + "\n\n" + m.viewEdit() + m.statusLines()
+		return overlay.Frame(m.th, m.width, overlay.DefaultMinWidth, body)
 	}
+	var head strings.Builder
+	head.WriteString(overlay.Title(m.th, "Settings") + "\n")
+	if !m.scopeSel.Disabled {
+		head.WriteString(m.scopeSel.View(m.th) + "\n")
+	}
+	head.WriteString("\n" + overlay.Hints(m.th, "* = overridden in this scope  •  Ctrl+L clear  •  Enter edit/toggle") + "\n")
 
+	rows := make([]string, len(m.entries))
+	for i, e := range m.entries {
+		rows[i] = m.renderEntry(e, i == m.cursor)
+	}
+	foot := "\n" + overlay.Hints(m.th, m.footerHint())
+	if s := m.statusLines(); s != "" {
+		foot = strings.TrimPrefix(s, "\n") + "\n" + foot
+	}
+	return overlay.FitFrame(m.th, overlay.Box{Width: m.width, Height: m.height},
+		overlay.List{Head: head.String(), Rows: rows, Foot: foot, Cursor: m.cursor})
+}
+
+// statusLines renders the info and error messages, each preceded by a blank
+// line, or "" when there are none.
+func (m Model) statusLines() string {
+	var b strings.Builder
 	if m.info != "" {
-		b.WriteString("\n\n" + dim.Render(m.wrap(m.info)))
+		b.WriteString("\n\n" + m.th.Dim.Render(m.wrap(m.info)))
 	}
 	if m.errMsg != "" {
 		b.WriteString("\n\n" + m.th.Error.Render(m.wrap("✗ "+m.errMsg)))
 	}
-	if !m.editing {
-		if !m.scopeSel.Disabled {
-			b.WriteString("\n\n" + m.scopeSel.View(m.th))
-		}
-		b.WriteString("\n\n" + overlay.Hints(m.th, m.footerHint()))
-	}
-
-	return overlay.Frame(m.th, m.width, overlay.DefaultMinWidth, b.String())
-}
-
-func (m Model) viewList() string {
-	var b strings.Builder
-	b.WriteString(overlay.Hints(m.th, "* = overridden in this scope  •  Ctrl+L clear  •  Enter edit/toggle") + "\n\n")
-	for i, e := range m.entries {
-		b.WriteString(m.renderEntry(e, i == m.cursor) + "\n")
-	}
-	return strings.TrimRight(b.String(), "\n")
+	return b.String()
 }
 
 func (m Model) renderEntry(e SettingEntry, selected bool) string {
@@ -89,11 +90,7 @@ func (m Model) viewEdit() string {
 }
 
 func (m Model) footerHint() string {
-	base := "↑/↓ move • Enter edit/toggle • Ctrl+L clear • Esc close"
-	if !m.scopeSel.Disabled {
-		base += " • Tab · scope"
-	}
-	return base
+	return "↑/↓ move • Enter edit/toggle • Ctrl+L clear • Esc close"
 }
 
 func (m Model) wrap(s string) string {

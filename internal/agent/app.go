@@ -269,6 +269,101 @@ func (a *App) effectiveSettings() *config.Settings {
 	return a.deps.Settings
 }
 
+// coerceLiveModel keeps the active provider's live model inside its curated
+// active set. After a provider switch (or any rebuild) a previously configured
+// model may no longer be activated, so it moves to the first curated model.
+// The check runs on the merged view, and the fix is written to the tier that
+// supplied the stale value: rewriting the global default because one project
+// narrowed its active set would change every other project. It reports
+// whether settings changed. A failed save is logged, not returned, because a
+// rebuild must not fail over this housekeeping.
+func (a *App) coerceLiveModel() bool {
+	if a.docs == nil {
+		changed, err := provider.CoerceModelToCurated(a.deps.Settings, a.deps.Settings.ActiveProvider())
+		if err == nil && changed && a.deps.Loader != nil {
+			if err := a.deps.Loader.Save(a.deps.Settings); err != nil {
+				slog.Warn("save curated model coercion", "error", err)
+			}
+		}
+		return changed
+	}
+	merged := a.docs.Merged()
+	activeID := config.NormalizeProviderID(merged.ActiveProvider())
+	next, ok := provider.CuratedReplacement(merged, activeID)
+	if !ok {
+		return false
+	}
+	scope := config.ScopeGlobal
+	if projectOwnsModel(a.docs.Project, activeID) {
+		scope = config.ScopeProject
+	}
+	if err := a.persistScope(scope, func(s *config.Settings) error {
+		return provider.SetProviderModel(s, activeID, next)
+	}); err != nil {
+		slog.Warn("save curated model coercion", "provider", activeID, "scope", scope.String(), "error", err)
+		return false
+	}
+	return true
+}
+
+// projectOwnsModel reports whether the project tier decides providerID's live
+// model: it picked the provider, pinned the model, or narrowed the active set.
+func projectOwnsModel(project *config.Settings, providerID string) bool {
+	if project == nil || project.Providers == nil {
+		return false
+	}
+	if config.NormalizeProviderID(project.Providers.Active) == providerID {
+		return true
+	}
+	inst := provider.InstanceConfig(project, providerID)
+	return inst != nil && (inst.Model != "" || len(inst.ActiveModels) > 0)
+}
+
+// persistScope routes a settings write to the chosen tier. Project writes run
+// with the global custom provider definitions visible (provider helpers
+// validate ids against them) but never saved into the project file: custom
+// definitions carry connection details and stay global-only.
+func (a *App) persistScope(scope config.SettingScope, fn func(*config.Settings) error) error {
+	if scope != config.ScopeProject {
+		return a.persistGlobal(fn)
+	}
+	if a.docs == nil {
+		return fmt.Errorf("save project settings: %w", config.ErrNoProjectScope)
+	}
+	return a.docs.MutateProject(func(project, global *config.Settings) error {
+		restore := lendCustomDefinitions(project, global)
+		defer restore()
+		return fn(project)
+	})
+}
+
+// lendCustomDefinitions temporarily gives project the global custom provider
+// definitions and returns the func that puts project's own value back.
+func lendCustomDefinitions(project, global *config.Settings) (restore func()) {
+	if global == nil || global.Providers == nil || len(global.Providers.Custom) == 0 {
+		return func() {}
+	}
+	hadProviders := project.Providers != nil
+	if !hadProviders {
+		project.Providers = &config.ProvidersSettings{}
+	}
+	own := project.Providers.Custom
+	project.Providers.Custom = global.Providers.Custom
+	return func() {
+		project.Providers.Custom = own
+		if !hadProviders && providersBlockEmpty(project.Providers) {
+			project.Providers = nil
+		}
+	}
+}
+
+// providersBlockEmpty reports whether p holds nothing worth writing, so a
+// lent-then-restored block does not leave "providers": {} in the file.
+func providersBlockEmpty(p *config.ProvidersSettings) bool {
+	return p.Active == "" && p.OpenAI == nil && p.GeminiAPIKey == nil &&
+		p.OpenAIResponses == nil && len(p.Extra) == 0 && len(p.Custom) == 0
+}
+
 // persistGlobal is the single entry point for global scalar settings WRITES. It
 // routes through Documents.MutateGlobal so Merged is refreshed atomically with
 // the on-disk save; the raw Loader.Save path is only a fallback for tests that
@@ -616,16 +711,8 @@ func (h *appHooks) RebuildRunner(ctx context.Context) (string, string, error) {
 		return "", "", err
 	}
 
-	// Keep the active provider's live model inside its curated active set. After
-	// a provider switch (or any rebuild) a previously-configured model may no
-	// longer be activated; coerce it to the first curated model and persist.
-	// Coercion uses deps.Settings (global) so any resulting save goes to the
-	// global file, not the read-only merged view.
-	activeID := h.app.deps.Settings.ActiveProvider()
-	if changed, cErr := provider.CoerceModelToCurated(h.app.deps.Settings, activeID); cErr == nil && changed {
-		if h.app.deps.Loader != nil {
-			_ = h.app.deps.Loader.Save(h.app.deps.Settings)
-		}
+	if h.app.coerceLiveModel() && h.app.docs != nil {
+		effectiveSettings = h.app.docs.Merged()
 	}
 
 	endpoint, err := provider.ResolveEndpointConfig(effectiveSettings)
@@ -1943,20 +2030,34 @@ func (h *appHooks) SnapshotUndo(n int) ([]string, error) {
 	return h.app.runner.SnapshotUndo(n)
 }
 
-// SelectCurrentModel switches the active (provider, model) globally and rebuilds
-// the runner. Called by /model command and the modelpick dialog.
-func (h *appHooks) SelectCurrentModel(ctx context.Context, providerID, model string) (string, error) {
+// SelectCurrentModel switches the active (provider, model) in scope's file and
+// rebuilds the runner. Called by /model and the model picker. The pick is
+// validated against the merged view, so a project-narrowed active set and
+// custom providers defined globally both count.
+func (h *appHooks) SelectCurrentModel(ctx context.Context, providerID, model string, scope config.SettingScope) (string, error) {
 	if h.app == nil || h.app.runner == nil {
 		return "", fmt.Errorf("runner not available")
 	}
-	if err := provider.SelectCurrentModel(h.app.deps.Loader, h.app.deps.Settings, providerID, model); err != nil {
+	return h.app.selectCurrentModel(ctx, providerID, model, scope)
+}
+
+// selectCurrentModel validates a pick, writes it to scope's file, and rebuilds
+// the runner through deps.Hooks; it returns the resolved live model.
+func (a *App) selectCurrentModel(ctx context.Context, providerID, model string, scope config.SettingScope) (string, error) {
+	providerID, model, err := provider.ValidateModelSelection(a.effectiveSettings(), providerID, model)
+	if err != nil {
+		return "", err
+	}
+	if err := a.persistScope(scope, func(s *config.Settings) error {
+		return provider.WriteActiveModel(s, providerID, model)
+	}); err != nil {
 		return "", err
 	}
 	// An explicit /model pick redefines the base. Any subsequent mode switch
 	// that has no provider override will return to this provider, not the
 	// startup-default one.
-	h.app.baseProviderID = config.NormalizeProviderID(providerID)
-	_, resolvedModel, err := h.RebuildRunner(ctx)
+	a.baseProviderID = providerID
+	_, resolvedModel, err := a.deps.Hooks.RebuildRunner(ctx)
 	if err != nil {
 		return "", err
 	}

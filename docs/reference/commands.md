@@ -160,7 +160,8 @@ For the terminal's own selection, hold `Fn` in Terminal.app (`Cmd-R` toggles
 View > Allow Mouse Reporting when `Fn` is not available), `Option` in iTerm2,
 or `Shift` in most other terminals. You can also turn mouse mode off with
 `Alt+M` / `/mouse off`. That selection only reaches the visible rows.
-Keyboard scrollback (`PgUp`/`PgDn`, `Shift+Up`/`Down`) works either way.
+Keyboard scrollback (`PgUp`/`PgDn`, or `Fn+Up`/`Fn+Down` on a Mac, and
+`Shift+Up`/`Down`) works either way.
 `/mouse on` and `/mouse off` are
 remembered (`ui.mouse`). `Alt+M` and `/mouse` with no argument last for this
 session only. The next full-screen launch starts from the remembered choice,
@@ -359,6 +360,14 @@ Screen reader mode stays in the plain terminal and refuses the switch.
     `toolCallParsing`, and for `openai-responses` also `reasoningEffort`, `useResponseChaining`.
   - **Reset all** — remove all provider-level instance overrides.
 - **Delete (`x` on custom provider):** shows a confirmation screen; press `y` or Enter to confirm removal of the definition, instance overrides, and stored API key. Press Esc to cancel.
+- **Where changes are saved:** the dialog opens on Global. Press Tab on the
+  provider list, edit sheet, pickers, or Manage models screen to switch the
+  `Save to:` line to Project. Active models, the default model, the system
+  prompt, and the provider-wide settings then go to
+  `<repo>/.sagittarius/settings.json`. API keys, the URL, the wire format, and
+  custom provider definitions always save globally; the project view tags them
+  `[global only]`. Adding a provider saves its definition, active models, and
+  default model globally so every project can use it.
 
 ### `/model`
 
@@ -367,8 +376,12 @@ Screen reader mode stays in the plain terminal and refuses the switch.
   providers' activated models. Each entry is displayed as `{Provider}/{Model}`.
   Selecting one atomically switches the active provider and its live model in a
   single step, then rebuilds the runner.
-- **Direct argument:** `/model gemini/gemini-2.5-pro` switches directly.
-- **Autocomplete:** Tab-completes `{Provider}/{Model}` pairs.
+- **Direct argument:** `/model gemini/gemini-2.5-pro` switches directly and
+  saves globally. `/model --project gemini/gemini-2.5-pro` saves the pick to
+  this project's settings file only. The picker opens on Project; press Tab to
+  switch its `Save to:` line.
+- **Autocomplete:** Tab-completes `{Provider}/{Model}` pairs, with or without
+  `--project` in front.
 - **`Ctrl+/`:** Cycles globally across all active models (wraps around). The status
   bar shows the resolved model after each cycle.
 - **Context:** The new model's context window applies immediately. The
@@ -383,7 +396,9 @@ Screen reader mode stays in the plain terminal and refuses the switch.
   the thinking budget -- for any active `{Provider}/{Model}` pair.
 - **Menu-first:** `/models` opens a global model list. Select a model to open its
   settings submenu. Changes are saved to `providers.<id>.models.<model>` in
-  `settings.json` and take effect immediately for the active model.
+  `settings.json` and take effect immediately for the active model. The dialog
+  opens on Global; press Tab to save to the project file instead. In the
+  project view, values inherited from the global file show as `(global: value)`.
 
 #### Reasoning history (`reasoningHistory`)
 
@@ -520,8 +535,8 @@ again.
 
 - **Description:** Browse and edit **global and project settings** in a curated
   list grouped by category.
-- **Scope radio:** Tab switches focus to the scope selector; arrow keys change
-  between Global (`~/.sagittarius/settings.json`) and Project
+- **Scope:** the `Save to:` line under the title shows the target file. Tab
+  switches between Global (`~/.sagittarius/settings.json`) and Project
   (`<repo>/.sagittarius/settings.json`). Values shown are from the selected scope
   file only (not merged), with a `*` on any key explicitly set in that scope.
 - **Editing:**
@@ -779,6 +794,9 @@ See also: [MCP server configuration](../tools/mcp-server.md).
   in `ask` mode, `plan` mode, and the `/readonly` posture; a tool the server
   itself declares `readOnlyHint` on shows as `read-only (declared)` and is not
   editable here. The footer links to the `/mcp` wizard for server management.
+  Both toggles are saved in the settings file that defines the server, so a
+  server from `<repo>/.sagittarius/settings.json` (shown with `[project]`)
+  keeps its tool choices in that project.
 - **`find_symbol`:** One of the built-in tools, this locates symbol definitions
   and references across source files using a syntax-aware parser (no persistent
   index). It is on by default; disable it with `sagittarius.symbols.enabled: false`

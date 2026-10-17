@@ -12,6 +12,7 @@ import (
 
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/ui/overlay"
+	"github.com/undeadindustries/sagittarius/internal/ui/scopedialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/theme"
 )
 
@@ -128,6 +129,11 @@ type Model struct {
 	done   bool
 	status string // surfaced to the parent footer/scrollback after close
 
+	// scopeSel picks the file preference writes land in. It opens on Global
+	// (provider setup is usually shared); Tab flips it on the list, edit
+	// sheet, picker, and activation screens.
+	scopeSel scopedialog.ScopeSelector
+
 	errMsg string
 	info   string
 
@@ -190,6 +196,7 @@ func New(ctx context.Context, deps Deps) Model {
 	ti := textinput.New()
 	ti.CharLimit = 8192
 	ti.Prompt = "> "
+	overlay.StyleTextInput(&ti, theme.Default())
 
 	m := Model{
 		deps:      deps,
@@ -200,9 +207,28 @@ func New(ctx context.Context, deps Deps) Model {
 		add:       addState{wire: config.WireFormatOpenAIChat, fieldIdx: addFieldName},
 		providers: deps.ListProviders(),
 		spin:      newDialogSpinner(),
+		scopeSel:  scopedialog.NewScopeSelector(config.ScopeGlobal),
 	}
+	m.scopeSel.Disabled = !deps.ProjectAvailable()
 	m.syncInputWidth()
 	return m
+}
+
+// scope is where preference writes go.
+func (m Model) scope() config.SettingScope { return m.scopeSel.Scope }
+
+// scopeScreen reports whether the current screen shows the scope line and
+// takes the toggle key. Text-entry and add screens do not: Tab belongs to
+// the input there, and their writes are global-only or already scoped.
+func (m Model) scopeScreen() bool {
+	if m.scopeSel.Disabled {
+		return false
+	}
+	switch m.screen {
+	case screenEditPick, screenEdit, screenEditPicker, screenModels:
+		return true
+	}
+	return false
 }
 
 // newDialogSpinner returns the small braille-dot spinner shown while an
@@ -229,6 +255,7 @@ func (m Model) SetSize(w, h int) Model {
 // SetTheme applies the resolved color theme to the overlay.
 func (m Model) SetTheme(th theme.Theme) Model {
 	m.th = th
+	overlay.StyleTextInput(&m.input, th)
 	return m
 }
 
@@ -263,6 +290,11 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m.handleRemoveResult(msg)
 	case modelsLoadedMsg:
 		return m.handleModelsLoaded(msg), nil
+	case scopedialog.ScopeChangedMsg:
+		if m.screen == screenEdit {
+			m.refreshEditItems()
+		}
+		return m, nil
 	case tea.KeyMsg:
 		// Swallow input while an add/remove write is in flight (the spinner
 		// keeps animating via the TickMsg case above).
@@ -310,7 +342,7 @@ func (m Model) seedModels(id string) []string {
 		copy(out, curated)
 		return out
 	}
-	if name := currentValue(m.deps.ProviderSettings(id), "model"); name != "" {
+	if name := currentValue(m.deps.ProviderSettings(id, m.scope()), "model"); name != "" {
 		return []string{name}
 	}
 	if m.add.presetID != "" {
@@ -339,7 +371,7 @@ func (m *Model) initChecked() {
 		return
 	}
 	// Uncurated: check only the configured default (or live) model.
-	def := currentValue(m.deps.ProviderSettings(m.targetID), "model")
+	def := currentValue(m.deps.ProviderSettings(m.targetID, m.scope()), "model")
 	if def == "" {
 		def = m.deps.CurrentModel(m.targetID)
 	}
@@ -357,6 +389,14 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		return m.handleAddKey(msg)
 	case screenRemove:
 		return m.handleRemoveKey(msg)
+	}
+	if m.scopeScreen() {
+		if sel, cmd, handled := m.scopeSel.HandleKey(msg); handled {
+			m.scopeSel = sel
+			m.info = ""
+			m.errMsg = ""
+			return m, cmd
+		}
 	}
 
 	switch msg.String() {
@@ -417,14 +457,15 @@ func (m Model) resetHighlightedField() (Model, tea.Cmd) {
 	m.info = ""
 	switch item.kind {
 	case editPreset:
-		_ = m.deps.ClearSetting(m.ctx, m.targetID, "promptMode")
-		if err := m.deps.ClearSetting(m.ctx, m.targetID, "personality"); err != nil {
+		// promptMode is often unset; the personality clear below reports real failures.
+		_ = m.deps.ClearSetting(m.ctx, m.targetID, "promptMode", m.scope())
+		if err := m.deps.ClearSetting(m.ctx, m.targetID, "personality", m.scope()); err != nil {
 			m.errMsg = err.Error()
 			return m, nil
 		}
 		m.info = "System prompt reset to default."
 	case editOverride, editEnum, editToggleBool:
-		if err := m.deps.ClearSetting(m.ctx, m.targetID, item.key); err != nil {
+		if err := m.deps.ClearSetting(m.ctx, m.targetID, item.key, m.scope()); err != nil {
 			m.errMsg = err.Error()
 			return m, nil
 		}
@@ -569,7 +610,7 @@ func (m Model) saveActivation() (Model, tea.Cmd) {
 		m.errMsg = "Select at least one model (Space to toggle) before saving."
 		return m, nil
 	}
-	if err := m.deps.SetActiveModels(m.ctx, m.targetID, selected); err != nil {
+	if err := m.deps.SetActiveModels(m.ctx, m.targetID, selected, m.scope()); err != nil {
 		m.errMsg = err.Error()
 		return m, nil
 	}
@@ -581,7 +622,7 @@ func (m Model) saveActivation() (Model, tea.Cmd) {
 	if m.targetID == m.deps.ActiveProviderID() {
 		current := m.deps.CurrentModel(m.targetID)
 		if current != "" && !containsString(selected, current) {
-			if err := m.deps.SetModel(m.ctx, m.targetID, selected[0]); err != nil {
+			if err := m.deps.SetModel(m.ctx, m.targetID, selected[0], m.scope()); err != nil {
 				m.errMsg = err.Error()
 				return m, nil
 			}
@@ -795,7 +836,7 @@ func (m Model) selectEdit() (Model, tea.Cmd) {
 		} else {
 			next = "true"
 		}
-		if err := m.deps.ApplySetting(m.ctx, m.targetID, item.key, next); err != nil {
+		if err := m.deps.ApplySetting(m.ctx, m.targetID, item.key, next, m.scope()); err != nil {
 			m.errMsg = err.Error()
 			return m, nil
 		}
@@ -807,7 +848,7 @@ func (m Model) selectEdit() (Model, tea.Cmd) {
 	case editEnum:
 		return m.enterEnum(item.key), nil
 	case editResetAll:
-		if err := m.deps.ResetSettings(m.ctx, m.targetID); err != nil {
+		if err := m.deps.ResetSettings(m.ctx, m.targetID, m.scope()); err != nil {
 			m.errMsg = err.Error()
 			return m, nil
 		}
@@ -817,8 +858,8 @@ func (m Model) selectEdit() (Model, tea.Cmd) {
 	case editDefn, editOverride:
 		m.editingKey = item.key
 		m.editingKind = item.kind
-		m.input = freshInput(item.key + " value")
-		m.input.SetValue(currentValue(m.deps.ProviderSettings(m.targetID), item.key))
+		m.input = freshInput(m.th, item.key+" value")
+		m.input.SetValue(currentValue(m.deps.ProviderSettings(m.targetID, m.scope()), item.key))
 		m.screen = screenEditField
 	}
 	return m, nil
@@ -887,14 +928,14 @@ func (m Model) selectPicker() (Model, tea.Cmd) {
 	}
 	choice := m.pickerOptions[m.cursor]
 	if m.pickerKey == "systemPrompt" {
-		info, err := m.deps.ApplySystemPromptPreset(m.ctx, m.targetID, choice.id)
+		info, err := m.deps.ApplySystemPromptPreset(m.ctx, m.targetID, choice.id, m.scope())
 		if err != nil {
 			m.errMsg = err.Error()
 			return m, nil
 		}
 		m.info = info
 	} else {
-		if err := m.deps.ApplySetting(m.ctx, m.targetID, m.pickerKey, choice.id); err != nil {
+		if err := m.deps.ApplySetting(m.ctx, m.targetID, m.pickerKey, choice.id, m.scope()); err != nil {
 			m.errMsg = err.Error()
 			return m, nil
 		}
@@ -906,7 +947,7 @@ func (m Model) selectPicker() (Model, tea.Cmd) {
 }
 
 func (m Model) enterSetKey() Model {
-	m.input = freshSecretInput()
+	m.input = freshSecretInput(m.th)
 	m.screen = screenSetKey
 	m.syncInputWidth()
 	return m
@@ -935,7 +976,7 @@ func (m Model) enterModels(id string) (Model, tea.Cmd) {
 
 func (m Model) enterModelsAdd() Model {
 	m.modelsAddReturn = m.screen
-	m.input = freshInput("model name (e.g. gemini-2.5-pro)")
+	m.input = freshInput(m.th, "model name (e.g. gemini-2.5-pro)")
 	m.screen = screenModelsAdd
 	m.syncInputWidth()
 	return m
@@ -1004,11 +1045,11 @@ func (m Model) commitTextEntry() (Model, tea.Cmd) {
 	var err error
 	switch m.editingKind {
 	case editModel:
-		err = m.deps.SetModel(m.ctx, m.targetID, value)
+		err = m.deps.SetModel(m.ctx, m.targetID, value, m.scope())
 	case editDefn:
 		err = m.deps.UpdateCustomDefinition(m.ctx, m.targetID, m.editingKey, value)
 	default:
-		err = m.deps.ApplySetting(m.ctx, m.targetID, m.editingKey, value)
+		err = m.deps.ApplySetting(m.ctx, m.targetID, m.editingKey, value, m.scope())
 	}
 	if err != nil {
 		m.errMsg = err.Error()
@@ -1052,7 +1093,7 @@ func (m Model) selectTemplate() (Model, tea.Cmd) {
 	m.info = ""
 	if choice.id == "" {
 		m.add = addState{wire: config.WireFormatOpenAIChat, fieldIdx: addFieldName}
-		m.input = freshInput("display name (e.g. Local vLLM)")
+		m.input = freshInput(m.th, "display name (e.g. Local vLLM)")
 		m.screen = screenAdd
 		return m, nil
 	}
@@ -1070,7 +1111,7 @@ func (m Model) selectTemplate() (Model, tea.Cmd) {
 		note:        p.Note,
 		fieldIdx:    addFieldAPIKey,
 	}
-	m.input = freshSecretInput()
+	m.input = freshSecretInput(m.th)
 	m.screen = screenAdd
 	return m, nil
 }
@@ -1109,7 +1150,7 @@ func (m Model) handleAddKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 			return m, nil
 		case "enter":
 			m.add.fieldIdx = addFieldEnvVar
-			m.input = freshInput("API key env var (optional, e.g. OPENAI_API_KEY)")
+			m.input = freshInput(m.th, "API key env var (optional, e.g. OPENAI_API_KEY)")
 			return m, nil
 		}
 		return m, nil
@@ -1136,7 +1177,7 @@ func (m Model) advanceAdd() (Model, tea.Cmd) {
 		}
 		m.add.displayName = value
 		m.add.fieldIdx = addFieldHostOrURL
-		m.input = freshInput("URL or host (e.g. http://127.0.0.1:8000 or 127.0.0.1)")
+		m.input = freshInput(m.th, "URL or host (e.g. http://127.0.0.1:8000 or 127.0.0.1)")
 	case addFieldHostOrURL:
 		if value == "" {
 			m.errMsg = "URL or hostname is required."
@@ -1149,7 +1190,7 @@ func (m Model) advanceAdd() (Model, tea.Cmd) {
 			m.input.Blur()
 		} else {
 			m.add.fieldIdx = addFieldPort
-			m.input = freshInput("port (default: 8000)")
+			m.input = freshInput(m.th, "port (default: 8000)")
 		}
 	case addFieldPort:
 		m.add.port = value
@@ -1158,7 +1199,7 @@ func (m Model) advanceAdd() (Model, tea.Cmd) {
 	case addFieldEnvVar:
 		m.add.envVar = value
 		m.add.fieldIdx = addFieldAPIKey
-		m.input = freshSecretInput()
+		m.input = freshSecretInput(m.th)
 	case addFieldAPIKey:
 		m.add.apiKey = value
 		// Show auto-generated id for optional override.
@@ -1177,7 +1218,7 @@ func (m Model) advanceAdd() (Model, tea.Cmd) {
 		}
 		m.add.idOverride = suggested
 		m.add.fieldIdx = addFieldIdOverride
-		ti := freshInput("provider id (edit or Enter to accept)")
+		ti := freshInput(m.th, "provider id (edit or Enter to accept)")
 		ti.SetValue(suggested)
 		m.input = ti
 	case addFieldIdOverride:
@@ -1310,7 +1351,10 @@ func (m Model) selectAddModel() (Model, tea.Cmd) {
 	}
 	model := m.models[m.cursor]
 	// Curate the chosen default plus any names typed with `a`. Do not dump
-	// the discovered catalog — that was an earlier, intentional change.
+	// the discovered catalog — that was an earlier, intentional change. The
+	// curated set and default model go to the global file next to the new
+	// definition so every project sees a usable provider; only the switch to
+	// it honors the selected scope.
 	active := make([]string, 0, 1+len(m.typedModels))
 	active = append(active, model)
 	for _, extra := range m.typedModels {
@@ -1318,15 +1362,15 @@ func (m Model) selectAddModel() (Model, tea.Cmd) {
 			active = append(active, extra)
 		}
 	}
-	if err := m.deps.SetActiveModels(m.ctx, m.targetID, active); err != nil {
+	if err := m.deps.SetActiveModels(m.ctx, m.targetID, active, config.ScopeGlobal); err != nil {
 		m.errMsg = err.Error()
 		return m, nil
 	}
-	if err := m.deps.SetModel(m.ctx, m.targetID, model); err != nil {
+	if err := m.deps.SetModel(m.ctx, m.targetID, model, config.ScopeGlobal); err != nil {
 		m.errMsg = err.Error()
 		return m, nil
 	}
-	if err := m.deps.SwitchProvider(m.ctx, m.targetID); err != nil {
+	if err := m.deps.SwitchProvider(m.ctx, m.targetID, m.scope()); err != nil {
 		m.errMsg = err.Error()
 		return m, nil
 	}
@@ -1377,21 +1421,22 @@ func discoverCmd(ctx context.Context, deps Deps, id string) tea.Cmd {
 	}
 }
 
-func freshInput(placeholder string) textinput.Model {
+func freshInput(th theme.Theme, placeholder string) textinput.Model {
 	ti := textinput.New()
 	ti.CharLimit = 8192
 	ti.Prompt = "> "
 	ti.Placeholder = placeholder
 	ti.EchoMode = textinput.EchoNormal
 	ti.SetValue("")
+	overlay.StyleTextInput(&ti, th)
 	ti.Focus()
 	return ti
 }
 
 // freshSecretInput returns a blank password field. Placeholders are omitted
 // because EchoPassword mode can leak the first placeholder character as "p".
-func freshSecretInput() textinput.Model {
-	ti := freshInput("")
+func freshSecretInput(th theme.Theme) textinput.Model {
+	ti := freshInput(th, "")
 	ti.Placeholder = ""
 	ti.EchoMode = textinput.EchoPassword
 	return ti

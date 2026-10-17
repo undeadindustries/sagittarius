@@ -14,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/undeadindustries/sagittarius/internal/config"
+	"github.com/undeadindustries/sagittarius/internal/ui/overlay"
 	"github.com/undeadindustries/sagittarius/internal/ui/theme"
 )
 
@@ -116,6 +117,7 @@ func New(ctx context.Context, deps Deps) Model {
 	ti := textinput.New()
 	ti.CharLimit = 8192
 	ti.Prompt = "> "
+	overlay.StyleTextInput(&ti, theme.Default())
 	return Model{
 		deps:    deps,
 		ctx:     ctx,
@@ -139,6 +141,7 @@ func (m Model) SetSize(w, h int) Model {
 
 func (m Model) SetTheme(th theme.Theme) Model {
 	m.th = th
+	overlay.StyleTextInput(&m.input, th)
 	return m
 }
 
@@ -221,7 +224,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 // not surface the model the user wants (or returns nothing).
 func (m Model) enterManualModel() Model {
 	m.screen = screenManualModel
-	m.input = freshInput("model name (e.g. gpt-4o-mini)")
+	m.input = freshInput(m.th, "model name (e.g. gpt-4o-mini)")
 	m.errMsg = ""
 	m.info = "Type the exact model id to use with this endpoint."
 	m.syncInputWidth()
@@ -256,7 +259,7 @@ func (m Model) back() Model {
 	case screenCustomKey:
 		m.screen = screenCustomURL
 		m.errMsg = ""
-		m.input = freshInput("base URL (e.g. http://127.0.0.1:8000/v1/chat/completions)")
+		m.input = freshInput(m.th, "base URL (e.g. http://127.0.0.1:8000/v1/chat/completions)")
 		m.input.SetValue(m.customURL)
 		m.syncInputWidth()
 	case screenModels:
@@ -284,15 +287,15 @@ func (m Model) activate() (Model, tea.Cmd) {
 		switch m.choice.kind {
 		case choiceKindGemini:
 			m.screen = screenAPIKey
-			m.input = freshSecretInput()
+			m.input = freshSecretInput(m.th)
 			m.info = "Paste your Gemini API key (from Google AI Studio)."
 		case choiceKindPreset:
 			m.screen = screenAPIKey
-			m.input = freshSecretInput()
+			m.input = freshSecretInput(m.th)
 			m.info = m.presetKeyInfo()
 		case choiceKindCustom:
 			m.screen = screenCustomURL
-			m.input = freshInput("base URL (e.g. http://127.0.0.1:8000/v1/chat/completions)")
+			m.input = freshInput(m.th, "base URL (e.g. http://127.0.0.1:8000/v1/chat/completions)")
 			m.info = "Enter the chat-completions URL for your OpenAI-compatible server."
 		}
 		m.syncInputWidth()
@@ -307,7 +310,7 @@ func (m Model) activate() (Model, tea.Cmd) {
 		}
 		m.customURL = url
 		m.screen = screenCustomKey
-		m.input = freshSecretInput()
+		m.input = freshSecretInput(m.th)
 		m.info = "Paste the bearer token or API key for this endpoint."
 		m.errMsg = ""
 		m.syncInputWidth()
@@ -419,17 +422,18 @@ func discoverCmd(ctx context.Context, deps Deps, id string) tea.Cmd {
 	}
 }
 
-func freshInput(placeholder string) textinput.Model {
+func freshInput(th theme.Theme, placeholder string) textinput.Model {
 	ti := textinput.New()
 	ti.Placeholder = placeholder
 	ti.CharLimit = 8192
 	ti.Prompt = "> "
+	overlay.StyleTextInput(&ti, th)
 	ti.Focus()
 	return ti
 }
 
-func freshSecretInput() textinput.Model {
-	ti := freshInput("API key")
+func freshSecretInput(th theme.Theme) textinput.Model {
+	ti := freshInput(th, "API key")
 	ti.EchoMode = textinput.EchoPassword
 	ti.EchoCharacter = '•'
 	return ti

@@ -22,8 +22,10 @@ type onboardingDeps struct {
 	inner *providerDialogDeps
 }
 
-func (d *onboardingDeps) settings() *config.Settings { return d.inner.settings() }
-func (d *onboardingDeps) loader() *config.Loader     { return d.inner.loader() }
+// settings is the global document: first-run setup writes it in place and
+// saves through loader, so it must never be the merged view.
+func (d *onboardingDeps) settings() *config.Settings { return d.inner.app.deps.Settings }
+func (d *onboardingDeps) loader() *config.Loader     { return d.inner.app.deps.Loader }
 
 func (d *onboardingDeps) PrepareGemini(ctx context.Context, apiKey string) (string, error) {
 	apiKey = strings.TrimSpace(apiKey)

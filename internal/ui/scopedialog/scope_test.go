@@ -19,33 +19,40 @@ func TestNewScopeSelector_DefaultGlobal(t *testing.T) {
 	}
 }
 
-func TestScopeSelector_RightArrowSwitchesToProject(t *testing.T) {
-	s := NewScopeSelector(config.ScopeGlobal)
-	s.Focused = true
-
-	s2, cmd := s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
-	if s2.Scope != config.ScopeProject {
-		t.Fatalf("scope after 'l' = %v, want ScopeProject", s2.Scope)
+func TestScopeSelector_HandleKey(t *testing.T) {
+	tab := tea.KeyMsg{Type: tea.KeyTab}
+	other := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")}
+	tests := []struct {
+		name      string
+		start     config.SettingScope
+		disabled  bool
+		key       tea.KeyMsg
+		want      config.SettingScope
+		wantTaken bool
+	}{
+		{"tab global to project", config.ScopeGlobal, false, tab, config.ScopeProject, true},
+		{"tab project to global", config.ScopeProject, false, tab, config.ScopeGlobal, true},
+		{"other key ignored", config.ScopeGlobal, false, other, config.ScopeGlobal, false},
+		{"disabled ignores tab", config.ScopeGlobal, true, tab, config.ScopeGlobal, false},
 	}
-	if cmd == nil {
-		t.Fatal("expected ScopeChangedMsg command")
-	}
-	msg := cmd()
-	if changed, ok := msg.(ScopeChangedMsg); !ok || changed.Scope != config.ScopeProject {
-		t.Fatalf("cmd() = %T %v, want ScopeChangedMsg{ScopeProject}", msg, msg)
-	}
-}
-
-func TestScopeSelector_NotFocusedIgnoresKeys(t *testing.T) {
-	s := NewScopeSelector(config.ScopeGlobal)
-	s.Focused = false
-
-	s2, cmd := s.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
-	if s2.Scope != config.ScopeGlobal {
-		t.Fatalf("unfocused selector should not change scope")
-	}
-	if cmd != nil {
-		t.Fatal("unfocused selector should not emit commands")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := NewScopeSelector(tt.start)
+			s.Disabled = tt.disabled
+			got, cmd, taken := s.HandleKey(tt.key)
+			if got.Scope != tt.want || taken != tt.wantTaken {
+				t.Fatalf("HandleKey = (%v, taken=%v), want (%v, %v)", got.Scope, taken, tt.want, tt.wantTaken)
+			}
+			if !tt.wantTaken {
+				if cmd != nil {
+					t.Fatal("unhandled key returned a command")
+				}
+				return
+			}
+			if msg, ok := cmd().(ScopeChangedMsg); !ok || msg.Scope != tt.want {
+				t.Fatalf("cmd() = %v, want ScopeChangedMsg{%v}", msg, tt.want)
+			}
+		})
 	}
 }
 
@@ -72,13 +79,10 @@ func TestScopeSelector_ViewContainsLabels(t *testing.T) {
 	}
 }
 
-func TestScopeSelector_FocusedIndicator(t *testing.T) {
-	s := NewScopeSelector(config.ScopeGlobal)
-	s.Focused = true
-	view := s.View(testTheme)
-	// Focused view should contain the "›" indicator.
-	if !strings.Contains(view, "›") {
-		t.Fatalf("focused view missing indicator '›': %q", view)
+func TestScopeSelector_ViewNamesToggleKey(t *testing.T) {
+	view := NewScopeSelector(config.ScopeGlobal).View(testTheme)
+	if !strings.Contains(view, "Tab switches") {
+		t.Fatalf("view does not say how to switch: %q", view)
 	}
 }
 

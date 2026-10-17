@@ -1,36 +1,23 @@
 package systempromptdialog
 
 import (
-	"strings"
-
-	"github.com/undeadindustries/sagittarius/internal/ui"
 	"github.com/undeadindustries/sagittarius/internal/ui/overlay"
 )
 
-// View renders the project system-prompt picker.
+// View renders the project system-prompt picker, windowed to the terminal
+// height so the title and hints stay visible.
 func (m Model) View() string {
-	dim := m.th.Dim
-	var b strings.Builder
-	b.WriteString(overlay.Title(m.th, "System Prompt") + "\n\n")
-	b.WriteString(overlay.Hints(m.th, "Project-wide personality for this workspace (.sagittarius/settings.json)") + "\n\n")
+	head := overlay.Title(m.th, "System Prompt") + "\n\n" +
+		overlay.Hints(m.th, "Project-wide personality for this workspace (.sagittarius/settings.json)") + "\n"
+	rows := make([]string, len(m.options))
 	for i, p := range m.options {
-		b.WriteString(overlay.Row(m.th, p.label, i == m.cursor) + "\n")
+		rows[i] = overlay.Row(m.th, p.label, i == m.cursor)
 	}
-	if m.info != "" {
-		line := m.info
-		if m.applying {
-			line = m.spin.View() + " " + line
-		}
-		b.WriteString("\n" + dim.Render(m.wrap(line)))
+	info := m.info
+	if info != "" && m.applying {
+		info = m.spin.View() + " " + info
 	}
-	if m.errMsg != "" {
-		b.WriteString("\n" + m.th.Error.Render(m.wrap("✗ "+m.errMsg)))
-	}
-	b.WriteString("\n\n" + overlay.Hints(m.th, "↑/↓ move • Enter apply • Esc close"))
-
-	return overlay.Frame(m.th, m.width, overlay.DefaultMinWidth, b.String())
-}
-
-func (m Model) wrap(s string) string {
-	return ui.WrapText(s, overlay.ContentWidth(m.width, overlay.DefaultMinWidth))
+	foot := overlay.Foot(m.th, info, m.errMsg, "↑/↓ move • Enter apply • Esc close")
+	return overlay.FitFrame(m.th, overlay.Box{Width: m.width, Height: m.height},
+		overlay.List{Head: head, Rows: rows, Foot: foot, Cursor: m.cursor})
 }

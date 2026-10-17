@@ -100,15 +100,19 @@ func handleProviders(_ *Context) Result {
 func modelCommand() Command {
 	return Command{
 		Name:        "model",
-		Description: "Pick the current {Provider}/{Model} from the global active list — opens an interactive picker or accepts a direct argument",
+		Description: "Pick the current {Provider}/{Model} — opens a picker, or takes {provider}/{model} (add --project to save it for this project only)",
 		Handler:     handleModelPick,
 		ArgComplete: func(deps Deps, argPrefix string) []string {
+			flag := ""
+			if rest, ok := strings.CutPrefix(argPrefix, modelProjectFlag+" "); ok {
+				flag, argPrefix = modelProjectFlag+" ", rest
+			}
 			pairs := deps.Hooks.AllActiveModels()
 			var out []string
 			for _, p := range pairs {
 				label := p.DisplayID + "/" + p.Model
 				if strings.HasPrefix(label, argPrefix) {
-					out = append(out, label)
+					out = append(out, flag+label)
 				}
 			}
 			return out
@@ -116,10 +120,39 @@ func modelCommand() Command {
 	}
 }
 
+// modelProjectFlag saves a direct /model pick to the project settings file
+// instead of the global one.
+const modelProjectFlag = "--project"
+
+// parseModelArgs splits /model's arguments into the {provider}/{model} pick
+// and the save scope. The flag may come before or after the pick.
+func parseModelArgs(args string) (pick string, scope config.SettingScope, err error) {
+	scope = config.ScopeGlobal
+	var rest []string
+	for _, field := range strings.Fields(args) {
+		if field == modelProjectFlag {
+			scope = config.ScopeProject
+			continue
+		}
+		rest = append(rest, field)
+	}
+	if len(rest) > 1 {
+		return "", scope, fmt.Errorf("/model: expected one {provider}/{model}, got %q", strings.Join(rest, " "))
+	}
+	if len(rest) == 1 {
+		pick = rest[0]
+	}
+	return pick, scope, nil
+}
+
 // handleModelPick selects a model directly when an argument is provided, or
-// opens the picker dialog for interactive selection.
+// opens the picker dialog for interactive selection. A bare --project opens
+// the picker too; the picker has its own scope switch.
 func handleModelPick(ctx *Context) Result {
-	arg := strings.TrimSpace(ctx.Args)
+	arg, scope, err := parseModelArgs(ctx.Args)
+	if err != nil {
+		return ErrorResult(err)
+	}
 	if arg == "" {
 		return DialogResult(DialogModelPick)
 	}
@@ -142,11 +175,17 @@ func handleModelPick(ctx *Context) Result {
 	if providerID == "" {
 		return ErrorResult(fmt.Errorf("/model: %q is not in the active model list; run /model to see available models", arg))
 	}
-	resolved, err := ctx.Deps.Hooks.SelectCurrentModel(ctx.Ctx, providerID, model)
+	resolved, err := ctx.Deps.Hooks.SelectCurrentModel(ctx.Ctx, providerID, model, scope)
+	if errors.Is(err, config.ErrNoProjectScope) {
+		return ErrorResult(fmt.Errorf("/model %s: this session has no project settings file; start Sagittarius inside a project folder: %w", modelProjectFlag, err))
+	}
 	if err != nil {
 		return ErrorResult(err)
 	}
 	msg := fmt.Sprintf("Model → %s/%s", displayOrID, model)
+	if scope == config.ScopeProject {
+		msg += " (saved for this project)"
+	}
 	if resolved != "" && resolved != model {
 		msg += fmt.Sprintf(" (mode override active: using %s)", resolved)
 	}

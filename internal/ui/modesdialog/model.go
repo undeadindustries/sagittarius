@@ -44,8 +44,7 @@ type Model struct {
 	pickCursor int
 
 	// scopeSel controls which settings file the override is written to.
-	scopeSel     scopedialog.ScopeSelector
-	scopeFocused bool
+	scopeSel scopedialog.ScopeSelector
 
 	spin     spinner.Model
 	applying bool
@@ -146,27 +145,14 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// When the scope selector has focus, delegate navigation to it.
-	if m.scopeFocused && m.screen == screenPicker {
-		sel, cmd := m.scopeSel.Update(msg)
-		m.scopeSel = sel
-		return m, cmd
-	}
-
 	key, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return m, nil
 	}
-
-	// Tab toggles focus between the model list and the scope selector.
-	if key.String() == "tab" && m.screen == screenPicker && !m.scopeSel.Disabled {
-		m.scopeFocused = !m.scopeFocused
-		if m.scopeFocused {
-			m.scopeSel.Focus()
-		} else {
-			m.scopeSel.Blur()
-		}
-		return m, nil
+	if sel, cmd, taken := m.scopeSel.HandleKey(key); taken {
+		m.scopeSel = sel
+		m.pendingReset = false
+		return m, cmd
 	}
 
 	listLen := m.currentListLen()
@@ -212,8 +198,6 @@ func (m Model) back() (Model, tea.Cmd) {
 		m.done = true
 	case screenPicker:
 		m.screen = screenModes
-		m.scopeFocused = false
-		m.scopeSel.Blur()
 	}
 	m.errMsg = ""
 	m.info = ""
@@ -274,8 +258,6 @@ func (m Model) applyOverride() (Model, tea.Cmd) {
 	m.applying = true
 	m.errMsg = ""
 	m.info = fmt.Sprintf("Setting %s %s → %s/%s…", mode, noun, e.DisplayID, e.Model)
-	m.scopeFocused = false
-	m.scopeSel.Blur()
 	m.screen = screenModes
 	return m, tea.Batch(
 		m.spin.Tick,
@@ -301,8 +283,6 @@ func (m Model) clearCurrentOverride() (Model, tea.Cmd) {
 	m.applying = true
 	m.errMsg = ""
 	m.info = fmt.Sprintf("Clearing %s %s override…", mode, noun)
-	m.scopeFocused = false
-	m.scopeSel.Blur()
 	m.screen = screenModes
 	return m, tea.Batch(
 		m.spin.Tick,

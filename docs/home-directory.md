@@ -77,29 +77,39 @@ so the project file can never leak into the global one.
 |---|---|
 | Scalars (`ui.theme`, `providers.active`, mode routing strings) | Project value replaces global when set |
 | `mcpServers` | Shallow merge by server name (project adds/overrides; global is the base) |
-| `providers.<id>.models` | Shallow merge by model id |
+| `providers.<id>.models` | Merge by model id, then field by field (a project `temperature` keeps the global cached context limit and reasoning support) |
 | `providers.<id>.activeModels` | Project replaces entirely when set |
 | `sagittarius.modes.*` | Project value replaces global when set |
 | `sagittarius.systemPrompt` | Project value replaces global when set |
+| Provider `baseUrl` and `wireFormat`, custom provider definitions | Global only. A project file cannot change where requests go; the merge ignores these fields and logs a warning |
 | Credentials / API keys | Never in either file |
 
 **What you can store per scope:**
 
-| Setting | Default scope | Notes |
+| Setting | Opens on | Notes |
 |---|---|---|
+| Current model (`/model` picker) | **Project** | `/model provider/model` saves globally; add `--project` to save for this repo only |
 | Mode overrides (`/modes`) | **Project** | Per-repo agent/plan/ask/debug routing |
-| Active model set (`/model`) | **Project** | Which models are active for this repo |
-| MCP server definitions (`/mcp`) | **Project** | Servers can be global or project; scope is chosen in the wizard |
-| System prompt preset (`/system-prompt`) | **Project** | Already writes project |
-| UI preferences (`/settings` → UI) | **Global** | Personal prefs (theme, showThinking) |
-| Provider definitions and API keys (`/providers`) | **Global** | Shared across all repos |
-| Security / snapshot / verify settings (`/settings`) | Either | Use the scope radio in `/settings` |
+| Subagent routing (`/subagents`) | **Project** | |
+| MCP server definitions (`/mcp`) | **Project** | Servers can be global or project; pick the scope in the form |
+| MCP tool toggles (`/tools`) | Server's file | Saved in whichever file defines the server; project servers show `[project]` |
+| System prompt preset (`/system-prompt`) | **Project** | Always writes project |
+| Provider preferences (`/providers`) | **Global** | Active models, default model, temperature, system prompt, and the other per-provider settings can be saved to either file |
+| Per-model settings (`/models`) | **Global** | Either file |
+| `/settings` rows | **Global** | Either file |
+| API keys, provider URL and wire format, custom provider definitions | Global only | Marked `[global only]` in the project view of `/providers` |
 
 **Saving to a scope:**
-- In the TUI, overlay dialogs that write settings show an "Apply to" scope
-  selector (Tab to focus, arrows to change between Global and Project).
+- Every dialog that saves settings shows a `Save to:` line under its title.
+  Press Tab to switch between Global and Project; the change applies to the
+  next save. Text fields keep Tab for themselves, so switch before you open one.
+- In the project view, a value set in the project file shows as `= value` and
+  a value inherited from the global file as `(global: value)`.
+- When a session has no project folder (for example it starts in your home
+  directory), the `Save to:` line is hidden and everything saves globally.
 - Headlessly, use `/modes override` and `/modes clear` with an optional
-  `global|project` trailing argument (default: project).
+  `global|project` trailing argument (default: project), or
+  `/model --project provider/model`.
 - The `/settings` browser lets you view any key in the selected scope file,
   toggle booleans, edit values, and `Ctrl+L` to clear a key from that scope only
   (falling back to the other scope or the built-in default).

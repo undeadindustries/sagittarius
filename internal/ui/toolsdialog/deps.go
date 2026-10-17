@@ -4,7 +4,11 @@
 // so the dialog never imports the agent or slash packages (preserves AD-004).
 package toolsdialog
 
-import "context"
+import (
+	"context"
+
+	"github.com/undeadindustries/sagittarius/internal/config"
+)
 
 // BuiltinTool is a code-defined Sagittarius tool. These are listed but never
 // editable or removable.
@@ -35,7 +39,10 @@ type ServerGroup struct {
 	Server string
 	Status string // connection status text (e.g. "connected")
 	Err    string // discovery error, when present
-	Tools  []ServerTool
+	// Scope is the settings file that defines the server; tool toggles are
+	// saved there so a project server's filters stay with the project.
+	Scope config.SettingScope
+	Tools []ServerTool
 }
 
 // Deps performs the side effects the tool inventory needs.

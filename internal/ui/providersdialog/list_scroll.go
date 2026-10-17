@@ -13,6 +13,9 @@ func lineCount(s string) int {
 func (m Model) viewChromeLines() int {
 	lines := 2 // lipgloss top + bottom border
 	lines += 2 // "Providers" header
+	if m.scopeScreen() {
+		lines += lineCount(m.wrap(m.scopeSel.View(m.th)))
+	}
 
 	switch m.screen {
 	case screenModels:

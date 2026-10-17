@@ -34,6 +34,11 @@ type fakeDeps struct {
 	appliedPwith []string // "id:presetID" for ApplySystemPromptPreset
 	cleared      []string // "id.key" for ClearSetting
 	resetIDs     []string // ids passed to ResetSettings
+	// project enables the scope switch; projectByID holds values set in the
+	// project file; scopes records the scope of every preference write.
+	project     bool
+	projectByID map[string]map[string]string
+	scopes      []config.SettingScope
 }
 
 func newFakeDeps() *fakeDeps {
@@ -51,7 +56,9 @@ func newFakeDeps() *fakeDeps {
 
 func (f *fakeDeps) ListProviders() []ProviderEntry { return f.providers }
 func (f *fakeDeps) ActiveProviderID() string       { return f.active }
-func (f *fakeDeps) SwitchProvider(_ context.Context, id string) error {
+func (f *fakeDeps) ProjectAvailable() bool         { return f.project }
+func (f *fakeDeps) SwitchProvider(_ context.Context, id string, scope config.SettingScope) error {
+	f.scopes = append(f.scopes, scope)
 	f.switched = id
 	f.active = id
 	return nil
@@ -71,7 +78,8 @@ func (f *fakeDeps) RemoveCustomProvider(_ context.Context, id string) error {
 func (f *fakeDeps) DiscoverModels(_ context.Context, _ string) ([]string, error) {
 	return f.models, f.discoverErr
 }
-func (f *fakeDeps) SetModel(_ context.Context, id, model string) error {
+func (f *fakeDeps) SetModel(_ context.Context, id, model string, scope config.SettingScope) error {
+	f.scopes = append(f.scopes, scope)
 	f.setModel[id] = model
 	return nil
 }
@@ -81,7 +89,8 @@ func (f *fakeDeps) CurrentModel(id string) string {
 	}
 	return f.currentModel[id]
 }
-func (f *fakeDeps) ApplySetting(_ context.Context, id, key, value string) error {
+func (f *fakeDeps) ApplySetting(_ context.Context, id, key, value string, scope config.SettingScope) error {
+	f.scopes = append(f.scopes, scope)
 	f.applied = append(f.applied, id+"."+key+"="+value)
 	return nil
 }
@@ -89,7 +98,13 @@ func (f *fakeDeps) UpdateCustomDefinition(_ context.Context, id, field, value st
 	f.updatedDefn = append(f.updatedDefn, id+"."+field+"="+value)
 	return nil
 }
-func (f *fakeDeps) ProviderSettings(id string) map[string]string {
+func (f *fakeDeps) ProviderSettings(id string, scope config.SettingScope) map[string]string {
+	if scope == config.ScopeProject {
+		if f.projectByID != nil {
+			return f.projectByID[id]
+		}
+		return map[string]string{}
+	}
 	if f.settingsByID != nil {
 		return f.settingsByID[id]
 	}
@@ -104,7 +119,8 @@ func (f *fakeDeps) ValidSettingKeys(id string) []string {
 	return nil
 }
 func (f *fakeDeps) ActiveModels(id string) []string { return f.activeModels[id] }
-func (f *fakeDeps) SetActiveModels(_ context.Context, id string, models []string) error {
+func (f *fakeDeps) SetActiveModels(_ context.Context, id string, models []string, scope config.SettingScope) error {
+	f.scopes = append(f.scopes, scope)
 	if f.activeModels == nil {
 		f.activeModels = map[string][]string{}
 	}
@@ -123,7 +139,8 @@ func (f *fakeDeps) SystemPromptPresetID(id string) string {
 	}
 	return ""
 }
-func (f *fakeDeps) ApplySystemPromptPreset(_ context.Context, id, presetID string) (string, error) {
+func (f *fakeDeps) ApplySystemPromptPreset(_ context.Context, id, presetID string, scope config.SettingScope) (string, error) {
+	f.scopes = append(f.scopes, scope)
 	f.appliedPwith = append(f.appliedPwith, id+":"+presetID)
 	if f.presetID == nil {
 		f.presetID = map[string]string{}
@@ -131,11 +148,13 @@ func (f *fakeDeps) ApplySystemPromptPreset(_ context.Context, id, presetID strin
 	f.presetID[id] = presetID
 	return "applied " + presetID, nil
 }
-func (f *fakeDeps) ClearSetting(_ context.Context, id, key string) error {
+func (f *fakeDeps) ClearSetting(_ context.Context, id, key string, scope config.SettingScope) error {
+	f.scopes = append(f.scopes, scope)
 	f.cleared = append(f.cleared, id+"."+key)
 	return nil
 }
-func (f *fakeDeps) ResetSettings(_ context.Context, id string) error {
+func (f *fakeDeps) ResetSettings(_ context.Context, id string, scope config.SettingScope) error {
+	f.scopes = append(f.scopes, scope)
 	f.resetIDs = append(f.resetIDs, id)
 	return nil
 }

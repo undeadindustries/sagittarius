@@ -184,6 +184,59 @@ func inputBackgroundOpen(m *model) string {
 	return sample[:i]
 }
 
+func TestVisibleInputWidth(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		line string
+		want int
+	}{
+		{name: "plain trailing spaces", line: "abc   ", want: 3},
+		{name: "styled trailing spaces", line: "\x1b[40mabc\x1b[0m\x1b[40m   \x1b[0m", want: 3},
+		{name: "reverse cursor block at end", line: "abc\x1b[7m \x1b[0m   ", want: 4},
+		{name: "reverse cleared by 27", line: "abc\x1b[7m\x1b[27m   ", want: 3},
+		{name: "reverse cleared by bare reset", line: "abc\x1b[7m\x1b[m   ", want: 3},
+		{name: "palette index 7 is not reverse", line: "abc\x1b[38;5;7m   ", want: 3},
+		{name: "colon palette index 7 is not reverse", line: "abc\x1b[38:5:7m   ", want: 3},
+		{name: "rgb with 7 is not reverse", line: "abc\x1b[48;2;7;7;7m   ", want: 3},
+		{name: "reverse after extended color", line: "abc\x1b[38;5;1;7m \x1b[0m ", want: 4},
+		{name: "wide rune", line: "日本 ", want: 4},
+		{name: "empty", line: "", want: 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := visibleInputWidth(tc.line); got != tc.want {
+				t.Errorf("visibleInputWidth(%q) = %d, want %d", tc.line, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRenderInputKeepsCursorAfterText guards the cursor block at the end of
+// typed text, which padding used to trim as trailing whitespace.
+func TestRenderInputKeepsCursorAfterText(t *testing.T) {
+	// Not parallel: pins the process-wide color profile.
+	prev := lipgloss.ColorProfile()
+	t.Cleanup(func() { lipgloss.SetColorProfile(prev) })
+	lipgloss.SetColorProfile(termenv.TrueColor)
+
+	for _, themeName := range []string{"default", "greyscale"} {
+		t.Run(themeName, func(t *testing.T) {
+			m := newModel(ui.Options{ThemeName: themeName}, quitApp{}, NewTerminal(ui.Options{}))
+			m.width, m.height = 80, 24
+			m.input.SetValue("hello")
+			m.syncInputLayout()
+			m.input.Cursor.Blink = false
+
+			cursorCell := m.input.Cursor.Style.Inline(true).Reverse(true).Render(" ")
+			if view := m.renderInput(); !strings.Contains(view, cursorCell) {
+				t.Fatalf("cursor cell %q missing from composer %q", cursorCell, view)
+			}
+		})
+	}
+}
+
 func TestInputScrollToTopResetsViewport(t *testing.T) {
 	t.Parallel()
 	ti := textarea.New()

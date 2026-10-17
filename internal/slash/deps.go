@@ -77,8 +77,10 @@ type Hooks interface {
 	SnapshotDiff(pathFilter string) (string, error)
 	SnapshotUndo(n int) ([]string, error)
 	// SelectCurrentModel atomically switches to the given (provider, model) pair
-	// and rebuilds the runner. Returns the resolved live model or an error.
-	SelectCurrentModel(ctx context.Context, providerID, model string) (string, error)
+	// in scope's settings file and rebuilds the runner. Returns the resolved
+	// live model or an error (config.ErrNoProjectScope when scope is Project
+	// and the session has no project file).
+	SelectCurrentModel(ctx context.Context, providerID, model string, scope config.SettingScope) (string, error)
 	// AllActiveModels returns every curated (provider, model) pair across all
 	// providers, for the /model picker and autocomplete.
 	AllActiveModels() []provider.ProviderModelPair

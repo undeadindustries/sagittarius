@@ -8,6 +8,7 @@ package overlay
 import (
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/undeadindustries/sagittarius/internal/ui/theme"
@@ -74,4 +75,15 @@ func Hints(th theme.Theme, s string) string {
 // matching the treatment already used on the exit-summary title.
 func Title(th theme.Theme, s string) string {
 	return th.GradientText(s, th.Title, th.TitleGradient)
+}
+
+// StyleTextInput applies the theme's dim style to a dialog text input's
+// placeholder and completion text. textinput.New defaults both to a grey
+// foreground, which would leak a color code into a greyscale theme.
+func StyleTextInput(ti *textinput.Model, th theme.Theme) {
+	if ti == nil {
+		return
+	}
+	ti.PlaceholderStyle = th.Dim
+	ti.CompletionStyle = th.Dim
 }

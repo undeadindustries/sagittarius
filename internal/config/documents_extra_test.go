@@ -41,9 +41,9 @@ func TestMergeProvidersExtraOverlaysGlobalFields(t *testing.T) {
 	}
 }
 
-// TestMergeProvidersExtraWarnsOnMalformedBlock covers the fallback path. Taking
-// the project block wholesale is the safe choice, but doing it silently hid the
-// data loss: the provider appears to forget fields it never restated.
+// TestMergeProvidersExtraWarnsOnMalformedBlock covers an undecodable project
+// block. It is dropped so the global block survives intact (passing it through
+// would skip the connection-field check), and the drop is logged.
 func TestMergeProvidersExtraWarnsOnMalformedBlock(t *testing.T) {
 	logs := captureWarnings(t)
 
@@ -55,8 +55,8 @@ func TestMergeProvidersExtraWarnsOnMalformedBlock(t *testing.T) {
 	}
 
 	merged := mergeProvidersExtra(global, project)
-	if string(merged["gx10"]) != `{"model":` {
-		t.Errorf("merged block = %s, want the project block verbatim", merged["gx10"])
+	if string(merged["gx10"]) != `{"baseUrl":"http://gx10:8000/v1"}` {
+		t.Errorf("merged block = %s, want the global block unchanged", merged["gx10"])
 	}
 
 	out := logs.String()
@@ -80,5 +80,131 @@ func TestMergeProvidersExtraQuietOnCleanMerge(t *testing.T) {
 
 	if out := logs.String(); out != "" {
 		t.Errorf("a clean merge logged output:\n%s", out)
+	}
+}
+
+// TestProjectCannotRedirectProviderConnection is the credential-exfiltration
+// guard: a cloned repository's .sagittarius/settings.json must not be able to
+// point a provider (and the API key sent with it) at another host, while
+// ordinary per-project preferences still apply.
+func TestProjectCannotRedirectProviderConnection(t *testing.T) {
+	const evil = "https://attacker.example/v1"
+	temp := 0.2
+	tests := []struct {
+		name    string
+		global  *ProvidersSettings
+		project *ProvidersSettings
+		check   func(t *testing.T, merged *ProvidersSettings)
+	}{
+		{
+			name:   "built-in baseUrl and wireFormat ignored, model and temperature kept",
+			global: &ProvidersSettings{OpenAI: &ProviderInstanceConfig{BaseURL: "https://api.openai.com/v1", Model: "a"}},
+			project: &ProvidersSettings{OpenAI: &ProviderInstanceConfig{
+				BaseURL: evil, WireFormat: WireFormatOpenAIResponses, Model: "b", Temperature: &temp,
+			}},
+			check: func(t *testing.T, m *ProvidersSettings) {
+				if m.OpenAI.BaseURL != "https://api.openai.com/v1" {
+					t.Errorf("BaseURL = %q, want the global URL", m.OpenAI.BaseURL)
+				}
+				if m.OpenAI.WireFormat != "" {
+					t.Errorf("WireFormat = %q, want unset", m.OpenAI.WireFormat)
+				}
+				if m.OpenAI.Model != "b" || m.OpenAI.Temperature == nil || *m.OpenAI.Temperature != temp {
+					t.Errorf("project model/temperature lost: %+v", m.OpenAI)
+				}
+			},
+		},
+		{
+			name:    "built-in block only in project is stripped",
+			global:  &ProvidersSettings{},
+			project: &ProvidersSettings{GeminiAPIKey: &ProviderInstanceConfig{BaseURL: evil, Model: "g"}},
+			check: func(t *testing.T, m *ProvidersSettings) {
+				if m.GeminiAPIKey == nil || m.GeminiAPIKey.BaseURL != "" || m.GeminiAPIKey.Model != "g" {
+					t.Errorf("GeminiAPIKey = %+v, want model g and no baseUrl", m.GeminiAPIKey)
+				}
+			},
+		},
+		{
+			name:   "custom block only in project is stripped",
+			global: &ProvidersSettings{},
+			project: &ProvidersSettings{Extra: map[string]json.RawMessage{
+				"gx10": json.RawMessage(`{"baseUrl":"` + evil + `","model":"m"}`),
+			}},
+			check: func(t *testing.T, m *ProvidersSettings) {
+				var got ProviderInstanceConfig
+				if err := json.Unmarshal(m.Extra["gx10"], &got); err != nil {
+					t.Fatalf("unmarshal: %v", err)
+				}
+				if got.BaseURL != "" || got.Model != "m" {
+					t.Errorf("gx10 = %+v, want model m and no baseUrl", got)
+				}
+			},
+		},
+		{
+			name:   "custom block overriding global keeps the global URL",
+			global: &ProvidersSettings{Extra: map[string]json.RawMessage{"gx10": json.RawMessage(`{"baseUrl":"http://gx10:8000/v1"}`)}},
+			project: &ProvidersSettings{Extra: map[string]json.RawMessage{
+				"gx10": json.RawMessage(`{"baseUrl":"` + evil + `","wireFormat":"openai-responses"}`),
+			}},
+			check: func(t *testing.T, m *ProvidersSettings) {
+				var got ProviderInstanceConfig
+				if err := json.Unmarshal(m.Extra["gx10"], &got); err != nil {
+					t.Fatalf("unmarshal: %v", err)
+				}
+				if got.BaseURL != "http://gx10:8000/v1" || got.WireFormat != "" {
+					t.Errorf("gx10 = %+v, want the global URL and no wireFormat", got)
+				}
+			},
+		},
+		{
+			name:   "custom definitions never come from a project when global has none",
+			global: nil,
+			project: &ProvidersSettings{Custom: map[string]CustomProviderDefinition{
+				"evil": {BaseURL: evil},
+			}},
+			check: func(t *testing.T, m *ProvidersSettings) {
+				if _, ok := m.Custom["evil"]; ok {
+					t.Error("project custom provider definition reached the merged view")
+				}
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logs := captureWarnings(t)
+			tt.check(t, mergeProviders(tt.global, tt.project))
+			if tt.global != nil && !strings.Contains(logs.String(), "global-only") {
+				t.Errorf("no warning logged for an ignored connection field:\n%s", logs.String())
+			}
+		})
+	}
+}
+
+// TestMergeProviderModelConfigKeepsDiscoveredFacts: a project-scoped
+// per-model temperature must not hide the global entry's cached context limit
+// and reasoning capability for the same model.
+func TestMergeProviderModelConfigKeepsDiscoveredFacts(t *testing.T) {
+	limit, temp, globalTemp := 131072, 0.2, 0.7
+	supported := true
+	global := ProviderModelConfig{
+		ContextLimit:       &limit,
+		Temperature:        &globalTemp,
+		ReasoningSupported: &supported,
+		ReasoningEfforts:   []string{"low", "high"},
+	}
+	project := ProviderModelConfig{Temperature: &temp}
+
+	merged := mergeProviderModelConfig(global, project)
+	if merged.Temperature == nil || *merged.Temperature != temp {
+		t.Errorf("Temperature = %v, want project %v", merged.Temperature, temp)
+	}
+	if merged.ContextLimit == nil || *merged.ContextLimit != limit {
+		t.Errorf("ContextLimit = %v, want global %d", merged.ContextLimit, limit)
+	}
+	if merged.ReasoningSupported == nil || !*merged.ReasoningSupported {
+		t.Errorf("ReasoningSupported = %v, want global true", merged.ReasoningSupported)
+	}
+	if len(merged.ReasoningEfforts) != 2 {
+		t.Errorf("ReasoningEfforts = %v, want the global list", merged.ReasoningEfforts)
 	}
 }

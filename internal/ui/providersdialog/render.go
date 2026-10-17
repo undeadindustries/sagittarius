@@ -13,8 +13,11 @@ import (
 func (m Model) View() string {
 	dim := m.th.Dim
 	var b strings.Builder
-	b.WriteString(overlay.Title(m.th, "Providers") + "\n\n")
-	b.WriteString(m.screenBody())
+	b.WriteString(overlay.Title(m.th, "Providers") + "\n")
+	if m.scopeScreen() {
+		b.WriteString(m.wrap(m.scopeSel.View(m.th)) + "\n")
+	}
+	b.WriteString("\n" + m.screenBody())
 
 	if m.info != "" {
 		line := m.info
@@ -32,9 +35,14 @@ func (m Model) View() string {
 	return overlay.Frame(m.th, m.width, overlay.DefaultMinWidth, b.String())
 }
 
+// wrap breaks s at the frame's text width (inside the border padding), so the
+// frame never re-wraps a line and the chrome line counts stay exact.
 func (m Model) wrap(s string) string {
-	return ui.WrapText(s, overlay.ContentWidth(m.width, overlay.DefaultMinWidth))
+	return ui.WrapText(s, max(overlay.ContentWidth(m.width, overlay.DefaultMinWidth)-framePaddingCols, 1))
 }
+
+// framePaddingCols is overlay.Frame's horizontal padding inside ContentWidth.
+const framePaddingCols = 2
 
 func (m Model) footerHint() string {
 	switch m.screen {
@@ -43,6 +51,9 @@ func (m Model) footerHint() string {
 	case screenEditPick:
 		return "↑/↓ move • Enter edit • a add • x remove custom • Esc close"
 	case screenEdit:
+		if m.scopeScreen() && m.scope() == config.ScopeProject {
+			return "↑/↓ move • Enter select • r reset field • Esc back\nAPI key, URL, and wire format always save to the global file"
+		}
 		return "↑/↓ move • Enter select • r reset field • Esc back"
 	case screenAddTemplate:
 		return "↑/↓ move • Enter choose template • Esc back"
@@ -129,14 +140,26 @@ func (m Model) renderProviderList(entries []ProviderEntry) string {
 	return m.renderWindowedRows(labels)
 }
 
+// renderEdit labels each row with where its value comes from: "= v" when set
+// in the selected scope, "(global: v)" when a project view inherits it, and
+// "(default: v)" otherwise. In the project view, rows that always save
+// globally are tagged so a project edit never silently lands elsewhere.
 func (m Model) renderEdit() string {
 	dim := m.th.Dim
 	header := fmt.Sprintf("Editing %s (%s)\n\n", config.ProviderDisplayID(m.targetID), m.targetWire)
-	values := m.deps.ProviderSettings(m.targetID)
+	values := m.deps.ProviderSettings(m.targetID, m.scope())
+	var inherited map[string]string
+	projectView := m.scopeScreen() && m.scope() == config.ScopeProject
+	if projectView {
+		inherited = m.deps.ProviderSettings(m.targetID, config.ScopeGlobal)
+	}
 	eff := m.deps.EffectiveProviderSettings(m.targetID)
 	labels := make([]string, len(m.editItems))
 	for i, item := range m.editItems {
 		label := item.label
+		if projectView && globalOnlyItem(item) {
+			label += dim.Render(" [global only]")
+		}
 		switch item.kind {
 		case editPreset:
 			label += dim.Render("  = " + m.presetLabel())
@@ -149,6 +172,8 @@ func (m Model) renderEdit() string {
 		case editOverride, editEnum, editToggleBool:
 			if v := values[item.key]; v != "" {
 				label += dim.Render("  = " + v)
+			} else if g := inherited[item.key]; g != "" {
+				label += dim.Render("  (global: " + g + ")")
 			} else if e := eff[item.key]; e != "" {
 				label += dim.Render("  (default: " + e + ")")
 			}
@@ -156,6 +181,19 @@ func (m Model) renderEdit() string {
 		labels[i] = label
 	}
 	return header + m.renderWindowedRows(labels)
+}
+
+// globalOnlyItem reports whether an edit-sheet row writes the global file
+// whatever scope is selected: credentials, custom definitions, and the
+// connection fields a project file is not allowed to change.
+func globalOnlyItem(item editItem) bool {
+	switch item.kind {
+	case editAPIKey, editDefn, editWireDefn:
+		return true
+	case editOverride:
+		return item.key == "baseUrl" || item.key == "wireFormat"
+	}
+	return false
 }
 
 // presetLabel returns the display label for the provider's current system prompt

@@ -6,19 +6,40 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+
+	"github.com/undeadindustries/sagittarius/internal/config"
 )
 
 type fakeDeps struct {
 	entries  []ModelEntry
 	settings map[string]string // key "providerID/model/key" -> value
+	// project enables the scope switch; projectSettings is the project file,
+	// keyed like settings.
+	project         bool
+	projectSettings map[string]string
 }
 
 func (f *fakeDeps) ListAllActiveModels() []ModelEntry { return f.entries }
+func (f *fakeDeps) ProjectAvailable() bool            { return f.project }
 
-func (f *fakeDeps) GetModelSettings(providerID, model string) map[string]string {
+// store returns the map scope writes to, creating it on first use.
+func (f *fakeDeps) store(scope config.SettingScope) map[string]string {
+	if scope == config.ScopeProject {
+		if f.projectSettings == nil {
+			f.projectSettings = map[string]string{}
+		}
+		return f.projectSettings
+	}
+	if f.settings == nil {
+		f.settings = map[string]string{}
+	}
+	return f.settings
+}
+
+func (f *fakeDeps) GetModelSettings(providerID, model string, scope config.SettingScope) map[string]string {
 	out := map[string]string{}
 	prefix := providerID + "/" + model + "/"
-	for k, v := range f.settings {
+	for k, v := range f.store(scope) {
 		if len(k) > len(prefix) && k[:len(prefix)] == prefix {
 			out[k[len(prefix):]] = v
 		}
@@ -26,18 +47,13 @@ func (f *fakeDeps) GetModelSettings(providerID, model string) map[string]string 
 	return out
 }
 
-func (f *fakeDeps) SetModelSetting(_ context.Context, providerID, model, key, value string) error {
-	if f.settings == nil {
-		f.settings = map[string]string{}
-	}
-	f.settings[providerID+"/"+model+"/"+key] = value
+func (f *fakeDeps) SetModelSetting(_ context.Context, providerID, model, key, value string, scope config.SettingScope) error {
+	f.store(scope)[providerID+"/"+model+"/"+key] = value
 	return nil
 }
 
-func (f *fakeDeps) ClearModelSetting(_ context.Context, providerID, model, key string) error {
-	if f.settings != nil {
-		delete(f.settings, providerID+"/"+model+"/"+key)
-	}
+func (f *fakeDeps) ClearModelSetting(_ context.Context, providerID, model, key string, scope config.SettingScope) error {
+	delete(f.store(scope), providerID+"/"+model+"/"+key)
 	return nil
 }
 

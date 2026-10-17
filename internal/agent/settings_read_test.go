@@ -116,7 +116,7 @@ func TestSetActiveModelsRefreshesMerged(t *testing.T) {
 
 	app := &App{docs: docs, deps: slash.Deps{Settings: docs.Global}}
 	d := &providerDialogDeps{app: app}
-	if err := d.SetActiveModels(t.Context(), "gemini-apikey", []string{model}); err != nil {
+	if err := d.SetActiveModels(t.Context(), "gemini-apikey", []string{model}, config.ScopeGlobal); err != nil {
 		t.Fatalf("SetActiveModels: %v", err)
 	}
 	if !hasModel(provider.AllActiveModels(app.effectiveSettings()), model) {

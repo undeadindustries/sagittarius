@@ -6,10 +6,14 @@ import (
 	"testing"
 
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
+
+	"github.com/undeadindustries/sagittarius/internal/ui/theme"
 )
 
 func TestFreshSecretInputStartsBlank(t *testing.T) {
-	ti := freshSecretInput()
+	ti := freshSecretInput(theme.Default())
 	if ti.Value() != "" {
 		t.Fatalf("secret input value = %q, want empty", ti.Value())
 	}
@@ -22,6 +26,21 @@ func TestFreshSecretInputStartsBlank(t *testing.T) {
 	view := ti.View()
 	if strings.Contains(view, "> p") || strings.Contains(view, "> paste") {
 		t.Fatalf("secret input view leaked placeholder: %q", view)
+	}
+}
+
+func TestGreyscalePlaceholderHasNoColor(t *testing.T) {
+	prev := lipgloss.ColorProfile()
+	t.Cleanup(func() { lipgloss.SetColorProfile(prev) })
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	ti := freshInput(theme.Greyscale(), "model name")
+	ti.Width = 40
+	view := ti.View()
+	if strings.Contains(view, "38;") || strings.Contains(view, "48;") {
+		t.Fatalf("greyscale placeholder has color: %q", view)
+	}
+	if !strings.Contains(view, "model name") {
+		t.Fatalf("placeholder missing: %q", view)
 	}
 }
 

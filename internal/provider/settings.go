@@ -99,31 +99,9 @@ func sortedIDs(ids []string) {
 // caller cannot pick an uncurated model accidentally). The active-model check is
 // skipped when the active-model list is empty (uncurated provider).
 func SelectCurrentModel(loader *config.Loader, settings *config.Settings, providerID, model string) error {
-	providerID = config.NormalizeProviderID(providerID)
-	model = strings.TrimSpace(model)
-	if providerID == "" {
-		return fmt.Errorf("select model: provider id is required")
-	}
-	if model == "" {
-		return fmt.Errorf("select model: model is required")
-	}
-	// Validate provider exists.
-	if !providerKnown(settings, providerID) {
-		return fmt.Errorf("select model: unknown provider %q", providerID)
-	}
-	// Validate model is in the active set (skip if uncurated).
-	curated := CuratedActiveModels(settings, providerID)
-	if len(curated) > 0 {
-		found := false
-		for _, m := range curated {
-			if m == model {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return fmt.Errorf("select model: model %q is not in the active set for %q", model, providerID)
-		}
+	providerID, model, err := ValidateModelSelection(settings, providerID, model)
+	if err != nil {
+		return err
 	}
 	if err := SetActiveProvider(settings, providerID); err != nil {
 		return err
@@ -137,6 +115,29 @@ func SelectCurrentModel(loader *config.Loader, settings *config.Settings, provid
 		}
 	}
 	return nil
+}
+
+// ValidateModelSelection checks a (provider, model) pick against settings
+// without changing them and returns the normalized pair. It is separate from
+// SelectCurrentModel so a caller can validate against the merged view and then
+// write to one scope's file. The active-set check is skipped for an uncurated
+// provider (empty active-model list).
+func ValidateModelSelection(settings *config.Settings, providerID, model string) (string, string, error) {
+	providerID = config.NormalizeProviderID(providerID)
+	model = strings.TrimSpace(model)
+	if providerID == "" {
+		return "", "", fmt.Errorf("select model: provider id is required")
+	}
+	if model == "" {
+		return "", "", fmt.Errorf("select model: model is required")
+	}
+	if !providerKnown(settings, providerID) {
+		return "", "", fmt.Errorf("select model: unknown provider %q", providerID)
+	}
+	if curated := CuratedActiveModels(settings, providerID); len(curated) > 0 && !slices.Contains(curated, model) {
+		return "", "", fmt.Errorf("select model: model %q is not in the active set for %q", model, providerID)
+	}
+	return providerID, model, nil
 }
 
 // IsOpenAIChatMode reports whether the active provider uses openai-chat wire format.
@@ -425,26 +426,51 @@ func CuratedActiveModels(settings *config.Settings, providerID string) []string 
 // Providers without a curated set are left untouched.
 func CoerceModelToCurated(settings *config.Settings, providerID string) (bool, error) {
 	id := config.NormalizeProviderID(providerID)
+	next, ok := CuratedReplacement(settings, id)
+	if !ok {
+		return false, nil
+	}
+	if err := SetProviderModel(settings, id, next); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// CuratedReplacement reports the model providerID should switch to because
+// its resolved model is outside its curated active set: the first curated
+// entry. It only reads settings, so a caller can evaluate the merged view and
+// write the result to whichever scope supplied the model. ok is false when no
+// change is needed, the provider is uncurated, or its endpoint cannot be
+// resolved (a rebuild must not fail over this housekeeping).
+func CuratedReplacement(settings *config.Settings, providerID string) (model string, ok bool) {
+	id := config.NormalizeProviderID(providerID)
 	curated := CuratedActiveModels(settings, id)
 	if len(curated) == 0 {
-		return false, nil
+		return "", false
 	}
 	endpoint, err := ResolveEndpointForProvider(settings, id)
 	if err != nil {
-		// Endpoint resolution failure is non-fatal here: skip coercion rather
-		// than block a rebuild.
-		return false, nil
+		return "", false
 	}
 	current := strings.TrimSpace(endpoint.Model)
 	for _, m := range curated {
 		if m == current {
-			return false, nil
+			return "", false
 		}
 	}
-	if err := SetProviderModel(settings, id, curated[0]); err != nil {
-		return false, err
+	return curated[0], true
+}
+
+// InstanceConfig returns a copy of providerID's instance block in settings, or
+// nil when settings has none. Callers use it to ask which settings tier owns a
+// provider value without decoding the raw custom-provider blocks themselves.
+func InstanceConfig(settings *config.Settings, providerID string) *config.ProviderInstanceConfig {
+	inst := providerInstance(settings, config.NormalizeProviderID(providerID))
+	if inst == nil {
+		return nil
 	}
-	return true, nil
+	out := *inst
+	return &out
 }
 
 // ActiveModelsFor returns the curated active-model set for providerID. When the

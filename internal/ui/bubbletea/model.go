@@ -29,6 +29,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/ui/modelsdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/modesdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/onboardingdialog"
+	"github.com/undeadindustries/sagittarius/internal/ui/overlay"
 	"github.com/undeadindustries/sagittarius/internal/ui/providersdialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/screendialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/sessionpickdialog"
@@ -434,7 +435,6 @@ const maxVisibleSuggestions = 8
 func newModel(opts ui.Options, app ui.App, term *Terminal) *model {
 	ti := textarea.New()
 	ti.Placeholder = inputPlaceholderIdle
-	ti.Focus()
 	ti.CharLimit = 8192
 	ti.ShowLineNumbers = false
 	ti.MaxHeight = maxInputRows
@@ -487,6 +487,11 @@ func newModel(opts ui.Options, app ui.App, term *Terminal) *model {
 		getenv:            os.Getenv,
 		localCopy:         clipboard.Copy,
 	}
+	// Focus after the textarea is stored on the model. Focus records a pointer
+	// to FocusedStyle; focusing the local copy would leave rendering reading
+	// styles that setTheme never updates, so a live theme switch would keep
+	// the old prompt color.
+	m.input.Focus()
 	m.syncInputPrompt(idleStatus.Mode)
 
 	// Seed initial scrollback (e.g. from --resume) so the user can see the
@@ -513,6 +518,7 @@ func applyInputTheme(ti *textarea.Model, th theme.Theme) {
 		ti.FocusedStyle.CursorLine = inputBg
 		ti.FocusedStyle.Prompt = inputBg.Foreground(th.Accent.GetForeground())
 		ti.FocusedStyle.Placeholder = inputBg.Faint(true)
+		ti.Cursor.Style = lipgloss.NewStyle()
 		return
 	}
 	rev := lipgloss.NewStyle().Reverse(true)
@@ -521,6 +527,9 @@ func applyInputTheme(ti *textarea.Model, th theme.Theme) {
 	ti.FocusedStyle.CursorLine = rev
 	ti.FocusedStyle.Prompt = rev
 	ti.FocusedStyle.Placeholder = rev.Faint(true)
+	// The cursor block is drawn in reverse video, which is a no-op on a bar
+	// that is already reversed; an underline keeps it visible.
+	ti.Cursor.Style = lipgloss.NewStyle().Underline(true)
 }
 
 // setTheme switches the live UI theme by name ("default"|"greyscale") and
@@ -530,7 +539,10 @@ func applyInputTheme(ti *textarea.Model, th theme.Theme) {
 func (m *model) setTheme(name string) {
 	m.th = theme.Resolve(name, false)
 	applyInputTheme(&m.input, m.th)
-	m.spin = newWorkingSpinner(m.th)
+	// Restyle the live spinner. Replacing it assigns a new ID, and the
+	// in-flight TickMsg is dropped, so the working indicator freezes until
+	// the next turn.
+	m.spin.Style = m.th.Accent
 	m.welcome = welcomeText(m.opts, m.th)
 	m.syncViewportContent()
 }
@@ -1106,44 +1118,8 @@ func (m *model) View() string {
 	if m.quitting {
 		return ""
 	}
-	if m.onboardingOverlay != nil {
-		return m.onboardingOverlay.View()
-	}
-	if m.overlay != nil {
-		return m.overlay.View()
-	}
-	if m.modelsOverlay != nil {
-		return m.modelsOverlay.View()
-	}
-	if m.modelPickOverlay != nil {
-		return m.modelPickOverlay.View()
-	}
-	if m.modesOverlay != nil {
-		return m.modesOverlay.View()
-	}
-	if m.subagentsOverlay != nil {
-		return m.subagentsOverlay.View()
-	}
-	if m.systemPromptOverlay != nil {
-		return m.systemPromptOverlay.View()
-	}
-	if m.mcpOverlay != nil {
-		return m.mcpOverlay.View()
-	}
-	if m.toolsOverlay != nil {
-		return m.toolsOverlay.View()
-	}
-	if m.bgProcOverlay != nil {
-		return m.bgProcOverlay.View()
-	}
-	if m.settingsOverlay != nil {
-		return m.settingsOverlay.View()
-	}
-	if m.sessionPickOverlay != nil {
-		return m.sessionPickOverlay.View()
-	}
-	if m.screenOverlay != nil {
-		return m.screenOverlay.View()
+	if view, ok := m.overlayView(); ok {
+		return overlay.FitHeight(m.th, view, m.height)
 	}
 	if m.inline {
 		return m.inlineView()
@@ -1178,6 +1154,54 @@ func (m *model) View() string {
 	}
 	sections = append(sections, footer)
 	return clampWidth(lipgloss.JoinVertical(lipgloss.Left, sections...), m.width)
+}
+
+// overlayView renders the open modal dialog, if any. View clips it to the
+// terminal height: Bubble Tea keeps the bottom of a frame taller than the
+// screen, which would hide a dialog's title, so any dialog content that
+// overlay.FitList does not window (long text, edit screens) is cut from the
+// bottom instead, with a notice.
+func (m *model) overlayView() (string, bool) {
+	if m.onboardingOverlay != nil {
+		return m.onboardingOverlay.View(), true
+	}
+	if m.overlay != nil {
+		return m.overlay.View(), true
+	}
+	if m.modelsOverlay != nil {
+		return m.modelsOverlay.View(), true
+	}
+	if m.modelPickOverlay != nil {
+		return m.modelPickOverlay.View(), true
+	}
+	if m.modesOverlay != nil {
+		return m.modesOverlay.View(), true
+	}
+	if m.subagentsOverlay != nil {
+		return m.subagentsOverlay.View(), true
+	}
+	if m.systemPromptOverlay != nil {
+		return m.systemPromptOverlay.View(), true
+	}
+	if m.mcpOverlay != nil {
+		return m.mcpOverlay.View(), true
+	}
+	if m.toolsOverlay != nil {
+		return m.toolsOverlay.View(), true
+	}
+	if m.bgProcOverlay != nil {
+		return m.bgProcOverlay.View(), true
+	}
+	if m.settingsOverlay != nil {
+		return m.settingsOverlay.View(), true
+	}
+	if m.sessionPickOverlay != nil {
+		return m.sessionPickOverlay.View(), true
+	}
+	if m.screenOverlay != nil {
+		return m.screenOverlay.View(), true
+	}
+	return "", false
 }
 
 // clampWidth truncates every line of the rendered frame to width cells. The

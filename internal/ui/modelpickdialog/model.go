@@ -27,11 +27,10 @@ type Model struct {
 	curProvider string
 	curModel    string
 
-	cursor       int
-	scopeSel     scopedialog.ScopeSelector
-	scopeFocused bool
-	done         bool
-	status       string
+	cursor   int
+	scopeSel scopedialog.ScopeSelector
+	done     bool
+	status   string
 
 	spin     spinner.Model
 	applying bool
@@ -113,24 +112,13 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	if _, ok := msg.(scopedialog.ScopeChangedMsg); ok {
 		return m, nil
 	}
-	// Delegate to scope selector when it's focused.
-	if m.scopeFocused {
-		sel, cmd := m.scopeSel.Update(msg)
-		m.scopeSel = sel
-		return m, cmd
-	}
 	key, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return m, nil
 	}
-	if key.String() == "tab" && !m.scopeSel.Disabled {
-		m.scopeFocused = !m.scopeFocused
-		if m.scopeFocused {
-			m.scopeSel.Focus()
-		} else {
-			m.scopeSel.Blur()
-		}
-		return m, nil
+	if sel, cmd, taken := m.scopeSel.HandleKey(key); taken {
+		m.scopeSel = sel
+		return m, cmd
 	}
 	switch key.String() {
 	case "esc", "q":
@@ -159,8 +147,6 @@ func (m Model) selectCurrent() (Model, tea.Cmd) {
 	m.applying = true
 	m.errMsg = ""
 	m.info = fmt.Sprintf("Switching to %s/%s…", e.DisplayID, e.Model)
-	m.scopeFocused = false
-	m.scopeSel.Blur()
 	return m, tea.Batch(
 		m.spin.Tick,
 		func() tea.Msg {

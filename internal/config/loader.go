@@ -125,11 +125,10 @@ func (l *Loader) Reload() (*Settings, error) {
 
 // LoadProjectSettings reads <workDir>/.sagittarius/settings.json when present.
 // It returns (nil, nil) when the file does not exist. Secrets are stripped (and
-// ignored) — project settings are read-only here and never written back, so a
-// project file cannot leak credentials into the global document. Only the
-// security and sagittarius sections are consumed by callers (see
-// ProjectBoundaryEnforced / SnapshotsEnabled); other sections round-trip but
-// are not merged.
+// ignored) so a project file cannot leak credentials into the global document.
+// mergeSettings decides which sections reach the effective view; provider
+// connection fields (baseUrl, wireFormat) and custom provider definitions are
+// never taken from the project tier.
 func LoadProjectSettings(workDir string) (*Settings, error) {
 	path := ResolveProjectSettingsPath(workDir)
 	raw, err := os.ReadFile(path)

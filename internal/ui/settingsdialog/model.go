@@ -10,6 +10,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/undeadindustries/sagittarius/internal/config"
+	"github.com/undeadindustries/sagittarius/internal/ui/overlay"
 	"github.com/undeadindustries/sagittarius/internal/ui/scopedialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/theme"
 )
@@ -23,10 +24,9 @@ type Model struct {
 	width  int
 	height int
 
-	entries      []SettingEntry
-	cursor       int
-	scopeSel     scopedialog.ScopeSelector
-	scopeFocused bool
+	entries  []SettingEntry
+	cursor   int
+	scopeSel scopedialog.ScopeSelector
 
 	editing  bool
 	editKey  string
@@ -132,7 +132,11 @@ func (m Model) Status() string { return m.status }
 func (m Model) SetSize(w, h int) Model { m.width = w; m.height = h; return m }
 
 // SetTheme applies the resolved color theme.
-func (m Model) SetTheme(th theme.Theme) Model { m.th = th; return m }
+func (m Model) SetTheme(th theme.Theme) Model {
+	m.th = th
+	overlay.StyleTextInput(&m.input, th)
+	return m
+}
 
 // Update advances the dialog for one message.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
@@ -140,16 +144,10 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		m.applySecretStatuses(status)
 		return m, nil
 	}
-	// When the scope selector is focused, delegate to it and reload entries on change.
 	if _, ok := msg.(scopedialog.ScopeChangedMsg); ok {
 		m.entries = m.deps.ListSettings(m.scopeSel.Scope)
 		m.restoreSecretStatuses()
 		return m, nil
-	}
-	if m.scopeFocused {
-		sel, cmd := m.scopeSel.Update(msg)
-		m.scopeSel = sel
-		return m, cmd
 	}
 	if m.editing {
 		return m.updateEdit(msg)
@@ -158,15 +156,10 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
-	// Tab toggles scope focus.
-	if key.String() == "tab" && !m.scopeSel.Disabled {
-		m.scopeFocused = !m.scopeFocused
-		if m.scopeFocused {
-			m.scopeSel.Focus()
-		} else {
-			m.scopeSel.Blur()
-		}
-		return m, nil
+	if sel, cmd, taken := m.scopeSel.HandleKey(key); taken {
+		m.scopeSel = sel
+		m.info = ""
+		return m, cmd
 	}
 	switch key.String() {
 	case "esc", "q":
@@ -251,6 +244,7 @@ func nextChoice(current string, choices []string) string {
 
 func (m Model) startEdit(e SettingEntry) (Model, tea.Cmd) {
 	ti := textinput.New()
+	overlay.StyleTextInput(&ti, m.th)
 	// A secret is write-only: Value is empty for it anyway, and masking keeps
 	// the key off screen and out of any terminal scrollback capture.
 	if e.Kind == KindSecret {

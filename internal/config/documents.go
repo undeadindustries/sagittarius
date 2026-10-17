@@ -182,6 +182,30 @@ func (d *Documents) MutateGlobal(fn func(*Settings) error) error {
 	return d.saveLocked(ScopeGlobal) // saveLocked recomputes merged
 }
 
+// MutateProject is MutateGlobal for the project tier: fn edits the project
+// document (created empty if absent), which is then saved and merged under one
+// lock. It returns ErrNoProjectScope when the session has no project tier, so
+// a project-scoped dialog save can never silently land in the global file.
+// fn receives the global document read-only, for lookups (such as custom
+// provider definitions) that must not be copied into the project file.
+func (d *Documents) MutateProject(fn func(project, global *Settings) error) error {
+	if fn == nil {
+		return fmt.Errorf("mutate project settings: nil mutator")
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.workDir == "" {
+		return fmt.Errorf("save project settings: %w", ErrNoProjectScope)
+	}
+	if d.Project == nil {
+		d.Project = &Settings{Raw: map[string]json.RawMessage{}}
+	}
+	if err := fn(d.Project, d.Global); err != nil {
+		return err
+	}
+	return d.saveLocked(ScopeProject)
+}
+
 // SaveProject writes the project Settings to disk and reloads Merged. It
 // creates the project directory if needed. If d.Project is nil a new empty
 // Settings is initialised first.
@@ -271,6 +295,24 @@ func (d *Documents) IsDefined(scope SettingScope, key string) bool {
 func (d *Documents) ScopeOf(key string) SettingScope {
 	if settingsHasKey(d.Project, key) {
 		return ScopeProject
+	}
+	return ScopeGlobal
+}
+
+// MCPServerScope returns the scope whose file defines the named MCP server.
+// mcpServers merges per server name with the project entry replacing the
+// global one, so an edit must go to the project file whenever it defines the
+// server; an edit written to global would be shadowed. A server in neither
+// file (an extension server, say) reports ScopeGlobal.
+func (d *Documents) MCPServerScope(name string) SettingScope {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if d.Project != nil {
+		if servers, err := d.Project.MCPServers(); err == nil {
+			if _, ok := servers[name]; ok {
+				return ScopeProject
+			}
+		}
 	}
 	return ScopeGlobal
 }
@@ -383,7 +425,7 @@ func mergeSettings(global, project *Settings) *Settings {
 		return global
 	}
 	if global == nil {
-		return project
+		global = &Settings{}
 	}
 	merged := &Settings{
 		Raw:         mergeRaw(global.Raw, project.Raw),
@@ -483,7 +525,9 @@ func mergeProviders(global, project *ProvidersSettings) *ProvidersSettings {
 		return global
 	}
 	if global == nil {
-		return project
+		// Never adopt the project block wholesale: its custom definitions and
+		// connection fields would then reach endpoint resolution.
+		global = &ProvidersSettings{}
 	}
 	// Start from a shallow copy of global so unknown Extra keys round-trip.
 	merged := *global
@@ -491,27 +535,70 @@ func mergeProviders(global, project *ProvidersSettings) *ProvidersSettings {
 	// endpoint resolution and mode routing see the project's chosen provider.
 	merged.Active = overlayStr(global.Active, project.Active)
 	// Per-instance settings can be project-overridden (model, activeModels, etc).
-	// Custom provider definitions (connection params + catalog) stay global-only.
-	merged.OpenAI = mergeProviderInstance(global.OpenAI, project.OpenAI)
-	merged.GeminiAPIKey = mergeProviderInstance(global.GeminiAPIKey, project.GeminiAPIKey)
-	merged.OpenAIResponses = mergeProviderInstance(global.OpenAIResponses, project.OpenAIResponses)
+	// Custom provider definitions and connection fields stay global-only.
+	merged.OpenAI = mergeProviderInstance(global.OpenAI, stripProjectConnection(string(BuiltInOpenAI), project.OpenAI))
+	merged.GeminiAPIKey = mergeProviderInstance(global.GeminiAPIKey, stripProjectConnection(string(BuiltInGeminiAPIKey), project.GeminiAPIKey))
+	merged.OpenAIResponses = mergeProviderInstance(global.OpenAIResponses, stripProjectConnection(string(BuiltInOpenAIResponses), project.OpenAIResponses))
 	// Extra holds raw custom provider instance blocks; project can override per block.
 	merged.Extra = mergeProvidersExtra(global.Extra, project.Extra)
 	return &merged
+}
+
+// stripProjectConnection removes the fields that decide where requests (and
+// the API key that rides on them) are sent. A project settings file arrives
+// with whatever repository was cloned, so letting it set baseUrl or wireFormat
+// would let that repository redirect the user's credentials.
+func stripProjectConnection(providerID string, inst *ProviderInstanceConfig) *ProviderInstanceConfig {
+	if inst == nil || (inst.BaseURL == "" && inst.WireFormat == "") {
+		return inst
+	}
+	out := *inst
+	if out.BaseURL != "" {
+		slog.Warn("ignoring project settings field; connection fields are global-only",
+			"provider", providerID, "field", "baseUrl")
+		out.BaseURL = ""
+	}
+	if out.WireFormat != "" {
+		slog.Warn("ignoring project settings field; connection fields are global-only",
+			"provider", providerID, "field", "wireFormat")
+		out.WireFormat = ""
+	}
+	return &out
+}
+
+// stripProjectConnectionRaw is stripProjectConnection for a still-encoded
+// provider block. An undecodable block is dropped: endpoint resolution cannot
+// read it either, and passing it through would skip the check.
+func stripProjectConnectionRaw(providerID string, raw json.RawMessage) (json.RawMessage, bool) {
+	var inst ProviderInstanceConfig
+	if err := json.Unmarshal(raw, &inst); err != nil {
+		slog.Warn("ignoring undecodable project provider block", "provider", providerID, "error", err)
+		return nil, false
+	}
+	if inst.BaseURL == "" && inst.WireFormat == "" {
+		return raw, true
+	}
+	out, err := json.Marshal(stripProjectConnection(providerID, &inst))
+	if err != nil {
+		slog.Warn("ignoring project provider block", "provider", providerID, "error", err)
+		return nil, false
+	}
+	return out, true
 }
 
 func mergeProvidersExtra(global, project map[string]json.RawMessage) map[string]json.RawMessage {
 	if len(project) == 0 {
 		return global
 	}
-	if len(global) == 0 {
-		return project
-	}
 	merged := make(map[string]json.RawMessage, len(global)+len(project))
 	for k, v := range global {
 		merged[k] = v
 	}
 	for k, pRaw := range project {
+		pRaw, ok := stripProjectConnectionRaw(k, pRaw)
+		if !ok {
+			continue
+		}
 		gRaw, exists := global[k]
 		if !exists {
 			merged[k] = pRaw
@@ -598,19 +685,56 @@ func mergeProviderInstance(global, project *ProviderInstanceConfig) *ProviderIns
 	if len(project.ActiveModels) > 0 {
 		merged.ActiveModels = project.ActiveModels
 	}
-	// models: shallow merge by model id — project per-model config wins per entry.
+	// models: merged by model id, then field by field, so a project-scoped
+	// temperature does not hide the global entry's discovered context limit or
+	// reasoning capability for the same model.
 	if len(project.Models) > 0 {
 		mergedModels := make(map[string]ProviderModelConfig, len(global.Models)+len(project.Models))
 		for k, v := range global.Models {
 			mergedModels[k] = v
 		}
 		for k, v := range project.Models {
-			mergedModels[k] = v
+			mergedModels[k] = mergeProviderModelConfig(global.Models[k], v)
 		}
 		merged.Models = mergedModels
 	}
 	merged.Extra = mergeRaw(global.Extra, project.Extra)
 	return &merged
+}
+
+// mergeProviderModelConfig overlays the project's non-zero per-model fields on
+// the global entry. Discovered capability fields (Reasoning*) are facts about
+// the model, so the project only adds them where global has none.
+func mergeProviderModelConfig(global, project ProviderModelConfig) ProviderModelConfig {
+	merged := global
+	merged.Personality = overlayStr(global.Personality, project.Personality)
+	merged.PromptMode = overlayStr(global.PromptMode, project.PromptMode)
+	merged.Temperature = overlayPtr(global.Temperature, project.Temperature)
+	merged.ContextLimit = overlayPtr(global.ContextLimit, project.ContextLimit)
+	merged.ReasoningEffort = overlayStr(global.ReasoningEffort, project.ReasoningEffort)
+	merged.ShowThinking = overlayPtr(global.ShowThinking, project.ShowThinking)
+	merged.ReasoningHistory = overlayStr(global.ReasoningHistory, project.ReasoningHistory)
+	merged.ThinkingBudgetTokens = overlayPtr(global.ThinkingBudgetTokens, project.ThinkingBudgetTokens)
+	merged.HardThinkingBudget = overlayPtr(global.HardThinkingBudget, project.HardThinkingBudget)
+	if len(project.ChatTemplateKwargs) > 0 {
+		kwargs := make(map[string]any, len(global.ChatTemplateKwargs)+len(project.ChatTemplateKwargs))
+		for k, v := range global.ChatTemplateKwargs {
+			kwargs[k] = v
+		}
+		for k, v := range project.ChatTemplateKwargs {
+			kwargs[k] = v
+		}
+		merged.ChatTemplateKwargs = kwargs
+	}
+	merged.ReasoningSupported = overlayPtr(project.ReasoningSupported, global.ReasoningSupported)
+	merged.ReasoningMandatory = overlayPtr(project.ReasoningMandatory, global.ReasoningMandatory)
+	if len(global.ReasoningEfforts) == 0 {
+		merged.ReasoningEfforts = project.ReasoningEfforts
+	}
+	merged.ReasoningDefaultEffort = overlayStr(project.ReasoningDefaultEffort, global.ReasoningDefaultEffort)
+	merged.ReasoningProbed = global.ReasoningProbed || project.ReasoningProbed
+	merged.Extra = mergeRaw(global.Extra, project.Extra)
+	return merged
 }
 
 func mergeSagittarius(global, project *SagittariusSettings) *SagittariusSettings {

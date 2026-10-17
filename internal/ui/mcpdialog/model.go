@@ -9,6 +9,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/undeadindustries/sagittarius/internal/config"
+	"github.com/undeadindustries/sagittarius/internal/ui/overlay"
 	"github.com/undeadindustries/sagittarius/internal/ui/scopedialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/theme"
 )
@@ -70,9 +71,8 @@ type Model struct {
 	fields       []fieldID
 	fieldCursor  int
 
-	// scopeSel is shown at the bottom of the add/edit form.
-	scopeSel     scopedialog.ScopeSelector
-	scopeFocused bool
+	// scopeSel is shown under the add/edit form title.
+	scopeSel scopedialog.ScopeSelector
 
 	// field editor state
 	input   textinput.Model
@@ -139,7 +139,10 @@ func (m Model) SetSize(w, h int) Model {
 // SetTheme applies the resolved color theme to the overlay.
 func (m Model) SetTheme(th theme.Theme) Model {
 	m.th = th
-	m.spin = newDialogSpinner(th)
+	// Copy the style onto the live spinner. Replacing the spinner assigns a
+	// new ID, and an in-flight tick is then ignored.
+	m.spin.Style = newDialogSpinner(th).Style
+	overlay.StyleTextInput(&m.input, th)
 	return m
 }
 
@@ -220,8 +223,6 @@ func (m *Model) startAdd() {
 	m.info = ""
 	// Default new servers to project scope.
 	m.scopeSel.Scope = config.ScopeProject
-	m.scopeFocused = false
-	m.scopeSel.Blur()
 	m.rebuildFields()
 	m.screen = screenForm
 }
@@ -251,8 +252,6 @@ func (m Model) startEdit() (Model, tea.Cmd) {
 	m.info = ""
 	// Pre-select the scope the server is currently stored in.
 	m.scopeSel.Scope = srv.Scope
-	m.scopeFocused = false
-	m.scopeSel.Blur()
 	m.rebuildFields()
 	m.screen = screenForm
 	return m, nil
@@ -329,21 +328,11 @@ func (m Model) handleReloadResult(msg reloadResultMsg) (Model, tea.Cmd) {
 func (m Model) busy() bool { return m.saving || m.reloading }
 
 func (m Model) updateForm(key tea.KeyMsg) (Model, tea.Cmd) {
-	// Tab toggles focus between the field list and the scope selector.
-	if key.String() == "tab" && !m.scopeSel.Disabled {
-		m.scopeFocused = !m.scopeFocused
-		if m.scopeFocused {
-			m.scopeSel.Focus()
-		} else {
-			m.scopeSel.Blur()
-		}
-		return m, nil
-	}
-	// When the scope selector has focus, route left/right to it.
-	if m.scopeFocused {
-		sel, cmd := m.scopeSel.Update(key)
+	if sel, _, taken := m.scopeSel.HandleKey(key); taken {
+		// The form saves with whatever scope is selected at Save time, so the
+		// change notification has nothing to reload here.
 		m.scopeSel = sel
-		return m, cmd
+		return m, nil
 	}
 	switch key.String() {
 	case "esc":
@@ -535,6 +524,7 @@ func (m Model) freshFieldInput(id fieldID) textinput.Model {
 	ti := textinput.New()
 	ti.CharLimit = 8192
 	ti.Prompt = "> "
+	overlay.StyleTextInput(&ti, m.th)
 	ti.Focus()
 	if fieldKindOf(id) == kindSecret {
 		ti.EchoMode = textinput.EchoPassword

@@ -71,8 +71,41 @@ type providerDialogDeps struct {
 	app *App
 }
 
-func (d *providerDialogDeps) settings() *config.Settings { return d.app.deps.Settings }
-func (d *providerDialogDeps) loader() *config.Loader     { return d.app.deps.Loader }
+// settings is the merged (global + project) view the dialog displays. Custom
+// provider definitions in it always come from the global tier (see
+// config.mergeProviders), so it is safe for every read.
+func (d *providerDialogDeps) settings() *config.Settings { return d.app.effectiveSettings() }
+
+// ProjectAvailable reports whether this session has a project settings tier.
+func (d *providerDialogDeps) ProjectAvailable() bool {
+	return d.app.docs != nil && d.app.docs.ProjectAvailable()
+}
+
+// scopeDocument returns the document a scope writes to, for "set in this
+// scope" display. It never allocates a project document as a side effect, so
+// a project view with no file yet reads as nil (nothing set there).
+func (a *App) scopeDocument(scope config.SettingScope) *config.Settings {
+	if a.docs == nil {
+		return a.deps.Settings
+	}
+	if scope == config.ScopeProject {
+		return a.docs.Project
+	}
+	return a.docs.Global
+}
+
+// connectionSettingKeys decide where requests and the API key go. They are
+// global-only (the merge ignores them in a project file), so a project-scoped
+// edit of one is written globally rather than saved where it has no effect.
+var connectionSettingKeys = map[string]bool{"baseUrl": true, "wireFormat": true}
+
+// settingScope routes key to the global tier when it is a connection field.
+func settingScope(key string, scope config.SettingScope) config.SettingScope {
+	if connectionSettingKeys[key] {
+		return config.ScopeGlobal
+	}
+	return scope
+}
 
 func (d *providerDialogDeps) ListProviders() []providersdialog.ProviderEntry {
 	s := d.settings()
@@ -143,11 +176,13 @@ func (d *providerDialogDeps) ActiveProviderID() string {
 	return d.settings().ActiveProvider()
 }
 
-func (d *providerDialogDeps) SwitchProvider(ctx context.Context, id string) error {
-	if d.loader() == nil || d.settings() == nil {
+func (d *providerDialogDeps) SwitchProvider(ctx context.Context, id string, scope config.SettingScope) error {
+	if d.app == nil || d.settings() == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	if err := provider.SaveActiveProvider(d.loader(), d.settings(), id); err != nil {
+	if err := d.app.persistScope(scope, func(s *config.Settings) error {
+		return provider.SetActiveProvider(s, id)
+	}); err != nil {
 		return err
 	}
 	_, _, err := d.app.deps.Hooks.RebuildRunner(ctx)
@@ -202,7 +237,8 @@ func (d *providerDialogDeps) RemoveCustomProvider(ctx context.Context, id string
 	// RemoveCustomProvider blanked providers.active. Promote another activated
 	// model so the rebuilt runner targets a valid provider instead of failing
 	// with "no active provider configured" (leaving the live generator pointed
-	// at the deleted provider). SelectCurrentModel persists settings itself.
+	// at the deleted provider). The pair comes from the activated set, so it
+	// needs no further validation.
 	fallback, ok := firstActivatedModel(d.app.effectiveSettings())
 	if !ok {
 		// No provider left to fall back to; persistGlobal already saved the
@@ -210,7 +246,9 @@ func (d *providerDialogDeps) RemoveCustomProvider(ctx context.Context, id string
 		// new provider is added.
 		return nil
 	}
-	if err := provider.SelectCurrentModel(d.loader(), d.settings(), fallback.ProviderID, fallback.Model); err != nil {
+	if err := d.app.persistGlobal(func(s *config.Settings) error {
+		return provider.WriteActiveModel(s, fallback.ProviderID, fallback.Model)
+	}); err != nil {
 		return fmt.Errorf("removed provider but selecting a fallback model failed: %w", err)
 	}
 	if _, _, err := d.app.deps.Hooks.RebuildRunner(ctx); err != nil {
@@ -351,7 +389,7 @@ func modelIDsFromInfos(infos []provider.ModelInfo) []string {
 	return models
 }
 
-func (d *providerDialogDeps) SetModel(ctx context.Context, id, model string) error {
+func (d *providerDialogDeps) SetModel(ctx context.Context, id, model string, scope config.SettingScope) error {
 	if d.app == nil {
 		return fmt.Errorf("settings not loaded")
 	}
@@ -366,16 +404,12 @@ func (d *providerDialogDeps) SetModel(ctx context.Context, id, model string) err
 		limit = provider.ContextLimitForModel(infos, model)
 	}
 	discovered := needReasoning && reasoningDiscoveryApplies(d.settings(), id) && len(infos) > 0
-	if err := d.app.persistGlobal(func(s *config.Settings) error {
-		if err := provider.SetProviderModel(s, config.NormalizeProviderID(id), model); err != nil {
-			return err
-		}
-		if limit > 0 {
-			_, _ = provider.MaybeSetModelContextLimit(s, id, model, limit)
-		}
-		applyReasoningInfos(s, id, []string{model}, infos, discovered)
-		return nil
+	if err := d.app.persistScope(scope, func(s *config.Settings) error {
+		return provider.SetProviderModel(s, config.NormalizeProviderID(id), model)
 	}); err != nil {
+		return err
+	}
+	if err := d.cacheModelFacts(id, []string{model}, limit, modelDiscovery{infos: infos, discovered: discovered}); err != nil {
 		return err
 	}
 	return d.rebuildIfActive(ctx, id)
@@ -391,11 +425,34 @@ func (d *providerDialogDeps) CurrentModel(id string) string {
 	return endpoint.Model
 }
 
-func (d *providerDialogDeps) ApplySetting(ctx context.Context, id, key, value string) error {
+// modelDiscovery is one catalog fetch's result, passed to cacheModelFacts.
+type modelDiscovery struct {
+	infos      []provider.ModelInfo
+	discovered bool
+}
+
+// cacheModelFacts writes the discovered context limit and reasoning capability
+// to the global file whatever scope the user picked: they describe the model,
+// not a preference, and every project shares them.
+func (d *providerDialogDeps) cacheModelFacts(id string, models []string, limit int, disc modelDiscovery) error {
+	if limit <= 0 && len(disc.infos) == 0 && !disc.discovered {
+		return nil
+	}
+	return d.app.persistGlobal(func(s *config.Settings) error {
+		if limit > 0 && len(models) == 1 {
+			// Best effort: a failed cache write only costs a later rediscovery.
+			_, _ = provider.MaybeSetModelContextLimit(s, id, models[0], limit)
+		}
+		applyReasoningInfos(s, id, models, disc.infos, disc.discovered)
+		return nil
+	})
+}
+
+func (d *providerDialogDeps) ApplySetting(ctx context.Context, id, key, value string, scope config.SettingScope) error {
 	if d.app == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	if err := d.app.persistGlobal(func(s *config.Settings) error {
+	if err := d.app.persistScope(settingScope(key, scope), func(s *config.Settings) error {
 		return provider.ApplyProviderSetting(s, id, key, value)
 	}); err != nil {
 		return err
@@ -437,8 +494,23 @@ func (d *providerDialogDeps) UpdateCustomDefinition(ctx context.Context, id, fie
 	return d.rebuildIfActive(ctx, id)
 }
 
-func (d *providerDialogDeps) ProviderSettings(id string) map[string]string {
-	values := provider.InstanceSettingValues(d.settings(), id)
+// ProviderSettings returns the values written in scope's file, so the edit
+// sheet can tell "set here" apart from inherited or default values. Custom
+// definition fields always come from the merged (global-only) definitions.
+func (d *providerDialogDeps) ProviderSettings(id string, scope config.SettingScope) map[string]string {
+	values := map[string]string{}
+	if doc := d.app.scopeDocument(scope); doc != nil {
+		values = provider.InstanceSettingValues(doc, id)
+	}
+	if scope == config.ScopeProject {
+		global := provider.InstanceSettingValues(d.app.scopeDocument(config.ScopeGlobal), id)
+		for key := range connectionSettingKeys {
+			delete(values, key)
+			if v, ok := global[key]; ok {
+				values[key] = v
+			}
+		}
+	}
 	if s := d.settings(); s != nil && s.Providers != nil {
 		if custom, ok := s.Providers.Custom[id]; ok {
 			values["displayName"] = custom.DisplayName
@@ -483,19 +555,18 @@ func (d *providerDialogDeps) ActiveModels(id string) []string {
 // SetActiveModels persists the curated active-model set and caches reasoning
 // capability for the selected models only (one discovery call when needed).
 // Activation does not change the live model, so no runner rebuild is required.
-func (d *providerDialogDeps) SetActiveModels(ctx context.Context, id string, models []string) error {
+func (d *providerDialogDeps) SetActiveModels(ctx context.Context, id string, models []string, scope config.SettingScope) error {
 	if d.app == nil {
 		return fmt.Errorf("settings not loaded")
 	}
 	// Network discovery off the Documents write lock.
 	infos, discovered := discoverReasoningInfosIfNeeded(ctx, d.settings(), id, models)
-	return d.app.persistGlobal(func(s *config.Settings) error {
-		if err := provider.SetActiveModels(s, id, models); err != nil {
-			return err
-		}
-		applyReasoningInfos(s, id, models, infos, discovered)
-		return nil
-	})
+	if err := d.app.persistScope(scope, func(s *config.Settings) error {
+		return provider.SetActiveModels(s, id, models)
+	}); err != nil {
+		return err
+	}
+	return d.cacheModelFacts(id, models, 0, modelDiscovery{infos: infos, discovered: discovered})
 }
 
 // EffectiveProviderSettings returns resolved display strings (overrides plus
@@ -550,15 +621,16 @@ func (d *providerDialogDeps) SystemPromptPresetID(id string) string {
 
 // ApplySystemPromptPreset writes the preset's personality/variant and returns an
 // info line describing the suggested sampling knobs (and which were kept pinned).
-func (d *providerDialogDeps) ApplySystemPromptPreset(ctx context.Context, id, presetID string) (string, error) {
-	if d.loader() == nil || d.settings() == nil {
+func (d *providerDialogDeps) ApplySystemPromptPreset(ctx context.Context, id, presetID string, scope config.SettingScope) (string, error) {
+	if d.app == nil || d.settings() == nil {
 		return "", fmt.Errorf("settings not loaded")
 	}
-	res, err := provider.ApplySystemPromptPreset(d.settings(), id, presetID)
-	if err != nil {
-		return "", err
-	}
-	if err := d.loader().Save(d.settings()); err != nil {
+	var res provider.PresetApplyResult
+	if err := d.app.persistScope(scope, func(s *config.Settings) error {
+		var err error
+		res, err = provider.ApplySystemPromptPreset(s, id, presetID)
+		return err
+	}); err != nil {
 		return "", err
 	}
 	if rerr := d.rebuildIfActive(ctx, id); rerr != nil {
@@ -583,11 +655,11 @@ func formatPresetInfo(res provider.PresetApplyResult) string {
 		res.Label, temp, comp)
 }
 
-func (d *providerDialogDeps) ClearSetting(ctx context.Context, id, key string) error {
+func (d *providerDialogDeps) ClearSetting(ctx context.Context, id, key string, scope config.SettingScope) error {
 	if d.app == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	if err := d.app.persistGlobal(func(s *config.Settings) error {
+	if err := d.app.persistScope(settingScope(key, scope), func(s *config.Settings) error {
 		return provider.ClearProviderSetting(s, id, key)
 	}); err != nil {
 		return err
@@ -595,11 +667,11 @@ func (d *providerDialogDeps) ClearSetting(ctx context.Context, id, key string) e
 	return d.rebuildIfActive(ctx, id)
 }
 
-func (d *providerDialogDeps) ResetSettings(ctx context.Context, id string) error {
+func (d *providerDialogDeps) ResetSettings(ctx context.Context, id string, scope config.SettingScope) error {
 	if d.app == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	if err := d.app.persistGlobal(func(s *config.Settings) error {
+	if err := d.app.persistScope(scope, func(s *config.Settings) error {
 		return provider.ResetProviderInstanceOverrides(s, id)
 	}); err != nil {
 		return err
@@ -643,19 +715,25 @@ func (d *modelsDialogDeps) ListAllActiveModels() []modelsdialog.ModelEntry {
 	return entries
 }
 
-func (d *modelsDialogDeps) GetModelSettings(providerID, model string) map[string]string {
-	s := d.app.effectiveSettings()
-	if s == nil {
-		return nil
-	}
-	return provider.ModelConfigValues(s, providerID, model)
+// ProjectAvailable reports whether this session has a project settings tier.
+func (d *modelsDialogDeps) ProjectAvailable() bool {
+	return d.app.docs != nil && d.app.docs.ProjectAvailable()
 }
 
-func (d *modelsDialogDeps) SetModelSetting(ctx context.Context, providerID, model, key, value string) error {
+// GetModelSettings returns the per-model values written in scope's file.
+func (d *modelsDialogDeps) GetModelSettings(providerID, model string, scope config.SettingScope) map[string]string {
+	doc := d.app.scopeDocument(scope)
+	if doc == nil {
+		return nil
+	}
+	return provider.ModelConfigValues(doc, providerID, model)
+}
+
+func (d *modelsDialogDeps) SetModelSetting(ctx context.Context, providerID, model, key, value string, scope config.SettingScope) error {
 	if d.app == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	if err := d.app.persistGlobal(func(s *config.Settings) error {
+	if err := d.app.persistScope(scope, func(s *config.Settings) error {
 		return provider.SetModelConfig(s, providerID, model, key, value)
 	}); err != nil {
 		return err
@@ -680,11 +758,11 @@ func (d *modelsDialogDeps) ReasoningOptions(providerID, model string) (efforts [
 	return efforts, defaultEffort, known
 }
 
-func (d *modelsDialogDeps) ClearModelSetting(ctx context.Context, providerID, model, key string) error {
+func (d *modelsDialogDeps) ClearModelSetting(ctx context.Context, providerID, model, key string, scope config.SettingScope) error {
 	if d.app == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	if err := d.app.persistGlobal(func(s *config.Settings) error {
+	if err := d.app.persistScope(scope, func(s *config.Settings) error {
 		return provider.ClearModelConfig(s, providerID, model, key)
 	}); err != nil {
 		return err
@@ -693,7 +771,7 @@ func (d *modelsDialogDeps) ClearModelSetting(ctx context.Context, providerID, mo
 }
 
 func (d *modelsDialogDeps) rebuildIfActive(ctx context.Context, providerID string) error {
-	if d.app.deps.Settings != nil && d.app.deps.Settings.ActiveProvider() == config.NormalizeProviderID(providerID) {
+	if s := d.app.effectiveSettings(); s != nil && s.ActiveProvider() == config.NormalizeProviderID(providerID) {
 		_, _, err := d.app.deps.Hooks.RebuildRunner(ctx)
 		return err
 	}
@@ -778,48 +856,10 @@ func (d *modelPickDialogDeps) ContextFitNotice() string {
 }
 
 func (d *modelPickDialogDeps) SelectCurrentModel(ctx context.Context, providerID, model string, scope config.SettingScope) error {
-	docs := d.app.docs
-	if docs == nil {
+	if d.app.docs == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	// For global scope, delegate through the standard hook (validates + saves + rebuilds).
-	if scope == config.ScopeGlobal {
-		_, err := d.app.deps.Hooks.SelectCurrentModel(ctx, providerID, model)
-		return err
-	}
-	// For project scope: validate against merged (sees custom providers from global),
-	// then write only providers.active and providers.<id>.model to the project tier.
-	merged := docs.Merged()
-	providerID = config.NormalizeProviderID(providerID)
-	if _, ok := config.ProviderDefaults(providerID); !ok {
-		if merged == nil || merged.Providers == nil || merged.Providers.Custom == nil {
-			return fmt.Errorf("select model: unknown provider %q", providerID)
-		}
-		if _, ok := merged.Providers.Custom[providerID]; !ok {
-			return fmt.Errorf("select model: unknown provider %q", providerID)
-		}
-	}
-	curated := provider.CuratedActiveModels(merged, providerID)
-	if len(curated) > 0 {
-		found := false
-		for _, m := range curated {
-			if m == model {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return fmt.Errorf("select model: %q is not in the active set for %q", model, providerID)
-		}
-	}
-	target := docs.TargetSettings(scope)
-	if err := provider.WriteActiveModel(target, providerID, model); err != nil {
-		return err
-	}
-	if err := docs.Save(scope); err != nil {
-		return err
-	}
-	_, _, err := d.app.deps.Hooks.RebuildRunner(ctx)
+	_, err := d.app.selectCurrentModel(ctx, providerID, model, scope)
 	return err
 }
 

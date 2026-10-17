@@ -234,7 +234,7 @@ Sagittarius runs in the terminal **alternate screen**, so your terminal's normal
 | `Shift+Up` / `Shift+Down` | Scroll one line at a time |
 | `Option+M` (`µ`) or `Alt+M` | Toggle mouse mode (wheel scrolling, on by default) |
 
-On a full-size keyboard with dedicated Page Up / Page Down keys, those work too. The composer status row above the input shows a reminder (`Fn↑ Fn↓` on macOS, `Pg↑ Pg↓` elsewhere).
+On a full-size keyboard with dedicated Page Up / Page Down keys, those work too. The composer status row above the input shows both (`Pg↑ Pg↓ or Fn↑ Fn↓`), because a Mac keyboard over SSH is still a Mac keyboard.
 
 The mouse wheel scrolls the conversation by default. If you turned mouse mode off with **`Alt+M`** (or **`Option+M`** on macOS), press it again or run **`/mouse on`**. It is on again at the next launch.
 
@@ -250,7 +250,7 @@ The alt-screen is cleared when Sagittarius exits. The exit summary (session stat
 - **`Ctrl+/`** / **`Ctrl+Shift+P`**: cycle active models forward / backward.
 - **`/mode`**, **`/model`**, **`/modes`**: full pickers and override editors.
 
-Per-repo routing defaults save to **project** scope (`.sagittarius/settings.json`); provider keys and definitions stay **global**. See [docs/home-directory.md](docs/home-directory.md).
+Every dialog that saves settings has a `Save to:` line under its title; press **Tab** to switch it between Global and Project. `/model`, `/modes`, and `/subagents` open on Project, while `/settings`, `/providers`, and `/models` open on Global. `/model --project provider/model` does the same without the picker. API keys, provider URLs, and provider definitions always stay **global**, so a project file can't send your requests somewhere else. See [docs/home-directory.md](docs/home-directory.md).
 
 ### Host Toolkit Checklist
 

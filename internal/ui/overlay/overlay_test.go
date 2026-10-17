@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 
@@ -79,6 +80,34 @@ func TestTitleGradientsAndFallsBack(t *testing.T) {
 	gotGrey := Title(grey, "Providers")
 	if ansiColorCode.MatchString(gotGrey) {
 		t.Errorf("expected no color ANSI on greyscale theme, got %q", gotGrey)
+	}
+}
+
+func TestStyleTextInput(t *testing.T) {
+	prev := lipgloss.ColorProfile()
+	t.Cleanup(func() { lipgloss.SetColorProfile(prev) })
+	lipgloss.SetColorProfile(termenv.TrueColor)
+	cases := []struct {
+		name      string
+		th        theme.Theme
+		wantColor bool
+	}{
+		{name: "default", th: theme.Default(), wantColor: true},
+		{name: "greyscale", th: theme.Greyscale(), wantColor: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ti := textinput.New()
+			ti.Placeholder = "name"
+			ti.Width = 20
+			StyleTextInput(&ti, tc.th)
+			ti.Focus()
+			view := ti.View()
+			got := strings.Contains(view, "38;") || strings.Contains(view, "48;")
+			if got != tc.wantColor {
+				t.Fatalf("color = %v, want %v, view %q", got, tc.wantColor, view)
+			}
+		})
 	}
 }
 

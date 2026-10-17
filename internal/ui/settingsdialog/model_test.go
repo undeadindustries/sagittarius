@@ -24,9 +24,14 @@ type fakeSettingsDeps struct {
 	statusErr    error
 	statusCalls  int
 	statusCtxNil bool
+	project      bool
+	listedScopes []config.SettingScope
 }
 
-func (f *fakeSettingsDeps) ListSettings(config.SettingScope) []SettingEntry { return f.entries }
+func (f *fakeSettingsDeps) ListSettings(scope config.SettingScope) []SettingEntry {
+	f.listedScopes = append(f.listedScopes, scope)
+	return f.entries
+}
 func (f *fakeSettingsDeps) SetValue(_ context.Context, _ config.SettingScope, key, value string) error {
 	if f.setErr != nil {
 		return f.setErr
@@ -45,7 +50,7 @@ func (f *fakeSettingsDeps) SecretStatus(ctx context.Context, key string) (string
 	f.statusCtxNil = ctx == nil
 	return f.statusFor[key], f.statusErr
 }
-func (f *fakeSettingsDeps) ProjectAvailable() bool { return false }
+func (f *fakeSettingsDeps) ProjectAvailable() bool { return f.project }
 
 // secretDeps builds deps around a single secret row.
 func secretDeps(status string) *fakeSettingsDeps {

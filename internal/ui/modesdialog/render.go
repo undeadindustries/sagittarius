@@ -2,42 +2,31 @@ package modesdialog
 
 import (
 	"fmt"
-	"strings"
 
-	"github.com/undeadindustries/sagittarius/internal/ui"
 	"github.com/undeadindustries/sagittarius/internal/ui/overlay"
 )
 
 // View renders the mode-override editor overlay.
 func (m Model) View() string {
-	dim := m.th.Dim
-	var b strings.Builder
-	b.WriteString(overlay.Title(m.th, m.title) + "\n\n")
-	b.WriteString(m.body())
-
-	if m.info != "" {
-		line := m.info
-		if m.applying {
-			line = m.spin.View() + " " + line
-		}
-		b.WriteString("\n\n" + dim.Render(m.wrap(line)))
+	head := overlay.Title(m.th, m.title) + "\n"
+	if !m.scopeSel.Disabled {
+		head += m.scopeSel.View(m.th) + "\n"
 	}
-	if m.errMsg != "" {
-		b.WriteString("\n\n" + m.th.Error.Render(m.wrap("✗ "+m.errMsg)))
+	head += "\n" + m.screenHead()
+	info := m.info
+	if info != "" && m.applying {
+		info = m.spin.View() + " " + info
 	}
-	b.WriteString("\n\n" + overlay.Hints(m.th, m.footerHint()))
-
-	return overlay.Frame(m.th, m.width, overlay.DefaultMinWidth, b.String())
+	rows, cursor := m.rows()
+	foot := overlay.Foot(m.th, info, m.errMsg, m.footerHint())
+	return overlay.FitFrame(m.th, overlay.Box{Width: m.width, Height: m.height},
+		overlay.List{Head: head, Rows: rows, Foot: foot, Cursor: cursor})
 }
 
 func (m Model) footerHint() string {
 	switch m.screen {
 	case screenPicker:
-		hint := "↑/↓ move • Enter assign (first row = clear) • Esc back"
-		if !m.scopeSel.Disabled {
-			hint += " • Tab · scope"
-		}
-		return hint
+		return "↑/↓ move • Enter assign (first row = clear) • Esc back"
 	default:
 		hint := "↑/↓ move • Enter assign model • r clear override • Esc close"
 		if _, ok := m.deps.(Resetter); ok {
@@ -47,29 +36,31 @@ func (m Model) footerHint() string {
 	}
 }
 
-func (m Model) wrap(s string) string {
-	return ui.WrapText(s, overlay.ContentWidth(m.width, overlay.DefaultMinWidth))
-}
-
-func (m Model) body() string {
-	switch m.screen {
-	case screenModes:
-		return m.renderModes()
-	case screenPicker:
-		return m.renderPicker()
+// screenHead is the fixed text above the current screen's rows.
+func (m Model) screenHead() string {
+	if m.screen == screenPicker {
+		return fmt.Sprintf("Assign model for %s %s\n", m.targetMode, m.itemNoun)
 	}
-	return ""
-}
-
-func (m Model) renderModes() string {
-	dim := m.th.Dim
-	var b strings.Builder
+	head := ""
 	if h, ok := m.deps.(HeaderProvider); ok {
 		if header := h.Header(); header != "" {
-			b.WriteString(overlay.Hints(m.th, header) + "\n\n")
+			head = overlay.Hints(m.th, header) + "\n\n"
 		}
 	}
-	b.WriteString(overlay.Hints(m.th, "Enter = assign model override • r = clear to default") + "\n\n")
+	return head + overlay.Hints(m.th, "Enter = assign model override • r = clear to default") + "\n"
+}
+
+// rows returns the current screen's rows and the cursor within them.
+func (m Model) rows() ([]string, int) {
+	if m.screen == screenPicker {
+		return m.pickerRows(), m.pickCursor
+	}
+	return m.modeRows(), m.modeCursor
+}
+
+func (m Model) modeRows() []string {
+	dim := m.th.Dim
+	rows := make([]string, len(m.modes))
 	for i, me := range m.modes {
 		label := me.Mode
 		if me.Model != "" {
@@ -81,30 +72,23 @@ func (m Model) renderModes() string {
 		} else {
 			label += dim.Render("  (default)")
 		}
-		b.WriteString(overlay.Row(m.th, label, i == m.modeCursor) + "\n")
+		rows[i] = overlay.Row(m.th, label, i == m.modeCursor)
 	}
-	return strings.TrimRight(b.String(), "\n")
+	return rows
 }
 
-func (m Model) renderPicker() string {
+func (m Model) pickerRows() []string {
 	dim := m.th.Dim
-	var b strings.Builder
-	fmt.Fprintf(&b, "Assign model for %s %s\n\n", m.targetMode, m.itemNoun)
 	if len(m.models) <= 1 { // only the sentinel, no real models
-		b.WriteString(dim.Render("No active models. Open /providers and activate some first."))
-		return b.String()
+		return []string{dim.Render("No active models. Open /providers and activate some first.")}
 	}
+	rows := make([]string, len(m.models))
 	for i, e := range m.models {
-		var label string
+		label := fmt.Sprintf("%s/%s", e.DisplayID, e.Model)
 		if e.IsClear {
 			label = dim.Render("(use default)")
-		} else {
-			label = fmt.Sprintf("%s/%s", e.DisplayID, e.Model)
 		}
-		b.WriteString(overlay.Row(m.th, label, i == m.pickCursor) + "\n")
+		rows[i] = overlay.Row(m.th, label, i == m.pickCursor)
 	}
-	if !m.scopeSel.Disabled {
-		b.WriteString("\n" + m.scopeSel.View(m.th))
-	}
-	return strings.TrimRight(b.String(), "\n")
+	return rows
 }

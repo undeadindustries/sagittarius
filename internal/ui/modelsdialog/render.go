@@ -2,28 +2,35 @@ package modelsdialog
 
 import (
 	"fmt"
-	"strings"
 
-	"github.com/undeadindustries/sagittarius/internal/ui"
 	"github.com/undeadindustries/sagittarius/internal/ui/overlay"
 )
 
-// View renders the per-model settings editor.
+// View renders the per-model settings editor. List screens are windowed to the
+// terminal height so the title, scope line, and hints stay visible.
 func (m Model) View() string {
-	dim := m.th.Dim
-	var b strings.Builder
-	b.WriteString(overlay.Title(m.th, "Model Settings") + "\n\n")
-	b.WriteString(m.body())
-
-	if m.info != "" {
-		b.WriteString("\n\n" + dim.Render(m.wrap(m.info)))
+	if m.screen == screenEditField {
+		body := m.head() + "\n" + m.editTitle + "\n\n" + m.input.View() + "\n" +
+			overlay.Foot(m.th, m.info, m.errMsg, m.footerHint())
+		return overlay.Frame(m.th, m.width, overlay.DefaultMinWidth, body)
 	}
-	if m.errMsg != "" {
-		b.WriteString("\n\n" + m.th.Error.Render(m.wrap("✗ "+m.errMsg)))
+	rows, cursor, sub := m.rows()
+	head := m.head()
+	if sub != "" {
+		head += "\n" + sub
 	}
-	b.WriteString("\n\n" + overlay.Hints(m.th, m.footerHint()))
+	foot := overlay.Foot(m.th, m.info, m.errMsg, m.footerHint())
+	return overlay.FitFrame(m.th, overlay.Box{Width: m.width, Height: m.height},
+		overlay.List{Head: head, Rows: rows, Foot: foot, Cursor: cursor})
+}
 
-	return overlay.Frame(m.th, m.width, overlay.DefaultMinWidth, b.String())
+// head is the title plus the scope line (when a project file is available).
+func (m Model) head() string {
+	head := overlay.Title(m.th, "Model Settings") + "\n"
+	if !m.scopeSel.Disabled {
+		head += m.scopeSel.View(m.th) + "\n"
+	}
+	return head
 }
 
 func (m Model) footerHint() string {
@@ -39,68 +46,60 @@ func (m Model) footerHint() string {
 	}
 }
 
-func (m Model) wrap(s string) string {
-	return ui.WrapText(s, overlay.ContentWidth(m.width, overlay.DefaultMinWidth))
-}
-
-func (m Model) body() string {
+// rows returns the current screen's selectable rows, the cursor, and an
+// optional sub-heading rendered above them.
+func (m Model) rows() (rows []string, cursor int, sub string) {
 	switch m.screen {
-	case screenList:
-		return m.renderList()
 	case screenSetting:
-		return m.renderSettings()
-	case screenEditField:
-		return m.editTitle + "\n\n" + m.input.View()
+		return m.settingRows(), m.cursor, m.settingsHeading()
 	case screenPickValue:
-		return m.renderPicker()
+		return m.pickerRows(), m.cursor, m.pickTitle + "\n"
 	}
-	return ""
+	return m.listRows(), m.cursor, ""
 }
 
-func (m Model) renderList() string {
-	dim := m.th.Dim
-	var b strings.Builder
+func (m Model) listRows() []string {
 	if len(m.entries) == 0 {
-		b.WriteString(dim.Render("No active models. Open /providers and activate some first."))
-		return b.String()
+		return []string{m.th.Dim.Render("No active models. Open /providers and activate some first.")}
 	}
+	rows := make([]string, len(m.entries))
 	for i, e := range m.entries {
-		label := fmt.Sprintf("%s/%s", e.ProviderLabel, e.Model)
-		b.WriteString(m.renderRow(label, i == m.cursor) + "\n")
+		rows[i] = overlay.Row(m.th, fmt.Sprintf("%s/%s", e.ProviderLabel, e.Model), i == m.cursor)
 	}
-	return strings.TrimRight(b.String(), "\n")
+	return rows
 }
 
-func (m Model) renderSettings() string {
-	dim := m.th.Dim
-	var b strings.Builder
-	fmt.Fprintf(&b, "Settings for %s/%s\n",
-		m.targetProvider, m.targetModel)
+func (m Model) settingsHeading() string {
+	heading := fmt.Sprintf("Settings for %s/%s", m.targetProvider, m.targetModel)
 	if m.capabilityHint != "" {
-		b.WriteString(dim.Render(m.wrap("Reasoning: "+m.capabilityHint)) + "\n")
+		heading += "\n" + m.th.Dim.Render("Reasoning: "+m.capabilityHint)
 	}
-	b.WriteString("\n")
+	return heading + "\n"
+}
+
+// settingRows shows a value set in the selected scope as "= v" and, in the
+// project view, a global value it inherits as "(global: v)".
+func (m Model) settingRows() []string {
+	dim := m.th.Dim
+	rows := make([]string, len(m.settingItems))
 	for i, item := range m.settingItems {
 		label := item.label
 		if item.key != "back" {
 			if v := m.settingValues[item.key]; v != "" {
 				label += dim.Render("  = " + v)
+			} else if v := m.inheritedValues[item.key]; v != "" {
+				label += dim.Render("  (global: " + v + ")")
 			}
 		}
-		b.WriteString(m.renderRow(label, i == m.cursor) + "\n")
+		rows[i] = overlay.Row(m.th, label, i == m.cursor)
 	}
-	return strings.TrimRight(b.String(), "\n")
+	return rows
 }
 
-func (m Model) renderPicker() string {
-	var b strings.Builder
-	b.WriteString(m.pickTitle + "\n\n")
+func (m Model) pickerRows() []string {
+	rows := make([]string, len(m.pickOptions))
 	for i, opt := range m.pickOptions {
-		b.WriteString(m.renderRow(opt.label, i == m.cursor) + "\n")
+		rows[i] = overlay.Row(m.th, opt.label, i == m.cursor)
 	}
-	return strings.TrimRight(b.String(), "\n")
-}
-
-func (m Model) renderRow(label string, selected bool) string {
-	return overlay.Row(m.th, label, selected)
+	return rows
 }

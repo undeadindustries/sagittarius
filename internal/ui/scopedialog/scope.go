@@ -2,14 +2,14 @@
 // (Global ~/.sagittarius vs Project .sagittarius/) across overlay dialogs.
 //
 // The three exports are:
-//   - ScopeSelector: a keyboard-navigable radio widget for choosing where to save.
+//   - ScopeSelector: a Global/Project switch, flipped with Tab, for choosing where to save.
 //   - ScopeBadge: renders a dim "[global]" or "[project]" label suffix for list rows.
 //   - ScopeHint: renders a one-line dim hint (e.g. "Inherited from Global").
 //
 // These primitives use lipgloss for rendering and are safe to embed in any
-// Bubble Tea overlay model. They do not import bubbletea themselves — they
-// receive tea.Msg in Update and return (ScopeSelector, tea.Cmd) so the parent
-// model controls focus.
+// Bubble Tea overlay model. ScopeSelector.HandleKey takes the parent's key
+// press and reports whether it consumed it, so the parent decides on which
+// screens Tab switches scope (text inputs keep Tab for themselves).
 package scopedialog
 
 import (
@@ -28,12 +28,17 @@ type ScopeChangedMsg struct {
 	Scope config.SettingScope
 }
 
-// ScopeSelector is a keyboard-navigable two-option radio for choosing
-// config.ScopeGlobal vs config.ScopeProject. Embed it in an overlay model
-// and call Update / View as part of the parent's update/render cycle.
+// ToggleKey flips the scope in every dialog that embeds a ScopeSelector. One
+// key, no focus step: choosing where a change lands should never take longer
+// than making the change.
+const ToggleKey = "tab"
+
+// ScopeSelector is a two-option switch between config.ScopeGlobal and
+// config.ScopeProject. Embed it in an overlay model, pass key presses to
+// HandleKey, and render View in the dialog head so it stays visible when the
+// body is windowed to the terminal height.
 type ScopeSelector struct {
-	Scope   config.SettingScope
-	Focused bool
+	Scope config.SettingScope
 	// GlobalLabel is the text shown for the global option. Defaults to
 	// "Global (~/.sagittarius)".
 	GlobalLabel string
@@ -55,56 +60,42 @@ func NewScopeSelector(defaultScope config.SettingScope) ScopeSelector {
 	}
 }
 
-// Update handles keyboard input when the selector is focused. The parent is
-// responsible for focusing/unfocusing via Focus/Blur based on Tab navigation.
-// Returns the updated selector and an optional command (ScopeChangedMsg).
-func (s ScopeSelector) Update(msg tea.Msg) (ScopeSelector, tea.Cmd) {
-	if !s.Focused || s.Disabled {
+// Toggle flips between Global and Project and returns a command that emits
+// ScopeChangedMsg so the parent can reload scope-dependent rows. A disabled
+// selector stays on its scope and returns a nil command.
+func (s ScopeSelector) Toggle() (ScopeSelector, tea.Cmd) {
+	if s.Disabled {
 		return s, nil
 	}
-	km, ok := msg.(tea.KeyMsg)
-	if !ok {
-		return s, nil
+	if s.Scope == config.ScopeProject {
+		s.Scope = config.ScopeGlobal
+	} else {
+		s.Scope = config.ScopeProject
 	}
-	switch km.String() {
-	case "left", "h":
-		if s.Scope != config.ScopeGlobal {
-			s.Scope = config.ScopeGlobal
-			return s, func() tea.Msg { return ScopeChangedMsg{Scope: s.Scope} }
-		}
-	case "right", "l", " ":
-		if s.Scope != config.ScopeProject {
-			s.Scope = config.ScopeProject
-			return s, func() tea.Msg { return ScopeChangedMsg{Scope: s.Scope} }
-		}
-	}
-	return s, nil
+	scope := s.Scope
+	return s, func() tea.Msg { return ScopeChangedMsg{Scope: scope} }
 }
 
-// Focus marks the selector as focused so it will handle keyboard input.
-func (s *ScopeSelector) Focus() { s.Focused = true }
+// HandleKey toggles on ToggleKey and reports whether it consumed the key, so
+// a parent can call it first and fall through to its own bindings otherwise.
+func (s ScopeSelector) HandleKey(km tea.KeyMsg) (ScopeSelector, tea.Cmd, bool) {
+	if s.Disabled || km.String() != ToggleKey {
+		return s, nil, false
+	}
+	s, cmd := s.Toggle()
+	return s, cmd, true
+}
 
-// Blur removes keyboard focus.
-func (s *ScopeSelector) Blur() { s.Focused = false }
-
-// View renders the "Apply to: ○ Global  ● Project" row using the given theme.
-// Returns an empty string when Disabled is true.
+// View renders "Save to: ● Global (~/.sagittarius)  ○ Project (.sagittarius/)
+// · Tab switches". Returns an empty string when Disabled is true.
 func (s ScopeSelector) View(th theme.Theme) string {
 	if s.Disabled {
 		return ""
 	}
-
-	label := th.Dim.Render("Apply to: ")
+	label := th.Dim.Render("Save to: ")
 	globalStr := s.renderOption(config.ScopeGlobal, s.GlobalLabel, th)
 	projectStr := s.renderOption(config.ScopeProject, s.ProjectLabel, th)
-
-	row := label + globalStr + th.Dim.Render("  ") + projectStr
-	if s.Focused {
-		// Wrap the whole row in a faint focus indicator.
-		indicator := th.Accent.Render("›") + " "
-		return indicator + row
-	}
-	return "  " + row // indent to match the indicator width
+	return label + globalStr + th.Dim.Render("  ") + projectStr + th.Dim.Render("  · Tab switches")
 }
 
 func (s ScopeSelector) renderOption(opt config.SettingScope, label string, th theme.Theme) string {
@@ -181,7 +172,7 @@ func SaveToLabel(scope config.SettingScope, globalPath, projectPath string) stri
 // ─── KeyHint ─────────────────────────────────────────────────────────────────
 
 // KeyHint returns the keyboard hint appended to the dialog footer when the
-// scope selector is available. E.g. "Tab · scope".
+// scope selector is available.
 func KeyHint() string {
-	return "Tab · scope"
+	return "Tab · switch scope"
 }

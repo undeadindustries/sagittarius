@@ -2,7 +2,6 @@ package bubbletea
 
 import (
 	"fmt"
-	"runtime"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -93,31 +92,26 @@ func (m *model) scrollShortcutHints() string {
 	if m != nil && m.inline {
 		return inlineShortcuts
 	}
-	return scrollShortcutHintsForGOOS(runtime.GOOS)
+	return fullscreenShortcuts
 }
 
 // Status-row key hints, ordered by how much a user needs them: the layout and
 // thinking keys come first, so a narrow terminal drops the mouse and scroll
-// keys before them (see truncateAtSeparator). Alt+M / ⌥M shows both PC and Mac
-// keyboards so a Mac user SSH'd into Linux sees the key they press. Words, not
-// icons: no single-width glyph for "mouse"/"thinking" renders reliably across
-// terminal fonts.
+// keys before them (see truncateAtSeparator). The mouse and scroll hints name
+// both keyboards. The process OS is the server's, so a Mac over SSH would
+// otherwise be told to press Page Up. Words, not icons: no single-width glyph
+// for "mouse"/"thinking" renders reliably across terminal fonts.
 const (
 	hintScreen   = "/screen display mode"
 	hintThinking = "Ctrl+T show thinking"
 	hintMouse    = "Alt+M or ⌥M mouse"
+	hintScroll   = "Pg↑ Pg↓ or Fn↑ Fn↓"
+
+	fullscreenShortcuts = hintScreen + " · " + hintThinking + " · " + hintMouse + " · " + hintScroll
 
 	// readOnlyLiftHint leads the key hints while the read-only posture is on.
 	readOnlyLiftHint = "/readonly off to lift"
 )
-
-func scrollShortcutHintsForGOOS(goos string) string {
-	scrollKeys := "Pg↑ Pg↓"
-	if goos == "darwin" {
-		scrollKeys = "Fn↑ Fn↓"
-	}
-	return strings.Join([]string{hintScreen, hintThinking, hintMouse, scrollKeys}, " · ")
-}
 
 // toolPolicyLabel is the footer's tool-approval entry: the read-only posture
 // when it is on, else the approval mode. Empty when the app reports no

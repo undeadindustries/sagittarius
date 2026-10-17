@@ -49,7 +49,10 @@ func (d *toolsDialogDeps) ServerTools(ctx context.Context) []toolsdialog.ServerG
 	inv := d.app.runtime.Catalog.MCPManager().ToolInventory(ctx)
 	out := make([]toolsdialog.ServerGroup, 0, len(inv))
 	for _, g := range inv {
-		group := toolsdialog.ServerGroup{Server: g.Server, Status: string(g.Status), Err: g.Err}
+		group := toolsdialog.ServerGroup{
+			Server: g.Server, Status: string(g.Status), Err: g.Err,
+			Scope: d.serverScope(g.Server),
+		}
 		for _, t := range g.Tools {
 			group.Tools = append(group.Tools, toolsdialog.ServerTool{
 				Name:             t.Name,
@@ -65,13 +68,22 @@ func (d *toolsDialogDeps) ServerTools(ctx context.Context) []toolsdialog.ServerG
 	return out
 }
 
+// serverScope is the settings file that defines server (see
+// config.Documents.MCPServerScope).
+func (d *toolsDialogDeps) serverScope(server string) config.SettingScope {
+	if d.app.docs == nil {
+		return config.ScopeGlobal
+	}
+	return d.app.docs.MCPServerScope(server)
+}
+
 func (d *toolsDialogDeps) SetToolEnabled(ctx context.Context, server, tool string, enabled bool) error {
 	if d.app.deps.Settings == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	// Route the filter write through persistGlobal so docs.Merged is refreshed
-	// atomically with the on-disk save (a tool filter is a global-scoped scalar).
-	if err := d.app.persistGlobal(func(s *config.Settings) error {
+	// The filter lives on the server entry, so it goes to whichever file
+	// defines the server; persistScope refreshes docs.Merged with the save.
+	if err := d.app.persistScope(d.serverScope(server), func(s *config.Settings) error {
 		servers, err := s.MCPServers()
 		if err != nil {
 			return err
@@ -100,7 +112,7 @@ func (d *toolsDialogDeps) SetToolReadOnly(ctx context.Context, server, tool stri
 	if d.app.deps.Settings == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	if err := d.app.persistGlobal(func(s *config.Settings) error {
+	if err := d.app.persistScope(d.serverScope(server), func(s *config.Settings) error {
 		servers, err := s.MCPServers()
 		if err != nil {
 			return err

@@ -7,7 +7,9 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/ui/overlay"
+	"github.com/undeadindustries/sagittarius/internal/ui/scopedialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/theme"
 )
 
@@ -55,8 +57,15 @@ type Model struct {
 	targetProvider string
 	targetModel    string
 
+	// scopeSel picks the file writes land in; it opens on Global because
+	// per-model tuning is usually shared across projects.
+	scopeSel scopedialog.ScopeSelector
+
 	settingItems  []settingItem
-	settingValues map[string]string // current values for the target model
+	settingValues map[string]string // values set in the selected scope
+	// inheritedValues are the global values a project-scope view falls back
+	// to; nil while the selector is on Global.
+	inheritedValues map[string]string
 	// capabilityHint is a read-only one-line description of the target
 	// model's resolved reasoning mechanism, shown above the settings list.
 	capabilityHint string
@@ -92,14 +101,17 @@ func New(ctx context.Context, deps Deps) Model {
 	ti := textinput.New()
 	ti.CharLimit = 256
 	ti.Prompt = "> "
+	overlay.StyleTextInput(&ti, theme.Default())
 
 	m := Model{
-		deps:   deps,
-		ctx:    ctx,
-		th:     theme.Default(),
-		input:  ti,
-		screen: screenList,
+		deps:     deps,
+		ctx:      ctx,
+		th:       theme.Default(),
+		input:    ti,
+		screen:   screenList,
+		scopeSel: scopedialog.NewScopeSelector(config.ScopeGlobal),
 	}
+	m.scopeSel.Disabled = !deps.ProjectAvailable()
 	m.entries = deps.ListAllActiveModels()
 	if len(m.entries) == 0 {
 		m.errMsg = "No active models. Open /providers and activate some first."
@@ -126,17 +138,27 @@ func (m Model) SetSize(w, h int) Model {
 // SetTheme applies the resolved color theme.
 func (m Model) SetTheme(th theme.Theme) Model {
 	m.th = th
+	overlay.StyleTextInput(&m.input, th)
 	return m
 }
 
 // Update advances the settings editor for one message.
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
+	if _, ok := msg.(scopedialog.ScopeChangedMsg); ok {
+		m.reloadValues()
+		return m, nil
+	}
 	key, ok := msg.(tea.KeyMsg)
 	if !ok {
 		return m, nil
 	}
 	if m.screen == screenEditField {
 		return m.handleEditFieldKey(key)
+	}
+	if sel, cmd, handled := m.scopeSel.HandleKey(key); handled {
+		m.scopeSel = sel
+		m.info = ""
+		return m, cmd
 	}
 	switch key.String() {
 	case "esc", "q":
@@ -197,7 +219,7 @@ func (m Model) openSettingsFor(idx int) (Model, tea.Cmd) {
 	m.targetProvider = e.ProviderID
 	m.targetModel = e.Model
 	m.settingItems = settingsMenu
-	m.settingValues = m.deps.GetModelSettings(e.ProviderID, e.Model)
+	m.reloadValues()
 	m.capabilityHint = m.deps.ReasoningCapabilityHint(e.ProviderID, e.Model)
 	m.screen = screenSetting
 	m.cursor = 0
@@ -269,11 +291,11 @@ func (m Model) selectPickOption() (Model, tea.Cmd) {
 	opt := m.pickOptions[m.cursor]
 	switch opt.value {
 	case pickInheritValue:
-		if err := m.deps.ClearModelSetting(m.ctx, m.targetProvider, m.targetModel, m.pickKey); err != nil {
+		if err := m.deps.ClearModelSetting(m.ctx, m.targetProvider, m.targetModel, m.pickKey, m.scopeSel.Scope); err != nil {
 			m.errMsg = err.Error()
 			return m, nil
 		}
-		m.settingValues = m.deps.GetModelSettings(m.targetProvider, m.targetModel)
+		m.reloadValues()
 		m.info = fmt.Sprintf("%s → default (inherit)", m.pickKey)
 		m.status = m.info
 		m.screen = screenSetting
@@ -282,11 +304,11 @@ func (m Model) selectPickOption() (Model, tea.Cmd) {
 	case pickCustomValue:
 		return m.openEditField(settingItem{label: "reasoningEffort (unverified)", key: "reasoningEffort"})
 	default:
-		if err := m.deps.SetModelSetting(m.ctx, m.targetProvider, m.targetModel, m.pickKey, opt.value); err != nil {
+		if err := m.deps.SetModelSetting(m.ctx, m.targetProvider, m.targetModel, m.pickKey, opt.value, m.scopeSel.Scope); err != nil {
 			m.errMsg = err.Error()
 			return m, nil
 		}
-		m.settingValues = m.deps.GetModelSettings(m.targetProvider, m.targetModel)
+		m.reloadValues()
 		m.info = fmt.Sprintf("%s → %s", m.pickKey, opt.value)
 		m.status = m.info
 		m.screen = screenSetting
@@ -322,11 +344,11 @@ func (m Model) handleEditFieldKey(key tea.KeyMsg) (Model, tea.Cmd) {
 
 func (m Model) commitEditField() (Model, tea.Cmd) {
 	value := m.input.Value()
-	if err := m.deps.SetModelSetting(m.ctx, m.targetProvider, m.targetModel, m.editKey, value); err != nil {
+	if err := m.deps.SetModelSetting(m.ctx, m.targetProvider, m.targetModel, m.editKey, value, m.scopeSel.Scope); err != nil {
 		m.errMsg = err.Error()
 		return m, nil
 	}
-	m.settingValues = m.deps.GetModelSettings(m.targetProvider, m.targetModel)
+	m.reloadValues()
 	m.info = fmt.Sprintf("%s → %s", m.editKey, value)
 	m.status = m.info
 	m.screen = screenSetting
@@ -343,14 +365,28 @@ func (m Model) clearCurrentSetting() (Model, tea.Cmd) {
 	if item.key == "back" {
 		return m, nil
 	}
-	if err := m.deps.ClearModelSetting(m.ctx, m.targetProvider, m.targetModel, item.key); err != nil {
+	if err := m.deps.ClearModelSetting(m.ctx, m.targetProvider, m.targetModel, item.key, m.scopeSel.Scope); err != nil {
 		m.errMsg = err.Error()
 		return m, nil
 	}
-	m.settingValues = m.deps.GetModelSettings(m.targetProvider, m.targetModel)
+	m.reloadValues()
 	m.info = fmt.Sprintf("%s reset to default.", item.key)
 	m.errMsg = ""
 	return m, nil
+}
+
+// reloadValues re-reads the target model's values for the selected scope, plus
+// the global values a project view inherits. No-op before a model is chosen.
+func (m *Model) reloadValues() {
+	if m.targetProvider == "" {
+		return
+	}
+	scope := m.scopeSel.Scope
+	m.settingValues = m.deps.GetModelSettings(m.targetProvider, m.targetModel, scope)
+	m.inheritedValues = nil
+	if scope == config.ScopeProject {
+		m.inheritedValues = m.deps.GetModelSettings(m.targetProvider, m.targetModel, config.ScopeGlobal)
+	}
 }
 
 // targetIndex returns the cursor position for the currently-edited target in the list.

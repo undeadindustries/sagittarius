@@ -57,12 +57,17 @@ func (stubModelsDeps) ListAllActiveModels() []modelsdialog.ModelEntry {
 		{ProviderID: "openai", ProviderLabel: "openai", Model: "gpt-4o-mini"},
 	}
 }
-func (stubModelsDeps) GetModelSettings(string, string) map[string]string { return nil }
-func (stubModelsDeps) SetModelSetting(context.Context, string, string, string, string) error {
+func (stubModelsDeps) ProjectAvailable() bool { return false }
+func (stubModelsDeps) GetModelSettings(string, string, config.SettingScope) map[string]string {
 	return nil
 }
-func (stubModelsDeps) ClearModelSetting(context.Context, string, string, string) error { return nil }
-func (stubModelsDeps) ReasoningCapabilityHint(string, string) string                   { return "" }
+func (stubModelsDeps) SetModelSetting(context.Context, string, string, string, string, config.SettingScope) error {
+	return nil
+}
+func (stubModelsDeps) ClearModelSetting(context.Context, string, string, string, config.SettingScope) error {
+	return nil
+}
+func (stubModelsDeps) ReasoningCapabilityHint(string, string) string { return "" }
 func (stubModelsDeps) ReasoningOptions(string, string) ([]string, string, bool) {
 	return nil, "", false
 }
@@ -74,9 +79,10 @@ func (stubDialogDeps) ListProviders() []providersdialog.ProviderEntry {
 		{ID: "openai", DisplayID: "openai", DisplayName: "OpenAI", WireFormat: config.WireFormatOpenAIChat, IsActive: true},
 	}
 }
-func (stubDialogDeps) ActiveProviderID() string                        { return "openai" }
-func (stubDialogDeps) SwitchProvider(context.Context, string) error    { return nil }
-func (stubDialogDeps) SetAPIKey(context.Context, string, string) error { return nil }
+func (stubDialogDeps) ActiveProviderID() string                                          { return "openai" }
+func (stubDialogDeps) ProjectAvailable() bool                                            { return false }
+func (stubDialogDeps) SwitchProvider(context.Context, string, config.SettingScope) error { return nil }
+func (stubDialogDeps) SetAPIKey(context.Context, string, string) error                   { return nil }
 func (stubDialogDeps) AddCustomProvider(context.Context, string, config.CustomProviderDefinition, string) error {
 	return nil
 }
@@ -84,30 +90,38 @@ func (stubDialogDeps) RemoveCustomProvider(context.Context, string) error { retu
 func (stubDialogDeps) DiscoverModels(context.Context, string) ([]string, error) {
 	return nil, nil
 }
-func (stubDialogDeps) SetModel(context.Context, string, string) error             { return nil }
-func (stubDialogDeps) CurrentModel(string) string                                 { return "" }
-func (stubDialogDeps) ApplySetting(context.Context, string, string, string) error { return nil }
+func (stubDialogDeps) SetModel(context.Context, string, string, config.SettingScope) error {
+	return nil
+}
+func (stubDialogDeps) CurrentModel(string) string { return "" }
+func (stubDialogDeps) ApplySetting(context.Context, string, string, string, config.SettingScope) error {
+	return nil
+}
 func (stubDialogDeps) UpdateCustomDefinition(context.Context, string, string, string) error {
 	return nil
 }
-func (stubDialogDeps) ProviderSettings(string) map[string]string { return map[string]string{} }
+func (stubDialogDeps) ProviderSettings(string, config.SettingScope) map[string]string {
+	return map[string]string{}
+}
 func (stubDialogDeps) ValidSettingKeys(string) []string {
 	return config.ValidSettingKeys(config.WireFormatOpenAIChat)
 }
 func (stubDialogDeps) ActiveModels(string) []string { return nil }
-func (stubDialogDeps) SetActiveModels(context.Context, string, []string) error {
+func (stubDialogDeps) SetActiveModels(context.Context, string, []string, config.SettingScope) error {
 	return nil
 }
 func (stubDialogDeps) EffectiveProviderSettings(string) map[string]string {
 	return map[string]string{}
 }
 func (stubDialogDeps) SystemPromptPresetID(string) string { return "" }
-func (stubDialogDeps) ApplySystemPromptPreset(context.Context, string, string) (string, error) {
+func (stubDialogDeps) ApplySystemPromptPreset(context.Context, string, string, config.SettingScope) (string, error) {
 	return "", nil
 }
-func (stubDialogDeps) ClearSetting(context.Context, string, string) error { return nil }
-func (stubDialogDeps) ResetSettings(context.Context, string) error        { return nil }
-func (stubDialogDeps) GenerateProviderID(string) string                   { return "" }
+func (stubDialogDeps) ClearSetting(context.Context, string, string, config.SettingScope) error {
+	return nil
+}
+func (stubDialogDeps) ResetSettings(context.Context, string, config.SettingScope) error { return nil }
+func (stubDialogDeps) GenerateProviderID(string) string                                 { return "" }
 
 func newDialogModel() *model {
 	app := dialogApp{deps: stubDialogDeps{}, modelsDeps: stubModelsDeps{}}

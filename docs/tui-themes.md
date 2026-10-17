@@ -219,7 +219,9 @@ administrator`.
 
 The row above the composer is the opposite half: it only says which keys to
 press (`/screen display mode · Ctrl+T show thinking · Alt+M or ⌥M mouse · Pg↑
-Pg↓`). While the read-only posture is on, `/readonly off to lift` leads that row.
+Pg↓ or Fn↑ Fn↓`). The mouse and scroll hints name both keyboards, because the
+process OS is the server's and a Mac over SSH would otherwise see only the
+Page keys. While the read-only posture is on, `/readonly off to lift` leads that row.
 Inline mode shows only the first two hints, since page keys and mouse capture do
 nothing there.
 

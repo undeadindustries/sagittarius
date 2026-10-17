@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/ui/theme"
 )
 
@@ -100,6 +101,9 @@ func (m *Model) rebuild() {
 	}
 	for _, g := range groups {
 		header := g.Server
+		if g.Scope == config.ScopeProject {
+			header += " [project]"
+		}
 		if g.Status != "" {
 			header += "  (" + g.Status + ")"
 		}

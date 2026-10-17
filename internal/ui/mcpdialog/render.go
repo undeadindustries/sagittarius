@@ -21,31 +21,37 @@ func (m Model) View() string {
 		return m.wrapBox(m.viewReloading())
 	}
 
-	var b strings.Builder
 	switch m.screen {
 	case screenForm:
-		b.WriteString(m.viewForm())
+		return m.fitBox(m.formList())
 	case screenField:
-		b.WriteString(m.viewField())
+		return m.wrapBox(m.viewField() + m.statusLines())
 	case screenDelete:
-		b.WriteString(m.viewDelete())
+		return m.wrapBox(m.viewDelete() + m.statusLines())
 	default:
-		b.WriteString(m.viewList())
+		return m.fitBox(m.serverList())
 	}
+}
 
+func (m Model) wrapBox(body string) string {
+	return overlay.Frame(m.th, m.width, minContentWidth, body)
+}
+
+// fitBox frames a list screen windowed to the terminal height.
+func (m Model) fitBox(l overlay.List) string {
+	return overlay.FitFrame(m.th, overlay.Box{Width: m.width, Height: m.height, MinWidth: minContentWidth}, l)
+}
+
+// statusLines renders the info and error messages for the non-list screens.
+func (m Model) statusLines() string {
+	var b strings.Builder
 	if m.info != "" {
 		b.WriteString("\n\n" + m.th.Dim.Render(m.wrap(m.info)))
 	}
 	if m.errMsg != "" {
 		b.WriteString("\n\n" + m.th.Error.Render(m.wrap("✗ "+m.errMsg)))
 	}
-
-	body := b.String()
-	return m.wrapBox(body)
-}
-
-func (m Model) wrapBox(body string) string {
-	return overlay.Frame(m.th, m.width, minContentWidth, body)
+	return b.String()
 }
 
 func (m Model) viewSaving() string {
@@ -66,12 +72,11 @@ func (m Model) viewReloading() string {
 	return b.String()
 }
 
-func (m Model) viewList() string {
+func (m Model) serverList() overlay.List {
 	dim := m.th.Dim
-	var b strings.Builder
-	b.WriteString(overlay.Title(m.th, "MCP Servers") + "\n\n")
+	rows := make([]string, 0, len(m.servers))
 	if len(m.servers) == 0 {
-		b.WriteString(dim.Render("No MCP servers configured.") + "\n")
+		rows = append(rows, dim.Render("No MCP servers configured."))
 	}
 	for i, srv := range m.servers {
 		label := srv.Name
@@ -93,32 +98,35 @@ func (m Model) viewList() string {
 		if len(meta) > 0 {
 			label += dim.Render("  — " + strings.Join(meta, ", "))
 		}
-		b.WriteString(m.renderRow(label, i == m.listCursor) + "\n")
+		rows = append(rows, m.renderRow(label, i == m.listCursor))
 	}
-	b.WriteString("\n" + overlay.Hints(m.th, "↑/↓ move • Enter edit • a add • x remove • d disable • r reload • t tools • Esc close"))
-	return strings.TrimRight(b.String(), "\n")
+	return overlay.List{
+		Head:   overlay.Title(m.th, "MCP Servers") + "\n",
+		Rows:   rows,
+		Foot:   overlay.Foot(m.th, m.info, m.errMsg, "↑/↓ move • Enter edit • a add • x remove • d disable • r reload • t tools • Esc close"),
+		Cursor: m.listCursor,
+	}
 }
 
-func (m Model) viewForm() string {
-	var b strings.Builder
+func (m Model) formList() overlay.List {
 	title := "Add MCP Server"
 	if !m.adding {
 		title = "Edit MCP Server: " + m.originalName
 	}
-	b.WriteString(overlay.Title(m.th, title) + "\n\n")
-
+	head := overlay.Title(m.th, title) + "\n"
+	if !m.scopeSel.Disabled {
+		head += m.scopeSel.View(m.th) + "\n"
+	}
+	rows := make([]string, len(m.fields))
 	for i, id := range m.fields {
-		b.WriteString(m.renderRow(m.fieldLabel(id), i == m.fieldCursor) + "\n")
+		rows[i] = m.renderRow(m.fieldLabel(id), i == m.fieldCursor)
 	}
-	if !m.scopeSel.Disabled {
-		b.WriteString("\n" + m.scopeSel.View(m.th))
+	return overlay.List{
+		Head:   head,
+		Rows:   rows,
+		Foot:   overlay.Foot(m.th, m.info, m.errMsg, "↑/↓ move • Enter edit/save • Space toggle • Esc back"),
+		Cursor: m.fieldCursor,
 	}
-	footerHint := "↑/↓ move • Enter edit/save • Space toggle • Esc back"
-	if !m.scopeSel.Disabled {
-		footerHint += " • Tab · scope"
-	}
-	b.WriteString("\n" + overlay.Hints(m.th, footerHint))
-	return strings.TrimRight(b.String(), "\n")
 }
 
 func (m Model) fieldLabel(id fieldID) string {

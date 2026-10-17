@@ -245,7 +245,7 @@ func (m *mockHooks) SnapshotDiff(string) (string, error) { return "", nil }
 
 func (m *mockHooks) SnapshotUndo(int) ([]string, error) { return nil, nil }
 
-func (m *mockHooks) SelectCurrentModel(context.Context, string, string) (string, error) {
+func (m *mockHooks) SelectCurrentModel(context.Context, string, string, config.SettingScope) (string, error) {
 	return "gpt-4o-mini", nil
 }
 

@@ -116,14 +116,87 @@ func (m *model) renderInput() string {
 // pads a short row to its width, and that pad may be plain spaces or spaces
 // wrapped in an empty style, depending on the color profile. Either way the
 // background stops at the last non-space cell, so the tail is rebuilt here.
+// The cut point is visibleInputWidth rather than a plain trailing-space trim:
+// at the end of the text the virtual cursor is a reverse-video space, and
+// trimming it made the cursor vanish as soon as the user typed.
 func padInputLine(line string, target int, fill lipgloss.Style) string {
-	keep := ansi.StringWidth(strings.TrimRight(ansi.Strip(line), " "))
-	cut := ansi.Truncate(line, keep, "")
+	cut := ansi.Truncate(line, visibleInputWidth(line), "")
 	pad := target - lipgloss.Width(cut)
 	if pad <= 0 {
 		return cut
 	}
 	return cut + fill.Render(strings.Repeat(" ", pad))
+}
+
+// SGR parameters that switch reverse video and introduce extended colors.
+const (
+	sgrReset        = 0
+	sgrReverse      = 7
+	sgrNoReverse    = 27
+	sgrFgExtended   = 38
+	sgrBgExtended   = 48
+	sgrUlExtended   = 58
+	sgrColorIndexed = 5
+	sgrColorRGB     = 2
+)
+
+// visibleInputWidth returns the cell width of line up to and including its
+// last visible cell: any non-space cell, or a space drawn in reverse video
+// (the textarea's cursor block). Plain trailing spaces are not visible.
+func visibleInputWidth(line string) int {
+	p := ansi.NewParser()
+	var state byte
+	reverse := false
+	col, keep := 0, 0
+	for len(line) > 0 {
+		seq, width, n, newState := ansi.DecodeSequence(line, state, p)
+		state = newState
+		switch {
+		case width > 0:
+			col += width
+			if reverse || strings.TrimSpace(seq) != "" {
+				keep = col
+			}
+		case ansi.HasCsiPrefix(seq) && ansi.Cmd(p.Command()).Final() == 'm':
+			reverse = applySGRReverse(reverse, p.Params())
+		}
+		line = line[n:]
+	}
+	return keep
+}
+
+// applySGRReverse returns the reverse-video state after one SGR sequence.
+// Extended color arguments are skipped so a palette index such as the 7 in
+// 38;5;7 is not mistaken for the reverse attribute.
+func applySGRReverse(reverse bool, params ansi.Params) bool {
+	if len(params) == 0 {
+		return false
+	}
+	for i := 0; i < len(params); i++ {
+		switch v := params[i].Param(sgrReset); v {
+		case sgrReset, sgrNoReverse:
+			reverse = false
+		case sgrReverse:
+			reverse = true
+		case sgrFgExtended, sgrBgExtended, sgrUlExtended:
+			if params[i].HasMore() {
+				for i+1 < len(params) && params[i].HasMore() {
+					i++
+				}
+				continue
+			}
+			if i+1 >= len(params) {
+				continue
+			}
+			switch params[i+1].Param(sgrReset) {
+			case sgrColorIndexed:
+				i += 2
+			case sgrColorRGB:
+				i += 4
+			}
+		}
+	}
+	return reverse
 }
 
 // visibleInputPrefix returns the first word of s, used by tests to assert the
