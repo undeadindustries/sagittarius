@@ -147,9 +147,12 @@ newline for multi-line prompts.
 
 ## Working indicator and cancel
 
-While the agent is working, a braille spinner appears directly above the input
-showing the current activity, an elapsed timer, and a cancel hint — e.g.
-`⠹ Working… (12s · esc to cancel)`. Press `Esc` to cancel the in-flight turn.
+While the agent is working, a braille spinner appears just above the key-hint
+row (the `/screen display mode · …` line over the input) showing the current
+activity, an elapsed timer, and a cancel hint — e.g.
+`⠹ Working… (12s · esc to cancel)`. The thinking box uses the same spot. Both
+sit above the key hints so that row stays put next to the input when a turn
+starts or the box opens; the conversation gives up the space instead. Press `Esc` to cancel the in-flight turn.
 `Ctrl+C` also cancels a running turn rather than quitting outright; a second
 `Ctrl+C` (when idle) exits.
 

@@ -392,14 +392,7 @@ func (m *model) inlineView() string {
 	if strings.TrimSpace(live) != "" {
 		sections = append(sections, live)
 	}
-	if row := m.renderStatusRow(); row != "" {
-		sections = append(sections, row)
-	}
-	if box := m.renderThinkingBox(); box != "" {
-		sections = append(sections, box)
-	} else if m.showWorkingIndicator() {
-		sections = append(sections, renderWorkingLine(m.spin, m.workingDisplayLabel(), m.th, m.width))
-	}
+	sections = m.appendActivityAndHints(sections)
 	sections = append(sections, m.renderInputSeparator(), m.renderInput())
 	if suggestions := m.renderSuggestions(); suggestions != "" {
 		sections = append(sections, suggestions)

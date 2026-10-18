@@ -420,6 +420,72 @@ func TestShortcutHintOrder(t *testing.T) {
 	}
 }
 
+// lineIndexFromBottom returns how many lines above the last one the first line
+// containing want sits, or -1. The frame is bottom-anchored, so this is the
+// row's screen position regardless of how tall the content above it is.
+func lineIndexFromBottom(frame, want string) int {
+	lines := strings.Split(frame, "\n")
+	for i, line := range lines {
+		if strings.Contains(line, want) {
+			return len(lines) - 1 - i
+		}
+	}
+	return -1
+}
+
+// TestActivityRowSitsAboveKeyHints pins the composer order: the working line
+// or thinking box comes above the key-hint row, so the hints next to the input
+// keep their screen row when a turn starts and the activity slot appears.
+func TestActivityRowSitsAboveKeyHints(t *testing.T) {
+	t.Parallel()
+	const (
+		workingLabel = "Working…"
+		thinkingText = "weighing the layout change"
+	)
+	cases := []struct {
+		name     string
+		inline   bool
+		thinking bool
+		marker   string
+	}{
+		{"fullscreen working line", false, false, workingLabel},
+		{"fullscreen thinking box", false, true, thinkingText},
+		{"inline working line", true, false, workingLabel},
+		{"inline thinking box", true, true, thinkingText},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			m := newModel(ui.Options{ThemeName: "greyscale"}, statusApp{}, NewTerminal(ui.Options{}))
+			m.width, m.height = 200, 40
+			m.inline = tc.inline
+			idleHints := lineIndexFromBottom(stripANSI(m.View()), hintScreen)
+			if idleHints < 0 {
+				t.Fatalf("idle frame has no key-hint row:\n%s", stripANSI(m.View()))
+			}
+
+			m.busy = true
+			m.workingLabel = workingLabel
+			if tc.thinking {
+				m.thinkingToggled, m.showThinking = true, true
+				m.thinking = thinkingText
+			}
+			frame := stripANSI(m.View())
+			activity := lineIndexFromBottom(frame, tc.marker)
+			hints := lineIndexFromBottom(frame, hintScreen)
+			if activity < 0 || hints < 0 {
+				t.Fatalf("busy frame missing activity (%d) or hints (%d):\n%s", activity, hints, frame)
+			}
+			if activity <= hints {
+				t.Errorf("activity row is %d from the bottom, hints %d: activity must sit above the hints\n%s", activity, hints, frame)
+			}
+			if hints != idleHints {
+				t.Errorf("key-hint row moved from %d to %d rows above the bottom when the turn started\n%s", idleHints, hints, frame)
+			}
+		})
+	}
+}
+
 func TestFooterSettingsShowsReasoningEffort(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

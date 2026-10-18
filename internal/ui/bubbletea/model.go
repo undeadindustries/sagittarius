@@ -1149,16 +1149,7 @@ func (m *model) View() string {
 	m.viewport.Width = max(m.width-2, 1)
 
 	sections := []string{header, m.viewport.View()}
-	if row := m.renderStatusRow(); row != "" {
-		sections = append(sections, row)
-	}
-	// The thinking box carries its own spinner in the border, so when it is
-	// visible it replaces the standalone working line.
-	if box := m.renderThinkingBox(); box != "" {
-		sections = append(sections, box)
-	} else if m.showWorkingIndicator() {
-		sections = append(sections, renderWorkingLine(m.spin, m.workingDisplayLabel(), m.th, m.width))
-	}
+	sections = m.appendActivityAndHints(sections)
 	sections = append(sections, m.renderInputSeparator())
 	sections = append(sections, inputLine)
 	if suggestions != "" {
@@ -1166,6 +1157,24 @@ func (m *model) View() string {
 	}
 	sections = append(sections, footer)
 	return clampWidth(lipgloss.JoinVertical(lipgloss.Left, sections...), m.width)
+}
+
+// appendActivityAndHints adds the activity slot (thinking box or working line)
+// and then the key-hint status row. The frame is bottom-anchored, so the slot
+// that comes and goes during a turn sits above the hints: the hint row next to
+// the input never moves when "Working" appears or the thinking box opens. The
+// thinking box carries its own spinner in the border, so when it is visible it
+// replaces the standalone working line.
+func (m *model) appendActivityAndHints(sections []string) []string {
+	if box := m.renderThinkingBox(); box != "" {
+		sections = append(sections, box)
+	} else if m.showWorkingIndicator() {
+		sections = append(sections, renderWorkingLine(m.spin, m.workingDisplayLabel(), m.th, m.width))
+	}
+	if row := m.renderStatusRow(); row != "" {
+		sections = append(sections, row)
+	}
+	return sections
 }
 
 // overlayView renders the open modal dialog, if any. View clips it to the
