@@ -61,7 +61,14 @@ Each tool invocation renders as a single rounded **card** in the scrollback
 rather than separate start/output/result lines. The card updates in place across
 the call's lifecycle, so you see one grouped box per tool call. Its top border
 carries a status icon, the tool's display name, and a dimmed truncated summary of
-the arguments (the command, the path, etc.):
+the arguments (the command, the path, etc.).
+
+On the `default` theme the border color follows the card's state, not the tool:
+dark purple once it's finished, a slightly brighter purple while it runs, muted
+red when it fails or is denied, and the bright accent purple when it is waiting
+for your answer. That last one is always the brightest, so a pending approval
+stands out from a scroll full of finished cards. The thinking box and the
+sub-agent frame use the dark purple. `greyscale` keeps plain borders.
 
 ```
 ╭─ ✓ Shell  go build ./... ───────────────────────╮

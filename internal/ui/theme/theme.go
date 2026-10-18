@@ -50,9 +50,14 @@ type Theme struct {
 	// Selection / focus.
 	Selected lipgloss.Style // highlighted list row
 
-	// Structural colors for borders (dialog overlays, confirm band).
-	BorderColor      lipgloss.TerminalColor // default panel border
-	FocusBorderColor lipgloss.TerminalColor // focused / awaiting-input border
+	// Structural colors for borders. Tool cards pick one by state, so a scan
+	// of the transcript shows what is running, failed, or waiting on the user
+	// without reading glyphs. Focus must stay the brightest: it is the only
+	// border that asks for input (and the dialog overlay frame).
+	BorderColor        lipgloss.TerminalColor // settled cards, thinking box, sub-agent frame
+	RunningBorderColor lipgloss.TerminalColor // tool card still executing
+	ErrorBorderColor   lipgloss.TerminalColor // failed, denied, or blocked tool card
+	FocusBorderColor   lipgloss.TerminalColor // focused / awaiting-input border
 
 	// InputBg is the background color for the chat input row. Used by the TUI
 	// to set PromptStyle/TextStyle/CursorStyle on the textinput so the typing
@@ -77,6 +82,9 @@ func Default() Theme {
 		purple      = "#9B7EDE" // accent / user prefix / focus
 		purpleLight = "#D7AFFF" // titles / highlights
 		purpleDeep  = "#6C5CE7" // selected background
+		purpleDim   = "#5F5290" // settled card borders: theme-tinted, well below focus
+		purpleMid   = "#7565AE" // running card borders: lifted, still dimmer than focus
+		redMuted    = "#9A4E64" // failed card borders: reads as error without shouting
 		link        = "#87AFFF" // blue-ish for links/commands
 		code        = "#5FD7AF" // teal for code spans/blocks
 		grey        = "243"     // secondary
@@ -86,27 +94,29 @@ func Default() Theme {
 		green       = "#5FD787"
 	)
 	return Theme{
-		Name:             "default",
-		Colored:          true,
-		Title:            lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(purpleLight)),
-		Primary:          lipgloss.NewStyle(),
-		Secondary:        lipgloss.NewStyle().Foreground(lipgloss.Color(grey)),
-		Accent:           lipgloss.NewStyle().Foreground(lipgloss.Color(purple)),
-		Response:         lipgloss.NewStyle(),
-		Link:             lipgloss.NewStyle().Foreground(lipgloss.Color(link)),
-		Code:             lipgloss.NewStyle().Foreground(lipgloss.Color(code)),
-		Dim:              lipgloss.NewStyle().Foreground(lipgloss.Color(greyDim)).Italic(true),
-		UserBody:         lipgloss.NewStyle().Foreground(lipgloss.Color(grey)),
-		DiffAdd:          lipgloss.NewStyle().Foreground(lipgloss.Color(green)),
-		DiffDel:          lipgloss.NewStyle().Foreground(lipgloss.Color(red)),
-		DiffMeta:         lipgloss.NewStyle().Foreground(lipgloss.Color(greyDim)),
-		Error:            lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(red)),
-		Warning:          lipgloss.NewStyle().Foreground(lipgloss.Color(yellow)),
-		Success:          lipgloss.NewStyle().Foreground(lipgloss.Color(green)),
-		Selected:         lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF")).Background(lipgloss.Color(purpleDeep)),
-		BorderColor:      lipgloss.Color(grey),
-		FocusBorderColor: lipgloss.Color(purple),
-		InputBg:          lipgloss.Color("235"),
+		Name:               "default",
+		Colored:            true,
+		Title:              lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(purpleLight)),
+		Primary:            lipgloss.NewStyle(),
+		Secondary:          lipgloss.NewStyle().Foreground(lipgloss.Color(grey)),
+		Accent:             lipgloss.NewStyle().Foreground(lipgloss.Color(purple)),
+		Response:           lipgloss.NewStyle(),
+		Link:               lipgloss.NewStyle().Foreground(lipgloss.Color(link)),
+		Code:               lipgloss.NewStyle().Foreground(lipgloss.Color(code)),
+		Dim:                lipgloss.NewStyle().Foreground(lipgloss.Color(greyDim)).Italic(true),
+		UserBody:           lipgloss.NewStyle().Foreground(lipgloss.Color(grey)),
+		DiffAdd:            lipgloss.NewStyle().Foreground(lipgloss.Color(green)),
+		DiffDel:            lipgloss.NewStyle().Foreground(lipgloss.Color(red)),
+		DiffMeta:           lipgloss.NewStyle().Foreground(lipgloss.Color(greyDim)),
+		Error:              lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color(red)),
+		Warning:            lipgloss.NewStyle().Foreground(lipgloss.Color(yellow)),
+		Success:            lipgloss.NewStyle().Foreground(lipgloss.Color(green)),
+		Selected:           lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#FFFFFF")).Background(lipgloss.Color(purpleDeep)),
+		BorderColor:        lipgloss.Color(purpleDim),
+		RunningBorderColor: lipgloss.Color(purpleMid),
+		ErrorBorderColor:   lipgloss.Color(redMuted),
+		FocusBorderColor:   lipgloss.Color(purple),
+		InputBg:            lipgloss.Color("235"),
 		SpinnerGradient: []string{
 			purple, // #9B7EDE
 			link,   // #87AFFF blue
@@ -128,27 +138,29 @@ func Default() Theme {
 // are visually interchangeable apart from chroma.
 func Greyscale() Theme {
 	return Theme{
-		Name:             "greyscale",
-		Colored:          false,
-		Title:            lipgloss.NewStyle().Bold(true),
-		Primary:          lipgloss.NewStyle(),
-		Secondary:        lipgloss.NewStyle().Faint(true),
-		Accent:           lipgloss.NewStyle().Bold(true),
-		Response:         lipgloss.NewStyle(),
-		Link:             lipgloss.NewStyle().Underline(true),
-		Code:             lipgloss.NewStyle().Faint(true),
-		Dim:              lipgloss.NewStyle().Faint(true),
-		UserBody:         lipgloss.NewStyle().Faint(true),
-		DiffAdd:          lipgloss.NewStyle().Bold(true),
-		DiffDel:          lipgloss.NewStyle().Reverse(true),
-		DiffMeta:         lipgloss.NewStyle().Faint(true),
-		Error:            lipgloss.NewStyle().Bold(true),
-		Warning:          lipgloss.NewStyle().Bold(true),
-		Success:          lipgloss.NewStyle().Bold(true),
-		Selected:         lipgloss.NewStyle().Reverse(true),
-		BorderColor:      lipgloss.NoColor{},
-		FocusBorderColor: lipgloss.NoColor{},
-		InputBg:          lipgloss.NoColor{},
+		Name:               "greyscale",
+		Colored:            false,
+		Title:              lipgloss.NewStyle().Bold(true),
+		Primary:            lipgloss.NewStyle(),
+		Secondary:          lipgloss.NewStyle().Faint(true),
+		Accent:             lipgloss.NewStyle().Bold(true),
+		Response:           lipgloss.NewStyle(),
+		Link:               lipgloss.NewStyle().Underline(true),
+		Code:               lipgloss.NewStyle().Faint(true),
+		Dim:                lipgloss.NewStyle().Faint(true),
+		UserBody:           lipgloss.NewStyle().Faint(true),
+		DiffAdd:            lipgloss.NewStyle().Bold(true),
+		DiffDel:            lipgloss.NewStyle().Reverse(true),
+		DiffMeta:           lipgloss.NewStyle().Faint(true),
+		Error:              lipgloss.NewStyle().Bold(true),
+		Warning:            lipgloss.NewStyle().Bold(true),
+		Success:            lipgloss.NewStyle().Bold(true),
+		Selected:           lipgloss.NewStyle().Reverse(true),
+		BorderColor:        lipgloss.NoColor{},
+		RunningBorderColor: lipgloss.NoColor{},
+		ErrorBorderColor:   lipgloss.NoColor{},
+		FocusBorderColor:   lipgloss.NoColor{},
+		InputBg:            lipgloss.NoColor{},
 	}
 }
 

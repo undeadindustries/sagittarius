@@ -10,6 +10,26 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/ui"
 )
 
+func TestToolCardBorderColorFollowsState(t *testing.T) {
+	t.Parallel()
+	m := newModel(ui.Options{ThemeName: "default"}, quitApp{}, NewTerminal(ui.Options{}))
+	cases := []struct {
+		phase toolPhase
+		want  lipgloss.TerminalColor
+	}{
+		{toolRunning, m.th.RunningBorderColor},
+		{toolConfirming, m.th.FocusBorderColor},
+		{toolAsking, m.th.FocusBorderColor},
+		{toolSuccess, m.th.BorderColor},
+		{toolError, m.th.ErrorBorderColor},
+	}
+	for _, tc := range cases {
+		if got := m.toolCardBorderColor(&toolCard{phase: tc.phase}); got != tc.want {
+			t.Errorf("phase %d border = %v, want %v", tc.phase, got, tc.want)
+		}
+	}
+}
+
 func TestToolDisplayName(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{

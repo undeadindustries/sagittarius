@@ -214,13 +214,22 @@ func (m *model) renderToolCard(c *toolCard, width int) []string {
 	return out
 }
 
-// toolCardBorderColor highlights a confirming card with the focus color so the
-// pending decision draws the eye; other phases use the muted panel border.
+// toolCardBorderColor colors a card by state, not by tool: per-tool hues would
+// collide with the diff and status colors and stripe a long turn. A card
+// waiting on the user gets the focus color so the decision draws the eye; a
+// running card is lifted slightly; a failed one is muted red; settled cards use
+// the dim panel border.
 func (m *model) toolCardBorderColor(c *toolCard) lipgloss.TerminalColor {
-	if c.phase == toolConfirming || c.phase == toolAsking {
+	switch c.phase {
+	case toolConfirming, toolAsking:
 		return m.th.FocusBorderColor
+	case toolRunning:
+		return m.th.RunningBorderColor
+	case toolError:
+		return m.th.ErrorBorderColor
+	default:
+		return m.th.BorderColor
 	}
-	return m.th.BorderColor
 }
 
 // toolCardTop builds the top border row with the status icon, display name, and
