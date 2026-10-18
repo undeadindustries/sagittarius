@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -46,7 +47,7 @@ func (t *projectChecksTool) Declaration() provider.ToolDeclaration {
 				ProjectChecksParamPaths: map[string]any{
 					"type":        "array",
 					"items":       map[string]any{"type": "string"},
-					"description": "Optional: limit file-scoped checks (lint, format) to these workspace-relative paths. Build, vet, and test still run on the whole module.",
+					"description": "Optional: limit file-scoped checks (lint, format, typecheck) to these workspace-relative files or directories. Each check only gets the file types it reads (mypy never sees pyproject.toml); a check with no matching paths is reported as skipped. Build, vet, and test still run on the whole module.",
 				},
 				ProjectChecksParamFix: map[string]any{
 					"type":        "boolean",
@@ -97,6 +98,19 @@ func (t *projectChecksTool) Execute(ctx context.Context, args map[string]any) (m
 	allOK := true
 
 	for _, check := range plan.Checks {
+		targets := paths
+		if check.FileScoped && len(paths) > 0 {
+			targets = checks.ScopePaths(check, paths, t.isDir)
+			if len(targets) == 0 {
+				results = append(results, map[string]any{
+					"name":    check.Name,
+					"command": check.Command,
+					"ok":      true,
+					"skipped": "none of the given paths are " + strings.Join(check.Extensions, "/") + " files or directories",
+				})
+				continue
+			}
+		}
 		if _, lookErr := exec.LookPath(check.Command); lookErr != nil {
 			if !seenMissing[check.Command] {
 				seenMissing[check.Command] = true
@@ -108,7 +122,7 @@ func (t *projectChecksTool) Execute(ctx context.Context, args map[string]any) (m
 			continue
 		}
 
-		argv := checks.Argv(check, paths)
+		argv := checks.Argv(check, targets)
 		ok, exitCode, output := checks.Run(runCtx, t.ws.Root(), check, argv)
 		if !ok {
 			allOK = false
@@ -131,6 +145,19 @@ func (t *projectChecksTool) Execute(ctx context.Context, args map[string]any) (m
 		"missing_tools": missing,
 		"all_ok":        allOK,
 	}, nil
+}
+
+// isDir reports whether a workspace-relative path is an existing directory, so
+// checks.ScopePaths keeps directory targets for every file-scoped tool. Paths
+// were validated by scopePaths; a resolve or stat failure means "not a
+// directory", leaving the extension filter to decide.
+func (t *projectChecksTool) isDir(rel string) bool {
+	abs, err := t.ws.ResolvePath(rel)
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(abs)
+	return err == nil && info.IsDir()
 }
 
 // scopePaths validates that any caller-supplied paths stay within the workspace

@@ -5,6 +5,8 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -20,6 +22,27 @@ func Argv(check Check, paths []string) []string {
 	argv = append(argv, check.Args[:len(check.Args)-1]...)
 	argv = append(argv, paths...)
 	return argv
+}
+
+// ScopePaths narrows caller paths to those check can read, so a file-scoped
+// tool never receives a file type it would misparse (mypy treats every
+// argument as Python, so pyproject.toml becomes a syntax error). Directories
+// always pass: the tool walks them with its own file discovery. isDir reports
+// whether a path is a directory; it is injected so this stays free of I/O.
+// Checks that are not file-scoped, or that accept every file, get paths back
+// unchanged. An empty result means none of the paths apply to this check.
+func ScopePaths(check Check, paths []string, isDir func(string) bool) []string {
+	if !check.FileScoped || len(check.Extensions) == 0 {
+		return paths
+	}
+	out := make([]string, 0, len(paths))
+	for _, p := range paths {
+		ext := strings.ToLower(filepath.Ext(p))
+		if slices.Contains(check.Extensions, ext) || (isDir != nil && isDir(p)) {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // Run executes a check and returns its success status, exit code, and truncated output.

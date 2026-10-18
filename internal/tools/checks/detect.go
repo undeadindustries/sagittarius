@@ -24,6 +24,12 @@ type Check struct {
 	// FileScoped is true when Args end in a target list that may be narrowed to
 	// caller-supplied paths instead of the default whole-tree target.
 	FileScoped bool
+	// Extensions lists the file extensions (lowercase, with the dot) a
+	// file-scoped check can read. Caller paths are filtered to these before
+	// they replace the default target: tools like mypy parse every argument
+	// as source, so `mypy pyproject.toml` reports a bogus syntax error. Empty
+	// means every file is accepted.
+	Extensions []string
 	// FailOnOutput marks checks whose exit code is 0 even on findings (e.g.
 	// `gofmt -l`); the runner treats non-empty output as a failure.
 	FailOnOutput bool
@@ -121,10 +127,24 @@ func InstallHint(command string) string {
 	}
 }
 
+// File types each file-scoped tool reads. Kept to what the tool parses by
+// default so a narrowed run never hands it a file it rejects.
+var (
+	goExtensions       = []string{".go"}
+	pythonExtensions   = []string{".py", ".pyi"}
+	ruffExtensions     = []string{".py", ".pyi", ".ipynb"}
+	scriptExtensions   = []string{".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts"}
+	prettierExtensions = []string{
+		".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".mts", ".cts",
+		".json", ".jsonc", ".json5", ".css", ".scss", ".less", ".html", ".vue",
+		".md", ".mdx", ".yaml", ".yml", ".graphql", ".gql", ".hbs", ".handlebars",
+	}
+)
+
 func goPlan(fix bool) Plan {
-	format := Check{Name: "format", Command: "gofmt", Args: []string{"-l", "."}, FileScoped: true, FailOnOutput: true}
+	format := Check{Name: "format", Command: "gofmt", Args: []string{"-l", "."}, FileScoped: true, Extensions: goExtensions, FailOnOutput: true}
 	if fix {
-		format = Check{Name: "format", Command: "gofmt", Args: []string{"-w", "."}, FileScoped: true, Mutates: true}
+		format = Check{Name: "format", Command: "gofmt", Args: []string{"-w", "."}, FileScoped: true, Extensions: goExtensions, Mutates: true}
 	}
 	lint := Check{Name: "lint", Command: "golangci-lint", Args: []string{"run", "./..."}}
 	if fix {
@@ -143,13 +163,13 @@ func goPlan(fix bool) Plan {
 }
 
 func nodePlan(root string, fix bool) Plan {
-	lint := Check{Name: "lint", Command: "eslint", Args: []string{"."}, FileScoped: true}
+	lint := Check{Name: "lint", Command: "eslint", Args: []string{"."}, FileScoped: true, Extensions: scriptExtensions}
 	if fix {
-		lint = Check{Name: "lint", Command: "eslint", Args: []string{"--fix", "."}, FileScoped: true, Mutates: true}
+		lint = Check{Name: "lint", Command: "eslint", Args: []string{"--fix", "."}, FileScoped: true, Extensions: scriptExtensions, Mutates: true}
 	}
-	format := Check{Name: "format", Command: "prettier", Args: []string{"--check", "."}, FileScoped: true}
+	format := Check{Name: "format", Command: "prettier", Args: []string{"--check", "."}, FileScoped: true, Extensions: prettierExtensions}
 	if fix {
-		format = Check{Name: "format", Command: "prettier", Args: []string{"--write", "."}, FileScoped: true, Mutates: true}
+		format = Check{Name: "format", Command: "prettier", Args: []string{"--write", "."}, FileScoped: true, Extensions: prettierExtensions, Mutates: true}
 	}
 	plan := Plan{Stack: "node", Checks: []Check{lint, format}}
 	// Type check only when the project is configured for TypeScript.
@@ -160,20 +180,20 @@ func nodePlan(root string, fix bool) Plan {
 }
 
 func pythonPlan(fix bool) Plan {
-	lint := Check{Name: "lint", Command: "ruff", Args: []string{"check", "."}, FileScoped: true}
+	lint := Check{Name: "lint", Command: "ruff", Args: []string{"check", "."}, FileScoped: true, Extensions: ruffExtensions}
 	if fix {
-		lint = Check{Name: "lint", Command: "ruff", Args: []string{"check", "--fix", "."}, FileScoped: true, Mutates: true}
+		lint = Check{Name: "lint", Command: "ruff", Args: []string{"check", "--fix", "."}, FileScoped: true, Extensions: ruffExtensions, Mutates: true}
 	}
-	format := Check{Name: "format", Command: "ruff", Args: []string{"format", "--check", "."}, FileScoped: true}
+	format := Check{Name: "format", Command: "ruff", Args: []string{"format", "--check", "."}, FileScoped: true, Extensions: ruffExtensions}
 	if fix {
-		format = Check{Name: "format", Command: "ruff", Args: []string{"format", "."}, FileScoped: true, Mutates: true}
+		format = Check{Name: "format", Command: "ruff", Args: []string{"format", "."}, FileScoped: true, Extensions: ruffExtensions, Mutates: true}
 	}
 	return Plan{
 		Stack: "python",
 		Checks: []Check{
 			lint,
 			format,
-			{Name: "typecheck", Command: "mypy", Args: []string{"."}, FileScoped: true},
+			{Name: "typecheck", Command: "mypy", Args: []string{"."}, FileScoped: true, Extensions: pythonExtensions},
 		},
 	}
 }

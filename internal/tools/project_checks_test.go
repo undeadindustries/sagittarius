@@ -109,6 +109,83 @@ func TestProjectChecksPathsRejectFlags(t *testing.T) {
 	}
 }
 
+// checkEntry returns the result entry for the named check, or nil.
+func checkEntry(t *testing.T, res map[string]any, name string) map[string]any {
+	t.Helper()
+	list, ok := res["checks"].([]any)
+	if !ok {
+		t.Fatalf("checks = %#v, want a list", res["checks"])
+	}
+	for _, item := range list {
+		if e, _ := item.(map[string]any); e["name"] == name {
+			return e
+		}
+	}
+	return nil
+}
+
+// TestProjectChecksNarrowsPathsPerCheck is the regression for mypy being handed
+// pyproject.toml (it parses every argument as Python and reported a bogus
+// syntax error). A fake mypy on PATH echoes its arguments so the test sees the
+// exact argv; ruff is absent, so only mypy runs.
+func TestProjectChecksNarrowsPathsPerCheck(t *testing.T) {
+	root := t.TempDir()
+	for name, body := range map[string]string{
+		"pyproject.toml": "[project]\nname = \"x\"\nrequires-python = \">=3.11\"\n",
+		"app.py":         "x = 1\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(root, "pkg"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "mypy"), []byte("#!/bin/sh\necho \"args: $*\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin)
+	ws, err := NewWorkspace(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := newProjectChecksTool(ws, false)
+
+	res, err := tool.Execute(t.Context(), map[string]any{
+		ProjectChecksParamPaths: []any{"app.py", "pyproject.toml", "pkg"},
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	mypy := checkEntry(t, res, "typecheck")
+	if mypy == nil {
+		t.Fatalf("no typecheck entry in %#v", res["checks"])
+	}
+	if got := mypy["output"]; got != "args: app.py pkg" {
+		t.Fatalf("mypy argv output = %q, want %q", got, "args: app.py pkg")
+	}
+
+	res, err = tool.Execute(t.Context(), map[string]any{
+		ProjectChecksParamPaths: []any{"pyproject.toml"},
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	mypy = checkEntry(t, res, "typecheck")
+	if mypy == nil || mypy["skipped"] == nil || mypy["ok"] != true {
+		t.Fatalf("mypy with only pyproject.toml should be skipped and ok, got %#v", mypy)
+	}
+	for _, item := range res["missing_tools"].([]any) {
+		if m, _ := item.(map[string]any); m["tool"] == "ruff" {
+			t.Fatalf("ruff reported missing although no path applied to it: %#v", res["missing_tools"])
+		}
+	}
+	if res["all_ok"] != true {
+		t.Fatalf("all_ok = %v, want true when every scoped check was skipped", res["all_ok"])
+	}
+}
+
 func TestProjectChecksModeGates(t *testing.T) {
 	t.Parallel()
 

@@ -31,7 +31,7 @@ check, whether it passed, and any missing tools with an install hint.
 
 | Parameter | Type | Default | Meaning |
 |-----------|------|---------|---------|
-| `paths` | string[] | (all) | Limit file-scoped checks (format, lint) to these paths. Build/test still run on the whole module. |
+| `paths` | string[] | (all) | Limit file-scoped checks (format, lint, type check) to these files or directories. Each check only gets the file types it reads, so `mypy` never sees `pyproject.toml` and `gofmt` never sees a Markdown file. A check with no matching paths is reported as skipped rather than run. Build/test still run on the whole module. |
 | `fix` | bool | `false` | Run mutating formatters/auto-fixers. Disabled unless `sagittarius.verify.allowFix` is `true`. |
 
 Check-only runs (`fix=false`) are read-only and are allowed in `plan` and `ask`
