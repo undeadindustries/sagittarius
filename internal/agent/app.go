@@ -253,6 +253,7 @@ func (a *App) ComposerStatus() ui.ComposerStatus {
 		}
 		cs.ShowThinking = config.ResolveShowThinking(s, providerID, model)
 		cs.EscapeAtOnPaste = s.UI().EscapeAtOnPaste
+		cs.ReasoningEffort = a.liveReasoningEffort(s)
 	}
 	return cs
 }
@@ -2508,7 +2509,7 @@ func (r *Runner) SetRegistry(registry *tools.Registry) {
 	r.mergeSchedulerGrantsLocked()
 	scheduler := tools.NewScheduler(
 		registry,
-		approvalToPolicy(r.approval),
+		approvalToPolicy(r.ApprovalMode()),
 		r.interactive,
 		r.InteractionMode,
 		r.workspace,

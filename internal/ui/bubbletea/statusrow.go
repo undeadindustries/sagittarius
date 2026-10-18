@@ -102,12 +102,18 @@ func (m *model) scrollShortcutHints() string {
 // otherwise be told to press Page Up. Words, not icons: no single-width glyph
 // for "mouse"/"thinking" renders reliably across terminal fonts.
 const (
-	hintScreen   = "/screen display mode"
-	hintThinking = "Ctrl+T show thinking"
-	hintMouse    = "Alt+M or ⌥M mouse"
-	hintScroll   = "Pg↑ Pg↓ or Fn↑ Fn↓"
+	hintScreen    = "/screen display mode"
+	hintThinking  = "Ctrl+T show thinking"
+	hintReasoning = "Alt+R or ⌥R effort"
+	hintModel     = "Ctrl+/ model"
+	hintYolo      = "Alt+Y or ⌥Y yolo"
+	hintMouse     = "Alt+M or ⌥M mouse"
+	hintScroll    = "Pg↑ Pg↓ or Fn↑ Fn↓"
 
-	fullscreenShortcuts = hintScreen + " · " + hintThinking + " · " + hintMouse + " · " + hintScroll
+	// sessionHints are the per-turn controls shared by both screen modes.
+	sessionHints = hintScreen + " · " + hintThinking + " · " + hintReasoning + " · " + hintModel + " · " + hintYolo
+
+	fullscreenShortcuts = sessionHints + " · " + hintMouse + " · " + hintScroll
 
 	// readOnlyLiftHint leads the key hints while the read-only posture is on.
 	readOnlyLiftHint = "/readonly off to lift"
@@ -145,7 +151,11 @@ func (m *model) footerSettings() string {
 	if m.effectiveShowThinking() {
 		thinking = "shown"
 	}
-	entries := []string{"screen: " + screen, "thinking: " + thinking, "mouse: " + mouse}
+	entries := []string{"screen: " + screen, "thinking: " + thinking}
+	if cs, ok := m.composerStatus(); ok && cs.ReasoningEffort != "" {
+		entries = append(entries, "effort: "+cs.ReasoningEffort)
+	}
+	entries = append(entries, "mouse: "+mouse)
 	if tools := m.toolPolicyLabel(); tools != "" {
 		entries = append([]string{tools}, entries...)
 	}

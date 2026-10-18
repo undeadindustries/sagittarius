@@ -124,6 +124,8 @@ These work in the interactive TUI in addition to the slash commands above.
 | `Ctrl+/` | Cycle forward through active models |
 | `Ctrl+Shift+P` | Cycle backward through active models |
 | `Alt+T` | Cycle the color theme (default ↔ greyscale) |
+| `Alt+R` | Step the reasoning effort for the current model: its levels in order, then back to the default. Session only, cleared when the model changes; `/reasoning save` persists a level. Ignored mid-turn |
+| `Alt+Y` | Turn yolo (run tools without asking) on or off for this session. Off restores the approval mode the session started with, or `default` if it started in yolo. Mode gates, the project boundary, and `/readonly` still apply. Ignored mid-turn |
 | `Ctrl+T` | Toggle the thinking ("reasoning") box |
 | `Ctrl+Shift+D` | Export the last provider request to a JSON file (works mid-turn; same as `/chat debug`) |
 | `Ctrl+O` | Expand or collapse a pasted text placeholder in place |
@@ -139,7 +141,8 @@ These work in the interactive TUI in addition to the slash commands above.
 distinguish `Ctrl+digit` from the plain digit. On macOS, if your terminal sends
 special characters for `Option+key` instead of Alt sequences, Sagittarius accepts
 the characters `¡`, `™`, `£`, `¢` as aliases for `Alt+1..4`, `†` for `Alt+T`,
-and `µ` for `Alt+M`, so the shortcuts work out of the box.
+`®` for `Alt+R`, `¥` for `Alt+Y`, and `µ` for `Alt+M`, so the shortcuts work
+out of the box.
 
 ### Mouse scrolling and selection
 

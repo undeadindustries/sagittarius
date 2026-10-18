@@ -215,7 +215,7 @@ func (r *Runner) reviewBatch(ctx context.Context, baseID string, round int, cont
 			mode:        modes.ModeAsk,
 			class:       config.SubagentReviewer,
 			charter:     prompt.ReviewSubagentCharter(),
-			approval:    r.approval,
+			approval:    r.ApprovalMode(),
 			callID:      cardID,
 		})
 		if err != nil {

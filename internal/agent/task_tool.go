@@ -103,7 +103,7 @@ func (t *taskTool) ExecuteStream(ctx context.Context, args map[string]any, sink 
 		mode:        modes.ModeAsk,
 		class:       config.SubagentResearch,
 		charter:     prompt.ResearchSubagentCharter(),
-		approval:    t.runner.approval,
+		approval:    t.runner.ApprovalMode(),
 		callID:      callIDFromArgs(args),
 	})
 	if err != nil {

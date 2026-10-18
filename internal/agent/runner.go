@@ -211,19 +211,25 @@ type Runner struct {
 	systemBase  string
 	memory      string
 	systemDirty bool
-	approval    ApprovalMode
-	interactive bool
-	workDir     string
-	workspace   *tools.Workspace
-	spillDir    string
-	regMu       sync.RWMutex
-	registry    *tools.Registry
-	scheduler   *tools.Scheduler
-	historyMu   sync.RWMutex // guards history + turnCounter + hookTurnIndex
-	history     []provider.Message
-	ctxMgrMu    sync.RWMutex
-	ctxMgr      *contextmgmt.Manager
-	turnCounter int
+	// approvalMu guards approval, which Alt+Y swaps at runtime. It may be
+	// taken while regMu is held, never the reverse.
+	approvalMu sync.RWMutex
+	approval   ApprovalMode
+	// initialApproval is the approval mode the session started with, so
+	// turning yolo off restores autoEdit rather than forcing default.
+	initialApproval ApprovalMode
+	interactive     bool
+	workDir         string
+	workspace       *tools.Workspace
+	spillDir        string
+	regMu           sync.RWMutex
+	registry        *tools.Registry
+	scheduler       *tools.Scheduler
+	historyMu       sync.RWMutex // guards history + turnCounter + hookTurnIndex
+	history         []provider.Message
+	ctxMgrMu        sync.RWMutex
+	ctxMgr          *contextmgmt.Manager
+	turnCounter     int
 	// hookTurnIndex is the user-turn count reported to hooks as turn_index. It is
 	// deliberately separate from turnCounter, which drives the context-management
 	// cadence and resets whenever history is replaced: a hook script gating on
@@ -514,6 +520,7 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		modeState:             modes.NewState(cfg.InitialMode),
 		memory:                memory,
 		approval:              mode,
+		initialApproval:       mode,
 		interactive:           cfg.Interactive,
 		workDir:               ws.Root(),
 		workspace:             ws,
@@ -748,7 +755,30 @@ func (r *Runner) pinned() bool {
 
 // ApprovalMode returns the active tool-approval policy (default/autoEdit/yolo).
 func (r *Runner) ApprovalMode() ApprovalMode {
+	r.approvalMu.RLock()
+	defer r.approvalMu.RUnlock()
 	return r.approval
+}
+
+// ToggleYolo switches this session between yolo and the approval mode it
+// started with (or default, if it started in yolo), then rebuilds the
+// scheduler so the next tool call sees the new policy. Session grants
+// survive the rebuild. Nothing is persisted: yolo from a key press must not
+// outlive the session.
+func (r *Runner) ToggleYolo() (mode ApprovalMode, yolo bool) {
+	r.approvalMu.Lock()
+	if r.approval == ApprovalYolo {
+		r.approval = r.initialApproval
+		if r.approval == ApprovalYolo {
+			r.approval = ApprovalDefault
+		}
+	} else {
+		r.approval = ApprovalYolo
+	}
+	mode = r.approval
+	r.approvalMu.Unlock()
+	r.attachInteractionModeGate()
+	return mode, mode == ApprovalYolo
 }
 
 // InteractionMode returns the active interaction mode.
@@ -2065,7 +2095,7 @@ func (r *Runner) attachInteractionModeGate() {
 	r.mergeSchedulerGrantsLocked()
 	r.scheduler = tools.NewScheduler(
 		r.registry,
-		approvalToPolicy(r.approval),
+		approvalToPolicy(r.ApprovalMode()),
 		r.interactive,
 		r.InteractionMode,
 		r.workspace,

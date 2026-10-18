@@ -665,24 +665,36 @@ func (m *model) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case clipboardResultMsg:
 		return m, m.handleClipboardResult(msg)
 	case thinkingSavedMsg:
-		if msg.err != nil {
-			_ = m.term.ShowError(msg.err)
-		}
+		m.showErrorBlock(msg.err)
 		return m, nil
 	case requestDebugExportedMsg:
 		if msg.err != nil {
-			m.addBlock(roleError, msg.err.Error())
+			m.showErrorBlock(msg.err)
 			return m, nil
 		}
 		m.addBlock(roleInfo, "Wrote last request to "+msg.path)
 		return m, nil
 	case themeCycledMsg:
 		if msg.err != nil {
-			_ = m.term.ShowError(msg.err)
+			m.showErrorBlock(msg.err)
 			return m, nil
 		}
 		m.addBlock(roleInfo, "Theme → "+msg.name+" (Alt+T).")
 		m.setTheme(msg.name)
+		return m, nil
+	case reasoningCycledMsg:
+		if msg.err != nil {
+			m.showErrorBlock(msg.err)
+			return m, nil
+		}
+		m.addBlock(roleInfo, msg.desc)
+		return m, nil
+	case yoloToggledMsg:
+		if msg.err != nil {
+			m.showErrorBlock(msg.err)
+			return m, nil
+		}
+		m.addBlock(roleInfo, yoloToggleText(msg.mode, msg.yolo))
 		return m, nil
 	case statusMsg:
 		m.status = msg.status
@@ -1627,9 +1639,11 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				return m, m.enterPtyFocus()
 			}
 			return m.handleBusyTab()
-		case "ctrl+shift+m", "shift+tab", "ctrl+/":
-			// Mode/model switching is not allowed mid-turn; ignore so the keys
-			// do not corrupt the in-flight stream.
+		case "ctrl+shift+m", "shift+tab", "ctrl+/",
+			reasoningKeyAlt, reasoningKeyMac, reasoningKeyCtrlShift,
+			yoloKeyAlt, yoloKeyMac:
+			// Mode/model/effort/approval switching is not allowed mid-turn;
+			// ignore so the keys do not change policy under in-flight tool calls.
 			return m, nil
 		case "ctrl+b":
 			return m, m.openDialog(ui.DialogBackground)
@@ -1695,6 +1709,10 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m.startAppStream(events, err, "model")
 		}
 		return m, nil
+	case reasoningKeyAlt, reasoningKeyMac, reasoningKeyCtrlShift:
+		return m.cycleReasoningEffort()
+	case yoloKeyAlt, yoloKeyMac:
+		return m.toggleYolo()
 	case "ctrl+b":
 		return m, m.openDialog(ui.DialogBackground)
 	case "up":
@@ -2439,7 +2457,7 @@ func (m *model) handleSubmit(msg submitMsg) (tea.Model, tea.Cmd) {
 		m.turnInFlight = false
 		m.syncViewportContent()
 		m.status = m.idleStatus
-		_ = m.term.ShowError(err)
+		m.showErrorBlock(err)
 		return m, nil
 	}
 	m.stream = events
@@ -2793,6 +2811,18 @@ func (m *model) addBlock(role scrollRole, text string) {
 	m.syncViewportContent()
 }
 
+// showErrorBlock renders err the way a StreamError event would, directly on
+// the model. Code running inside Update must use this rather than
+// Terminal.ShowError: that goes through Program.Send, whose channel is
+// unbuffered and drained only by the loop that is running Update, so it
+// deadlocks the TUI. A nil err is a no-op.
+func (m *model) showErrorBlock(err error) {
+	if err == nil {
+		return
+	}
+	m.addBlock(roleError, err.Error())
+}
+
 // startToolCard appends a new running tool card for a StreamToolStart event,
 // indexing it by call id and marking it active so subsequent output/confirm/
 // result events update it in place.
@@ -3074,10 +3104,10 @@ func (m *model) streamContext() context.Context {
 
 // startAppStream wires an app capability that returns a stream of events
 // (mode/model switches) into the busy state with the given status label. An
-// error surfaces via the terminal error banner without entering the busy state.
+// error is shown as an error block without entering the busy state.
 func (m *model) startAppStream(events <-chan ui.StreamEvent, err error, statusLeft string) (tea.Model, tea.Cmd) {
 	if err != nil {
-		_ = m.term.ShowError(err)
+		m.showErrorBlock(err)
 		return m, nil
 	}
 	if events == nil {
@@ -3117,6 +3147,70 @@ func (m *model) cycleTheme() (tea.Model, tea.Cmd) {
 		name, err := tc.CycleTheme()
 		return themeCycledMsg{name: name, err: err}
 	}
+}
+
+// Session-only shortcut keys. Bubble Tea v1 cannot tell Ctrl+Shift+letter
+// from Ctrl+letter, so Alt is the real binding and ctrl+shift+t is only an
+// alias for a future key decoder; the Mac forms are what Option+letter types
+// when Option is not set to Meta.
+const (
+	reasoningKeyAlt       = "alt+r"
+	reasoningKeyMac       = "®"
+	reasoningKeyCtrlShift = "ctrl+shift+t"
+	yoloKeyAlt            = "alt+y"
+	yoloKeyMac            = "¥"
+)
+
+// reasoningCycledMsg carries the transcript line for one Alt+R press back
+// from the async ReasoningController call.
+type reasoningCycledMsg struct {
+	desc string
+	err  error
+}
+
+// yoloToggledMsg carries the new approval mode back from the async
+// ApprovalController call (it rebuilds the tool scheduler).
+type yoloToggledMsg struct {
+	mode string
+	yolo bool
+	err  error
+}
+
+// cycleReasoningEffort steps the session reasoning effort (Alt+R). The call
+// runs in a tea.Cmd so resolving model capabilities never stalls input. It is
+// a no-op when the app does not implement the capability.
+func (m *model) cycleReasoningEffort() (tea.Model, tea.Cmd) {
+	rc, ok := m.app.(ui.ReasoningController)
+	if !ok {
+		return m, nil
+	}
+	return m, func() tea.Msg {
+		_, desc, err := rc.CycleReasoningEffort()
+		return reasoningCycledMsg{desc: desc, err: err}
+	}
+}
+
+// toggleYolo flips session yolo approval (Alt+Y) in a tea.Cmd because the app
+// rebuilds the tool scheduler under its registry lock. No-op without the
+// capability.
+func (m *model) toggleYolo() (tea.Model, tea.Cmd) {
+	ac, ok := m.app.(ui.ApprovalController)
+	if !ok {
+		return m, nil
+	}
+	return m, func() tea.Msg {
+		mode, yolo, err := ac.ToggleYolo()
+		return yoloToggledMsg{mode: mode, yolo: yolo, err: err}
+	}
+}
+
+// yoloToggleText is the transcript line after Alt+Y. Turning yolo on says
+// plainly that tool calls now run without asking.
+func yoloToggleText(mode string, yolo bool) string {
+	if yolo {
+		return "Yolo on for this session (Alt+Y): tool calls run without asking."
+	}
+	return "Yolo off (Alt+Y): tool approval back to " + mode + "."
 }
 
 // setMouse turns mouse-wheel reporting on or off at runtime and returns the tea

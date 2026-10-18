@@ -163,6 +163,10 @@ type ComposerStatus struct {
 	// a passive status-row line that never blocks the composer; the TUI owns the
 	// shown-once / dismissed lifecycle.
 	TitleAnnouncementText string
+	// ReasoningEffort is the explicit reasoning effort for the live model: the
+	// session override (Alt+R, /reasoning <level>) or a pinned settings value.
+	// Empty means the model or provider decides, so the footer omits it.
+	ReasoningEffort string
 }
 
 // ComposerStatusProvider is an optional capability the TUI uses to render the
@@ -183,6 +187,22 @@ type ThinkingController interface {
 // canonical theme name ("default" or "greyscale"). The agent App implements it.
 type ThemeController interface {
 	CycleTheme() (string, error)
+}
+
+// ReasoningController is an optional capability the TUI uses to step the
+// session reasoning-effort override for the live model (Alt+R). level is the
+// new override ("" means back to the model default); desc is a one-line
+// message for the transcript. The override is never persisted. The agent App
+// implements it.
+type ReasoningController interface {
+	CycleReasoningEffort() (level, desc string, err error)
+}
+
+// ApprovalController is an optional capability the TUI uses to toggle yolo
+// tool approval for this session only (Alt+Y). mode is the approval mode now
+// in effect and yolo reports whether it is yolo. The agent App implements it.
+type ApprovalController interface {
+	ToggleYolo() (mode string, yolo bool, err error)
 }
 
 // SubagentCanceller is an optional capability the TUI uses to stop one running

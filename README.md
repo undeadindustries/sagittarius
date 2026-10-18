@@ -147,7 +147,8 @@ Interactive shortcuts, headless flags, and slash commands for the same features 
 |---------|----------------|------------------------|
 | **Interaction mode** (agent / plan / ask / debug) | `Shift+Tab` (cycle), `Alt+1` … `Alt+4` (direct), `Ctrl+Shift+M` (cycle alias); or `/mode`, `/modes` | `--mode` (`agent`, `plan`, `ask`, `debug`) |
 | **Model** (pick or cycle active set) | `Ctrl+/` (forward), `Ctrl+Shift+P` (back); or `/model`, `/models` | `-m`, `--model <id>` (pins model for this run; disables mode-based model routing) |
-| **Tool approval** (confirm vs auto-run tools) | Tool cards: Allow once / session / deny; status row shows policy | `--approval-mode` (`default`, `autoEdit`, `yolo`); `-y`, `--yolo` (shorthand for yolo; not combinable with `--approval-mode`) |
+| **Tool approval** (confirm vs auto-run tools) | Tool cards: Allow once / session / deny; `Alt+Y` turns yolo on or off for this session (off restores the mode you started with); the footer shows the policy | `--approval-mode` (`default`, `autoEdit`, `yolo`); `-y`, `--yolo` (shorthand for yolo; not combinable with `--approval-mode`) |
+| **Reasoning effort** | `Alt+R` steps through the levels the current model accepts, then back to its default (this session only; the footer shows `effort:`) | `/reasoning <level>`; `/reasoning save <level>` to keep it |
 | **Thinking / reasoning box** | `Ctrl+T` (persists `ui.showThinking`) | — (use `/settings` or per-model `showThinking` in `/models`) |
 | **Export last provider request** | `Ctrl+Shift+D`; or `/chat debug` (works while a turn is running) | — |
 | **Color theme** | `Alt+T` (persists `ui.theme`) | `/theme` (no startup flag) |
@@ -183,6 +184,8 @@ Most shortcuts match Windows/Linux. macOS terminals often send **Option** chords
 |-----------|---------|--------|
 | `Option+1` … `Option+4` | `Alt+1` … `Alt+4` | Switch mode (agent / plan / ask / debug) |
 | `Option+T` (`†`) | `Alt+T` | Cycle theme |
+| `Option+R` (`®`) | `Alt+R` | Step reasoning effort |
+| `Option+Y` (`¥`) | `Alt+Y` | Toggle yolo for this session |
 | `Option+M` (`µ`) | `Alt+M` | Toggle mouse mode |
 | `Option+1` … `4` | | Also works via `¡`, `™`, `£`, `¢` when the terminal emits those instead |
 
@@ -248,6 +251,7 @@ The alt-screen is cleared when Sagittarius exits. The exit summary (session stat
 - **`Alt+1` … `Alt+4`** (or macOS Option equivalents): jump directly to agent, plan, ask, or debug.
 - **`Ctrl+Shift+M`**: cycle modes in order (alias of `Shift+Tab`).
 - **`Ctrl+/`** / **`Ctrl+Shift+P`**: cycle active models forward / backward.
+- **`Alt+R`** (or **`Option+R`**): step the reasoning effort for the current model. It lasts for this session and resets when you switch models. **`/reasoning save`** keeps a level.
 - **`/mode`**, **`/model`**, **`/modes`**: full pickers and override editors.
 
 Every dialog that saves settings has a `Save to:` line under its title; press **Tab** to switch it between Global and Project. `/model`, `/modes`, and `/subagents` open on Project, while `/settings`, `/providers`, and `/models` open on Global. `/model --project provider/model` does the same without the picker. API keys, provider URLs, and provider definitions always stay **global**, so a project file can't send your requests somewhere else. See [docs/home-directory.md](docs/home-directory.md).

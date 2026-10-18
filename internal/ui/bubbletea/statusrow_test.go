@@ -60,7 +60,7 @@ func TestRenderStatusRowShowsHintsAndCountsNotPolicy(t *testing.T) {
 	m := newModel(opts, app, NewTerminal(ui.Options{}))
 	// Wide terminal so the full composed row fits; clamping at narrow widths is
 	// covered by TestStatusRowNeverExceedsWidth.
-	m.width = 150
+	m.width = 200
 	m.height = 24
 
 	if m.statusRowRows() != 1 {
@@ -73,8 +73,9 @@ func TestRenderStatusRowShowsHintsAndCountsNotPolicy(t *testing.T) {
 			t.Errorf("status row missing %q\n%s", want, row)
 		}
 	}
-	// The tool policy is a setting, so it lives in the footer, not here.
-	for _, banned := range []string{"Tools:", "yolo"} {
+	// The tool policy is a setting, so it lives in the footer, not here. The
+	// Alt+Y key hint names yolo, so check for the policy label instead.
+	for _, banned := range []string{"Tools:", approvalHint("yolo")} {
 		if strings.Contains(row, banned) {
 			t.Errorf("status row should not show setting %q\n%s", banned, row)
 		}
@@ -124,8 +125,8 @@ func TestReadOnlyLiftKeyStaysInStatusRow(t *testing.T) {
 func TestRenderStatusRowShowsScrollHintsWithoutComposerStatus(t *testing.T) {
 	t.Parallel()
 	m := newTestModel()
-	// The dual keyboard hint is 85 cells, so 80 drops the scroll entry.
-	m.width = 100
+	// The full hint is 139 cells, so 120 drops the scroll entry.
+	m.width = 150
 	row := stripANSI(m.renderStatusRow())
 	hints := m.scrollShortcutHints()
 	if !strings.Contains(row, hints) {
@@ -230,7 +231,7 @@ func TestFitLeftRightDropsWholeHints(t *testing.T) {
 	t.Parallel()
 	left := readOnlyLiftHint + "  ·  " + fullscreenShortcuts
 	// 111 cells leaves 80 for the left side: through "show thinking" (69) fits,
-	// the mouse hint would end at 88.
+	// the effort hint would end at 90.
 	gotLeft, _ := fitLeftRight(left, "2 AGENTS.md files · 119 skills", 111)
 	want := "/readonly off to lift  ·  /screen display mode · Ctrl+T show thinking"
 	if gotLeft != want {
@@ -394,9 +395,51 @@ func TestCopyHintLifecycle(t *testing.T) {
 
 func TestFullscreenHintsNameBothKeyboards(t *testing.T) {
 	t.Parallel()
-	for _, want := range []string{"Pg↑ Pg↓", "Fn↑ Fn↓", "Alt+M", "⌥M"} {
+	for _, want := range []string{"Pg↑ Pg↓", "Fn↑ Fn↓", "Alt+M", "⌥M", "Alt+R", "⌥R", "Alt+Y", "⌥Y", "Ctrl+/"} {
 		if !strings.Contains(fullscreenShortcuts, want) {
 			t.Fatalf("fullscreen hints = %q, missing %q", fullscreenShortcuts, want)
 		}
+	}
+}
+
+// TestShortcutHintOrder pins the drop order on narrow terminals: the session
+// keys (screen, thinking, effort, model, yolo) outlast the mouse and scroll
+// hints, and inline mode shows the session keys only.
+func TestShortcutHintOrder(t *testing.T) {
+	t.Parallel()
+	want := []string{hintScreen, hintThinking, hintReasoning, hintModel, hintYolo, hintMouse, hintScroll}
+	if got := strings.Split(fullscreenShortcuts, " · "); strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("fullscreen hint order = %q, want %q", got, want)
+	}
+	if inlineShortcuts != strings.Join(want[:5], " · ") {
+		t.Errorf("inline hints = %q", inlineShortcuts)
+	}
+	// 98 cells of session hints: at 90 the yolo hint goes, never half of it.
+	if got := truncateAtSeparator(fullscreenShortcuts, 90); got != strings.Join(want[:4], " · ") {
+		t.Errorf("truncated at 90 = %q", got)
+	}
+}
+
+func TestFooterSettingsShowsReasoningEffort(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		effort string
+		want   string
+	}{
+		{"pinned or session effort", "high", "screen: full · thinking: hidden · effort: high · mouse: off"},
+		{"model decides", "", "screen: full · thinking: hidden · mouse: off"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			app := statusApp{cs: ui.ComposerStatus{ApprovalMode: "default", ReasoningEffort: tc.effort}}
+			m := newModel(ui.Options{ThemeName: "greyscale"}, app, NewTerminal(ui.Options{}))
+			m.mouseEnabled = false
+			got := m.footerSettings()
+			if !strings.HasSuffix(got, tc.want) {
+				t.Errorf("footerSettings = %q, want suffix %q", got, tc.want)
+			}
+		})
 	}
 }

@@ -35,7 +35,7 @@ const (
 	inlineOSC52Copy = "Sent with OSC 52. If it didn't arrive, select the text above and copy it with your terminal."
 	inlineMouseHint = "Inline mode uses the terminal's own mouse. /screen fullscreen brings back in-app selection."
 	inlineSavedInfo = "Inline mode is on. New SSH sessions start inline. /screen fullscreen switches this session back. Screen layout in /settings changes the default."
-	inlineShortcuts = hintScreen + " · " + hintThinking
+	inlineShortcuts = sessionHints
 )
 
 // inlineBanner is the welcome text, printed once into the terminal scrollback

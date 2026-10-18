@@ -212,21 +212,23 @@ still streaming.
 {in}/{out}` and the cumulative session cost when OpenRouter cost is known. The
 settings read live state: the tool policy (`Tools: auto-approve all (yolo)`,
 `Tools: confirm before run`, `Tools: read-only`), `screen: full` or `inline`,
-`thinking: shown` or `hidden`, and `mouse: on`, `off`, or `terminal` (inline
-mode leaves the mouse to the terminal). For example: `Tools: auto-approve all
-(yolo) · screen: full · thinking: hidden · mouse: on  ·  System Prompt: System
-administrator`.
+`thinking: shown` or `hidden`, `effort: <level>` when a reasoning effort is set
+for this session (`Alt+R`, `/reasoning`) or pinned in settings, and `mouse: on`,
+`off`, or `terminal` (inline mode leaves the mouse to the terminal). For
+example: `Tools: auto-approve all (yolo) · screen: full · thinking: hidden ·
+effort: high · mouse: on  ·  System Prompt: System administrator`.
 
 The row above the composer is the opposite half: it only says which keys to
-press (`/screen display mode · Ctrl+T show thinking · Alt+M or ⌥M mouse · Pg↑
-Pg↓ or Fn↑ Fn↓`). The mouse and scroll hints name both keyboards, because the
-process OS is the server's and a Mac over SSH would otherwise see only the
-Page keys. While the read-only posture is on, `/readonly off to lift` leads that row.
-Inline mode shows only the first two hints, since page keys and mouse capture do
-nothing there.
+press (`/screen display mode · Ctrl+T show thinking · Alt+R or ⌥R effort ·
+Ctrl+/ model · Alt+Y or ⌥Y yolo · Alt+M or ⌥M mouse · Pg↑ Pg↓ or Fn↑ Fn↓`). The
+Alt hints name both keyboards, because the process OS is the server's and a Mac
+over SSH would otherwise see only the Alt and Page keys. While the read-only
+posture is on, `/readonly off to lift` leads that row. Inline mode stops after
+the yolo hint, since page keys and mouse capture do nothing there.
 
 On a narrow terminal both rows truncate instead of wrapping. They drop whole
-entries from the end first (the scroll keys, then the mouse hint, and so on), and
+entries from the end first (the scroll keys, then the mouse hint, then yolo,
+model, and effort), and
 cut text only when the first entry itself does not fit.
 
 Token counts come from the provider's reported usage when available (all three
