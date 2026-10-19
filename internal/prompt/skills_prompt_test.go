@@ -9,38 +9,62 @@ import (
 
 func TestSkillsGuidanceGatedBySkillsAvailable(t *testing.T) {
 	t.Parallel()
-	cases := []struct {
-		personality Personality
-		trigger     string
-	}{
-		{PersonalityProgrammer, "write or change code"},
-		{PersonalitySysadmin, "run commands or change the system"},
+	personalities := []Personality{
+		PersonalityProgrammer,
+		PersonalitySysadmin,
+		PersonalityPersonalAssistant,
+		PersonalityCreativeAssistant,
 	}
-	for _, tc := range cases {
+	for _, p := range personalities {
 		for _, variant := range []Variant{VariantFull, VariantLite} {
-			t.Run(string(tc.personality)+"/"+string(variant), func(t *testing.T) {
-				on := Build(Options{Personality: tc.personality, Variant: variant, SkillsAvailable: true})
+			t.Run(string(p)+"/"+string(variant), func(t *testing.T) {
+				on := Build(Options{Personality: p, Variant: variant, SkillsAvailable: true})
 				if !strings.Contains(on, "## Skills") {
 					t.Errorf("prompt should contain ## Skills when SkillsAvailable is true:\n%s", on)
 				}
-				if !strings.Contains(on, "Before you "+tc.trigger) {
-					t.Errorf("prompt missing trigger phrase %q when SkillsAvailable is true:\n%s", tc.trigger, on)
-				}
-				if !strings.Contains(on, tools.ActivateSkillToolName) {
-					t.Errorf("prompt should mention %s when SkillsAvailable is true", tools.ActivateSkillToolName)
+				if !strings.Contains(on, "Before your first tool call") {
+					t.Errorf("prompt should ask for the skill check as the first step:\n%s", on)
 				}
 
-				off := Build(Options{Personality: tc.personality, Variant: variant, SkillsAvailable: false})
+				off := Build(Options{Personality: p, Variant: variant, SkillsAvailable: false})
 				if strings.Contains(off, "## Skills") {
 					t.Errorf("prompt must not contain ## Skills when SkillsAvailable is false:\n%s", off)
-				}
-				if strings.Contains(off, "activate it first") {
-					t.Errorf("prompt must not contain skill guidance when SkillsAvailable is false:\n%s", off)
 				}
 				if strings.Contains(off, tools.ActivateSkillToolName) {
 					t.Errorf("prompt must not mention %s when SkillsAvailable is false:\n%s", tools.ActivateSkillToolName, off)
 				}
 			})
 		}
+	}
+}
+
+// TestSkillsGuidanceComesBeforeWorkflow pins the placement: at high
+// temperature a model that reads files first tends to edit straight away, so
+// the skill check has to be read before the workflow's research step.
+func TestSkillsGuidanceComesBeforeWorkflow(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		personality Personality
+		variant     Variant
+		workflow    string
+	}{
+		{PersonalityProgrammer, VariantFull, "# Primary Workflow"},
+		{PersonalityProgrammer, VariantLite, "## Workflow"},
+		{PersonalitySysadmin, VariantFull, "# Primary Workflow"},
+		{PersonalitySysadmin, VariantLite, "## Workflow"},
+		{PersonalityPersonalAssistant, VariantFull, "## Workflow"},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.personality)+"/"+string(tc.variant), func(t *testing.T) {
+			out := Build(Options{Personality: tc.personality, Variant: tc.variant, SkillsAvailable: true})
+			skills := strings.Index(out, "## Skills")
+			workflow := strings.Index(out, tc.workflow)
+			if skills < 0 || workflow < 0 {
+				t.Fatalf("missing section: skills=%d workflow=%d\n%s", skills, workflow, out)
+			}
+			if skills > workflow {
+				t.Errorf("## Skills (at %d) must come before %q (at %d)", skills, tc.workflow, workflow)
+			}
+		})
 	}
 }

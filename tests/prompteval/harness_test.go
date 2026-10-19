@@ -59,6 +59,22 @@ func sagittariusBin(t *testing.T) string {
 	return builtBinPath
 }
 
+// binTimeout returns the per-invocation limit. SAGITTARIUS_PROMPT_EVAL_TIMEOUT
+// (a Go duration) raises it for local models that run linters and tests inside
+// a single turn and routinely need longer than the default.
+func binTimeout(t *testing.T) time.Duration {
+	t.Helper()
+	raw := os.Getenv("SAGITTARIUS_PROMPT_EVAL_TIMEOUT")
+	if raw == "" {
+		return defaultBinTimeout
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		t.Fatalf("invalid SAGITTARIUS_PROMPT_EVAL_TIMEOUT %q: want a positive Go duration such as 10m", raw)
+	}
+	return d
+}
+
 type runResult struct {
 	stdout   string
 	stderr   string
@@ -67,7 +83,7 @@ type runResult struct {
 
 func invoke(t *testing.T, bin, workDir string, env []string, args ...string) runResult {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), defaultBinTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), binTimeout(t))
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, bin, args...)

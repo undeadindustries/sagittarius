@@ -120,12 +120,14 @@ sub-agents, hierarchical memory directives).
 
 ## Skills guidance
 
-When `activate_skill` is registered and at least one skill is discovered, the
-programmer and sysadmin prompts (both `full` and `lite`) include a short
-`## Skills` section asking the model to check the `activate_skill` catalog
-before writing code or running commands and activate a matching skill first.
-When no skills are installed, the section is omitted so the prompt does not
-mention skills. `/skills reload` recomposes the system prompt so the section
+When `activate_skill` is registered and at least one skill is discovered, every
+personality (both `full` and `lite`) includes a short `## Skills` section ahead
+of its workflow. It asks the model to check the `activate_skill` catalog before
+its first tool call on a new task and load a matching skill in that first step.
+The wording is the same for every personality, since any of them can need any
+skill: a sysadmin writing a Python script, or a personal assistant answering a
+question your own skill covers. When no skills are installed, the section is
+omitted so the prompt does not mention skills. `/skills reload` recomposes the system prompt so the section
 appears or disappears when skills are added or removed.
 
 ## Example settings

@@ -10,12 +10,15 @@ import (
 	"time"
 )
 
-// TestTaskSkillActivation measures how often the model calls activate_skill for
-// python3 as its first tool call when asked to edit a Python project. It repeats
-// the run SAGITTARIUS_PROMPT_EVAL_REPEAT times (default 3) so stochastic
-// behavior at high temperature (e.g. 1.0) shows up as a rate rather than a
-// single pass/fail coin flip. Sampling temperature comes from the user's
-// configured sampling settings for SAGITTARIUS_PROMPT_EVAL_MODEL.
+// TestTaskSkillActivation measures how often the model activates the python3
+// skill before its first file edit when asked to change a Python project. It
+// repeats the run SAGITTARIUS_PROMPT_EVAL_REPEAT times (default 3) so behavior
+// at high temperature shows up as a rate rather than a single coin flip.
+//
+// SAGITTARIUS_PROMPT_EVAL_PERSONALITY (programmer, sysadmin, ...) pins the
+// system prompt through the workspace settings; unset, the user's own setting
+// applies. Sampling temperature comes from the user's settings for
+// SAGITTARIUS_PROMPT_EVAL_MODEL.
 func TestTaskSkillActivation(t *testing.T) {
 	if !hasPython3Skill() {
 		t.Skip("skipping skill activation eval; no python3 skill installed under ~/.agents/skills or ~/.sagittarius/skills")
@@ -27,14 +30,20 @@ func TestTaskSkillActivation(t *testing.T) {
 			repeats = n
 		}
 	}
+	personality := os.Getenv("SAGITTARIUS_PROMPT_EVAL_PERSONALITY")
 
 	setup := func(t *testing.T, workDir string) {
 		mustWriteFile(t, filepath.Join(workDir, "pyproject.toml"), "[project]\nname = \"demo\"\nversion = \"0.1.0\"\nrequires-python = \">=3.11\"\n", 0o644)
 		mustWriteFile(t, filepath.Join(workDir, "app.py"), "def greet(name: str) -> str:\n    return f\"hello {name}\"\n", 0o644)
+		if personality != "" {
+			mustMkdirAll(t, filepath.Join(workDir, ".sagittarius"))
+			mustWriteFile(t, filepath.Join(workDir, ".sagittarius", "settings.json"),
+				`{"sagittarius":{"systemPrompt":{"personality":"`+personality+`"}}}`, 0o644)
+		}
 	}
 
 	runEval(t, "TaskSkill", setup, func(t *testing.T, base *evalRunner) {
-		firstActivated := 0
+		beforeEdit := 0
 		anyActivated := 0
 
 		for i := 0; i < repeats; i++ {
@@ -63,32 +72,29 @@ func TestTaskSkillActivation(t *testing.T) {
 			for _, turn := range plog.Turns {
 				calls = append(calls, turn.ToolCalls...)
 			}
-			first := false
-			any := false
+			activatedAt, firstEditAt := -1, -1
 			for idx, tc := range calls {
-				if tc.Name == "activate_skill" && strings.Contains(tc.Args, "python3") {
-					any = true
-					if idx == 0 {
-						first = true
-					}
+				if activatedAt < 0 && tc.Name == "activate_skill" && strings.Contains(tc.Args, "python3") {
+					activatedAt = idx
+				}
+				if firstEditAt < 0 && (tc.Name == "edit" || tc.Name == "write_file") {
+					firstEditAt = idx
 				}
 			}
-			if first {
-				firstActivated++
+			before := activatedAt >= 0 && (firstEditAt < 0 || activatedAt < firstEditAt)
+			if before {
+				beforeEdit++
 			}
-			if any {
+			if activatedAt >= 0 {
 				anyActivated++
 			}
-			firstName := "(none)"
-			if len(calls) > 0 {
-				firstName = calls[0].Name + "(" + calls[0].Args + ")"
-			}
-			t.Logf("run %d/%d: first_call=%s activated_first=%v activated_any=%v", i+1, repeats, firstName, first, any)
+			t.Logf("run %d/%d: activate_skill at call %d, first edit at call %d, before_edit=%v",
+				i+1, repeats, activatedAt, firstEditAt, before)
 		}
 
-		t.Logf("skill activation summary: first=%d/%d any=%d/%d", firstActivated, repeats, anyActivated, repeats)
-		if firstActivated == 0 {
-			t.Errorf("activate_skill(python3) was never the first tool call across %d runs (any=%d/%d)", repeats, anyActivated, repeats)
+		t.Logf("skill activation summary: before_edit=%d/%d any=%d/%d", beforeEdit, repeats, anyActivated, repeats)
+		if beforeEdit == 0 {
+			t.Errorf("activate_skill(python3) never ran before the first edit across %d runs (any=%d/%d)", repeats, anyActivated, repeats)
 		}
 	})
 }

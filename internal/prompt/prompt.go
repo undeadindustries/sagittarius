@@ -186,14 +186,17 @@ func workingMemoryBullets(scratchpadEnabled bool) string {
 	return strings.Join(bullets, "\n")
 }
 
-// skillsGuidance tells the model to check the activate_skill catalog before
-// acting. Callers gate it on SkillsAvailable so users with no skills installed
-// never see skill instructions in the prompt.
-func skillsGuidance(trigger string) string {
+// skillsGuidance tells the model to check the activate_skill catalog as its
+// first step. It is persona-neutral because any persona can need any skill (a
+// sysadmin writing Python, an assistant answering a health question), and it
+// sits before each persona's workflow because a model that has already read
+// the files at high temperature usually goes straight to editing. Callers gate
+// it on SkillsAvailable so users with no skills never see skill instructions.
+func skillsGuidance() string {
 	return join(
 		"## Skills",
 		"",
-		"Before you "+trigger+", check the skills listed in `"+tools.ActivateSkillToolName+"`. If one clearly matches the task's language, framework, tools, or domain, activate it first and follow its instructions. A skill already loaded in this conversation does not need activating again. If none match, continue without mentioning skills.",
+		"Before your first tool call on a new task, check the skills listed in `"+tools.ActivateSkillToolName+"`. If one clearly matches the task's language, framework, tools, or subject, call `"+tools.ActivateSkillToolName+"` for it in that first step, alongside any other calls, and follow its instructions. A skill already loaded in this conversation does not need activating again. If none match, continue without mentioning skills.",
 	)
 }
 

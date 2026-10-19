@@ -98,10 +98,14 @@ func runEval(t *testing.T, taskName string, setup func(t *testing.T, workDir str
 			sessionID := fmt.Sprintf("eval-%s-%s", taskName, time.Now().Format("150405.000"))
 			logFile := filepath.Join(os.Getenv("HOME"), ".sagittarius", "logs", fmt.Sprintf("chat-verbose-%s.log", sessionID))
 
+			provider := os.Getenv("GEMINI_PROVIDER")
+			if provider == "" {
+				provider = "gemini-apikey"
+			}
 			env := append(os.Environ(),
 				"SAGITTARIUS_SESSION_ID="+sessionID,
 				"SAGITTARIUS_MODEL="+model,
-				"GEMINI_PROVIDER=gemini-apikey",
+				"GEMINI_PROVIDER="+provider,
 			)
 
 			runner := &evalRunner{

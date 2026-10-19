@@ -19,12 +19,12 @@ func programmerLite(opts Options) string {
 	sections := []string{
 		renderIdentity(opts.Identity, programmerProfile.roleNoun, programmerProfile.helpClause),
 		liteToolUsage(opts.SymbolsEnabled, opts.EditEnabled, opts.ScratchpadEnabled),
-		programmerLiteWorkflow(),
 	}
 	if opts.SkillsAvailable {
-		sections = append(sections, skillsGuidance("write or change code"))
+		sections = append(sections, skillsGuidance())
 	}
 	sections = append(sections,
+		programmerLiteWorkflow(),
 		liteEditRules(),
 		liteShellSafety(opts.Interactive, opts.WaitUntilEnabled),
 	)
@@ -76,12 +76,13 @@ func programmerFull(opts Options) string {
 	sections := []string{
 		fullPreamble(opts),
 		fullCoreMandates(),
-		fullPrimaryWorkflow(opts.Interactive, opts.SymbolsEnabled, opts.EditEnabled),
 	}
 	if opts.SkillsAvailable {
-		sections = append(sections, skillsGuidance("write or change code"))
+		sections = append(sections, skillsGuidance())
 	}
-	sections = append(sections, fullOperationalGuidelines(opts.EditEnabled, opts.MemoryEnabled, opts.ScratchpadEnabled, opts.WaitUntilEnabled))
+	sections = append(sections,
+		fullPrimaryWorkflow(opts.Interactive, opts.SymbolsEnabled, opts.EditEnabled),
+		fullOperationalGuidelines(opts.EditEnabled, opts.MemoryEnabled, opts.ScratchpadEnabled, opts.WaitUntilEnabled))
 	if opts.IsGitRepo {
 		sections = append(sections, liteGit())
 	}
