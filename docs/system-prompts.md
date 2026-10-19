@@ -118,6 +118,16 @@ references only Sagittarius's real tools (`read_file`, `write_file`,
 features Sagittarius has not ported (todo/plan-mode tools, task tracker,
 sub-agents, hierarchical memory directives).
 
+## Skills guidance
+
+When `activate_skill` is registered and at least one skill is discovered, the
+programmer and sysadmin prompts (both `full` and `lite`) include a short
+`## Skills` section asking the model to check the `activate_skill` catalog
+before writing code or running commands and activate a matching skill first.
+When no skills are installed, the section is omitted so the prompt does not
+mention skills. `/skills reload` recomposes the system prompt so the section
+appears or disappears when skills are added or removed.
+
 ## Example settings
 
 ```json

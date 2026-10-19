@@ -10,7 +10,11 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/skills"
 )
 
-const activateSkillToolName = "activate_skill"
+const (
+	// ActivateSkillToolName is the model-facing name of the skill loader tool.
+	ActivateSkillToolName = "activate_skill"
+	activateSkillToolName = ActivateSkillToolName
+)
 
 // maxSkillDescriptionRunes caps each skill's description in the declaration
 // catalog (AD-155), following the mcp.pruneToolSchemas precedent.
@@ -54,7 +58,7 @@ func (t *ActivateSkillTool) Declaration() provider.ToolDeclaration {
 	// containing an empty string — is rejected by Gemini (e.g. via OpenRouter):
 	// "function_declarations[...].parameters.properties[name].enum[0]: cannot be empty".
 	nameSchema := map[string]any{"type": "string"}
-	description := "Activates a specialized agent skill by name. Returns the skill's instructions. Use this when a task matches a skill's description."
+	description := "Loads a skill's full instructions. Call this before acting on a task that names or clearly matches one of the skills below."
 	if len(names) == 0 {
 		nameSchema["description"] = "No skills are currently available."
 	} else {

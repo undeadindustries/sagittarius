@@ -75,6 +75,14 @@ func TestActivateSkillDeclarationNoSkillsOmitsEnum(t *testing.T) {
 	if _, ok := ns["enum"]; ok {
 		t.Fatalf("no skills must omit enum, got %#v", ns)
 	}
+	if got := ns["description"]; got != "No skills are currently available." {
+		t.Fatalf("no-skills name description = %#v, want %q", got, "No skills are currently available.")
+	}
+	decl := tool.Declaration()
+	const wantLead = "Loads a skill's full instructions. Call this before acting on a task that names or clearly matches one of the skills below."
+	if decl.Description != wantLead {
+		t.Fatalf("no-skills decl.Description = %q, want %q", decl.Description, wantLead)
+	}
 }
 
 // TestActivateSkillDeclarationWithSkillsHasEnum verifies the enum lists the
@@ -141,7 +149,11 @@ func TestActivateSkillDeclarationCatalog(t *testing.T) {
 		t.Fatalf("enum = %#v, want [coder, writer]", ns["enum"])
 	}
 
-	// Description must contain sorted catalog
+	// Description must lead with the call-before-acting wording and contain sorted catalog
+	const wantLead = "Loads a skill's full instructions. Call this before acting on a task that names or clearly matches one of the skills below."
+	if !strings.HasPrefix(decl.Description, wantLead) {
+		t.Errorf("decl.Description does not start with lead:\n%s\nwant prefix:\n%s", decl.Description, wantLead)
+	}
 	wantCatalog := "Available skills:\n- coder: Coding standards and best practices\n- writer: Writing guidance for prose"
 	if !strings.Contains(decl.Description, wantCatalog) {
 		t.Errorf("decl.Description missing catalog:\n%s\nwant:\n%s", decl.Description, wantCatalog)

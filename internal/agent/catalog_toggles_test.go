@@ -1,9 +1,13 @@
 package agent
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/undeadindustries/sagittarius/internal/config"
+	"github.com/undeadindustries/sagittarius/internal/skills"
 	"github.com/undeadindustries/sagittarius/internal/tools"
 )
 
@@ -243,5 +247,68 @@ func TestRefreshBuiltinTogglesResolvesFetchBudget(t *testing.T) {
 	})
 	if cat.webMaxFetchBytes != budget {
 		t.Errorf("configured budget = %d; want %d", cat.webMaxFetchBytes, budget)
+	}
+}
+
+// TestRunnerSystemPromptGatesSkillsSection verifies that the ## Skills section
+// is omitted when the catalog has no skills and appears once a skill is
+// discovered and the registry is rebuilt.
+func TestRunnerSystemPromptGatesSkillsSection(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	workDir := t.TempDir()
+	ws, err := tools.NewWorkspace(workDir)
+	if err != nil {
+		t.Fatalf("NewWorkspace: %v", err)
+	}
+	skillMgr := skills.NewManager(workDir, true)
+	if err := skillMgr.Discover(t.Context(), nil); err != nil {
+		t.Fatalf("Discover (empty): %v", err)
+	}
+	cat, err := NewCatalog(CatalogConfig{
+		Workspace:   ws,
+		Skills:      skillMgr,
+		EditEnabled: true,
+	})
+	if err != nil {
+		t.Fatalf("NewCatalog: %v", err)
+	}
+	t.Cleanup(func() { _ = cat.Close() })
+
+	rt := &Runtime{Catalog: cat}
+	runner, err := NewRunner(RunnerConfig{
+		Generator:   &fakeGenerator{},
+		Model:       "test-model",
+		WorkDir:     workDir,
+		Interactive: false,
+		Runtime:     rt,
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	runner.SetRegistry(cat.BuildRegistry())
+
+	if sys := systemInstruction(t, runner); strings.Contains(sys, "## Skills") {
+		t.Fatalf("system prompt must not contain ## Skills when zero skills are installed:\n%s", sys)
+	}
+
+	skillDir := filepath.Join(workDir, ".sagittarius", "skills", "python3")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const skillMD = "---\nname: python3\ndescription: Python engineering standards\n---\nBody.\n"
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(skillMD), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	reg, err := rt.ReloadSkills(t.Context())
+	if err != nil {
+		t.Fatalf("ReloadSkills: %v", err)
+	}
+	runner.SetRegistry(reg)
+
+	if sys := systemInstruction(t, runner); !strings.Contains(sys, "## Skills") {
+		t.Fatalf("system prompt should contain ## Skills after discovering a skill:\n%s", sys)
 	}
 }

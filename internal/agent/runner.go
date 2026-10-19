@@ -423,6 +423,19 @@ func (r *Runner) SkillNames() []string {
 	return names
 }
 
+// skillCount returns how many enabled skills the catalog currently exposes. It
+// returns 0 when no catalog is attached.
+func (r *Runner) skillCount() int {
+	if r.runtime == nil || r.runtime.Catalog == nil {
+		return 0
+	}
+	mgr := r.runtime.Catalog.SkillManager()
+	if mgr == nil {
+		return 0
+	}
+	return len(mgr.Skills())
+}
+
 // Close releases resources the runner owns directly — currently only the
 // optional --log-verbose transcript file. Safe to call on a nil *Runner or
 // when verbose logging is disabled. Callers should defer this alongside
@@ -1931,6 +1944,7 @@ func (r *Runner) rebuildBasePrompt() {
 		// prompt teaching a tool the model has no way to call (AD-074, AD-078).
 		ScratchpadEnabled: containsString(toolNames, tools.UpdateScratchpadToolName),
 		WaitUntilEnabled:  containsString(toolNames, tools.WaitUntilToolName),
+		SkillsAvailable:   containsString(toolNames, tools.ActivateSkillToolName) && r.skillCount() > 0,
 	})
 
 	if memory = strings.TrimSpace(memory); memory != "" {

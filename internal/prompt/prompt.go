@@ -110,6 +110,10 @@ type Options struct {
 	// WaitUntilEnabled reports whether wait_until is registered, so the prompt
 	// pairs is_background with a condition wait instead of teaching sleep.
 	WaitUntilEnabled bool
+	// SkillsAvailable reports whether activate_skill is registered and at least
+	// one skill is discovered, so the prompt only asks the model to check skills
+	// when there are skills to check.
+	SkillsAvailable bool
 }
 
 const commandPresentationRules = "## Presenting Commands to the User\n" +
@@ -180,6 +184,17 @@ func workingMemoryBullets(scratchpadEnabled bool) string {
 		bullets = append([]string{"- **Working Memory:** " + scratchpadRule}, bullets...)
 	}
 	return strings.Join(bullets, "\n")
+}
+
+// skillsGuidance tells the model to check the activate_skill catalog before
+// acting. Callers gate it on SkillsAvailable so users with no skills installed
+// never see skill instructions in the prompt.
+func skillsGuidance(trigger string) string {
+	return join(
+		"## Skills",
+		"",
+		"Before you "+trigger+", check the skills listed in `"+tools.ActivateSkillToolName+"`. If one clearly matches the task's language, framework, tools, or domain, activate it first and follow its instructions. A skill already loaded in this conversation does not need activating again. If none match, continue without mentioning skills.",
+	)
 }
 
 // Shared condensed sections used by programmer lite and stub personalities.

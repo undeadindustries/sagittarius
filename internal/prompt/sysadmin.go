@@ -30,8 +30,11 @@ func sysadminFull(opts Options) string {
 		sysadminCoreMandates(),
 		sysadminThisSystem(opts),
 		sysadminPrimaryWorkflow(),
-		sysadminOperationalGuidelines(opts.Interactive, opts.SymbolsEnabled, opts.EditEnabled, opts.ScratchpadEnabled, opts.WaitUntilEnabled),
 	}
+	if opts.SkillsAvailable {
+		sections = append(sections, skillsGuidance("run commands or change the system"))
+	}
+	sections = append(sections, sysadminOperationalGuidelines(opts.Interactive, opts.SymbolsEnabled, opts.EditEnabled, opts.ScratchpadEnabled, opts.WaitUntilEnabled))
 	if opts.IsGitRepo {
 		sections = append(sections, liteGit())
 	}
@@ -206,6 +209,7 @@ func sysadminLite(opts Options) string {
 		"## Workflow",
 		"- Check syntax with the service's own validator **before** reloading (e.g. `nginx -t`, `sshd -t`).",
 		"- Then reload rather than restart where supported, and verify behavior.",
+		sysadminLiteSkillsSection(opts.SkillsAvailable),
 		"",
 		"## Shell Commands",
 		"- For session-survival work (upgrades, large rsync), use `systemd-run`, `screen`, or `tmux`, and tee to a log file.",
@@ -218,4 +222,11 @@ func sysadminLite(opts Options) string {
 		"",
 		toolInvocationMandate(opts.EditEnabled),
 	)
+}
+
+func sysadminLiteSkillsSection(skillsAvailable bool) string {
+	if !skillsAvailable {
+		return ""
+	}
+	return "\n" + skillsGuidance("run commands or change the system")
 }
