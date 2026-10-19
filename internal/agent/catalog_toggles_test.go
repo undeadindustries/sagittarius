@@ -196,6 +196,44 @@ func TestRefreshBuiltinTogglesScratchpad(t *testing.T) {
 	}
 }
 
+func TestRefreshBuiltinTogglesSkills(t *testing.T) {
+	cat := newToggleCatalog(t, CatalogConfig{})
+	if !cat.SkillsEnabled() {
+		t.Fatal("skills should be enabled by default")
+	}
+	if _, ok := cat.BuildRegistry().Lookup(tools.ActivateSkillToolName); !ok {
+		t.Fatal("activate_skill should be registered by default")
+	}
+
+	off, on := false, true
+	if changed := cat.RefreshBuiltinToggles(&config.Settings{
+		Sagittarius: &config.SagittariusSettings{SkillsEnabled: &off},
+	}); !changed {
+		t.Fatal("disabling skills should report a change so the registry rebuilds")
+	}
+	if cat.SkillsEnabled() {
+		t.Error("catalog still reports skills enabled after toggle")
+	}
+	if cat.SkillManager().Enabled() {
+		t.Error("skill manager still reports enabled after toggle")
+	}
+	if _, ok := cat.BuildRegistry().Lookup(tools.ActivateSkillToolName); ok {
+		t.Error("activate_skill was registered with skillsEnabled=false")
+	}
+
+	if changed := cat.RefreshBuiltinToggles(&config.Settings{
+		Sagittarius: &config.SagittariusSettings{SkillsEnabled: &on},
+	}); !changed {
+		t.Fatal("re-enabling skills should report a change")
+	}
+	if !cat.SkillsEnabled() || !cat.SkillManager().Enabled() {
+		t.Error("skills did not re-enable")
+	}
+	if _, ok := cat.BuildRegistry().Lookup(tools.ActivateSkillToolName); !ok {
+		t.Error("activate_skill missing after re-enabling skills")
+	}
+}
+
 // TestSetRegistryHonorsLiveScratchpadSetting closes the other half of the loop:
 // refreshBuiltinToolToggles rebuilds and calls SetRegistry, which must consult
 // the live settings snapshot rather than whatever was true at construction.
@@ -310,5 +348,34 @@ func TestRunnerSystemPromptGatesSkillsSection(t *testing.T) {
 
 	if sys := systemInstruction(t, runner); !strings.Contains(sys, "## Skills") {
 		t.Fatalf("system prompt should contain ## Skills after discovering a skill:\n%s", sys)
+	}
+
+	// Disabling skills via settings drops activate_skill from the rebuilt
+	// registry, strips ## Skills from the prompt, empties SkillNames, and
+	// refuses @skill: mentions.
+	off := false
+	cat.RefreshBuiltinToggles(&config.Settings{
+		Sagittarius: &config.SagittariusSettings{SkillsEnabled: &off},
+	})
+	runner.SetRegistry(cat.BuildRegistry())
+
+	if _, ok := runner.Registry().Lookup(tools.ActivateSkillToolName); ok {
+		t.Fatal("activate_skill remained in registry when skillsEnabled=false")
+	}
+	if sys := systemInstruction(t, runner); strings.Contains(sys, "## Skills") || strings.Contains(sys, tools.ActivateSkillToolName) {
+		t.Fatalf("system prompt still advertises skills when skillsEnabled=false:\n%s", sys)
+	}
+	if got := runner.SkillNames(); len(got) != 0 {
+		t.Fatalf("SkillNames when disabled = %v, want empty", got)
+	}
+	events := collectEvents(t, mustRunTurn(t, runner, "@skill:python3 go"))
+	var sawDisabled bool
+	for _, ev := range events {
+		if ev.Err != nil && strings.Contains(ev.Err.Error(), "skills are turned off") {
+			sawDisabled = true
+		}
+	}
+	if !sawDisabled {
+		t.Fatalf("expected skills-turned-off error for @skill:python3, got %+v", events)
 	}
 }

@@ -126,9 +126,10 @@ of its workflow. It asks the model to check the `activate_skill` catalog before
 its first tool call on a new task and load a matching skill in that first step.
 The wording is the same for every personality, since any of them can need any
 skill: a sysadmin writing a Python script, or a personal assistant answering a
-question your own skill covers. When no skills are installed, the section is
-omitted so the prompt does not mention skills. `/skills reload` recomposes the system prompt so the section
-appears or disappears when skills are added or removed.
+question your own skill covers. When no skills are installed, or when
+`sagittarius.skillsEnabled` is `false`, the section is omitted so the prompt
+does not mention skills. `/skills reload` and toggling the setting in `/settings`
+recompose the system prompt live.
 
 ## Example settings
 

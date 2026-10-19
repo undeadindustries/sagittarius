@@ -1,6 +1,7 @@
 package skills
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -112,5 +113,40 @@ func TestNearestNamesSkipsDisabled(t *testing.T) {
 		if n == "golang-disabled" {
 			t.Fatal("disabled skills must not be suggested")
 		}
+	}
+}
+
+func TestManagerSetEnabled(t *testing.T) {
+	t.Parallel()
+	m := managerWith("golang", "python3")
+
+	if !m.Enabled() {
+		t.Fatal("new manager should be enabled by default")
+	}
+	if got := len(m.Skills()); got != 2 {
+		t.Fatalf("Skills() len = %d, want 2", got)
+	}
+
+	m.SetEnabled(false)
+	if m.Enabled() {
+		t.Fatal("Enabled() = true after SetEnabled(false)")
+	}
+	if got := m.Skills(); len(got) != 0 {
+		t.Fatalf("Skills() when disabled = %v, want empty", got)
+	}
+	if got := m.Get("golang"); got != nil {
+		t.Fatalf("Get when disabled = %+v, want nil", got)
+	}
+	if _, err := m.Content("golang"); !errors.Is(err, errSkillsDisabled) {
+		t.Fatalf("Content when disabled err = %v, want errSkillsDisabled", err)
+	}
+
+	// Re-enabling restores skills without a rediscover.
+	m.SetEnabled(true)
+	if got := len(m.Skills()); got != 2 {
+		t.Fatalf("Skills() after re-enable len = %d, want 2", got)
+	}
+	if _, err := m.Content("golang"); err != nil {
+		t.Fatalf("Content after re-enable: %v", err)
 	}
 }

@@ -36,6 +36,7 @@ type Catalog struct {
 	spillDir           string
 	scriptToolEnabled  bool
 	scratchpadEnabled  bool
+	skillsEnabled      bool
 }
 
 // CatalogConfig configures tool catalog assembly.
@@ -73,6 +74,9 @@ type CatalogConfig struct {
 	// ScratchpadEnabled is change-detection state for the same reason: the
 	// update_scratchpad tool needs a *Runner, so the runner registers it.
 	ScratchpadEnabled bool
+	// SkillsEnabled toggles agent skills altogether (default true when nil;
+	// pointer so a zero-value CatalogConfig in tests stays enabled).
+	SkillsEnabled *bool
 }
 
 // ResearchSubagentsEnabled reports the catalog's current research-subagent
@@ -81,6 +85,9 @@ func (c *Catalog) ResearchSubagentsEnabled() bool { return c != nil && c.researc
 
 // CodingSubagentsEnabled reports the catalog's current coding-subagent toggle.
 func (c *Catalog) CodingSubagentsEnabled() bool { return c != nil && c.codingSubagents }
+
+// SkillsEnabled reports the catalog's current skills toggle.
+func (c *Catalog) SkillsEnabled() bool { return c != nil && c.skillsEnabled }
 
 // NewCatalog constructs a tool catalog.
 func NewCatalog(cfg CatalogConfig) (*Catalog, error) {
@@ -115,6 +122,11 @@ func NewCatalog(cfg CatalogConfig) (*Catalog, error) {
 		}
 	}
 	directFetch := config.WebDirectFetch(cfg.Settings, nil)
+	skillsEnabled := config.SkillsEnabled(cfg.Settings, nil)
+	if cfg.SkillsEnabled != nil {
+		skillsEnabled = *cfg.SkillsEnabled
+	}
+	cfg.Skills.SetEnabled(skillsEnabled)
 
 	return &Catalog{
 		ws:                 cfg.Workspace,
@@ -137,6 +149,7 @@ func NewCatalog(cfg CatalogConfig) (*Catalog, error) {
 		spillDir:           cfg.SpillDir,
 		scriptToolEnabled:  cfg.ScriptToolEnabled,
 		scratchpadEnabled:  cfg.ScratchpadEnabled,
+		skillsEnabled:      skillsEnabled,
 	}, nil
 }
 
@@ -174,6 +187,7 @@ type builtinToggles struct {
 	webMaxFetchBytes   int
 	scriptToolEnabled  bool
 	scratchpadEnabled  bool
+	skillsEnabled      bool
 }
 
 func (c *Catalog) resolveToggles(s *config.Settings) builtinToggles {
@@ -191,6 +205,7 @@ func (c *Catalog) resolveToggles(s *config.Settings) builtinToggles {
 		webMaxFetchBytes:   config.WebMaxFetchBytes(s, nil, directFetch),
 		scriptToolEnabled:  config.ScriptToolEnabled(s, nil),
 		scratchpadEnabled:  config.ScratchpadEnabled(s, nil),
+		skillsEnabled:      config.SkillsEnabled(s, nil),
 	}
 }
 
@@ -208,6 +223,7 @@ func (c *Catalog) toggles() builtinToggles {
 		webMaxFetchBytes:   c.webMaxFetchBytes,
 		scriptToolEnabled:  c.scriptToolEnabled,
 		scratchpadEnabled:  c.scratchpadEnabled,
+		skillsEnabled:      c.skillsEnabled,
 	}
 }
 
@@ -224,6 +240,8 @@ func (c *Catalog) applyToggles(t builtinToggles) {
 	c.webMaxFetchBytes = t.webMaxFetchBytes
 	c.scriptToolEnabled = t.scriptToolEnabled
 	c.scratchpadEnabled = t.scratchpadEnabled
+	c.skillsEnabled = t.skillsEnabled
+	c.skills.SetEnabled(t.skillsEnabled)
 }
 
 // BuildRegistry assembles the current registry without reconnecting MCP servers.
@@ -245,7 +263,9 @@ func (c *Catalog) BuildRegistry() *tools.Registry {
 		tools.WithSpillDir(c.spillDir),
 		tools.WithScriptTool(c.scriptToolEnabled),
 	)
-	reg.Register(tools.NewActivateSkillTool(c.skills))
+	if c.skillsEnabled {
+		reg.Register(tools.NewActivateSkillTool(c.skills))
+	}
 	for _, tool := range c.mcp.Tools() {
 		reg.Register(wrapMCPTool(tool))
 	}

@@ -1148,6 +1148,13 @@ func (h *appHooks) BuiltinTools() []tools.ToolEntry {
 	return out
 }
 
+func (h *appHooks) SkillsEnabled() bool {
+	if h.app == nil || h.app.runtime == nil || h.app.runtime.Catalog == nil {
+		return false
+	}
+	return h.app.runtime.Catalog.SkillsEnabled()
+}
+
 func (h *appHooks) SkillList() []skills.Definition {
 	if h.app == nil || h.app.runtime == nil {
 		return nil

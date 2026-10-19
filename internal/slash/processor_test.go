@@ -84,6 +84,7 @@ type mockHooks struct {
 	evaluatorLabel string
 	trustedHook    string
 	trustAll       bool
+	skillsDisabled bool
 }
 
 func (m *mockHooks) RebuildRunner(context.Context) (string, string, error) {
@@ -207,6 +208,8 @@ func (m *mockHooks) BuiltinTools() []tools.ToolEntry {
 		{Name: "read_file", Description: "read a file", Source: tools.SourceBuiltin, ReadOnly: true},
 	}
 }
+
+func (m *mockHooks) SkillsEnabled() bool { return !m.skillsDisabled }
 
 func (m *mockHooks) SkillList() []skills.Definition { return nil }
 
@@ -1275,5 +1278,22 @@ func TestUpdateCommand(t *testing.T) {
 	res = p.Process(context.Background(), "/update unknown", deps)
 	if res.Err == nil {
 		t.Fatalf("expected error for /update unknown, got nil")
+	}
+}
+
+func TestSkillsCommandsWhenDisabled(t *testing.T) {
+	deps, _, hooks := testDeps(t, nil)
+	hooks.skillsDisabled = true
+	p := slash.NewProcessor()
+
+	for _, cmd := range []string{"/skills", "/skills list", "/skills reload"} {
+		res := p.Process(context.Background(), cmd, deps)
+		if res.Err != nil {
+			t.Fatalf("%s: unexpected error: %v", cmd, res.Err)
+		}
+		combined := strings.Join(res.Messages, "\n")
+		if !strings.Contains(combined, "Skills are turned off") || !strings.Contains(combined, "sagittarius.skillsEnabled") {
+			t.Fatalf("%s: got %q, want disabled message", cmd, combined)
+		}
 	}
 }

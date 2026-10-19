@@ -2,6 +2,7 @@ package skills
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -10,6 +11,9 @@ import (
 	"sync"
 )
 
+// errSkillsDisabled is returned by Content when the global skills toggle is off.
+var errSkillsDisabled = errors.New("skills are turned off (set sagittarius.skillsEnabled to true in /settings)")
+
 // Manager discovers skills and tracks session-active skill names.
 type Manager struct {
 	mu              sync.RWMutex
@@ -17,16 +21,40 @@ type Manager struct {
 	active          map[string]struct{}
 	workDir         string
 	trusted         bool
+	enabled         bool
 	extensionSkills []Definition
 }
 
-// NewManager constructs a skill manager for workDir.
+// NewManager constructs a skill manager for workDir with skills enabled by default.
 func NewManager(workDir string, trusted bool) *Manager {
 	return &Manager{
 		workDir: workDir,
 		trusted: trusted,
+		enabled: true,
 		active:  make(map[string]struct{}),
 	}
+}
+
+// SetEnabled toggles whether the manager exposes any discovered skills.
+// Discovery keeps the underlying slice populated so re-enabling mid-session
+// restores skills immediately without another disk scan.
+func (m *Manager) SetEnabled(enabled bool) {
+	if m == nil {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.enabled = enabled
+}
+
+// Enabled reports whether skills are currently enabled on this manager.
+func (m *Manager) Enabled() bool {
+	if m == nil {
+		return false
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.enabled
 }
 
 // Discover rescans skill directories with fork precedence:
@@ -88,10 +116,13 @@ func (m *Manager) Discover(ctx context.Context, extensionSkills []Definition) er
 	return nil
 }
 
-// Skills returns enabled discovered skills.
+// Skills returns enabled discovered skills, or nil when skills are globally disabled.
 func (m *Manager) Skills() []Definition {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	if !m.enabled {
+		return nil
+	}
 	out := make([]Definition, 0, len(m.skills))
 	for _, s := range m.skills {
 		if !s.Disabled {
@@ -110,10 +141,13 @@ func (m *Manager) AllSkills() []Definition {
 	return out
 }
 
-// Get returns a skill by name (case-insensitive).
+// Get returns a skill by name (case-insensitive), or nil when skills are disabled.
 func (m *Manager) Get(name string) *Definition {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	if !m.enabled {
+		return nil
+	}
 	lower := strings.ToLower(strings.TrimSpace(name))
 	for i := range m.skills {
 		if strings.ToLower(m.skills[i].Name) == lower {
@@ -155,6 +189,9 @@ const maxSuggestions = 5
 // the skill active. Callers that want the skill remembered for the session use
 // ActivateContent instead.
 func (m *Manager) Content(name string) (string, error) {
+	if !m.Enabled() {
+		return "", errSkillsDisabled
+	}
 	skill := m.Get(name)
 	if skill == nil {
 		return "", m.notFoundError(name)

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 	"github.com/undeadindustries/sagittarius/internal/skills"
@@ -62,6 +63,17 @@ func TestRuntimeToolsForChildIncludesSkillAndMCP(t *testing.T) {
 	}
 	if !containsString(names, "activate_skill") {
 		t.Errorf("child tools %v missing activate_skill", names)
+	}
+
+	off := false
+	cat.RefreshBuiltinToggles(&config.Settings{
+		Sagittarius: &config.SagittariusSettings{SkillsEnabled: &off},
+	})
+	gotDisabled := h.parent.runtimeToolsForChild(ApprovalDefault)
+	for _, tool := range gotDisabled {
+		if tool.Name() == "activate_skill" {
+			t.Fatal("child tools still include activate_skill when skillsEnabled=false")
+		}
 	}
 }
 

@@ -124,6 +124,9 @@ type SagittariusSettings struct {
 	// ScratchpadEnabled toggles the update_scratchpad working-memory tool
 	// (default on).
 	ScratchpadEnabled *bool `json:"scratchpadEnabled,omitempty"`
+	// SkillsEnabled toggles agent skills altogether — the activate_skill tool,
+	// the Skills prompt section, and @skill: mentions (default on).
+	SkillsEnabled *bool `json:"skillsEnabled,omitempty"`
 	// Memory configures the always-inject MEMORY.md tier.
 	Memory *SagittariusMemoryConfig `json:"memory,omitempty"`
 	// Chat configures external chat integrations (Google Chat, etc.).

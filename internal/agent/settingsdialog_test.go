@@ -371,6 +371,34 @@ func TestApplySettingValueGoogleChat(t *testing.T) {
 	}
 }
 
+func TestSettingsDialogSkillsEnabled(t *testing.T) {
+	docs := loadEmptyDocs(t)
+	entry := mustEntry(t, listSettings(docs, config.ScopeGlobal), "sagittarius.skillsEnabled")
+	if entry.DefaultValue != "true" {
+		t.Errorf("DefaultValue = %q, want \"true\"", entry.DefaultValue)
+	}
+	if entry.Value != "" {
+		t.Errorf("Value = %q, want empty", entry.Value)
+	}
+
+	s := &config.Settings{}
+	if err := applySettingValue(s, "sagittarius.skillsEnabled", "false"); err != nil {
+		t.Fatalf("apply skillsEnabled: %v", err)
+	}
+	if s.Sagittarius == nil || s.Sagittarius.SkillsEnabled == nil || *s.Sagittarius.SkillsEnabled {
+		t.Fatalf("skillsEnabled not set to false: %+v", s.Sagittarius)
+	}
+	if got := skillsEnabled(s); got != "false" {
+		t.Errorf("skillsEnabled(s) = %q, want \"false\"", got)
+	}
+	if err := clearSettingValue(s, "sagittarius.skillsEnabled"); err != nil {
+		t.Fatalf("clear skillsEnabled: %v", err)
+	}
+	if s.Sagittarius.SkillsEnabled != nil {
+		t.Errorf("skillsEnabled was not cleared")
+	}
+}
+
 func loadEmptyDocs(t *testing.T) *config.Documents {
 	t.Helper()
 	t.Setenv("SAGITTARIUS_HOME", t.TempDir())

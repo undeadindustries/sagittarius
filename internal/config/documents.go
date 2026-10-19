@@ -754,6 +754,7 @@ func mergeSagittarius(global, project *SagittariusSettings) *SagittariusSettings
 	merged.ContextLimitPreferDiscovered = overlayPtr(global.ContextLimitPreferDiscovered, project.ContextLimitPreferDiscovered)
 	merged.ScriptToolEnabled = overlayPtr(global.ScriptToolEnabled, project.ScriptToolEnabled)
 	merged.ScratchpadEnabled = overlayPtr(global.ScratchpadEnabled, project.ScratchpadEnabled)
+	merged.SkillsEnabled = overlayPtr(global.SkillsEnabled, project.SkillsEnabled)
 	merged.Memory = mergeMemoryConfig(global.Memory, project.Memory)
 	merged.Modes = mergeModes(global.Modes, project.Modes)
 	merged.Subagents = mergeSubagents(global.Subagents, project.Subagents)

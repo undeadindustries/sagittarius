@@ -765,12 +765,28 @@ func reloadHandler(unavailable, label string, reload func(*Context) (string, err
 	}
 }
 
-var handleSkillsReload = reloadHandler("Skills reload unavailable.", "reload skills",
-	func(ctx *Context) (string, error) { return ctx.Deps.Hooks.ReloadSkills(ctx.Ctx) })
+const skillsDisabledMessage = "Skills are turned off. Set sagittarius.skillsEnabled to true in /settings to use them."
+
+func handleSkillsReload(ctx *Context) Result {
+	if ctx.Deps.Hooks == nil {
+		return InfoResult("Skills reload unavailable.")
+	}
+	if !ctx.Deps.Hooks.SkillsEnabled() {
+		return InfoResult(skillsDisabledMessage)
+	}
+	summary, err := ctx.Deps.Hooks.ReloadSkills(ctx.Ctx)
+	if err != nil {
+		return ErrorResult(fmt.Errorf("reload skills: %w", err))
+	}
+	return InfoResult(summary)
+}
 
 func handleSkillsList(ctx *Context) Result {
 	if ctx.Deps.Hooks == nil {
 		return InfoResult("Skills unavailable.")
+	}
+	if !ctx.Deps.Hooks.SkillsEnabled() {
+		return InfoResult(skillsDisabledMessage)
 	}
 	skillsList := ctx.Deps.Hooks.SkillList()
 	if len(skillsList) == 0 {

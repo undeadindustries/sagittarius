@@ -166,8 +166,10 @@ func (r *Runner) runtimeToolsForChild(approval ApprovalMode) []tools.Tool {
 		return nil
 	}
 	var out []tools.Tool
-	if mgr := r.runtime.Catalog.SkillManager(); mgr != nil {
-		out = append(out, tools.NewActivateSkillTool(mgr))
+	if r.runtime.Catalog.SkillsEnabled() {
+		if mgr := r.runtime.Catalog.SkillManager(); mgr != nil {
+			out = append(out, tools.NewActivateSkillTool(mgr))
+		}
 	}
 	if mcpMgr := r.runtime.Catalog.MCPManager(); mcpMgr != nil {
 		for _, tool := range mcpMgr.Tools() {

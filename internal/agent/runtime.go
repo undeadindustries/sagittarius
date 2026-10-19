@@ -70,6 +70,8 @@ type RuntimeConfig struct {
 	ScriptToolEnabled bool
 	// ScratchpadEnabled toggles registration of update_scratchpad (default true).
 	ScratchpadEnabled bool
+	// SkillsEnabled toggles agent skills altogether (default true when nil).
+	SkillsEnabled *bool
 }
 
 // NewRuntime constructs and performs an initial tool catalog reload.
@@ -109,6 +111,7 @@ func NewRuntime(ctx context.Context, cfg RuntimeConfig) (*Runtime, error) {
 		SpillDir:           cfg.SpillDir,
 		ScriptToolEnabled:  cfg.ScriptToolEnabled,
 		ScratchpadEnabled:  cfg.ScratchpadEnabled,
+		SkillsEnabled:      cfg.SkillsEnabled,
 
 		ResearchSubagentsEnabled: cfg.ResearchSubagentsEnabled,
 		CodingSubagentsEnabled:   cfg.CodingSubagentsEnabled,

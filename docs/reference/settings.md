@@ -126,6 +126,12 @@ exact detail compression has summarized away, has no setting: it is always
 registered because it costs one tool declaration and reads a file the session is
 already writing. See `docs/working-memory.md`.
 
+### Skills (`sagittarius.skillsEnabled`)
+
+| Key | Type | Default | Purpose |
+|-----|------|---------|---------|
+| `skillsEnabled` | bool | `true` | Advertise discovered skills to the model. When `false`, the `activate_skill` tool is not registered (for the main agent or subagents), the `## Skills` system-prompt section is omitted, `@skill:` mentions are refused, and `/skills` reports that skills are turned off. Live-toggled from `/settings`. |
+
 ### Subagents (`sagittarius.subagents.*`)
 
 | Key | Type | Default | Purpose |

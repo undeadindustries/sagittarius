@@ -50,6 +50,7 @@ type Hooks interface {
 	MCPToolInventory(ctx context.Context) []mcp.ServerToolInventory
 	// BuiltinTools returns code-defined tools (built-in + skill) for `/tools`.
 	BuiltinTools() []tools.ToolEntry
+	SkillsEnabled() bool
 	SkillList() []skills.Definition
 	AgentList() []agents.Definition
 	// Session hooks — may be nil when no session manager is active.

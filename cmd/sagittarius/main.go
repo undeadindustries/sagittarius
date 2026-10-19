@@ -1200,6 +1200,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		spillDir = filepath.Join(tmpDir, "spill")
 	}
 
+	skillsEnabled := config.SkillsEnabled(settings, nil)
 	runtime, err := agent.NewRuntime(ctx, agent.RuntimeConfig{
 		Settings:                 settings,
 		ClientName:               "sagittarius",
@@ -1217,6 +1218,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		SpillDir:                 spillDir,
 		ScriptToolEnabled:        config.ScriptToolEnabled(settings, nil),
 		ScratchpadEnabled:        config.ScratchpadEnabled(settings, nil),
+		SkillsEnabled:            &skillsEnabled,
 	})
 	if err != nil {
 		return nil, nil, nil, "", "", err

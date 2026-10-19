@@ -368,6 +368,13 @@ func listSettings(docs *config.Documents, scope config.SettingScope) []settingsd
 			DefaultValue: fmtBool(config.ScratchpadEnabled(nil, nil)),
 			Kind:         settingsdialog.KindBool,
 		}, scratchpadEnabled(scopeSettings), scratchpadEnabled(global), scratchpadEnabled(project)),
+		row(settingsdialog.SettingEntry{
+			Key:          "sagittarius.skillsEnabled",
+			Label:        "Skills (activate_skill)",
+			Description:  "Advertise discovered skills to the model and allow @skill: mentions (default on)",
+			DefaultValue: fmtBool(config.SkillsEnabled(nil, nil)),
+			Kind:         settingsdialog.KindBool,
+		}, skillsEnabled(scopeSettings), skillsEnabled(global), skillsEnabled(project)),
 		{Label: "Google Chat", Kind: settingsdialog.KindHeader},
 		row(settingsdialog.SettingEntry{
 			Key:          "sagittarius.chat.googleChat.enabled",
@@ -776,6 +783,15 @@ func applySettingValue(s *config.Settings, key, value string) error {
 			s.Sagittarius = &config.SagittariusSettings{}
 		}
 		s.Sagittarius.ScratchpadEnabled = &b
+	case "sagittarius.skillsEnabled":
+		b, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("must be true/false: %w", err)
+		}
+		if s.Sagittarius == nil {
+			s.Sagittarius = &config.SagittariusSettings{}
+		}
+		s.Sagittarius.SkillsEnabled = &b
 	case "sagittarius.chat.googleChat.enabled":
 		b, err := strconv.ParseBool(value)
 		if err != nil {
@@ -1043,6 +1059,10 @@ func clearSettingValue(s *config.Settings, key string) error {
 	case "sagittarius.scratchpadEnabled":
 		if s.Sagittarius != nil {
 			s.Sagittarius.ScratchpadEnabled = nil
+		}
+	case "sagittarius.skillsEnabled":
+		if s.Sagittarius != nil {
+			s.Sagittarius.SkillsEnabled = nil
 		}
 	case "sagittarius.chat.googleChat.enabled":
 		if gc := gcOf(s); gc != nil {
@@ -1524,6 +1544,13 @@ func scriptEnabled(s *config.Settings) string {
 func scratchpadEnabled(s *config.Settings) string {
 	if sag := sagOf(s); sag != nil {
 		return fmtPtrBool(sag.ScratchpadEnabled)
+	}
+	return ""
+}
+
+func skillsEnabled(s *config.Settings) string {
+	if sag := sagOf(s); sag != nil {
+		return fmtPtrBool(sag.SkillsEnabled)
 	}
 	return ""
 }
