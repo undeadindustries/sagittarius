@@ -167,6 +167,10 @@ type ComposerStatus struct {
 	// session override (Alt+R, /reasoning <level>) or a pinned settings value.
 	// Empty means the model or provider decides, so the footer omits it.
 	ReasoningEffort string
+	// SkillsDisabled is true when sagittarius.skillsEnabled is false. The footer
+	// shows "skills: off" only then; when skills are on, the status row's skill
+	// count already speaks for them.
+	SkillsDisabled bool
 }
 
 // ComposerStatusProvider is an optional capability the TUI uses to render the

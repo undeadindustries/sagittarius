@@ -509,3 +509,39 @@ func TestFooterSettingsShowsReasoningEffort(t *testing.T) {
 		})
 	}
 }
+
+func TestFooterSettingsSkillsOff(t *testing.T) {
+	t.Parallel()
+
+	onApp := statusApp{cs: ui.ComposerStatus{ApprovalMode: "default", SkillsDisabled: false}}
+	mOn := newModel(ui.Options{ThemeName: "greyscale"}, onApp, NewTerminal(ui.Options{}))
+	mOn.mouseEnabled = true
+	if got := mOn.footerSettings(); strings.Contains(got, "skills:") {
+		t.Fatalf("skills enabled should omit skills entry, got %q", got)
+	}
+	if got := mOn.footerSettings(); !strings.Contains(got, "mouse: on") {
+		t.Fatalf("skills enabled should keep mouse entry, got %q", got)
+	}
+
+	offApp := statusApp{cs: ui.ComposerStatus{ApprovalMode: "default", SkillsDisabled: true}}
+	mOff := newModel(ui.Options{ThemeName: "greyscale"}, offApp, NewTerminal(ui.Options{}))
+	mOff.mouseEnabled = true
+	full := mOff.footerSettings()
+	const wantSuffix = "screen: full · thinking: hidden · skills: off · mouse: on"
+	if !strings.HasSuffix(full, wantSuffix) {
+		t.Fatalf("wide footerSettings with skills off = %q, want suffix %q", full, wantSuffix)
+	}
+
+	// On a terminal just too narrow for the full line, truncateAtSeparator drops
+	// "mouse: on" and keeps "skills: off". At the same width with skills enabled,
+	// "mouse: on" still fits.
+	narrowWidth := lipgloss.Width(full) - 2
+	narrowOff := truncateAtSeparator(full, narrowWidth)
+	if !strings.Contains(narrowOff, "skills: off") || strings.Contains(narrowOff, "mouse:") {
+		t.Fatalf("narrow skills-off line = %q, want skills: off kept and mouse dropped", narrowOff)
+	}
+	narrowOn := truncateAtSeparator(mOn.footerSettings(), narrowWidth)
+	if !strings.Contains(narrowOn, "mouse: on") {
+		t.Fatalf("narrow skills-on line at width %d = %q, want mouse: on kept", narrowWidth, narrowOn)
+	}
+}

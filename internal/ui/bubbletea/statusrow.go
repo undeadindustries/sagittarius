@@ -134,11 +134,13 @@ func (m *model) toolPolicyLabel() string {
 }
 
 // footerSettings is the current-state group at the start of the footer detail
-// line: the tool policy, the layout, the thinking-box state, and who owns the
-// mouse. It reads live model state, so it changes the moment /screen, Ctrl+T,
-// or Alt+M does. Inline mode never captures the mouse, so it reports the
-// terminal as owner. The order is the drop order on a narrow terminal, last
-// entry first, so the tool policy is the last of these to go.
+// line: the tool policy, the layout, the thinking-box state, when skills are
+// turned off, and who owns the mouse. It reads live model state, so it changes
+// the moment /screen, Ctrl+T, /settings, or Alt+M does. Inline mode never
+// captures the mouse, so it reports the terminal as owner. The order is the
+// drop order on a narrow terminal, last entry first, so "skills: off" sits
+// ahead of "mouse: …" (displacing mouse when width runs short) and the tool
+// policy is the last of these to go.
 func (m *model) footerSettings() string {
 	screen, mouse := "full", "off"
 	switch {
@@ -152,8 +154,13 @@ func (m *model) footerSettings() string {
 		thinking = "shown"
 	}
 	entries := []string{"screen: " + screen, "thinking: " + thinking}
-	if cs, ok := m.composerStatus(); ok && cs.ReasoningEffort != "" {
-		entries = append(entries, "effort: "+cs.ReasoningEffort)
+	if cs, ok := m.composerStatus(); ok {
+		if cs.ReasoningEffort != "" {
+			entries = append(entries, "effort: "+cs.ReasoningEffort)
+		}
+		if cs.SkillsDisabled {
+			entries = append(entries, "skills: off")
+		}
 	}
 	entries = append(entries, "mouse: "+mouse)
 	if tools := m.toolPolicyLabel(); tools != "" {

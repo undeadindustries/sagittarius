@@ -244,6 +244,7 @@ func (a *App) ComposerStatus() ui.ComposerStatus {
 	}
 	if a.runtime != nil && a.runtime.Catalog != nil {
 		cs.SkillCount = len(a.runtime.Catalog.SkillManager().Skills())
+		cs.SkillsDisabled = !a.runtime.Catalog.SkillsEnabled()
 	}
 	if s := a.effectiveSettings(); s != nil {
 		providerID := config.NormalizeProviderID(s.ActiveProvider())
