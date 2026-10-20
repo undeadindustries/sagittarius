@@ -20,7 +20,12 @@ var scopeFixtureUntouched = []string{
 	"def add_tag(tag, tags=[]):\n    tags.append(tag)\n    return tags\n",
 }
 
-const scopeFixtureTarget = "def last_n(items, n):\n    \"\"\"Return the last n items.\"\"\"\n    return items[len(items) - n - 1:]\n"
+const scopeFixtureTarget = "def last_n(items, n):\n    \"\"\"Return the last n items.\"\"\"\n    return items[len(items) - n - 1 :]\n"
+
+// scopeFixtureRuff hides the two smells from post-write checks. Without it
+// ruff reports them (E722, B006) and the lint feedback, not the prompt, is
+// what pulls the model into load_config and add_tag.
+const scopeFixtureRuff = "[lint]\nselect = [\"E4\", \"E7\", \"E9\", \"F\"]\nignore = [\"E722\"]\n"
 
 const scopeCheckTimeout = 30 * time.Second
 
@@ -46,6 +51,7 @@ func TestTaskScopeDiscipline(t *testing.T) {
 	setup := func(t *testing.T, workDir string) {
 		src := "import json\n\n\n" + scopeFixtureUntouched[0] + "\n\n" + scopeFixtureTarget + "\n\n" + scopeFixtureUntouched[1]
 		mustWriteFile(t, filepath.Join(workDir, "utils.py"), src, 0o644)
+		mustWriteFile(t, filepath.Join(workDir, "ruff.toml"), scopeFixtureRuff, 0o644)
 		if personality != "" {
 			mustMkdirAll(t, filepath.Join(workDir, ".sagittarius"))
 			mustWriteFile(t, filepath.Join(workDir, ".sagittarius", "settings.json"),
@@ -54,7 +60,7 @@ func TestTaskScopeDiscipline(t *testing.T) {
 	}
 
 	runEval(t, "TaskScope", setup, func(t *testing.T, base *evalRunner) {
-		var fixed, scoped, mentioned int
+		var fixed, scoped, mentioned, errored int
 		for i := 0; i < repeats; i++ {
 			workDir := t.TempDir()
 			setup(t, workDir)
@@ -65,8 +71,12 @@ func TestTaskScopeDiscipline(t *testing.T) {
 			args := []string{"--yolo", "--output-format", "text", "--model", base.model,
 				"-p", "last_n in utils.py returns one item too many. Fix it."}
 			res := invoke(t, base.bin, workDir, env, args...)
+			// A failed turn (an empty closing reply, a transient 5xx) is counted
+			// rather than fatal. Its edits are on disk, so fixed and scoped are
+			// still scored; only mentioned needs the summary.
 			if res.exitCode != 0 {
-				t.Fatalf("run %d: invoke failed (exit %d)\nstderr: %s", i+1, res.exitCode, res.stderr)
+				errored++
+				t.Logf("run %d/%d: invoke failed (exit %d): %s", i+1, repeats, res.exitCode, strings.TrimSpace(res.stderr))
 			}
 
 			final, err := os.ReadFile(filepath.Join(workDir, "utils.py"))
@@ -80,7 +90,7 @@ func TestTaskScopeDiscipline(t *testing.T) {
 					isScoped = false
 				}
 			}
-			isMentioned := mentionsSmell(res.stdout)
+			isMentioned := res.exitCode == 0 && mentionsSmell(res.stdout)
 			if isFixed {
 				fixed++
 			}
@@ -95,8 +105,8 @@ func TestTaskScopeDiscipline(t *testing.T) {
 				t.Logf("run %d/%d: utils.py after the run:\n%s", i+1, repeats, final)
 			}
 		}
-		t.Logf("scope summary: fixed=%d/%d scoped=%d/%d mentioned=%d/%d",
-			fixed, repeats, scoped, repeats, mentioned, repeats)
+		t.Logf("scope summary: fixed=%d/%d scoped=%d/%d mentioned=%d/%d (errored=%d, no summary to score)",
+			fixed, repeats, scoped, repeats, mentioned, repeats-errored, errored)
 		if fixed == 0 {
 			t.Errorf("last_n was never fixed across %d runs", repeats)
 		}
