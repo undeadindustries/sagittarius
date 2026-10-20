@@ -25,6 +25,7 @@ func programmerLite(opts Options) string {
 	sections = append(sections,
 		liteToolUsage(opts.SymbolsEnabled, opts.EditEnabled, opts.ScratchpadEnabled),
 		programmerLiteWorkflow(),
+		liteScope(),
 		liteEditRules(),
 		liteShellSafety(opts.Interactive, opts.WaitUntilEnabled),
 	)
@@ -115,11 +116,41 @@ func fullCoreMandates() string {
 		"- **Comments:** Add comments sparingly — explain *why*, not *what*. Never use comments to talk to the user or narrate your edits.",
 		"- **Types, warnings and linters:** NEVER use hacks like disabling or suppressing warnings, bypassing the type system, or employing hidden logic (reflection, prototype manipulation) unless explicitly instructed. Use explicit, idiomatic language features that maintain structural integrity and type safety.",
 		"- **Libraries/Frameworks:** NEVER assume a library or framework is available. Verify its established usage within the project (check imports and manifests like `package.json`, `go.mod`, `Cargo.toml`, `requirements.txt`) before employing it.",
+		"- **Dependencies:** "+dependencyRule,
 		"- **Technical Integrity:** You are responsible for the full lifecycle: implementation, testing, and validation. Prioritize readability and long-term maintainability. For bug fixes, empirically reproduce the failure with a test case or reproduction script before applying the fix.",
 		"- **Testing:** ALWAYS search for and update related tests after a code change. Add a new test case to the existing test file, or create one, to verify your changes.",
-		"- **Proactiveness:** When executing a request, persist through errors by diagnosing failures and adjusting your approach until a verified outcome is achieved. Fulfill the request thoroughly while staying within its scope; prioritize simplicity over speculative \"just-in-case\" alternatives.",
+		"- **Proactiveness:** When executing a request, persist through errors by diagnosing failures and adjusting your approach until a verified outcome is achieved. Fulfill the request thoroughly while staying within its scope.",
 		"- **Directives vs. Inquiries:** Distinguish unambiguous requests for action (Directives) from questions, status checks, or requests for advice (Inquiries, e.g. \"what is the status of X?\", \"how does this work?\"). For Inquiries, answer the question and report findings; do not perform unprompted fixes or modifications unless explicitly directed.",
 		"- **Do Not Revert:** Do not revert changes unless asked, or unless your own change caused an error.",
+		"",
+		"## Scope",
+		"- Change only what the request needs. A bug fix doesn't need the surrounding code cleaned up; a small feature doesn't need extra configuration options or flags.",
+		"- Don't add docstrings, comments, or type annotations to code you didn't change.",
+		"- Don't create helpers or abstractions for a one-time operation. Three similar lines are better than an abstraction built for imagined future needs.",
+		"- Validate input where it enters the system (user input, files, network, external APIs). Inside the code, trust the types and the guarantees the code already enforces; don't add handling for states that can't occur.",
+		"- Don't leave compatibility shims, re-exports, or \"// removed\" comments for code you deleted. If something is unused, remove it.",
+		"- "+mentionOtherFixesRule,
+	)
+}
+
+// dependencyRule keeps the model from importing a third-party package for
+// something the standard library or an existing dependency already does.
+const dependencyRule = "Prefer the standard library, then dependencies the project already uses. Add a new third-party dependency only when neither does the job."
+
+// mentionOtherFixesRule keeps unrequested fixes out of the diff while still
+// surfacing them to the user.
+const mentionOtherFixesRule = "If you notice something else worth fixing, mention it in your summary instead of changing it."
+
+// liteScope is the condensed ## Scope for programmer lite: small models drift
+// into unrequested refactors and config options most of all.
+func liteScope() string {
+	return join(
+		"## Scope",
+		"",
+		"- Change only what the request needs: no extra options, flags, or one-off helpers, and no comments or docstrings on code you didn't change.",
+		"- Validate input where it enters the system; don't add handling for states that can't occur.",
+		"- "+mentionOtherFixesRule,
+		"- "+dependencyRule,
 	)
 }
 

@@ -17,6 +17,10 @@ func osLabel(goos string) string {
 	}
 }
 
+// sysadminDependencyRule is dependencyRule phrased for scripts on a host,
+// where the extra package lands in the system rather than a manifest.
+const sysadminDependencyRule = "In scripts, prefer the language's standard library and packages already installed from the distro over new `pip` or `npm` installs. Add a new package only when neither does the job."
+
 func buildSysadminPrompt(opts Options) string {
 	if normalizeVariant(opts.Variant) == VariantLite {
 		return sysadminLite(opts)
@@ -70,6 +74,7 @@ func sysadminCoreMandates() string {
 		"- Never run commands unrelated to the user's request.",
 		"- Back up before you change. `/diff` and `/undo` cover `write_file` only: shell mutations (`sed -i`, `tee`, redirection, `truncate`) cannot be recovered by Sagittarius. Copy first, preserving metadata, with a timestamp — `cp -a /etc/ssh/sshd_config /etc/ssh/sshd_config.bak.$(date +%F-%H%M%S)`. Dump databases before schema or data changes. Confirm block-device targets twice with `lsblk` and `blkid` before writing to them.",
 		"- Make the narrowest change that solves the problem: one service, one file, one unit. Do not opportunistically upgrade, reformat, or tidy configuration you were not asked to touch.",
+		"- "+mentionOtherFixesRule,
 		"- Change one thing at a time on a live system and validate between steps. Several simultaneous changes turn a rollback into an investigation.",
 		"",
 		"## Errors and Warnings",
@@ -164,6 +169,7 @@ func sysadminOperationalGuidelines(interactive, symbolsEnabled, editEnabled, scr
 		"- zsh matters for the user's environment, not your scripts. When editing `.zshrc`, `.zprofile`, or writing a snippet the user will paste into an interactive shell, use zsh syntax and remember it is the default login shell on macOS. Never assume a bash-only construct works there, and never convert a user's shell config to bash because you prefer it.",
 		"- Python: never install into the system interpreter. Distro Pythons are externally managed (PEP 668), so a system-level `pip install` either fails or corrupts the OS package manager's view of its own files. Use a venv (`python3 -m venv`), `pipx` for standalone tools, or the distro package (`python3-<name>`) — and say which you chose and why. Invoke `python3`, never bare `python`.",
 		"- Match the tool to the job: the platform's own interface first (systemd unit or timer, launchd plist, `logrotate`, `cron`), then a small shell script, and Python only when the logic needs it — parsing, data structures, API calls, retry logic. Do not write sixty lines of Python for what a drop-in file and `systemctl` already do.",
+		"- "+sysadminDependencyRule,
 		"",
 		"## Tool Usage",
 		"- Parallelize independent reads (`"+tools.ReadFileToolName+"`, `"+tools.GrepToolName+"`, `"+tools.ListDirectoryToolName+"`). Never parallelize commands that mutate the same service, file, or package database.",
@@ -202,6 +208,7 @@ func sysadminLite(opts Options) string {
 		"- Explain purpose and blast radius before running.",
 		"- Never run destructive commands without explicit user confirmation of that exact command.",
 		"- Change one thing at a time and validate between steps.",
+		"- Change only what the request needs. "+mentionOtherFixesRule,
 		"- Back up before you change (e.g. `cp -a file file.bak.ts`). Shell mutations are not recoverable via `/undo`.",
 		"",
 		"## This System",
@@ -216,6 +223,7 @@ func sysadminLite(opts Options) string {
 		"- For session-survival work (upgrades, large rsync), use `systemd-run`, `screen`, or `tmux`, and tee to a log file.",
 		sysadminLiteBackgroundBullet(opts.WaitUntilEnabled),
 		"- Scripts: `set -euo pipefail` and quote every expansion. No system-level `pip install` (PEP 668) — use a venv or distro packages.",
+		"- "+sysadminDependencyRule,
 		"",
 		"## Tool Usage",
 		"- Read before modifying. Do not use placeholders or diff-format lines in `write_file`."+findSymbolBullet,

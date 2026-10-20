@@ -110,6 +110,22 @@ model and provider:
   not). This prevents a non-Gemini model served through an OpenAI-compatible
   endpoint from claiming to be Gemini.
 
+## Scope and dependencies
+
+The programmer prompt has a `## Scope` section that keeps changes to what was
+asked for. It names the usual ways models overreach: cleaning up code next to a
+bug fix, adding options nobody asked for, writing one-off helpers, putting
+docstrings on untouched code, adding error handling for states that can't
+happen (input is still validated where it enters the system), and leaving
+compatibility shims behind. Anything else worth fixing goes in the summary
+instead of the diff. Lite gets a condensed version after its workflow.
+
+Both programmer variants also prefer the standard library, then dependencies
+the project already uses, and add a new third-party dependency only when
+neither does the job. The sysadmin prompt has a shorter version of the scope
+rule and applies the dependency rule to scripts: the standard library and
+distro packages come before new `pip` or `npm` installs.
+
 ## Environment
 
 Every personality and variant ends with a short `## Environment` section so
