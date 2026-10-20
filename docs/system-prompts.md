@@ -110,6 +110,23 @@ model and provider:
   not). This prevents a non-Gemini model served through an OpenAI-compatible
   endpoint from claiming to be Gemini.
 
+## Environment
+
+Every personality and variant ends with a short `## Environment` section so
+the model doesn't spend its first tool calls working out where it is:
+
+- today's date (no time of day);
+- the working directory, OS, and shell;
+- inside a git repository: the branch, `git status --short` (capped at 500
+  bytes), and the last five commit subjects.
+
+It is a snapshot taken once when the session starts and labelled as one. The
+system prompt is the provider's cache prefix, so if the section changed after
+every edit, each request would be billed and prefilled again from the start.
+The prompt tells the model to run `git status` when it needs the current state.
+Subagents reuse their parent's snapshot. Git user names and emails are never
+included.
+
 ## Adapted, not copied
 
 The full prompt is an **adaptation** of the fork's programmer prompt: it

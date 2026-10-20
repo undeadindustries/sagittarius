@@ -149,6 +149,10 @@ type RunnerConfig struct {
 	// SubagentCharter is appended to the system prompt, telling a child what
 	// class it is running as and what it may touch. Empty for the parent.
 	SubagentCharter string
+	// Environment is the session-start snapshot for the prompt's
+	// ## Environment section. Nil captures one on first prompt build; a
+	// subagent receives its parent's so it neither re-runs git nor diverges.
+	Environment *prompt.Environment
 	// FileState is the registry coordinating concurrent file access across an
 	// agent tree. Empty falls back to the Runtime's, then to a fresh one.
 	FileState *tools.FileStateRegistry
@@ -256,6 +260,11 @@ type Runner struct {
 	// subagentCharter is appended to the system prompt for a subagent, naming
 	// the posture it is running under. Empty for the parent.
 	subagentCharter string
+	// env is the session-start environment snapshot, set at most once under
+	// envOnce and never mutated afterwards, so every prompt rebuild renders
+	// identical bytes.
+	env     *prompt.Environment
+	envOnce sync.Once
 	// newSubagentGenerator builds a child's generator. Never nil after
 	// construction.
 	newSubagentGenerator SubagentGeneratorFunc
@@ -566,6 +575,7 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		agentID:               cfg.AgentID,
 		fileState:             cfg.FileState,
 		subagentCharter:       cfg.SubagentCharter,
+		env:                   cfg.Environment,
 		newSubagentGenerator:  cfg.SubagentGenerator,
 	}
 	if runner.agentID == "" {
@@ -1945,6 +1955,7 @@ func (r *Runner) rebuildBasePrompt() {
 		ScratchpadEnabled: containsString(toolNames, tools.UpdateScratchpadToolName),
 		WaitUntilEnabled:  containsString(toolNames, tools.WaitUntilToolName),
 		SkillsAvailable:   containsString(toolNames, tools.ActivateSkillToolName) && r.skillCount() > 0,
+		Environment:       r.environment(),
 	})
 
 	if memory = strings.TrimSpace(memory); memory != "" {
@@ -2084,6 +2095,19 @@ func containsString(list []string, target string) bool {
 }
 
 // isGitRepo reports whether dir (or an ancestor) contains a .git entry.
+// environment returns the session's environment snapshot, capturing it on
+// first use. Later rebuilds (memory flush, model switch) reuse it so the
+// system prompt, which is the provider cache prefix, stays byte-identical.
+func (r *Runner) environment() *prompt.Environment {
+	r.envOnce.Do(func() {
+		if r.env == nil {
+			env := captureEnvironment(context.Background(), r.workDir)
+			r.env = &env
+		}
+	})
+	return r.env
+}
+
 func isGitRepo(dir string) bool {
 	dir = strings.TrimSpace(dir)
 	for dir != "" {

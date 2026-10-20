@@ -128,6 +128,7 @@ func (r *Runner) newSubagent(ctx context.Context, spec subagentSpec) (*subagent,
 		AgentID:           subID,
 		FileState:         r.fileState,
 		SubagentCharter:   spec.charter,
+		Environment:       r.environment(),
 		SubagentGenerator: r.newSubagentGenerator,
 		// Standing session constraints bind children too: a "do not touch X"
 		// limit the user set must hold inside a leased write, not just in the

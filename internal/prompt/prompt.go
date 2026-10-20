@@ -114,6 +114,62 @@ type Options struct {
 	// one skill is discovered, so the prompt only asks the model to check skills
 	// when there are skills to check.
 	SkillsAvailable bool
+	// Environment is the session-start snapshot rendered as ## Environment;
+	// nil omits the section. It must stay byte-stable for the whole session:
+	// the system prompt is the cache prefix, so any change re-bills it.
+	Environment *Environment
+}
+
+// Environment is what the model would otherwise spend its first tool calls
+// rediscovering. Fields are captured once per session; empty fields are
+// omitted. Branch is non-empty only inside a git repository.
+type Environment struct {
+	// Date is the local calendar date (YYYY-MM-DD). Time of day is never
+	// included because it would change the prompt on every rebuild.
+	Date          string
+	WorkDir       string
+	Shell         string
+	Branch        string
+	Status        string
+	RecentCommits string
+}
+
+// renderEnvironment formats opts.Environment, or returns "" when it is nil.
+func renderEnvironment(opts Options) string {
+	env := opts.Environment
+	if env == nil {
+		return ""
+	}
+	inRepo := env.Branch != ""
+	header := "Snapshot taken at session start"
+	if env.Date != "" {
+		header += " (date: " + env.Date + ")"
+	}
+	header += "."
+	if inRepo {
+		header += " Git status may be out of date; run `git status` for the current state."
+	}
+	lines := []string{"## Environment", header}
+	addField := func(label, value string) {
+		if value = strings.TrimSpace(value); value != "" {
+			lines = append(lines, "- "+label+": "+value)
+		}
+	}
+	addField("Working directory", env.WorkDir)
+	addField("OS", osLabel(opts.OS))
+	addField("Shell", env.Shell)
+	if inRepo {
+		addField("Git branch", env.Branch)
+		if status := strings.TrimRight(env.Status, "\n"); status != "" {
+			lines = append(lines, "- Git status:", "```", status, "```")
+		} else {
+			lines = append(lines, "- Git status: clean")
+		}
+		if commits := strings.TrimRight(env.RecentCommits, "\n"); commits != "" {
+			lines = append(lines, "- Recent commits:", "```", commits, "```")
+		}
+	}
+	return join(lines...)
 }
 
 const commandPresentationRules = "## Presenting Commands to the User\n" +
@@ -125,7 +181,7 @@ const commandPresentationRules = "## Presenting Commands to the User\n" +
 // which the runner appends). Unknown personalities fall back to programmer.
 func Build(opts Options) string {
 	base := buildForPersonality(opts)
-	return joinSections([]string{base, commandPresentationRules})
+	return joinSections([]string{base, renderEnvironment(opts), commandPresentationRules})
 }
 
 // renderIdentity builds the self-identification block. roleNoun completes the
