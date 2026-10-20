@@ -388,6 +388,17 @@ func TestGeminiStallGuard(t *testing.T) {
 			wantKind: ErrFirstTokenTimeout,
 		},
 		{
+			name: "metadata-only chunk does not disarm first-token timeout",
+			streamer: delayedStreamer{
+				delays: []time.Duration{0, testHang},
+				chunks: []*genai.GenerateContentResponse{
+					{UsageMetadata: &genai.GenerateContentResponseUsageMetadata{PromptTokenCount: 5}},
+					textResponse("late"),
+				},
+			},
+			wantKind: ErrFirstTokenTimeout,
+		},
+		{
 			name: "pause after first chunk is never cut off",
 			streamer: delayedStreamer{
 				delays: []time.Duration{0, testStallPause},

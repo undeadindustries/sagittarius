@@ -191,7 +191,9 @@ func (g *GeminiGenerator) GenerateContentStream(
 			if resp == nil {
 				continue
 			}
-			guard.firstOutput()
+			if geminiHasModelOutput(resp) {
+				guard.firstOutput()
+			}
 
 			// Assign synthetic IDs to Gemini tool calls that lack them, so that
 			// the model parts and emitted ToolCalls have matching IDs. This allows
@@ -270,4 +272,19 @@ func (g *GeminiGenerator) GenerateContentStream(
 	}()
 
 	return ch, nil
+}
+
+// geminiHasModelOutput reports whether a stream chunk carries text, reasoning,
+// or a tool call. Only those disarm the first-token guard: a wedged stream can
+// keep sending usage-only or empty chunks, and those must not hide the stall.
+func geminiHasModelOutput(resp *genai.GenerateContentResponse) bool {
+	if len(resp.Candidates) == 0 || resp.Candidates[0] == nil || resp.Candidates[0].Content == nil {
+		return false
+	}
+	for _, p := range resp.Candidates[0].Content.Parts {
+		if p != nil && (p.Text != "" || p.FunctionCall != nil) {
+			return true
+		}
+	}
+	return false
 }
