@@ -36,10 +36,20 @@ import (
 // /auth or /provider use before the next request.
 var errProviderUnavailable = errors.New("no provider configured: run /auth to set an API key or /provider use <id> to switch")
 
-// emptyModelReplyMsg is emitted when a turn produces no text, no tool calls,
-// and no reasoning. A silent StreamDone is how an over-window request looks
-// on providers that return 200 with an empty body (AD-094 / AD-126).
+// emptyModelReplyMsg is emitted when a turn's first reply has no text, no
+// tool calls, and no reasoning. A silent StreamDone is how an over-window
+// request looks on providers that return 200 with an empty body (AD-094 /
+// AD-126). After tool work an empty reply is normal (Gemini often ends a tool
+// loop that way), so that case gets emptySummaryNudge instead.
 const emptyModelReplyMsg = "The model returned no content. This often means the request was larger than the model's context window."
+
+// emptySummaryNudge asks once for the closing summary a model skipped after
+// tool work, so the user learns what was done.
+const emptySummaryNudge = "Your last reply was empty. In a few sentences, summarize what you did and the result."
+
+// emptySummaryNotice ends a turn whose model stayed silent even after the
+// nudge. The work is done, so this is information, not an error.
+const emptySummaryNotice = "The model finished without a summary. The tool results above show what it did."
 
 const requestBudgetDroppedFmt = "Context exceeded the model window. Dropped %d oldest messages to continue; /clear starts fresh."
 
@@ -1200,6 +1210,10 @@ func (r *Runner) runAgentLoop(ctx context.Context, userInput string, out chan<- 
 	// auto-title sees the whole reply, not just the final round.
 	var turnReply strings.Builder
 	overflowRetried := false
+	// toolsRan marks that this turn already did tool work, so an empty reply
+	// afterwards is a model with nothing left to say, not an overflowed
+	// request. emptyNudged limits the follow-up summary request to one.
+	toolsRan, emptyNudged := false, false
 	// True while the next round is the suppressed retry after a budget cut. It
 	// disables the budget for exactly that round, so a cut can never be
 	// followed immediately by another; a normal round clears it again.
@@ -1436,10 +1450,27 @@ outerLoop:
 
 			if len(toolCalls) == 0 {
 				if strings.TrimSpace(modelText) == "" && !hadReasoning {
-					out <- ui.StreamEvent{Type: ui.StreamError, Text: emptyModelReplyMsg}
-					r.setState(StateDone)
-					out <- ui.StreamEvent{Type: ui.StreamDone}
-					return
+					switch {
+					case !toolsRan:
+						out <- ui.StreamEvent{Type: ui.StreamError, Text: emptyModelReplyMsg}
+						r.setState(StateDone)
+						out <- ui.StreamEvent{Type: ui.StreamDone}
+						return
+					case !emptyNudged && ctx.Err() == nil:
+						emptyNudged = true
+						r.historyMu.Lock()
+						r.history = append(r.history, provider.Message{
+							Role:  provider.RoleUser,
+							Parts: []provider.Part{{Text: emptySummaryNudge}},
+						})
+						r.historyMu.Unlock()
+						if r.sessionRecorder != nil {
+							r.sessionRecorder.RecordHarnessMessage(emptySummaryNudge)
+						}
+						continue
+					default:
+						out <- ui.StreamEvent{Type: ui.StreamInfo, Text: emptySummaryNotice}
+					}
 				}
 				if pendingBatchID != "" && !batchReminded && ctx.Err() == nil {
 					batchReminded = true
@@ -1479,6 +1510,7 @@ outerLoop:
 			}
 			r.metrics.recordTools(len(toolCalls), countToolFailures(responses))
 			r.appendFunctionResponses(responses)
+			toolsRan = true
 			if id, findings := needsChangesBatch(responses); id != "" {
 				pendingBatchID, pendingBatchFindings = id, findings
 				batchReminded = false
