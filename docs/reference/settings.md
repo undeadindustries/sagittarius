@@ -91,8 +91,12 @@ anything streams back. If you hit the limit on a slow local box, raise
 `firstTokenTimeout` rather than disabling it, so a wedged server still fails
 instead of hanging the turn.
 
-When a budget runs out, the error names the setting to change, for example:
-`no output from local-vllm after 5m0s (raise providers.local-vllm.firstTokenTimeout, or set it to 0 to disable)`.
+When a budget runs out, the turn stops with an error that says which wait
+timed out and which setting to change, for example:
+
+```text
+Timed out: local-vllm accepted the request but sent no output within 5m0s. The server may be stuck, or it may still be processing a very long prompt. If it's just slow, raise the limit: set providers.local-vllm.firstTokenTimeout (seconds) in /providers or ~/.sagittarius/settings.json. 0 means no timeout.
+```
 
 ```json
 {

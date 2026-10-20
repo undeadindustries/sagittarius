@@ -30,12 +30,18 @@ func (e *StallError) Error() string {
 		id = "<id>"
 	}
 	if errors.Is(e.Kind, ErrConnectTimeout) {
-		return fmt.Sprintf("provider %s did not respond within %s (raise providers.%s.connectTimeout, or set it to 0 to disable)",
-			displayProvider(e.ProviderID), e.After, id)
+		return fmt.Sprintf("Timed out: %s didn't respond within %s. The endpoint may be down or overloaded. "+
+			"If it's just slow, raise the limit: "+stallFixHint,
+			displayProvider(e.ProviderID), e.After, id, "connectTimeout")
 	}
-	return fmt.Sprintf("no output from %s after %s (raise providers.%s.firstTokenTimeout, or set it to 0 to disable)",
-		displayProvider(e.ProviderID), e.After, id)
+	return fmt.Sprintf("Timed out: %s accepted the request but sent no output within %s. The server may be stuck, "+
+		"or it may still be processing a very long prompt. If it's just slow, raise the limit: "+stallFixHint,
+		displayProvider(e.ProviderID), e.After, id, "firstTokenTimeout")
 }
+
+// stallFixHint tells the user where the budget lives. /providers edits it for
+// OpenAI-style providers; settings.json works for every provider.
+const stallFixHint = "set providers.%s.%s (seconds) in /providers or ~/.sagittarius/settings.json. 0 means no timeout."
 
 func (e *StallError) Unwrap() error { return e.Kind }
 
