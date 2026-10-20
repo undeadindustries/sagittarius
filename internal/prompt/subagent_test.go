@@ -84,3 +84,21 @@ func TestReviewSubagentCharterRulesAppearOnce(t *testing.T) {
 		}
 	}
 }
+
+func TestSubagentOutcomeRuleOnlyWhereParsed(t *testing.T) {
+	t.Parallel()
+	outcomeLine := "`" + SubagentOutcomePrefix + " completed`"
+	charters := map[string]string{
+		"research": ResearchSubagentCharter(),
+		"coding":   CodingSubagentCharter([]string{"a.go"}, ""),
+		"fix":      FixSubagentCharter([]string{"a.go"}, ""),
+	}
+	for name, charter := range charters {
+		if got := strings.Count(charter, outcomeLine); got != 1 {
+			t.Errorf("%s charter: outcome rule appears %d times, want 1", name, got)
+		}
+	}
+	if strings.Contains(ReviewSubagentCharter(), SubagentOutcomePrefix) {
+		t.Error("review charter ends with a VERDICT line and must not ask for an OUTCOME line")
+	}
+}

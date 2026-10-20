@@ -168,8 +168,9 @@ self-report:
 
 | Field | Source |
 |---|---|
-| `status` | `completed`, `failed`, or `incomplete` (hit max tool rounds with work done) |
-| `summary` | The child's final message |
+| `status` | `completed`, `failed`, or `incomplete` (hit max tool rounds with work done, or the child reported `partial`) |
+| `reported_outcome` | What the child said on its `OUTCOME:` line: `completed`, `partial`, `failed`, or `unreported` |
+| `summary` | The child's final message, without the `OUTCOME:` line |
 | `files_changed` | Workspace-relative files the child wrote (from the file registry) |
 | `checks` | `{ran, ok}` from the child's last `run_project_checks` response |
 | `tool_calls` | How many tool calls the child made |
@@ -177,6 +178,17 @@ self-report:
 | `attempt`, `max_attempts` | Delegation budget accounting (below) |
 | `next_step` | Follow-up instruction for coding results with changed files |
 | `batch_review` | Batch review verdict, findings, and fix accounting, when the reviewer runs |
+
+Research and coding children are asked to start their final message with
+`OUTCOME: completed`, `OUTCOME: partial`, or `OUTCOME: failed: <reason>`.
+Finishing a turn isn't the same as finishing the task, and only the child knows
+whether it gave up. The report can only make a result worse: a self-reported
+`partial` turns a `completed` status into `incomplete`, and `failed` turns it
+into `failed` with the child's reason. A status the harness already marked
+`failed`, `incomplete`, or `canceled` stays that way whatever the child claims.
+When the line is missing, which small models do, the status stays `completed`,
+`reported_outcome` is `unreported`, and the parent is told to check the summary
+before relying on it. Reviewers end with a `VERDICT:` line instead.
 
 `result` and `files_written` remain as aliases. A coding result whose files
 changed always carries a `next_step` telling the parent to verify itself: the

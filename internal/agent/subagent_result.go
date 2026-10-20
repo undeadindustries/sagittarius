@@ -4,12 +4,15 @@ import (
 	"strings"
 
 	"github.com/undeadindustries/sagittarius/internal/config"
+	"github.com/undeadindustries/sagittarius/internal/prompt"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 	"github.com/undeadindustries/sagittarius/internal/tools"
 )
 
-// Child-to-parent hand-off statuses. They are derived by the harness from the
-// child's own transcript — never parsed out of model-written JSON.
+// Child-to-parent hand-off statuses. The harness derives them from the
+// child's runner state. The child's own OUTCOME line (see
+// parseReportedOutcome) may only downgrade a harness "completed" — a model
+// claiming success can never mask a failure the harness observed.
 const (
 	subagentStatusCompleted  = "completed"
 	subagentStatusFailed     = "failed"
@@ -19,6 +22,63 @@ const (
 	// went, and the parent must not treat it as a defect to retry.
 	subagentStatusCanceled = "canceled"
 )
+
+// Values of the hand-off's reported_outcome field: what the child said about
+// its own task, independent of the harness-derived status.
+const (
+	reportedOutcomeCompleted  = "completed"
+	reportedOutcomePartial    = "partial"
+	reportedOutcomeFailed     = "failed"
+	reportedOutcomeUnreported = "unreported"
+)
+
+// parseReportedOutcome reads the OUTCOME line from the first non-empty line of
+// a child's final message. It returns the outcome, the reason given after
+// "failed:", and the message with that line removed. A missing or unknown
+// outcome is reportedOutcomeUnreported and leaves text unchanged: small models
+// omit the line, and that must not read as either success or failure.
+func parseReportedOutcome(text string) (outcome, reason, body string) {
+	trimmed := strings.TrimLeft(text, " \t\r\n")
+	first, rest, _ := strings.Cut(trimmed, "\n")
+	// Models often wrap the line in Markdown code or bold markers.
+	first = strings.Trim(strings.TrimSpace(first), "`*")
+	prefixLen := len(prompt.SubagentOutcomePrefix)
+	if len(first) < prefixLen || !strings.EqualFold(first[:prefixLen], prompt.SubagentOutcomePrefix) {
+		return reportedOutcomeUnreported, "", text
+	}
+	value := strings.Trim(strings.TrimSpace(first[prefixLen:]), "`* ")
+	word, detail, _ := strings.Cut(value, ":")
+	switch strings.ToLower(strings.TrimSpace(word)) {
+	case reportedOutcomeCompleted:
+		outcome = reportedOutcomeCompleted
+	case reportedOutcomePartial:
+		outcome = reportedOutcomePartial
+	case reportedOutcomeFailed:
+		outcome = reportedOutcomeFailed
+		reason = strings.TrimSpace(detail)
+	default:
+		return reportedOutcomeUnreported, "", text
+	}
+	return outcome, reason, strings.TrimSpace(rest)
+}
+
+// applyReportedOutcome folds the child's self-report into a harness status.
+// Only a harness "completed" can change: partial becomes incomplete and failed
+// becomes failed. Every other harness status already reflects something the
+// harness saw, so it wins.
+func applyReportedOutcome(harnessStatus, outcome string) string {
+	if harnessStatus != subagentStatusCompleted {
+		return harnessStatus
+	}
+	switch outcome {
+	case reportedOutcomePartial:
+		return subagentStatusIncomplete
+	case reportedOutcomeFailed:
+		return subagentStatusFailed
+	default:
+		return harnessStatus
+	}
+}
 
 // buildSubagentResult assembles the structured hand-off every subagent tool
 // returns. Every field comes from the child's runner state (history, file
@@ -55,6 +115,11 @@ func buildSubagentResult(child *subagent, class config.SubagentClass, runErr err
 		childModel = child.runner.Model()
 	}
 
+	outcome, reason, body := parseReportedOutcome(summary)
+	if outcome != reportedOutcomeUnreported {
+		summary = body
+	}
+
 	status := subagentStatusCompleted
 	resultErr := ""
 	if runErr != nil {
@@ -67,20 +132,32 @@ func buildSubagentResult(child *subagent, class config.SubagentClass, runErr err
 		if summary == "" || summary == "(subagent finished without producing text)" {
 			summary = resultErr
 		}
+	} else {
+		status = applyReportedOutcome(status, outcome)
+		if status == subagentStatusFailed {
+			resultErr = "subagent reported failure"
+			if reason != "" {
+				resultErr += ": " + reason
+			}
+			if summary == "" {
+				summary = resultErr
+			}
+		}
 	}
 
 	result := map[string]any{
-		"status":        status,
-		"summary":       summary,
-		"result":        summary,
-		"files_changed": filesChanged,
-		"files_written": filesChanged,
-		"checks":        map[string]any{"ran": checksRan, "ok": checksOK},
-		"tool_calls":    toolCalls,
-		"provider":      childProvider,
-		"model":         childModel,
-		"attempt":       attempt,
-		"max_attempts":  maxAttempts,
+		"status":           status,
+		"summary":          summary,
+		"result":           summary,
+		"files_changed":    filesChanged,
+		"files_written":    filesChanged,
+		"checks":           map[string]any{"ran": checksRan, "ok": checksOK},
+		"tool_calls":       toolCalls,
+		"provider":         childProvider,
+		"model":            childModel,
+		"attempt":          attempt,
+		"max_attempts":     maxAttempts,
+		"reported_outcome": outcome,
 	}
 	if resultErr != "" && status == subagentStatusFailed {
 		// A failed hand-off keeps the "error" key so the card renderer flags
@@ -91,6 +168,8 @@ func buildSubagentResult(child *subagent, class config.SubagentClass, runErr err
 	}
 	if next := subagentNextStep(class, status, filesChanged, checksRan, checksOK); next != "" {
 		result["next_step"] = next
+	} else if status == subagentStatusCompleted && outcome == reportedOutcomeUnreported {
+		result["next_step"] = unreportedOutcomeNextStep
 	}
 	return result
 }
@@ -111,6 +190,10 @@ func canceledSubagentResult(child *subagent, class config.SubagentClass, runErr 
 		"Do not re-delegate or repeat it without asking the user first."
 	return result
 }
+
+// unreportedOutcomeNextStep warns the parent that "completed" only means the
+// child's turn ended: the child never said whether its task succeeded.
+const unreportedOutcomeNextStep = "The subagent did not report whether its task succeeded; check its summary before relying on it."
 
 // subagentNextStep tells the parent what to do after a coding child changed
 // files. The child's shell is read-only, so verification is always the

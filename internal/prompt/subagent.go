@@ -33,8 +33,23 @@ func ResearchSubagentCharter() string {
 		"  silence is not. NEVER fill a gap with a plausible guess.",
 		"- **Stop when the question is answered.** Do not expand into adjacent problems you",
 		"  noticed along the way.",
+		subagentOutcomeRule,
 	)
 }
+
+// SubagentOutcomePrefix opens the first line of a research or coding child's
+// final message. The harness reads it to tell a finished reply from a
+// finished task: a child that gave up still ends its turn normally.
+const SubagentOutcomePrefix = "OUTCOME:"
+
+// subagentOutcomeRule asks the child to self-report. The harness only lets
+// this report downgrade a completed hand-off, never upgrade a failed one.
+var subagentOutcomeRule = join(
+	"- **Start your final message with an outcome line.** Its first line must be exactly",
+	"  one of `"+SubagentOutcomePrefix+" completed`, `"+SubagentOutcomePrefix+" partial`, or `"+SubagentOutcomePrefix+" failed: <short reason>`.",
+	"  Use completed only if the assigned task itself succeeded; finishing your reply is",
+	"  not completing the task. Put the rest of your report after that line.",
+)
 
 // CodingSubagentCharter is appended to a coding subagent's system prompt. lease
 // is the set of path patterns the scheduler will let it write; naming them in
@@ -66,6 +81,7 @@ func CodingSubagentCharter(lease []string, contract string) string {
 		"- **Finish the change or say why you could not.** A half-written file is worse than an",
 		"  untouched one. If you cannot complete the change inside the lease, restore what you",
 		"  started and report the blocker.",
+		subagentOutcomeRule,
 	}
 	if strings.TrimSpace(contract) != "" {
 		sections = append(sections,
