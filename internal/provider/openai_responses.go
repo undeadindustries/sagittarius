@@ -41,6 +41,11 @@ type OpenAIResponsesGenerator struct {
 	// rather than chainMu-guarded: it is read while building each request body,
 	// which happens outside that lock.
 	summaryUnsupported atomic.Bool
+	// providerID, connectTimeout, and firstTokenTimeout drive the stall guard
+	// (see stallGuard). Zero budgets disable that stage.
+	providerID        string
+	connectTimeout    time.Duration
+	firstTokenTimeout time.Duration
 }
 
 // OpenAIResponsesConfig holds runtime options for an OpenAIResponsesGenerator.
@@ -55,6 +60,10 @@ type OpenAIResponsesConfig struct {
 	SystemPromptOverride string
 	ToolsEnabled         bool
 	HTTPClient           *http.Client
+	// ProviderID names the provider in stall errors.
+	ProviderID        string
+	ConnectTimeout    time.Duration
+	FirstTokenTimeout time.Duration
 }
 
 // NewOpenAIResponsesGenerator constructs an OpenAIResponsesGenerator.
@@ -80,6 +89,9 @@ func NewOpenAIResponsesGenerator(cfg OpenAIResponsesConfig) (*OpenAIResponsesGen
 		temperature:          cfg.Temperature,
 		systemPromptOverride: cfg.SystemPromptOverride,
 		toolsEnabled:         cfg.ToolsEnabled,
+		providerID:           cfg.ProviderID,
+		connectTimeout:       cfg.ConnectTimeout,
+		firstTokenTimeout:    cfg.FirstTokenTimeout,
 	}, nil
 }
 
@@ -171,19 +183,25 @@ func (g *OpenAIResponsesGenerator) lastID() string {
 	return g.lastResponseID
 }
 
-func (g *OpenAIResponsesGenerator) streamOnce(ctx context.Context, body []byte, ch chan<- StreamResponse) error {
+func (g *OpenAIResponsesGenerator) streamOnce(ctx context.Context, body []byte, ch chan<- StreamResponse) (err error) {
 	streamCtx := ctx
 	if g.timeout > 0 {
 		var cancel context.CancelFunc
 		streamCtx, cancel = context.WithTimeout(ctx, g.timeout)
 		defer cancel()
 	}
+	guard := newStallGuard(streamCtx, g.providerID, g.connectTimeout, g.firstTokenTimeout)
+	defer guard.stop()
+	defer func() { err = guard.classify(err) }()
+	streamCtx = guard.ctx
 
+	guard.armConnect()
 	resp, err := postSSE(streamCtx, g.client, g.url, g.bearer, body)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	guard.headersReceived()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		preview := readBodyPreview(resp.Body, 2048)
@@ -202,7 +220,7 @@ func (g *OpenAIResponsesGenerator) streamOnce(ctx context.Context, body []byte, 
 	}
 
 	state := NewResponsesSseMapperState()
-	err = scanResponsesSSE(resp.Body, state, func(chunk StreamResponse) bool {
+	err = scanResponsesSSE(resp.Body, state, guard.firstOutput, func(chunk StreamResponse) bool {
 		return sendOrDone(streamCtx, ch, chunk)
 	})
 	if err != nil {
@@ -343,9 +361,25 @@ func isLocalResponsesHost(host string) bool {
 	return false
 }
 
+// responsesEventIsOutput reports whether a Responses SSE event shows the model
+// producing something. Only the two lifecycle events sent before generation
+// starts are excluded; function-call argument deltas count even though they
+// are buffered until the item completes.
+func responsesEventIsOutput(eventType string) bool {
+	switch eventType {
+	case "", "response.created", "response.in_progress":
+		return false
+	default:
+		return true
+	}
+}
+
+// scanResponsesSSE maps a Responses SSE body to stream chunks. onOutput (may
+// be nil) fires on each event that shows model progress, for the stall guard.
 func scanResponsesSSE(
 	r io.Reader,
 	state *ResponsesSseMapperState,
+	onOutput func(),
 	onChunk func(StreamResponse) bool,
 ) error {
 	scanner := bufio.NewScanner(r)
@@ -366,6 +400,9 @@ func scanResponsesSSE(
 		var event ResponsesSseEvent
 		if err := json.Unmarshal([]byte(line[6:]), &event); err != nil {
 			continue
+		}
+		if onOutput != nil && responsesEventIsOutput(event.Type) {
+			onOutput()
 		}
 
 		chunks, err := MapResponsesSseEvent(event, state)

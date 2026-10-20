@@ -17,6 +17,17 @@ import (
 // defaults to 0.
 const defaultOpenAITimeout = 0
 
+const (
+	// defaultConnectTimeout bounds the wait for response headers. Servers
+	// send headers before prefill, so this only measures reachability and
+	// queueing; a healthy endpoint answers in well under a second.
+	defaultConnectTimeout = 30 * time.Second
+	// defaultFirstTokenTimeout bounds the wait between headers and the first
+	// model output. It is generous because prefill of a 100k-token prompt on
+	// local hardware, or a long hidden reasoning phase, takes minutes.
+	defaultFirstTokenTimeout = 300 * time.Second
+)
+
 // EndpointConfig holds resolved connection parameters for a provider endpoint.
 type EndpointConfig struct {
 	ProviderID           string
@@ -24,6 +35,8 @@ type EndpointConfig struct {
 	Model                string
 	WireFormat           config.WireFormat
 	Timeout              time.Duration
+	ConnectTimeout       time.Duration
+	FirstTokenTimeout    time.Duration
 	Bearer               string
 	RequiresAPIKey       bool
 	ToolCallParsing      config.ToolCallParsingMode
@@ -162,7 +175,7 @@ func resolveBuiltInEndpoint(
 
 	normalizedURL := normalizeEndpointURL(baseURL, wireFormat)
 
-	return EndpointConfig{
+	return withStallTimeouts(EndpointConfig{
 		ProviderID:           providerID,
 		BaseURL:              normalizedURL,
 		Model:                model,
@@ -175,7 +188,7 @@ func resolveBuiltInEndpoint(
 		Temperature:          config.ResolveEffectiveTemperature(settings, providerID, model),
 		SystemPromptOverride: resolveSystemPromptOverride(inst),
 		ToolsEnabled:         resolveToolsEnabled(inst),
-	}, nil
+	}, inst), nil
 }
 
 func geminiEndpointConfig(
@@ -192,7 +205,7 @@ func geminiEndpointConfig(
 	if inst != nil && inst.Model != "" {
 		model = inst.Model
 	}
-	return EndpointConfig{
+	return withStallTimeouts(EndpointConfig{
 		ProviderID:      providerID,
 		Model:           model,
 		WireFormat:      wireFormat,
@@ -200,7 +213,7 @@ func geminiEndpointConfig(
 		RequiresAPIKey:  def.RequiresAPIKey,
 		ToolCallParsing: resolveToolCallParsing(inst),
 		ToolsEnabled:    resolveToolsEnabled(inst),
-	}, nil
+	}, inst), nil
 }
 
 func resolveCustomEndpoint(
@@ -235,7 +248,7 @@ func resolveCustomEndpoint(
 	}
 
 	requiresKey := custom.APIKeyEnvVar != ""
-	return EndpointConfig{
+	return withStallTimeouts(EndpointConfig{
 		ProviderID:           providerID,
 		BaseURL:              normalizeEndpointURL(baseURL, wireFormat),
 		Model:                model,
@@ -248,7 +261,7 @@ func resolveCustomEndpoint(
 		Temperature:          config.ResolveEffectiveTemperature(settings, providerID, model),
 		SystemPromptOverride: resolveSystemPromptOverride(inst),
 		ToolsEnabled:         resolveToolsEnabled(inst),
-	}, nil
+	}, inst), nil
 }
 
 func normalizeEndpointURL(baseURL string, wireFormat config.WireFormat) string {
@@ -285,6 +298,27 @@ func resolveTimeout(inst *config.ProviderInstanceConfig, fallback time.Duration)
 		return time.Duration(*inst.Timeout) * time.Second
 	}
 	return fallback
+}
+
+// resolveStallSeconds reads a stall budget in seconds. Unlike timeout, an
+// explicit 0 is meaningful: it disables that stage. Negative values are
+// treated as unset.
+func resolveStallSeconds(seconds *int, fallback time.Duration) time.Duration {
+	if seconds == nil || *seconds < 0 {
+		return fallback
+	}
+	return time.Duration(*seconds) * time.Second
+}
+
+// withStallTimeouts fills the connect and first-token budgets from inst.
+func withStallTimeouts(ep EndpointConfig, inst *config.ProviderInstanceConfig) EndpointConfig {
+	var connect, firstToken *int
+	if inst != nil {
+		connect, firstToken = inst.ConnectTimeout, inst.FirstTokenTimeout
+	}
+	ep.ConnectTimeout = resolveStallSeconds(connect, defaultConnectTimeout)
+	ep.FirstTokenTimeout = resolveStallSeconds(firstToken, defaultFirstTokenTimeout)
+	return ep
 }
 
 func resolveToolCallParsing(inst *config.ProviderInstanceConfig) config.ToolCallParsingMode {

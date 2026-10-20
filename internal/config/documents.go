@@ -658,6 +658,8 @@ func mergeProviderInstance(global, project *ProviderInstanceConfig) *ProviderIns
 	merged.PromptMode = overlayStr(global.PromptMode, project.PromptMode)
 	merged.EnableTools = overlayPtr(global.EnableTools, project.EnableTools)
 	merged.Timeout = overlayPtr(global.Timeout, project.Timeout)
+	merged.ConnectTimeout = overlayPtr(global.ConnectTimeout, project.ConnectTimeout)
+	merged.FirstTokenTimeout = overlayPtr(global.FirstTokenTimeout, project.FirstTokenTimeout)
 	merged.Temperature = overlayPtr(global.Temperature, project.Temperature)
 	merged.ToolCallParsing = overlayStr(global.ToolCallParsing, project.ToolCallParsing)
 	merged.SystemPromptOverride = overlayStr(global.SystemPromptOverride, project.SystemPromptOverride)

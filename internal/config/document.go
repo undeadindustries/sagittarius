@@ -36,8 +36,12 @@ func unmarshalProviderInstance(raw json.RawMessage) (*ProviderInstanceConfig, er
 		"promptMode":       func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.PromptMode) },
 		"enableTools":      func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.EnableTools) },
 		"timeout":          func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.Timeout) },
-		"temperature":      func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.Temperature) },
-		"toolCallParsing":  func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.ToolCallParsing) },
+		"connectTimeout":   func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.ConnectTimeout) },
+		"firstTokenTimeout": func(b json.RawMessage) error {
+			return json.Unmarshal(b, &cfg.FirstTokenTimeout)
+		},
+		"temperature":     func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.Temperature) },
+		"toolCallParsing": func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.ToolCallParsing) },
 		"systemPromptOverride": func(b json.RawMessage) error {
 			return json.Unmarshal(b, &cfg.SystemPromptOverride)
 		},
@@ -107,6 +111,8 @@ func marshalProviderInstance(cfg *ProviderInstanceConfig) (json.RawMessage, erro
 		{"promptMode", cfg.PromptMode},
 		{"enableTools", cfg.EnableTools},
 		{"timeout", cfg.Timeout},
+		{"connectTimeout", cfg.ConnectTimeout},
+		{"firstTokenTimeout", cfg.FirstTokenTimeout},
 		{"temperature", cfg.Temperature},
 		{"toolCallParsing", cfg.ToolCallParsing},
 		{"systemPromptOverride", cfg.SystemPromptOverride},

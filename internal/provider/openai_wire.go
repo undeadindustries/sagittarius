@@ -442,6 +442,40 @@ func parseSSEStream(
 	requireArgs map[string]bool,
 	onChunk func(StreamResponse) bool,
 ) (needsNonStreamRetry bool, err error) {
+	return parseSSEStreamObserved(r, sseParseConfig{parseMode: parseMode, requireArgs: requireArgs}, onChunk)
+}
+
+// sseParseConfig carries parseSSEStreamObserved's options. onOutput, when set,
+// is called for every chunk that shows the model producing something —
+// including tool-call argument deltas, which are buffered and never reach
+// onChunk until the stream ends.
+type sseParseConfig struct {
+	parseMode   config.ToolCallParsingMode
+	requireArgs map[string]bool
+	onOutput    func()
+}
+
+// chatChunkIsOutput reports whether a chat-completions chunk carries model
+// output or a terminal frame. A role-only first delta does not count: some
+// servers send it before prefill finishes.
+func chatChunkIsOutput(chunk *openAIStreamChunk) bool {
+	if chunk.Usage != nil {
+		return true
+	}
+	if len(chunk.Choices) == 0 {
+		return false
+	}
+	choice := chunk.Choices[0]
+	return choice.FinishReason != nil || len(choice.Delta.ToolCalls) > 0 ||
+		deltaReasoning(choice.Delta) != "" || deltaContent(choice.Delta) != ""
+}
+
+func parseSSEStreamObserved(
+	r io.Reader,
+	cfg sseParseConfig,
+	onChunk func(StreamResponse) bool,
+) (needsNonStreamRetry bool, err error) {
+	parseMode, requireArgs := cfg.parseMode, cfg.requireArgs
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	state := &sseStreamState{pending: map[int]*pendingToolCall{}, requireArgs: requireArgs}
@@ -460,6 +494,9 @@ func parseSSEStream(
 		var chunk openAIStreamChunk
 		if err := json.Unmarshal([]byte(line[6:]), &chunk); err != nil {
 			continue
+		}
+		if cfg.onOutput != nil && chatChunkIsOutput(&chunk) {
+			cfg.onOutput()
 		}
 		// Capture usage from any chunk (OpenRouter sends a usage-only final frame
 		// with no choices; we must not skip it).

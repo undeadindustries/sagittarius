@@ -292,6 +292,10 @@ func ClearProviderSetting(settings *config.Settings, providerID, key string) err
 		cfg.ContextLimitUserSet = nil
 	case "timeout":
 		cfg.Timeout = nil
+	case "connectTimeout":
+		cfg.ConnectTimeout = nil
+	case "firstTokenTimeout":
+		cfg.FirstTokenTimeout = nil
 	case "compressionThreshold":
 		cfg.CompressionThreshold = nil
 	case "preserveFraction":

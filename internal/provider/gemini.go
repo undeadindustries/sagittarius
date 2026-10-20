@@ -79,9 +79,11 @@ func (a *modelPartsAccumulator) parts() []Part {
 
 // GeminiGenerator streams content from the Gemini API (BackendGeminiAPI).
 type GeminiGenerator struct {
-	streamer geminiStreamer
-	model    string
-	timeout  time.Duration
+	streamer          geminiStreamer
+	model             string
+	timeout           time.Duration
+	providerID        string
+	firstTokenTimeout time.Duration
 }
 
 // GeminiConfig holds runtime options for a GeminiGenerator.
@@ -90,6 +92,10 @@ type GeminiConfig struct {
 	Model    string
 	Timeout  time.Duration
 	Streamer geminiStreamer
+	// ProviderID names the provider in stall errors. FirstTokenTimeout
+	// bounds the wait for the first chunk; zero disables it.
+	ProviderID        string
+	FirstTokenTimeout time.Duration
 }
 
 // NewGeminiGenerator constructs a GeminiGenerator backed by the official genai SDK.
@@ -114,9 +120,11 @@ func NewGeminiGenerator(ctx context.Context, cfg GeminiConfig) (*GeminiGenerator
 	}
 
 	return &GeminiGenerator{
-		streamer: cfg.Streamer,
-		model:    cfg.Model,
-		timeout:  cfg.Timeout,
+		streamer:          cfg.Streamer,
+		model:             cfg.Model,
+		timeout:           cfg.Timeout,
+		providerID:        cfg.ProviderID,
+		firstTokenTimeout: cfg.FirstTokenTimeout,
 	}, nil
 }
 
@@ -151,6 +159,21 @@ func (g *GeminiGenerator) GenerateContentStream(
 			streamCtx, cancel = context.WithTimeout(ctx, g.timeout)
 			defer cancel()
 		}
+		// The genai SDK hides when response headers arrive, so only the
+		// first-output budget applies; it starts with the request.
+		guard := newStallGuard(streamCtx, g.providerID, 0, g.firstTokenTimeout)
+		defer guard.stop()
+		guard.headersReceived()
+		streamCtx = guard.ctx
+		// reportStall sends the stall error on the caller's context: streamCtx
+		// is already canceled, so sendOrDone on it would drop the message.
+		reportStall := func() bool {
+			if stall := guard.classify(nil); stall != nil {
+				sendOrDone(ctx, ch, StreamResponse{Error: stall})
+				return true
+			}
+			return false
+		}
 
 		stream := g.streamer.GenerateContentStream(streamCtx, model, contents, cfg)
 		var lastUsageMeta *genai.GenerateContentResponseUsageMetadata
@@ -159,12 +182,16 @@ func (g *GeminiGenerator) GenerateContentStream(
 		acc := newModelPartsAccumulator()
 		for resp, err := range stream {
 			if err != nil {
+				if reportStall() {
+					return
+				}
 				sendOrDone(streamCtx, ch, StreamResponse{Error: MapAPIError(err)})
 				return
 			}
 			if resp == nil {
 				continue
 			}
+			guard.firstOutput()
 
 			// Assign synthetic IDs to Gemini tool calls that lack them, so that
 			// the model parts and emitted ToolCalls have matching IDs. This allows
@@ -215,6 +242,9 @@ func (g *GeminiGenerator) GenerateContentStream(
 					return
 				}
 			}
+		}
+		if reportStall() {
+			return
 		}
 		// Emit provider-reported usage before Done (cost is not available from
 		// the Gemini API natively so CostKnown remains false). The complete

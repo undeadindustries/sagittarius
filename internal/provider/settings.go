@@ -527,6 +527,12 @@ func InstanceSettingValues(settings *config.Settings, providerID string) map[str
 	if inst.Timeout != nil {
 		out["timeout"] = strconv.Itoa(*inst.Timeout)
 	}
+	if inst.ConnectTimeout != nil {
+		out["connectTimeout"] = strconv.Itoa(*inst.ConnectTimeout)
+	}
+	if inst.FirstTokenTimeout != nil {
+		out["firstTokenTimeout"] = strconv.Itoa(*inst.FirstTokenTimeout)
+	}
 	if inst.CompressionThreshold != nil {
 		out["compressionThreshold"] = strconv.FormatFloat(*inst.CompressionThreshold, 'g', -1, 64)
 	}
@@ -652,6 +658,18 @@ func assignInstanceSetting(cfg *config.ProviderInstanceConfig, key, value string
 			return err
 		}
 		cfg.Timeout = n
+	case "connectTimeout":
+		n, err := parseNonNegativeInt(key, value)
+		if err != nil {
+			return err
+		}
+		cfg.ConnectTimeout = n
+	case "firstTokenTimeout":
+		n, err := parseNonNegativeInt(key, value)
+		if err != nil {
+			return err
+		}
+		cfg.FirstTokenTimeout = n
 	case "compressionThreshold":
 		f, err := parseFloat(key, value)
 		if err != nil {
@@ -769,6 +787,19 @@ func parseInt(key, value string) (*int, error) {
 		return nil, fmt.Errorf("%s must be an integer: %w", key, err)
 	}
 	return &n, nil
+}
+
+// parseNonNegativeInt parses a seconds budget where 0 means "disabled" and a
+// negative value is a typo, not a request.
+func parseNonNegativeInt(key, value string) (*int, error) {
+	n, err := parseInt(key, value)
+	if err != nil {
+		return nil, err
+	}
+	if *n < 0 {
+		return nil, fmt.Errorf("%s must be 0 (disabled) or a positive number of seconds", key)
+	}
+	return n, nil
 }
 
 func parseFloat(key, value string) (*float64, error) {

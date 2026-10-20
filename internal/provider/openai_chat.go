@@ -25,6 +25,11 @@ type OpenAIChatGenerator struct {
 	// temperature is the effective default sent when a request does not carry
 	// its own. Nil means "send none" (let the server decide).
 	temperature *float64
+	// providerID, connectTimeout, and firstTokenTimeout drive the stall guard
+	// (see stallGuard). Zero budgets disable that stage.
+	providerID        string
+	connectTimeout    time.Duration
+	firstTokenTimeout time.Duration
 }
 
 // OpenAIChatConfig holds runtime options for an OpenAIChatGenerator.
@@ -36,6 +41,10 @@ type OpenAIChatConfig struct {
 	ToolCallParsing config.ToolCallParsingMode
 	Temperature     *float64
 	HTTPClient      *http.Client
+	// ProviderID names the provider in stall errors.
+	ProviderID        string
+	ConnectTimeout    time.Duration
+	FirstTokenTimeout time.Duration
 }
 
 // NewOpenAIChatGenerator constructs an OpenAIChatGenerator.
@@ -62,13 +71,16 @@ func NewOpenAIChatGenerator(cfg OpenAIChatConfig) (*OpenAIChatGenerator, error) 
 		)
 	}
 	return &OpenAIChatGenerator{
-		client:          client,
-		url:             ChatCompletionsURL(cfg.BaseURL),
-		model:           cfg.Model,
-		timeout:         cfg.Timeout,
-		bearer:          cfg.Bearer,
-		toolCallParsing: parseMode,
-		temperature:     cfg.Temperature,
+		client:            client,
+		url:               ChatCompletionsURL(cfg.BaseURL),
+		model:             cfg.Model,
+		timeout:           cfg.Timeout,
+		bearer:            cfg.Bearer,
+		toolCallParsing:   parseMode,
+		temperature:       cfg.Temperature,
+		providerID:        cfg.ProviderID,
+		connectTimeout:    cfg.ConnectTimeout,
+		firstTokenTimeout: cfg.FirstTokenTimeout,
 	}, nil
 }
 
@@ -127,19 +139,25 @@ func (g *OpenAIChatGenerator) streamOnce(
 	body []byte,
 	requireArgs map[string]bool,
 	ch chan<- StreamResponse,
-) error {
+) (err error) {
 	streamCtx := ctx
 	if g.timeout > 0 {
 		var cancel context.CancelFunc
 		streamCtx, cancel = context.WithTimeout(ctx, g.timeout)
 		defer cancel()
 	}
+	guard := newStallGuard(streamCtx, g.providerID, g.connectTimeout, g.firstTokenTimeout)
+	defer guard.stop()
+	defer func() { err = guard.classify(err) }()
+	streamCtx = guard.ctx
 
+	guard.armConnect()
 	resp, err := postSSE(streamCtx, g.client, g.url, g.bearer, body)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	guard.headersReceived()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return mapOpenAIHTTPError(resp.StatusCode, readBodyPreview(resp.Body, 2048))
@@ -152,13 +170,17 @@ func (g *OpenAIChatGenerator) streamOnce(
 			g.url, contentType, preview)
 	}
 
-	needsRetry, parseErr := parseSSEStream(resp.Body, g.toolCallParsing, requireArgs, func(chunk StreamResponse) bool {
+	parse := sseParseConfig{parseMode: g.toolCallParsing, requireArgs: requireArgs, onOutput: guard.firstOutput}
+	needsRetry, parseErr := parseSSEStreamObserved(resp.Body, parse, func(chunk StreamResponse) bool {
 		return sendOrDone(streamCtx, ch, chunk)
 	})
 	if parseErr != nil {
 		return parseErr
 	}
 	if needsRetry {
+		// A non-streaming reply sends headers only after the whole generation,
+		// so neither stall budget applies to it.
+		guard.firstOutput()
 		return g.retryNonStreaming(streamCtx, body, ch)
 	}
 	return nil

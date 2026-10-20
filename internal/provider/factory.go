@@ -47,9 +47,11 @@ func newGeminiGenerator(ctx context.Context, settings *config.Settings, endpoint
 	}
 
 	gen, err := NewGeminiGenerator(ctx, GeminiConfig{
-		APIKey:  apiKey,
-		Model:   endpoint.Model,
-		Timeout: endpoint.Timeout,
+		APIKey:            apiKey,
+		Model:             endpoint.Model,
+		Timeout:           endpoint.Timeout,
+		ProviderID:        endpoint.ProviderID,
+		FirstTokenTimeout: endpoint.FirstTokenTimeout,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create gemini generator: %w", err)
@@ -75,12 +77,15 @@ func newOpenAIChatGenerator(ctx context.Context, settings *config.Settings, endp
 	}
 
 	gen, err := NewOpenAIChatGenerator(OpenAIChatConfig{
-		BaseURL:         endpoint.BaseURL,
-		Model:           endpoint.Model,
-		Timeout:         endpoint.Timeout,
-		Bearer:          bearer,
-		ToolCallParsing: endpoint.ToolCallParsing,
-		Temperature:     endpoint.Temperature,
+		BaseURL:           endpoint.BaseURL,
+		Model:             endpoint.Model,
+		Timeout:           endpoint.Timeout,
+		Bearer:            bearer,
+		ToolCallParsing:   endpoint.ToolCallParsing,
+		Temperature:       endpoint.Temperature,
+		ProviderID:        endpoint.ProviderID,
+		ConnectTimeout:    endpoint.ConnectTimeout,
+		FirstTokenTimeout: endpoint.FirstTokenTimeout,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create openai chat generator: %w", err)
@@ -114,6 +119,9 @@ func newOpenAIResponsesGenerator(ctx context.Context, settings *config.Settings,
 		Temperature:          endpoint.Temperature,
 		SystemPromptOverride: endpoint.SystemPromptOverride,
 		ToolsEnabled:         endpoint.ToolsEnabled,
+		ProviderID:           endpoint.ProviderID,
+		ConnectTimeout:       endpoint.ConnectTimeout,
+		FirstTokenTimeout:    endpoint.FirstTokenTimeout,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("create openai responses generator: %w", err)

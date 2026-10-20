@@ -71,6 +71,39 @@ Compression that fails is also reported in the conversation rather than only in
 `~/.sagittarius/logs/sagittarius.log`. After a failure the session falls back to
 truncation for the rest of its life; the failure is stated once.
 
+## Stall timeouts (`providers.<id>.*`)
+
+A request can hang in two places that the overall `timeout` doesn't catch
+quickly: waiting for the server to answer at all, and waiting for the model's
+first output after it does. Both have their own budget, in seconds. Once the
+model starts producing output, neither applies, so a long answer is never cut
+off.
+
+| Key | Type | Default | Purpose |
+|-----|------|---------|---------|
+| `connectTimeout` | int (seconds) | `30` | How long to wait for response headers. Covers an unreachable or overloaded server. Not used by Gemini-native providers, because the SDK doesn't report when headers arrive. |
+| `firstTokenTimeout` | int (seconds) | `300` | How long to wait for the first output after headers arrive: text, reasoning, a tool call, or the finish. Keep-alive comments and role-only chunks don't count. |
+
+Set either to `0` to turn that check off. Leave it unset to use the default.
+The first-token default is high on purpose: a local server prefilling a very
+long prompt, or a model reasoning silently for a while, can take minutes before
+anything streams back. If you hit the limit on a slow local box, raise
+`firstTokenTimeout` rather than disabling it, so a wedged server still fails
+instead of hanging the turn.
+
+When a budget runs out, the error names the setting to change, for example:
+`no output from local-vllm after 5m0s (raise providers.local-vllm.firstTokenTimeout, or set it to 0 to disable)`.
+
+```json
+{
+  "providers": {
+    "local-vllm": {
+      "firstTokenTimeout": 900
+    }
+  }
+}
+```
+
 ## Thinking budget (`providers.<id>.models.<model>.*`)
 
 Caps how long a model may reason before it has to act. Both keys are per-model

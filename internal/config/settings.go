@@ -32,12 +32,17 @@ type ProviderInstanceConfig struct {
 	// ContextLimitUserSet marks contextLimit as an explicit user pin so the
 	// model-switch auto-discovery (provider.MaybeSetContextLimit) leaves it
 	// alone. Auto-discovered limits set ContextLimit without this flag.
-	ContextLimitUserSet  *bool               `json:"contextLimitUserSet,omitempty"`
-	CompressionThreshold *float64            `json:"compressionThreshold,omitempty"`
-	PreserveFraction     *float64            `json:"preserveFraction,omitempty"`
-	PromptMode           PromptMode          `json:"promptMode,omitempty"`
-	EnableTools          *bool               `json:"enableTools,omitempty"`
-	Timeout              *int                `json:"timeout,omitempty"`
+	ContextLimitUserSet  *bool      `json:"contextLimitUserSet,omitempty"`
+	CompressionThreshold *float64   `json:"compressionThreshold,omitempty"`
+	PreserveFraction     *float64   `json:"preserveFraction,omitempty"`
+	PromptMode           PromptMode `json:"promptMode,omitempty"`
+	EnableTools          *bool      `json:"enableTools,omitempty"`
+	Timeout              *int       `json:"timeout,omitempty"`
+	// ConnectTimeout and FirstTokenTimeout are stall budgets in seconds:
+	// waiting for response headers, then for the first model output. Nil
+	// uses the built-in default; an explicit 0 disables that stage.
+	ConnectTimeout       *int                `json:"connectTimeout,omitempty"`
+	FirstTokenTimeout    *int                `json:"firstTokenTimeout,omitempty"`
 	Temperature          *float64            `json:"temperature,omitempty"`
 	ToolCallParsing      ToolCallParsingMode `json:"toolCallParsing,omitempty"`
 	SystemPromptOverride string              `json:"systemPromptOverride,omitempty"`
