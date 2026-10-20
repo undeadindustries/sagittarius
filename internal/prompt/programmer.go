@@ -18,12 +18,12 @@ func buildProgrammerPrompt(opts Options) string {
 func programmerLite(opts Options) string {
 	sections := []string{
 		renderIdentity(opts.Identity, programmerProfile.roleNoun, programmerProfile.helpClause),
-		liteToolUsage(opts.SymbolsEnabled, opts.EditEnabled, opts.ScratchpadEnabled),
 	}
 	if opts.SkillsAvailable {
 		sections = append(sections, skillsGuidance())
 	}
 	sections = append(sections,
+		liteToolUsage(opts.SymbolsEnabled, opts.EditEnabled, opts.ScratchpadEnabled),
 		programmerLiteWorkflow(),
 		liteEditRules(),
 		liteShellSafety(opts.Interactive, opts.WaitUntilEnabled),

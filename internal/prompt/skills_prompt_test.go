@@ -47,12 +47,13 @@ func TestSkillsGuidanceComesBeforeWorkflow(t *testing.T) {
 		personality Personality
 		variant     Variant
 		workflow    string
+		toolUsage   string
 	}{
-		{PersonalityProgrammer, VariantFull, "# Primary Workflow"},
-		{PersonalityProgrammer, VariantLite, "## Workflow"},
-		{PersonalitySysadmin, VariantFull, "# Primary Workflow"},
-		{PersonalitySysadmin, VariantLite, "## Workflow"},
-		{PersonalityPersonalAssistant, VariantFull, "## Workflow"},
+		{PersonalityProgrammer, VariantFull, "# Primary Workflow", ""},
+		{PersonalityProgrammer, VariantLite, "## Workflow", liteToolUsageMarker},
+		{PersonalitySysadmin, VariantFull, "# Primary Workflow", ""},
+		{PersonalitySysadmin, VariantLite, "## Workflow", "## Tool Usage"},
+		{PersonalityPersonalAssistant, VariantFull, "## Workflow", ""},
 	}
 	for _, tc := range cases {
 		t.Run(string(tc.personality)+"/"+string(tc.variant), func(t *testing.T) {
@@ -65,6 +66,19 @@ func TestSkillsGuidanceComesBeforeWorkflow(t *testing.T) {
 			if skills > workflow {
 				t.Errorf("## Skills (at %d) must come before %q (at %d)", skills, tc.workflow, workflow)
 			}
+			if tc.toolUsage != "" {
+				toolUsage := strings.Index(out, tc.toolUsage)
+				if toolUsage < 0 {
+					t.Fatalf("missing tool usage %q\n%s", tc.toolUsage, out)
+				}
+				if skills > toolUsage {
+					t.Errorf("## Skills (at %d) must come before %q (at %d)", skills, tc.toolUsage, toolUsage)
+				}
+			}
 		})
 	}
 }
+
+// liteToolUsageMarker is the opening phrase of liteToolUsage, used to locate
+// that section in a built prompt.
+const liteToolUsageMarker = "**Search before reading.**"
