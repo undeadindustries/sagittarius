@@ -57,7 +57,12 @@ func (r *Runner) runPostWriteChecks(ctx context.Context, emit func(ui.StreamEven
 		return false
 	}
 
+	var preexisting []diagnostics.Finding
+	report.Findings, preexisting = splitPreexistingFindings(report.Findings, r.sessionChangedLines())
 	modelFeedback, userFeedback := classifyFindings(report)
+	for _, f := range preexisting {
+		userFeedback = append(userFeedback, fmt.Sprintf("[%s] %s\n%s", f.Tool, preexistingFindingsNote, f.Message))
+	}
 
 	if len(modelFeedback) == 0 {
 		emit(ui.StreamEvent{Type: ui.StreamInfo, Text: "Checks passed."})
@@ -90,6 +95,10 @@ func (r *Runner) runPostWriteChecks(ctx context.Context, emit func(ui.StreamEven
 
 	return true
 }
+
+// preexistingFindingsNote labels linter findings shown to the user but kept
+// from the model because they sit on lines this session didn't change.
+const preexistingFindingsNote = "On lines this session didn't change, so not sent to the model:"
 
 // classifyFindings splits a diagnostics.Report into modelFeedback (sent to
 // the model on the next round) and userFeedback (shown in the UI). Only

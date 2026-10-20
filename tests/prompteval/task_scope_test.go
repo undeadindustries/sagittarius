@@ -22,16 +22,13 @@ var scopeFixtureUntouched = []string{
 
 const scopeFixtureTarget = "def last_n(items, n):\n    \"\"\"Return the last n items.\"\"\"\n    return items[len(items) - n - 1 :]\n"
 
-// scopeFixtureRuff hides the two smells from post-write checks. Without it
-// ruff reports them (E722, B006) and the lint feedback, not the prompt, is
-// what pulls the model into load_config and add_tag.
-const scopeFixtureRuff = "[lint]\nselect = [\"E4\", \"E7\", \"E9\", \"F\"]\nignore = [\"E722\"]\n"
-
 const scopeCheckTimeout = 30 * time.Second
 
 // TestTaskScopeDiscipline measures whether the model fixes only the reported
 // bug. utils.py has an off-by-one in last_n plus two unrelated smells; a run
-// is in scope when the other functions are byte-identical afterwards. It also
+// is in scope when the other functions are byte-identical afterwards. Ruff
+// flags both smells (E722, B006), so this also exercises the post-write check
+// filter that keeps findings on unchanged lines away from the model. It also
 // records whether the summary mentions the smells, which the Scope section
 // asks for instead of silent edits. Repeats follow SAGITTARIUS_PROMPT_EVAL_REPEAT
 // (default 3) and SAGITTARIUS_PROMPT_EVAL_PERSONALITY pins the prompt, as in
@@ -51,7 +48,6 @@ func TestTaskScopeDiscipline(t *testing.T) {
 	setup := func(t *testing.T, workDir string) {
 		src := "import json\n\n\n" + scopeFixtureUntouched[0] + "\n\n" + scopeFixtureTarget + "\n\n" + scopeFixtureUntouched[1]
 		mustWriteFile(t, filepath.Join(workDir, "utils.py"), src, 0o644)
-		mustWriteFile(t, filepath.Join(workDir, "ruff.toml"), scopeFixtureRuff, 0o644)
 		if personality != "" {
 			mustMkdirAll(t, filepath.Join(workDir, ".sagittarius"))
 			mustWriteFile(t, filepath.Join(workDir, ".sagittarius", "settings.json"),

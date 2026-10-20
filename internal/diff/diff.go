@@ -54,6 +54,42 @@ func UnifiedDiff(before, after, path string) string {
 	return header + hunks
 }
 
+// ChangedLines returns the 1-based line numbers in after that differ from
+// before: inserted lines, plus the lines on either side of a deletion, since a
+// removal can leave a problem at the seam (a dangling use, an unused import's
+// neighbor). Post-write checks use it to tell findings an edit caused from
+// ones that were already there. ok is false when the inputs are too large to
+// diff, in which case callers should treat every line as changed.
+func ChangedLines(before, after string) (lines map[int]bool, ok bool) {
+	lines = map[int]bool{}
+	if before == after {
+		return lines, true
+	}
+	a := splitLines(before)
+	b := splitLines(after)
+	if (len(a)+1)*(len(b)+1) > maxDiffCells {
+		return nil, false
+	}
+	next := 0 // index in b of the next line after the ops seen so far
+	for _, op := range diffOps(a, b) {
+		switch op.kind {
+		case opEqual:
+			next = op.b + 1
+		case opInsert:
+			lines[op.b+1] = true
+			next = op.b + 1
+		case opDelete:
+			if next > 0 {
+				lines[next] = true // line before the deletion
+			}
+			if next < len(b) {
+				lines[next+1] = true // line after the deletion
+			}
+		}
+	}
+	return lines, true
+}
+
 func splitLines(s string) []string {
 	if s == "" {
 		return nil

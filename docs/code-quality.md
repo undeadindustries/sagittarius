@@ -71,6 +71,23 @@ and tokens.
 }
 ```
 
+### Automatic checks after writes
+
+With `sagittarius.verify.autoCheckAfterWrite` on (the default), Sagittarius lints the files
+the agent just wrote and sends any problems back to it. Linters report the
+whole file, so a warning on a line the agent never touched is usually an old
+one. Those are shown to you, marked as being on lines this session didn't
+change, but they aren't sent to the agent. Otherwise a one-line bug fix turns
+into a cleanup of the whole file.
+
+Only linter warnings (ruff, eslint, clippy, shellcheck, and similar) are
+filtered. Build, compile, and type errors always go to the agent, because an
+edit can break code it didn't touch. A warning whose location can't be read
+from the tool's output is also always sent. "Changed" means changed since the
+session first wrote the file, including the lines on either side of a
+deletion. One known gap: if the agent removes the last use of an import, the
+"unused import" warning lands on the untouched import line and is filtered.
+
 ## 3. Code navigation via find_symbol
 
 The built-in `find_symbol` tool answers "where is this defined / referenced?"

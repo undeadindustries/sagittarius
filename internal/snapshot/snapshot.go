@@ -250,6 +250,39 @@ func (m *Manager) Diff(pathFilter string) (string, error) {
 	return out.String(), nil
 }
 
+// Baseline is a file's state before this session first wrote it.
+type Baseline struct {
+	// Content is the file's bytes before the first write ("" for a file the
+	// session created).
+	Content string
+	// Tracked is false when the session never wrote the file.
+	Tracked bool
+	// Captured is false when the file was too large to snapshot, so Content
+	// is unknown.
+	Captured bool
+}
+
+// SessionBaseline returns rel's pre-session state. Post-write checks diff it
+// against the file on disk to separate findings the session's edits caused
+// from ones that were already in the file.
+func (m *Manager) SessionBaseline(rel string) Baseline {
+	if m == nil {
+		return Baseline{}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	before, tracked := m.firstBefore[rel]
+	if !tracked {
+		return Baseline{}
+	}
+	for _, c := range m.stack {
+		if c.Rel == rel && c.Skipped {
+			return Baseline{Tracked: true}
+		}
+	}
+	return Baseline{Content: before, Tracked: true, Captured: true}
+}
+
 // ChangedFiles returns the sorted relative paths with a net change this session.
 func (m *Manager) ChangedFiles() []string {
 	if m == nil {
