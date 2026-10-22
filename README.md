@@ -68,7 +68,7 @@ sudo xattr -d com.apple.quarantine /usr/local/bin/sagittarius
 
 ### From source
 
-Building from source needs Go 1.26.9 or later ([go.dev/dl](https://go.dev/dl/)).
+Building from source needs Go 1.26.10 or later ([go.dev/dl](https://go.dev/dl/)).
 
 ```bash
 make build
