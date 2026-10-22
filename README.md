@@ -87,18 +87,19 @@ Write your standards in `AGENTS.md`. Sagittarius reads `~/.sagittarius/AGENTS.md
 
 The most common controls:
 
-| Action | How |
-|--------|-----|
-| Switch mode (agent, plan, ask, debug) | `Shift+Tab`, or `Alt+1` … `Alt+4` |
-| Cycle models | `Ctrl+/` and `Ctrl+Shift+P` |
-| Run tools without asking for this session | `Alt+Y` (yolo on or off) |
-| Step the reasoning effort | `Alt+R` |
-| Show or hide the thinking box | `Ctrl+T` |
-| Copy the last reply, or only its code | `/copy`, `/copy code` |
-| Run one prompt without the TUI | `sagittarius -p "your prompt"` |
-| Resume a session | `sagittarius --resume latest`, or `/resume` |
+| Action | Linux / Windows | macOS |
+|--------|-----------------|-------|
+| Switch mode (agent, plan, ask, debug) | `Shift+Tab`, or `Alt+1` ... `Alt+4` | `Shift+Tab`, or `Option+1` ... `Option+4` |
+| Cycle models | `Ctrl+/` and `Ctrl+Shift+P` | `Ctrl+/` and `Ctrl+Shift+P` |
+| Run tools without asking for this session | `Alt+Y` (yolo on or off) | `Option+Y` (yolo on or off) |
+| Step the reasoning effort | `Alt+R` | `Option+R` |
+| Show or hide the thinking box | `Ctrl+T` | `Ctrl+T` |
+| Scroll conversation | `PgUp` / `PgDn` | `Fn+Up` / `Fn+Down` |
+| Copy the last reply, or only its code | `/copy`, `/copy code` | `/copy`, `/copy code` |
+| Run one prompt without the TUI | `sagittarius -p "your prompt"` | `sagittarius -p "your prompt"` |
+| Resume a session | `sagittarius --resume latest`, or `/resume` | `sagittarius --resume latest`, or `/resume` |
 
-The complete keyboard reference, macOS key aliases, scrolling, and copy over SSH are in [docs/terminal-and-keyboard.md](docs/terminal-and-keyboard.md). All slash commands and flags are in [docs/reference/commands.md](docs/reference/commands.md).
+On macOS, Option chords work even when the terminal sends special characters (`®`, `¥`, etc.). The complete keyboard reference, scrolling, and copy over SSH are in [docs/terminal-and-keyboard.md](docs/terminal-and-keyboard.md). All slash commands and flags are in [docs/reference/commands.md](docs/reference/commands.md).
 
 ## Documentation
 
