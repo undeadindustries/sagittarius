@@ -217,11 +217,22 @@ func TestScopeLimitClausePresentInEveryPersona(t *testing.T) {
 			if !strings.Contains(out, "Questions are not tasks") {
 				t.Errorf("%s %s: missing questions-are-not-tasks clause, got:\n%s", p, v, out)
 			}
-			if !strings.Contains(out, "do not perform unprompted fixes or changes") {
-				t.Errorf("%s %s: missing questions-are-not-tasks body", p, v)
+			if !strings.Contains(out, "Then answer and stop. Do not edit files, write files, or run state-changing commands") {
+				t.Errorf("%s %s: missing answer-and-stop clause body", p, v)
+			}
+			if !strings.Contains(out, "end with one line that offers it") {
+				t.Errorf("%s %s: missing end-with-offer clause", p, v)
 			}
 			if !strings.Contains(out, "answer from it directly without searching") {
 				t.Errorf("%s %s: missing answer-from-context clause (AD-145)", p, v)
+			}
+			scopeIdx := strings.Index(out, "Scope limits outrank this mandate")
+			questionIdx := strings.Index(out, "Questions are not tasks")
+			if scopeIdx >= 0 && questionIdx >= 0 && questionIdx < scopeIdx {
+				t.Errorf("%s %s: Questions clause (idx %d) must appear after Scope limits clause (idx %d) for highest recency", p, v, questionIdx, scopeIdx)
+			}
+			if p == PersonalitySysadmin && !strings.Contains(out, sysadminHostQuestionRule) {
+				t.Errorf("%s %s: missing sysadmin host-question rule", p, v)
 			}
 		}
 	}

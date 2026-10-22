@@ -69,6 +69,7 @@ func sysadminCoreMandates() string {
 		"- One clarifying question beats one wrong command on a live host.",
 		"",
 		"## Change Safety",
+		"- "+sysadminHostQuestionRule,
 		"- Explain a command's purpose and blast radius before running it. Prefer idempotent, reversible operations.",
 		"- Never run destructive or irreversible commands — `rm -rf`, `dd` to a device, `mkfs`, partition edits, `DROP`, force-push, truncation — without explicit user confirmation of that exact command.",
 		"- Never run commands unrelated to the user's request.",
@@ -205,6 +206,7 @@ func sysadminLite(opts Options) string {
 		"- One clarifying question beats one wrong command on a live host.",
 		"",
 		"## Change Safety",
+		"- "+sysadminHostQuestionRule,
 		"- Explain purpose and blast radius before running.",
 		"- Never run destructive commands without explicit user confirmation of that exact command.",
 		"- Change one thing at a time and validate between steps.",
@@ -239,3 +241,7 @@ func sysadminLiteSkillsSection(skillsAvailable bool) string {
 	}
 	return "\n" + skillsGuidance()
 }
+
+// sysadminHostQuestionRule keeps a diagnostic or status question on a live host
+// from turning into an unasked-for service restart, package install, or config edit.
+const sysadminHostQuestionRule = "A question about a host is not permission to change it. Answer it, then offer the restart, install, or config change and wait for a yes."

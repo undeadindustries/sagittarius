@@ -126,6 +126,20 @@ neither does the job. The sysadmin prompt has a shorter version of the scope
 rule and applies the dependency rule to scripts: the standard library and
 distro packages come before new `pip` or `npm` installs.
 
+## Questions and answer-first
+
+Every personality and variant shares a single **Questions are not tasks** rule at
+the end of `toolInvocationMandate` (`internal/prompt/prompt.go`) so it carries the
+highest recency weight. When a message asks a question ("why does X...?",
+"can we...?", "should I...?", "what happens if...?", "is it possible to...?", or
+a request for status, review, or diagnosis) without directing an action, the
+model may use read-only tools (`read_file`, search, `web_fetch`, read-only
+shell), then answers and stops without editing files or running state-changing
+commands. When an action naturally follows, it ends with a one-line offer (for
+example, "Would you like me to fix X by changing Y?"). Mixed messages answer the
+question first and confirm before acting. Both `sysadmin` variants also state in
+`## Change Safety` that a question about a host is not permission to change it.
+
 ## Environment
 
 Every personality and variant ends with a short `## Environment` section so

@@ -365,9 +365,10 @@ func liteGit() string {
 }
 
 // toolInvocationMandate discourages premature stops where the model narrates an
-// intended tool call but ends the turn without invoking it. The final bullet is
-// deliberately last (highest recency) because it is a precedence rule over the
-// bullets above it, not an independent behavior of equal weight.
+// intended tool call but ends the turn without invoking it. The final two
+// bullets are deliberately last (highest recency) because they are precedence
+// rules over the action-pushing bullets above them: explicit scope restrictions
+// first, and the answer-first rule for questions at the very end.
 func toolInvocationMandate(editEnabled bool) string {
 	mutatingTools := "`" + tools.WriteFileToolName + "`"
 	if editEnabled {
@@ -381,14 +382,20 @@ func toolInvocationMandate(editEnabled bool) string {
 		"",
 		"**Directives require tools.** For fix/implement/update/create requests, research with tools when needed, then mutate with `"+tools.WriteFileToolName+"` or `"+tools.ShellToolName+"` in the same turn when the fix is clear. Do not split \"I'll do it next\" across turns for small, obvious fixes.",
 		"",
-		"**Questions are not tasks.** If the user asks a question without directing an action (e.g. \"what is the status?\"), answer the question — do not perform unprompted fixes or changes even if you discover issues. When the answer is already in this conversation, answer from it directly without searching.",
-		"",
 		"**Scope limits outrank this mandate.** When the user restricts the turn — \"just discuss this\", "+
 			"\"don't change anything yet\", \"tell me what you would do\", or a named exclusion like \"do not edit X\" — "+
 			"a text-only answer with no mutating tool calls is the correct and complete turn, not a failed one. "+
 			"Read-only tools stay available for research; "+mutatingTools+" do not. "+
 			"The restriction holds until the user lifts it. If you cannot tell whether a message is a directive or "+
 			"a discussion, ask one short question rather than acting.",
+		"",
+		"**Questions are not tasks.** A message that asks something without telling you to do it is a question. "+
+			"That includes \"why does X...?\", \"can we...?\", \"should I...?\", \"what happens if...?\", \"is it possible to...?\", "+
+			"and requests for status, review, or diagnosis. Read-only research is fine: read files, search, fetch the web, "+
+			"and run read-only commands. Then answer and stop. Do not edit files, write files, or run state-changing commands "+
+			"in that turn, even if you find the bug. If an action would naturally follow, end with one line that offers it, "+
+			"for example \"Would you like me to fix X by changing Y?\" When a message mixes a question with an instruction, "+
+			"answer the question first and confirm before you act. When the answer is already in this conversation, answer from it directly without searching.",
 	)
 }
 
