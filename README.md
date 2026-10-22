@@ -10,7 +10,7 @@ Sagittarius is a terminal AI agent for software engineering, system administrati
 
 Sagittarius started as a 1:1 Go port of `gemini-cli`. Upstream development on `gemini-cli` ended, and the alternative forks were brittle. Sagittarius grew into an independent agent harness for large software projects, server administration, and workflow automation.
 
-We test Sagittarius against OpenCode, Hermes, and DeepSeek. The goal of these comparisons is safer code changes, tighter scope, and predictable tool use during server maintenance.
+We test Sagittarius against OpenCode, Hermes, and DeepSeek. The goal of these comparisons is safer, more production-ready code, tighter scope, and predictable tool use during server maintenance.
 
 ## Why Sagittarius
 
