@@ -118,6 +118,11 @@ type Options struct {
 	// nil omits the section. It must stay byte-stable for the whole session:
 	// the system prompt is the cache prefix, so any change re-bills it.
 	Environment *Environment
+	// CustomBody is the text of a user-authored prompt from
+	// ~/.sagittarius/prompts/. When non-empty it replaces the personality
+	// prompt and Personality and Variant are ignored. The runner loads the
+	// file; this package never touches the filesystem.
+	CustomBody string
 }
 
 // Environment is what the model would otherwise spend its first tool calls
@@ -178,9 +183,15 @@ const commandPresentationRules = "## Presenting Commands to the User\n" +
 	"- Prefer executing commands directly via `" + tools.ShellToolName + "` over asking the user to copy and paste them."
 
 // Build returns the system prompt base (without user memory or mode suffix,
-// which the runner appends). Unknown personalities fall back to programmer.
+// which the runner appends). A non-empty CustomBody replaces the personality
+// prompt; unknown personalities fall back to programmer.
 func Build(opts Options) string {
-	base := buildForPersonality(opts)
+	var base string
+	if strings.TrimSpace(opts.CustomBody) != "" {
+		base = customPrompt(opts)
+	} else {
+		base = buildForPersonality(opts)
+	}
 	return joinSections([]string{base, renderEnvironment(opts), commandPresentationRules})
 }
 
@@ -188,22 +199,41 @@ func Build(opts Options) string {
 // "You are Sagittarius, <roleNoun>." sentence and helpClause is the role summary
 // that follows; the model-honesty sentence is identical across personalities.
 func renderIdentity(id Identity, roleNoun, helpClause string) string {
+	who := "You are Sagittarius, " + roleNoun + "."
+	return who + " " + helpClause + "\n\n" + modelHonesty(id)
+}
+
+// modelHonesty is the self-identification sentence. It is separate from the
+// "You are Sagittarius" line so a custom prompt, which owns its own identity,
+// still keeps the model from claiming to be a different model.
+func modelHonesty(id Identity) string {
 	model := strings.TrimSpace(id.Model)
 	known := model != "" && model != "local-model"
 	providerName := strings.TrimSpace(id.ProviderName)
-
-	who := "You are Sagittarius, " + roleNoun + "."
-	var selfID string
-	if known {
-		via := ""
-		if providerName != "" {
-			via = " (via " + providerName + ")"
-		}
-		selfID = "If asked which AI model or LLM you are, identify yourself accurately as " + model + via + ". Do not claim to be a different model."
-	} else {
-		selfID = "If asked which AI model or LLM you are, answer honestly based on your own knowledge. Do not claim to be Google Gemini or any specific model unless you genuinely are that model."
+	if !known {
+		return "If asked which AI model or LLM you are, answer honestly based on your own knowledge. Do not claim to be Google Gemini or any specific model unless you genuinely are that model."
 	}
-	return who + " " + helpClause + "\n\n" + selfID
+	via := ""
+	if providerName != "" {
+		via = " (via " + providerName + ")"
+	}
+	return "If asked which AI model or LLM you are, identify yourself accurately as " + model + via + ". Do not claim to be a different model."
+}
+
+// customPrompt assembles a user-authored prompt. The user's text comes first
+// and owns the identity; the shared tool core follows so a pasted prompt does
+// not lose tool-use rules, shell safety, or the answer-first rule for
+// questions, which stays last (highest recency) as in every built-in prompt.
+func customPrompt(opts Options) string {
+	sections := []string{opts.CustomBody, modelHonesty(opts.Identity)}
+	if opts.SkillsAvailable {
+		sections = append(sections, skillsGuidance())
+	}
+	sections = append(sections,
+		liteShellSafety(opts.Interactive, opts.WaitUntilEnabled),
+		liteToolUsage(opts.SymbolsEnabled, opts.EditEnabled, opts.ScratchpadEnabled),
+	)
+	return joinSections(sections)
 }
 
 // The two working-memory rules, worded once and rendered in each persona's own

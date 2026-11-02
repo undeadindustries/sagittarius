@@ -384,13 +384,23 @@ func sessionsStringValue(s *Settings, pick func(*SagittariusSessionsConfig) *str
 	return "", false
 }
 
-// SagittariusSystemPromptConfig is the global default for the system-prompt
-// personality and variant. Empty fields fall back to the built-in defaults
-// (programmer / full).
+// SagittariusSystemPromptConfig is the scope-level system-prompt selection:
+// either a built-in personality and variant, or the name of a custom prompt
+// stored under ~/.sagittarius/prompts/. Custom and Personality/Variant are
+// mutually exclusive within one scope; writers set one and clear the other.
+// Empty fields fall back to the built-in defaults (programmer / full).
 type SagittariusSystemPromptConfig struct {
+	Custom      string                     `json:"custom,omitempty"`
 	Personality string                     `json:"personality,omitempty"`
 	Variant     string                     `json:"variant,omitempty"`
 	Extra       map[string]json.RawMessage `json:"-"`
+}
+
+// IsEmpty reports whether the config selects nothing, so lower tiers apply.
+func (c *SagittariusSystemPromptConfig) IsEmpty() bool {
+	return c == nil || (strings.TrimSpace(c.Custom) == "" &&
+		strings.TrimSpace(c.Personality) == "" &&
+		strings.TrimSpace(c.Variant) == "")
 }
 
 // SagittariusUtilityConfig overrides the model for an auxiliary role (context

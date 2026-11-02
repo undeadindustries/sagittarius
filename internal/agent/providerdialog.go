@@ -805,6 +805,30 @@ func (d *systemPromptDialogDeps) ApplyPreset(ctx context.Context, presetID strin
 	return d.app.deps.Hooks.ApplyProjectSystemPromptPreset(ctx, presetID)
 }
 
+func (d *systemPromptDialogDeps) ListCustomPrompts() ([]string, error) {
+	return d.app.ListCustomPrompts()
+}
+
+func (d *systemPromptDialogDeps) LoadCustomPrompt(name string) (string, error) {
+	return d.app.LoadCustomPrompt(name)
+}
+
+func (d *systemPromptDialogDeps) SaveCustomPrompt(ctx context.Context, name, body string, create bool) (string, error) {
+	return d.app.SaveCustomPrompt(ctx, name, body, create)
+}
+
+func (d *systemPromptDialogDeps) ImportCustomPrompt(ctx context.Context, name, path string, create bool) (string, error) {
+	return d.app.ImportCustomPrompt(ctx, name, path, create)
+}
+
+func (d *systemPromptDialogDeps) RenameCustomPrompt(ctx context.Context, oldName, newName string) (string, error) {
+	return d.app.RenameCustomPrompt(ctx, oldName, newName)
+}
+
+func (d *systemPromptDialogDeps) DeleteCustomPrompt(ctx context.Context, name string) (string, error) {
+	return d.app.DeleteCustomPrompt(ctx, name)
+}
+
 // ModelPickDialogDeps returns the side-effect adapter the /model global picker uses.
 func (a *App) ModelPickDialogDeps() modelpickdialog.Deps {
 	return &modelPickDialogDeps{baseDialogDeps{app: a}}

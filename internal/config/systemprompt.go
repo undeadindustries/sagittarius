@@ -101,6 +101,33 @@ func ResolvePersonality(settings *Settings, providerID, model string) string {
 	return PersonalityProgrammer
 }
 
+// ResolveCustomPrompt returns the custom prompt name selected in the merged
+// sagittarius.systemPrompt, or "" when none is selected. A model or provider
+// personality override wins over it, preserving the documented order: a
+// provider pinned to sysadmin still gets sysadmin. The name is returned as
+// stored; the caller loads and validates the file.
+func ResolveCustomPrompt(settings *Settings, providerID, model string) string {
+	gp := globalSystemPrompt(settings)
+	if gp == nil {
+		return ""
+	}
+	name := strings.TrimSpace(gp.Custom)
+	if name == "" {
+		return ""
+	}
+	if inst := settings.ProviderInstance(providerID); inst != nil {
+		if mc, ok := lookupModelConfig(inst, model); ok {
+			if _, ok := CanonicalPersonality(mc.Personality); ok {
+				return ""
+			}
+		}
+		if _, ok := CanonicalPersonality(inst.Personality); ok {
+			return ""
+		}
+	}
+	return name
+}
+
 // ResolveVariant picks the prompt variant ("full"/"lite") for (providerID,
 // model) using the same tier order, reusing the promptMode setting.
 func ResolveVariant(settings *Settings, providerID, model string) string {

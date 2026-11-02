@@ -206,22 +206,34 @@ func modelsCommand() Command {
 func systemPromptCommand() Command {
 	return Command{
 		Name:        "system-prompt",
-		Description: "Set the project system-prompt personality (saved to .sagittarius/settings.json) — opens a picker or accepts a preset id",
+		Description: "Set the project system prompt (saved to .sagittarius/settings.json). Opens a picker, or accepts a preset id or custom prompt name",
 		Handler:     handleSystemPrompt,
-		ArgComplete: func(_ Deps, argPrefix string) []string {
-			var out []string
-			for _, p := range config.SortedSystemPromptPresets() {
-				if strings.HasPrefix(p.ID, argPrefix) {
-					out = append(out, p.ID)
-				}
-			}
-			return out
-		},
+		ArgComplete: systemPromptArgComplete,
 	}
 }
 
+// systemPromptArgComplete lists built-in preset ids, then saved custom prompt
+// names. Custom names are read when completion runs, like checkpoint tags, so
+// a prompt saved in another session shows up without a restart.
+func systemPromptArgComplete(deps Deps, argPrefix string) []string {
+	var out []string
+	for _, p := range config.SortedSystemPromptPresets() {
+		if strings.HasPrefix(p.ID, argPrefix) {
+			out = append(out, p.ID)
+		}
+	}
+	if deps.Hooks == nil {
+		return out
+	}
+	names, err := deps.Hooks.ListCustomPrompts()
+	if err != nil {
+		return out
+	}
+	return append(out, filterByPrefix(names, argPrefix)...)
+}
+
 // handleSystemPrompt opens the picker when no argument is given, or applies a
-// preset id directly for headless use.
+// preset id or custom prompt name directly for headless use.
 func handleSystemPrompt(ctx *Context) Result {
 	arg := strings.TrimSpace(ctx.Args)
 	if arg == "" {
@@ -393,7 +405,7 @@ func memoryCommand() Command {
 			},
 			{
 				Name:        "reload",
-				Description: "Reload memory files into the system prompt",
+				Description: "Reload memory files and the selected custom prompt into the system prompt",
 				Handler:     handleMemoryReload,
 			},
 		},

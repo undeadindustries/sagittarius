@@ -465,10 +465,19 @@ again.
 
 ### `/system-prompt`
 
-- **Description:** Set the **project-wide** system-prompt personality (programmer,
-  sysadmin, personal assistant, creative assistant × full/lite variants).
-- **Menu-first:** `/system-prompt` opens a preset picker. Pass a preset id directly
-  for headless use (e.g. `--slash "/system-prompt programmer-lite"`).
+- **Description:** Set the **project-wide** system prompt: a built-in
+  personality (programmer, sysadmin, personal assistant, creative assistant ×
+  full/lite variants) or one of your custom prompts.
+- **Menu-first:** `/system-prompt` opens a picker. Pass a preset id or a custom
+  prompt name directly for headless use (e.g.
+  `--slash "/system-prompt programmer-lite"` or
+  `--slash "/system-prompt code-reviewer"`). Tab completion lists both.
+- **Custom prompts:** choose **Custom prompts…** at the end of the picker to
+  manage them. Keys: Enter edit, `n` new, `r` rename, `d` delete (asks `y`),
+  Esc back. In the editor, paste or type the text, or press Tab to import a
+  file instead; Ctrl+S saves and Esc cancels. Prompts are stored in
+  `~/.sagittarius/prompts/`. See
+  [Custom prompts](../system-prompts.md#custom-prompts).
 - **Persistence:** Saved to `<repo>/.sagittarius/settings.json` under
   `sagittarius.systemPrompt` and merged over the global default for the current
   workspace. Use `/providers` to set a per-provider override instead.

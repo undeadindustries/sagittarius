@@ -47,6 +47,7 @@ a folder name, the second one gets a numeric suffix (`my-app-1`).
 | `~/.sagittarius/tmp/<slug>/snapshots/<sessionId>.jsonl` | First snapshotted `write_file` (powers `/diff` and `/undo`) |
 | `~/.sagittarius/tmp/<slug>/spill/sagittarius-spill-*.log` | First oversized shell/grep/find_symbol result (full output; the model sees a head+tail preview) |
 | `~/.sagittarius/skills/` | You add a user skill |
+| `~/.sagittarius/prompts/<name>.md` | You save a custom system prompt in `/system-prompt` (directory `0700`, files `0600`) |
 | `~/.sagittarius/agents/` | You add a user agent definition |
 | `~/.sagittarius/extensions/<name>/` | You install an extension |
 

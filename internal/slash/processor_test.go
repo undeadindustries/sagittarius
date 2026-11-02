@@ -54,6 +54,10 @@ type mockHooks struct {
 	// stateful in-memory slice, so /memory command tests can assert real
 	// add/list/remove behavior.
 	memoryEntries []slash.MemoryEntry
+	// customPrompts backs ListCustomPrompts; appliedSystemPrompt records the
+	// last ApplyProjectSystemPromptPreset argument.
+	customPrompts       []string
+	appliedSystemPrompt string
 	// constraints backs AddConstraint()/ListConstraints()/ClearConstraints()
 	// with a stateful in-memory slice, so /constraints command tests can
 	// assert real add/list/clear behavior.
@@ -258,11 +262,13 @@ func (m *mockHooks) ProjectSystemPromptPresetID() string { return "" }
 
 func (m *mockHooks) ApplyProjectSystemPromptPreset(ctx context.Context, presetID string) (string, error) {
 	_ = ctx
-	_ = presetID
 	m.reloadCalls++
 	m.rebuildCalls++
+	m.appliedSystemPrompt = presetID
 	return "System prompt → Programmer", nil
 }
+
+func (m *mockHooks) ListCustomPrompts() ([]string, error) { return m.customPrompts, nil }
 
 func (m *mockHooks) WriteRequestDebug() (string, error) {
 	return "/tmp/sagittarius-request-test.json", nil
@@ -773,6 +779,36 @@ func TestSystemPromptAppliesPresetArg(t *testing.T) {
 	}
 	if hooks.reloadCalls == 0 {
 		t.Fatal("expected ReloadSystemInstruction after preset apply")
+	}
+}
+
+func TestSystemPromptPassesCustomNameAndCompletes(t *testing.T) {
+	t.Parallel()
+	deps, _, hooks := testDeps(t, nil)
+	hooks.customPrompts = []string{"atlas", "orion"}
+	p := slash.NewProcessor()
+
+	result := p.Process(context.Background(), "/system-prompt atlas", deps)
+	if !result.Handled || result.Err != nil {
+		t.Fatalf("result = %+v", result)
+	}
+	if hooks.appliedSystemPrompt != "atlas" {
+		t.Fatalf("applied = %q, want atlas", hooks.appliedSystemPrompt)
+	}
+
+	got := slash.NewRegistry().Complete("/system-prompt ", deps)
+	var names []string
+	for _, it := range got.Items {
+		names = append(names, it.Label)
+	}
+	joined := strings.Join(names, ",")
+	if !strings.Contains(joined, "programmer") || !strings.HasSuffix(joined, "atlas,orion") {
+		t.Fatalf("completion = %v, want presets then atlas, orion", names)
+	}
+
+	got = slash.NewRegistry().Complete("/system-prompt or", deps)
+	if len(got.Items) != 1 || got.Items[0].Label != "orion" {
+		t.Fatalf("prefix completion = %+v, want only orion", got.Items)
 	}
 }
 

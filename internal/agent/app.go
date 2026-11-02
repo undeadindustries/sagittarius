@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -20,6 +21,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/contextmgmt"
 	"github.com/undeadindustries/sagittarius/internal/credentials"
+	"github.com/undeadindustries/sagittarius/internal/customprompt"
 	"github.com/undeadindustries/sagittarius/internal/goal"
 	"github.com/undeadindustries/sagittarius/internal/grill"
 	"github.com/undeadindustries/sagittarius/internal/hooks"
@@ -2097,20 +2099,43 @@ func (h *appHooks) ProjectSystemPromptPresetID() string {
 	return config.ProjectSystemPromptPresetID(s)
 }
 
+// ApplyProjectSystemPromptPreset selects a built-in preset id or a custom
+// prompt name. A custom name is loaded before anything is written, so a typo
+// or an unreadable file never saves a broken selection. One selection per
+// scope: choosing a custom prompt clears personality and variant, and choosing
+// a built-in clears custom.
 func (h *appHooks) ApplyProjectSystemPromptPreset(ctx context.Context, presetID string) (string, error) {
 	if h.app == nil || h.app.runner == nil {
 		return "", fmt.Errorf("runner not available")
 	}
-	preset, ok := config.LookupPreset(presetID)
-	if !ok {
-		return "", fmt.Errorf("unknown system prompt preset %q", presetID)
+	var selection config.SagittariusSystemPromptConfig
+	var label string
+	if preset, ok := config.LookupPreset(presetID); ok {
+		selection = config.SagittariusSystemPromptConfig{
+			Personality: config.CanonicalPersonalityID(preset.Personality),
+			Variant:     config.CanonicalVariant(preset.Variant),
+		}
+		label = preset.Label
+	} else {
+		name, err := customprompt.NormalizeName(presetID)
+		if err != nil {
+			return "", fmt.Errorf("unknown system prompt %q: not a built-in preset or a valid custom prompt name", presetID)
+		}
+		if _, err := h.app.LoadCustomPrompt(name); err != nil {
+			if errors.Is(err, customprompt.ErrNotFound) {
+				return "", fmt.Errorf("unknown system prompt %q: no built-in preset or saved custom prompt has that name", presetID)
+			}
+			return "", err
+		}
+		selection = config.SagittariusSystemPromptConfig{Custom: name}
+		label = customPromptLabel(name)
 	}
 
 	// Write directly to docs.Project and SaveProject so the merged view updates
 	// atomically. Documents is always wired in production; its absence is a
 	// programming/test error, not a reason to fall back to a divergent writer.
 	if h.app.docs == nil {
-		return "", fmt.Errorf("settings documents not loaded")
+		return "", errNoSettingsDocuments
 	}
 	// Without a project tier (launched from the home directory) the only file
 	// there is to write is the global one; say so rather than claim a project
@@ -2123,21 +2148,27 @@ func (h *appHooks) ApplyProjectSystemPromptPreset(ctx context.Context, presetID 
 	if s.Sagittarius == nil {
 		s.Sagittarius = &config.SagittariusSettings{}
 	}
-	s.Sagittarius.SystemPrompt = &config.SagittariusSystemPromptConfig{
-		Personality: config.CanonicalPersonalityID(preset.Personality),
-		Variant:     config.CanonicalVariant(preset.Variant),
+	if prev := s.Sagittarius.SystemPrompt; prev != nil {
+		selection.Extra = prev.Extra
 	}
+	s.Sagittarius.SystemPrompt = &selection
 	if err := h.app.docs.Save(scope); err != nil {
 		return "", err
 	}
 
-	if err := h.ReloadSystemInstruction(ctx); err != nil {
+	if err := h.app.reloadAfterSelectionChange(ctx); err != nil {
 		return "", err
 	}
-	if _, _, err := h.RebuildRunner(ctx); err != nil {
-		return "", err
+	return fmt.Sprintf("System prompt → %s (%s)", label, where), nil
+}
+
+// ListCustomPrompts returns stored custom prompt names for /system-prompt
+// completion.
+func (h *appHooks) ListCustomPrompts() ([]string, error) {
+	if h.app == nil {
+		return nil, nil
 	}
-	return fmt.Sprintf("System prompt → %s (%s)", preset.Label, where), nil
+	return h.app.ListCustomPrompts()
 }
 
 func (h *appHooks) ToolkitReport() string {
@@ -2381,6 +2412,11 @@ func resolveSystemPromptLabel(runner *Runner, settings *config.Settings) string 
 	if runner != nil {
 		model = runner.Model()
 	}
+	if runner != nil {
+		if name := runner.ActiveCustomPrompt(); name != "" {
+			return customPromptLabel(name)
+		}
+	}
 	if presetID := config.ProjectSystemPromptPresetID(settings); presetID != "" {
 		if p, ok := config.LookupPreset(presetID); ok {
 			return p.Label
@@ -2544,8 +2580,9 @@ func (r *Runner) Registry() *tools.Registry {
 	return r.registry
 }
 
-// ReloadSystemInstruction re-reads AGENTS.md memory and recomposes the system
-// prompt (personality prompt + memory + mode suffix).
+// ReloadSystemInstruction re-reads AGENTS.md memory and the selected custom
+// prompt file, then recomposes the system prompt (personality or custom prompt
+// + memory + mode suffix).
 func (r *Runner) ReloadSystemInstruction() error {
 	memory, err := DiscoverSystemInstruction(r.workDir)
 	if err != nil {
@@ -2555,6 +2592,7 @@ func (r *Runner) ReloadSystemInstruction() error {
 	r.modelMu.Lock()
 	r.memory = memory
 	r.systemDirty = false
+	r.customPromptCached = false
 	r.modelMu.Unlock()
 	r.rebuildSystem()
 	return nil

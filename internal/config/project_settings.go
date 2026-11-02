@@ -4,12 +4,18 @@ import (
 	"strings"
 )
 
-// ProjectSystemPromptPresetID returns the preset id matching an explicitly
-// configured sagittarius.systemPrompt, or "" when unset.
+// ProjectSystemPromptPresetID returns the selection in an explicitly
+// configured sagittarius.systemPrompt: the custom prompt name when one is set,
+// otherwise the matching built-in preset id, or "" when unset. Custom names
+// never collide with preset ids, so callers can tell them apart with
+// LookupPreset.
 func ProjectSystemPromptPresetID(settings *Settings) string {
 	gp := globalSystemPrompt(settings)
-	if gp == nil || (strings.TrimSpace(gp.Personality) == "" && strings.TrimSpace(gp.Variant) == "") {
+	if gp.IsEmpty() {
 		return ""
+	}
+	if c := strings.TrimSpace(gp.Custom); c != "" {
+		return c
 	}
 	personality := gp.Personality
 	variant := gp.Variant

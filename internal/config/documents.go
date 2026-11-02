@@ -848,6 +848,10 @@ func mergeModeConfig(global, project *SagittariusModeConfig) *SagittariusModeCon
 	return &merged
 }
 
+// mergeSystemPromptConfig overlays the selection as one unit: when the project
+// selects anything (custom, personality, or variant) it replaces the global
+// selection whole. Field-by-field merging would let a global custom name sit
+// under a project personality and produce a selection nobody chose.
 func mergeSystemPromptConfig(global, project *SagittariusSystemPromptConfig) *SagittariusSystemPromptConfig {
 	if project == nil {
 		return global
@@ -856,8 +860,11 @@ func mergeSystemPromptConfig(global, project *SagittariusSystemPromptConfig) *Sa
 		return project
 	}
 	merged := *global
-	merged.Personality = overlayStr(global.Personality, project.Personality)
-	merged.Variant = overlayStr(global.Variant, project.Variant)
+	if !project.IsEmpty() {
+		merged.Custom = project.Custom
+		merged.Personality = project.Personality
+		merged.Variant = project.Variant
+	}
 	return &merged
 }
 

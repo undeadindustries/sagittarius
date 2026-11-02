@@ -19,6 +19,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/atmention"
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/contextmgmt"
+	"github.com/undeadindustries/sagittarius/internal/customprompt"
 	"github.com/undeadindustries/sagittarius/internal/goal"
 	"github.com/undeadindustries/sagittarius/internal/grill"
 	"github.com/undeadindustries/sagittarius/internal/hooks"
@@ -225,6 +226,19 @@ type Runner struct {
 	systemBase  string
 	memory      string
 	systemDirty bool
+	// customPrompt* cache the text of the selected custom prompt, also under
+	// modelMu. The file is read only when the selected name changes or on
+	// ReloadSystemInstruction: the system prompt is the provider's cache
+	// prefix and must not change mid-task because a file changed on disk.
+	// customPromptBody is "" when the load failed; customPromptNotice holds a
+	// one-shot fallback warning shown at the start of the next turn.
+	customPromptName   string
+	customPromptBody   string
+	customPromptCached bool
+	customPromptNotice string
+	// loadCustomPrompt reads a custom prompt by name. Set once at
+	// construction; tests replace it to avoid touching the user's home.
+	loadCustomPrompt func(name string) (string, error)
 	// approvalMu guards approval, which Alt+Y swaps at runtime. It may be
 	// taken while regMu is held, never the reverse.
 	approvalMu sync.RWMutex
@@ -587,6 +601,7 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		subagentCharter:       cfg.SubagentCharter,
 		env:                   cfg.Environment,
 		newSubagentGenerator:  cfg.SubagentGenerator,
+		loadCustomPrompt:      loadStoredCustomPrompt,
 	}
 	if runner.agentID == "" {
 		runner.agentID = parentAgentID
@@ -1191,6 +1206,9 @@ func (r *Runner) runAgentLoop(ctx context.Context, userInput string, out chan<- 
 	if r.goplsHintPending {
 		r.goplsHintPending = false
 		out <- ui.StreamEvent{Type: ui.StreamInfo, Text: goplsHint}
+	}
+	if notice := r.takeCustomPromptNotice(); notice != "" {
+		out <- ui.StreamEvent{Type: ui.StreamInfo, Text: notice}
 	}
 
 	verifyHinted := false
@@ -1938,10 +1956,6 @@ func (r *Runner) rebuildSystem() {
 	r.applyModeSystemSuffix()
 }
 
-// rebuildBasePrompt resolves the personality and variant for the live
-// (provider, model), builds the personality prompt with an honest identity
-// line, and concatenates the AGENTS.md memory. The result is stored in
-// systemBase (mode suffix is appended separately by applyModeSystemSuffix).
 func (r *Runner) maxToolRounds() int {
 	if r.maxToolRoundsOverride != nil {
 		return *r.maxToolRoundsOverride
@@ -1949,6 +1963,79 @@ func (r *Runner) maxToolRounds() int {
 	return config.ResolveMaxToolRounds(r.sagittariusSettings(), tools.MaxToolRounds)
 }
 
+// loadStoredCustomPrompt is the production custom prompt loader. It resolves
+// the store on each call so SAGITTARIUS_HOME is honored; it runs only when the
+// selected name changes or on an explicit reload, never per round.
+func loadStoredCustomPrompt(name string) (string, error) {
+	store, err := customprompt.DefaultStore()
+	if err != nil {
+		return "", err
+	}
+	return store.Load(name)
+}
+
+// customPromptBodyFor returns the cached text of the named custom prompt,
+// loading it when the name differs from the cached one. A load failure is
+// cached as "" so the built-in prompt is used and the warning fires once per
+// name, not on every rebuild. The file read happens outside modelMu.
+func (r *Runner) customPromptBodyFor(name string) string {
+	r.modelMu.RLock()
+	cached := r.customPromptCached && r.customPromptName == name
+	body := r.customPromptBody
+	r.modelMu.RUnlock()
+	if cached {
+		return body
+	}
+
+	var notice string
+	if name != "" {
+		var err error
+		body, err = r.loadCustomPrompt(name)
+		if err != nil {
+			body = ""
+			slog.Warn("system prompt: custom prompt unavailable, using built-in prompt", "name", name, "error", err)
+			notice = fmt.Sprintf("Custom system prompt %q could not be loaded (%v). Using the built-in prompt.", name, err)
+		}
+	} else {
+		body = ""
+	}
+
+	r.modelMu.Lock()
+	r.customPromptName = name
+	r.customPromptBody = body
+	r.customPromptCached = true
+	if notice != "" {
+		r.customPromptNotice = notice
+	}
+	r.modelMu.Unlock()
+	return body
+}
+
+// takeCustomPromptNotice returns and clears the pending fallback warning.
+func (r *Runner) takeCustomPromptNotice() string {
+	r.modelMu.Lock()
+	defer r.modelMu.Unlock()
+	n := r.customPromptNotice
+	r.customPromptNotice = ""
+	return n
+}
+
+// ActiveCustomPrompt returns the name of the custom prompt in the current
+// system instruction, or "" when a built-in prompt is in use (including the
+// fallback after a failed load).
+func (r *Runner) ActiveCustomPrompt() string {
+	r.modelMu.RLock()
+	defer r.modelMu.RUnlock()
+	if r.systemPromptOverride != "" || r.customPromptBody == "" {
+		return ""
+	}
+	return r.customPromptName
+}
+
+// rebuildBasePrompt resolves the custom prompt or the personality and variant
+// for the live (provider, model), builds the prompt with an honest identity
+// line, and concatenates the AGENTS.md memory. The result is stored in
+// systemBase (mode suffix is appended separately by applyModeSystemSuffix).
 func (r *Runner) rebuildBasePrompt() {
 	r.flushDirtyMemoryIfNeeded()
 	if r.systemPromptOverride != "" {
@@ -1967,7 +2054,9 @@ func (r *Runner) rebuildBasePrompt() {
 	providerID := r.activeProviderID()
 
 	toolNames := r.toolDeclarationNames()
+	customBody := r.customPromptBodyFor(config.ResolveCustomPrompt(settings, providerID, model))
 	base := prompt.Build(prompt.Options{
+		CustomBody:  customBody,
 		Personality: prompt.Personality(config.ResolvePersonality(settings, providerID, model)),
 		Variant:     prompt.Variant(config.ResolveVariant(settings, providerID, model)),
 		Identity: prompt.Identity{

@@ -94,8 +94,64 @@ Both personality and variant resolve by **first non-empty wins**:
 3. **Global default** — `sagittarius.systemPrompt` in `~/.sagittarius/settings.json`
 4. **Built-in default** — `programmer` / `full`
 
+`sagittarius.systemPrompt` holds one selection per file: either `custom` (a
+[custom prompt](#custom-prompts) name) or `personality` and `variant`. If the
+project file sets any of the three keys, its selection replaces the global one
+as a whole. A model or provider `personality` override still wins over a custom
+prompt.
+
 The runner re-resolves on every model, provider, mode, settings, or memory
 change, so switching providers or models updates the prompt (and identity) live.
+
+## Custom prompts
+
+You can write your own system prompts, name them, and pick them in
+`/system-prompt` next to the built-in presets.
+
+Open `/system-prompt` and choose **Custom prompts…** at the end of the list.
+From there you can:
+
+- **Create** a prompt (`n`): give it a name, then paste the text, or press Tab
+  and enter the path of a file to import (`.md`, `.txt`, or any UTF-8 text).
+  The text is copied in; the source file is not read again.
+- **Edit** (Enter), **rename** (`r`), or **delete** (`d`, then `y`). Renaming
+  or deleting a prompt that is selected updates or clears that selection in
+  your settings files.
+
+Saved prompts appear in the main list as `name (custom)`. Select one with Enter,
+or headlessly with `--slash "/system-prompt <name>"`.
+
+**Storage.** Each prompt is one file, `~/.sagittarius/prompts/<name>.md`. The
+directory is created with mode `0700` and files with `0600`. Prompts are global
+only: a cloned repository can select a prompt by name, but it cannot supply the
+text. You can also edit the files directly; run `/memory reload` or reselect the
+prompt to load the change.
+
+**Rules.** Names use lowercase letters, digits, and hyphens (up to 48
+characters; spaces become hyphens) and cannot match a built-in preset id. The
+text must be valid UTF-8 without NUL bytes and at most 64 KiB, since the whole
+prompt is sent with every request.
+
+**What Sagittarius adds.** Your text replaces the personality prompt (including
+the "You are Sagittarius" line). After it, Sagittarius adds:
+
+1. the model-honesty sentence from [Identity](#identity);
+2. the `## Skills` section, when skills are installed;
+3. the shell safety rules and the shared `## Tool Usage` section, which ends
+   with the [Questions and answer-first](#questions-and-answer-first) rule;
+4. `## Environment` and the command presentation rules.
+
+Memory (`AGENTS.md`, `MEMORY.md`), the mode suffix, the scratchpad, and session
+constraints are appended as usual.
+
+**Loading and failures.** The file is read when the selection changes or on a
+reload, not on every request, so the provider's prompt cache stays valid. If the
+file is missing or invalid, Sagittarius logs a warning, shows a one-line notice
+at the start of the next turn, and uses the built-in prompt. The turn still runs.
+
+**Sampling.** A custom prompt has no personality, so temperature and other
+preset-linked defaults use the `programmer` / `full` values unless you set them
+per provider or model.
 
 ## Identity
 
@@ -191,6 +247,16 @@ recompose the system prompt live.
       "model": "gpt-4o",
       "promptMode": "full"
     }
+  }
+}
+```
+
+A custom prompt selection looks like this:
+
+```json
+{
+  "sagittarius": {
+    "systemPrompt": { "custom": "code-reviewer" }
   }
 }
 ```

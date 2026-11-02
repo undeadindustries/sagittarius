@@ -87,9 +87,12 @@ type Hooks interface {
 	AllActiveModels() []provider.ProviderModelPair
 	// ProjectSystemPromptPresetID returns the active project system-prompt preset id.
 	ProjectSystemPromptPresetID() string
-	// ApplyProjectSystemPromptPreset writes a preset to the project settings file
-	// and reloads the runner system instruction.
+	// ApplyProjectSystemPromptPreset writes a built-in preset id or a custom
+	// prompt name to the project settings file (global when there is no
+	// project tier) and reloads the runner system instruction.
 	ApplyProjectSystemPromptPreset(ctx context.Context, presetID string) (string, error)
+	// ListCustomPrompts returns the names of saved custom system prompts.
+	ListCustomPrompts() ([]string, error)
 	// Chat checkpoint + export hooks (/chat).
 	// WriteRequestDebug writes the most recent provider request to a timestamped
 	// JSON file in the working directory and returns its path.

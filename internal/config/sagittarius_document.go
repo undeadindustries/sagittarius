@@ -576,6 +576,10 @@ func unmarshalSystemPromptConfig(raw json.RawMessage) (*SagittariusSystemPromptC
 	cfg := &SagittariusSystemPromptConfig{Extra: make(map[string]json.RawMessage)}
 	for key, val := range obj {
 		switch key {
+		case "custom":
+			if err := json.Unmarshal(val, &cfg.Custom); err != nil {
+				return nil, fmt.Errorf("decode systemPrompt.custom: %w", err)
+			}
 		case "personality":
 			if err := json.Unmarshal(val, &cfg.Personality); err != nil {
 				return nil, err
@@ -609,6 +613,9 @@ func marshalSystemPromptConfig(cfg *SagittariusSystemPromptConfig) (json.RawMess
 		}
 		obj[key] = b
 		return nil
+	}
+	if err := add("custom", cfg.Custom); err != nil {
+		return nil, err
 	}
 	if err := add("personality", cfg.Personality); err != nil {
 		return nil, err

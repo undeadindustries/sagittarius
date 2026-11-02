@@ -1063,10 +1063,11 @@ func (m *model) openDialog(kind ui.DialogKind) tea.Cmd {
 			m.addBlock(roleInfo, "System prompt picker is unavailable in this session.")
 			return nil
 		}
-		o := systempromptdialog.New(ctx, host.SystemPromptDialogDeps())
+		o, cmd := systempromptdialog.New(ctx, host.SystemPromptDialogDeps())
 		o = o.SetTheme(m.th)
 		o = o.SetSize(m.width, m.height)
 		m.systemPromptOverlay = &o
+		return cmd
 	case ui.DialogMCP:
 		host, ok := m.app.(mcpDialogHost)
 		if !ok {
