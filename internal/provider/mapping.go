@@ -251,7 +251,7 @@ func applyReasoningToThinkingConfig(tc *genai.ThinkingConfig, reasoning *Reasoni
 			tc.ThinkingLevel = ""
 		case "none", "off":
 			tc.ThinkingLevel = lowestGeminiThinkingLevel(model)
-		case "minimal", "low", "medium", "high":
+		case "minimal", "low", "medium", "high", "xhigh":
 			tc.ThinkingLevel = clampGeminiThinkingLevel(model, effort)
 		default:
 			if level, ok := geminiThinkingLevel(effort); ok {
@@ -306,6 +306,16 @@ func geminiSupportedLevels(model string) []genai.ThinkingLevel {
 	}
 
 	switch {
+	// Gemini 4. Levels are from the Vertex "thinking" table (LOW/MEDIUM/HIGH,
+	// plus XHIGH on Hydrogen only). minimal is rejected with 400, so it is
+	// absent and clamps to low. Carbon-for-cyber and Argon-cyber share the
+	// public models' level sets.
+	case strings.Contains(m, "gemini-4-hydrogen"):
+		return []genai.ThinkingLevel{
+			genai.ThinkingLevelLow, genai.ThinkingLevelMedium, genai.ThinkingLevelHigh, geminiThinkingLevelXHigh,
+		}
+	case strings.Contains(m, "gemini-4-carbon"), strings.Contains(m, "gemini-4-argon"):
+		return []genai.ThinkingLevel{genai.ThinkingLevelLow, genai.ThinkingLevelMedium, genai.ThinkingLevelHigh}
 	// gemini-3.8-flash, gemini-3.7-flash: low, medium, high (no minimal)
 	case strings.Contains(m, "gemini-3.8-flash"), strings.Contains(m, "gemini-3-8-flash"),
 		strings.Contains(m, "gemini-3.7-flash"), strings.Contains(m, "gemini-3-7-flash"):
@@ -359,7 +369,7 @@ func clampGeminiThinkingLevel(model, effort string) genai.ThinkingLevel {
 	}
 
 	// Not directly supported: map to the nearest level.
-	// Ordered rank: minimal (1), low (2), medium (3), high (4).
+	// Ordered rank: minimal (1), low (2), medium (3), high (4), xhigh (5).
 	levelRank := func(l genai.ThinkingLevel) int {
 		switch l {
 		case genai.ThinkingLevelMinimal:
@@ -370,6 +380,8 @@ func clampGeminiThinkingLevel(model, effort string) genai.ThinkingLevel {
 			return 3
 		case genai.ThinkingLevelHigh:
 			return 4
+		case geminiThinkingLevelXHigh:
+			return 5
 		default:
 			return 0
 		}
@@ -393,6 +405,12 @@ func clampGeminiThinkingLevel(model, effort string) genai.ThinkingLevel {
 	return best
 }
 
+// geminiThinkingLevelXHigh is Gemini 4 Hydrogen's deepest thinkingLevel.
+// google.golang.org/genai has no constant for it. GenerateContent takes the
+// uppercase enum "XHIGH"; the Interactions API's lowercase "xhigh" is a
+// different wire.
+const geminiThinkingLevelXHigh = genai.ThinkingLevel("XHIGH")
+
 // geminiThinkingLevel maps a Sagittarius effort string to the genai
 // ThinkingLevel enum.
 func geminiThinkingLevel(effort string) (genai.ThinkingLevel, bool) {
@@ -405,6 +423,8 @@ func geminiThinkingLevel(effort string) (genai.ThinkingLevel, bool) {
 		return genai.ThinkingLevelMedium, true
 	case "high":
 		return genai.ThinkingLevelHigh, true
+	case "xhigh":
+		return geminiThinkingLevelXHigh, true
 	default:
 		return "", false
 	}

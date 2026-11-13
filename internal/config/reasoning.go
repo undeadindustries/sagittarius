@@ -66,7 +66,7 @@ func ModelReasoningRule(wireFormat WireFormat, model string) (profile ReasoningP
 		if isGeminiLevelFamily(m) || strings.Contains(m, "gemini-2.5") {
 			return ReasoningProfile{
 				Mechanism:       ReasoningMechanismGeminiDynamic,
-				ValidEfforts:    []string{"minimal", "low", "medium", "high"},
+				ValidEfforts:    geminiReasoningEfforts(m),
 				SupportsDynamic: true,
 			}, true
 		}
@@ -110,6 +110,17 @@ func ModelReasoningRule(wireFormat WireFormat, model string) (profile ReasoningP
 	default:
 		return ReasoningProfile{}, false
 	}
+}
+
+// geminiReasoningEfforts is the effort list offered for a Gemini model id
+// that has already been lowercased and stripped of a provider prefix.
+// Hydrogen adds xhigh. Every other Gemini family keeps the original four:
+// a level the model rejects is clamped on the wire, not hidden here.
+func geminiReasoningEfforts(model string) []string {
+	if strings.Contains(model, "gemini-4-hydrogen") {
+		return []string{"minimal", "low", "medium", "high", "xhigh"}
+	}
+	return []string{"minimal", "low", "medium", "high"}
 }
 
 // ReasoningResolution is the resolved reasoning request for one round,

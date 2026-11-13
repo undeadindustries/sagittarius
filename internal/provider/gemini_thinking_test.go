@@ -335,6 +335,30 @@ func TestBuildGenerateContentConfigLevelClampingGemini3(t *testing.T) {
 			effort:    "minimal",
 			wantLevel: genai.ThinkingLevelMinimal,
 		},
+		{
+			name:      "hydrogen minimal clamps to low",
+			model:     "gemini-4-hydrogen",
+			effort:    "minimal",
+			wantLevel: genai.ThinkingLevelLow,
+		},
+		{
+			name:      "hydrogen xhigh passes through",
+			model:     "models/gemini-4-hydrogen",
+			effort:    "xhigh",
+			wantLevel: geminiThinkingLevelXHigh,
+		},
+		{
+			name:      "carbon xhigh clamps to high",
+			model:     "gemini-4-carbon",
+			effort:    "xhigh",
+			wantLevel: genai.ThinkingLevelHigh,
+		},
+		{
+			name:      "argon medium preserved",
+			model:     "gemini-4-argon",
+			effort:    "medium",
+			wantLevel: genai.ThinkingLevelMedium,
+		},
 	}
 
 	for _, tc := range tests {

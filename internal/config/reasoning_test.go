@@ -21,6 +21,8 @@ func TestModelReasoningRule(t *testing.T) {
 		{"gemini-3 dynamic", WireFormatGemini, "gemini-3-pro", true, ReasoningMechanismGeminiDynamic, true, false, []string{"minimal", "low", "medium", "high"}},
 		{"gemini-3.8 dynamic", WireFormatGemini, "gemini-3.8-flash", true, ReasoningMechanismGeminiDynamic, true, false, []string{"minimal", "low", "medium", "high"}},
 		{"gemini-4 future dynamic", WireFormatGemini, "gemini-4-flash", true, ReasoningMechanismGeminiDynamic, true, false, []string{"minimal", "low", "medium", "high"}},
+		{"gemini-4-hydrogen adds xhigh", WireFormatGemini, "models/gemini-4-hydrogen", true, ReasoningMechanismGeminiDynamic, true, false, []string{"minimal", "low", "medium", "high", "xhigh"}},
+		{"gemini-4-carbon keeps the shared list", WireFormatGemini, "gemini-4-carbon", true, ReasoningMechanismGeminiDynamic, true, false, []string{"minimal", "low", "medium", "high"}},
 		{"gemini-2.5 dynamic", WireFormatGemini, "models/gemini-2.5-flash", true, ReasoningMechanismGeminiDynamic, true, false, []string{"minimal", "low", "medium", "high"}},
 		{"gemini-1.5 unmatched", WireFormatGemini, "gemini-1.5-pro", false, ReasoningMechanismNone, false, false, nil},
 		{"gpt-5-pro mandatory", WireFormatOpenAIResponses, "gpt-5-pro", true, ReasoningMechanismFixedEffort, false, true, []string{"high"}},
