@@ -34,6 +34,8 @@ func finishHint(reason string) string {
 		return "It stopped because the output resembled existing text; ask it to paraphrase or describe the code instead of quoting it verbatim."
 	case lower == "max_tokens" || lower == "length":
 		return "It hit the output limit; ask it to continue."
+	case lower == "malformed_response":
+		return "The provider returned a garbled reply. Send the message again."
 	case lower == "malformed_function_call" || lower == "unexpected_tool_call":
 		return "The model produced an invalid tool call; retry the request."
 	case lower == "safety" || lower == "content_filter" || lower == "blocklist" ||
@@ -42,6 +44,19 @@ func finishHint(reason string) string {
 		return "A provider content filter blocked it; rephrase the request."
 	default:
 		return "Ask it to continue or rephrase the request."
+	}
+}
+
+// IsTransientFinish reports whether reason is an unparsable model output that
+// a resend of the same request often clears. Gemini returns these as HTTP 200
+// with an empty candidate, and the same history succeeds on a later attempt.
+// MALFORMED_RESPONSE is a raw API string: no genai SDK version names it.
+func IsTransientFinish(reason string) bool {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "malformed_response", "malformed_function_call":
+		return true
+	default:
+		return false
 	}
 }
 

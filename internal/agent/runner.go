@@ -52,6 +52,20 @@ const emptySummaryNudge = "Your last reply was empty. In a few sentences, summar
 // nudge. The work is done, so this is information, not an error.
 const emptySummaryNotice = "The model finished without a summary. The tool results above show what it did."
 
+// maxTransientFinishRetries is how many times a turn resends a request that
+// ended in a transient finish (MALFORMED_RESPONSE, MALFORMED_FUNCTION_CALL)
+// with no text and no tool call. Two covers the usual one-shot glitch without
+// burning a long agent history on a stuck model.
+const maxTransientFinishRetries = 2
+
+// transientFinishBackoffFirst and transientFinishBackoffSecond space those
+// resends. The failure is random on Google's side, so a short pause is enough
+// and a second, longer one covers a brief blip.
+const (
+	transientFinishBackoffFirst  = 500 * time.Millisecond
+	transientFinishBackoffSecond = time.Second
+)
+
 const requestBudgetDroppedFmt = "Context exceeded the model window. Dropped %d oldest messages to continue; /clear starts fresh."
 
 // State is the runner lifecycle phase for one user turn.
@@ -1236,6 +1250,7 @@ func (r *Runner) runAgentLoop(ctx context.Context, userInput string, out chan<- 
 	// disables the budget for exactly that round, so a cut can never be
 	// followed immediately by another; a normal round clears it again.
 	thinkingCutPending := false
+	transientFinishRetries := 0
 
 	emit := func(ev ui.StreamEvent) {
 		select {
@@ -1365,6 +1380,16 @@ outerLoop:
 				r.verboseLog.LogError(streamErr)
 				return
 			}
+			retry, stopped := r.retryTransientFinish(ctx, out, req, res, currentProvider, currentModel, currentMode, round, &transientFinishRetries)
+			if stopped {
+				return
+			}
+			if retry {
+				// Same as a thinking-budget cut: this round produced no answer,
+				// so it must not consume a maxToolRounds slot.
+				round--
+				continue
+			}
 			// A round that completed normally re-arms the budget: the cut is
 			// latched only against an immediate second cut, which is what could
 			// otherwise loop, not against protecting later rounds in the turn.
@@ -1469,6 +1494,10 @@ outerLoop:
 			if len(toolCalls) == 0 {
 				if strings.TrimSpace(modelText) == "" && !hadReasoning {
 					switch {
+					case !toolsRan && res.FinishReason != "":
+						// FinishNotice already named the stop. The context-window
+						// line is a guess for a silent 200, and it is wrong when
+						// the provider said the reply was malformed or filtered.
 					case !toolsRan:
 						out <- ui.StreamEvent{Type: ui.StreamError, Text: emptyModelReplyMsg}
 						r.setState(StateDone)
@@ -2504,6 +2533,62 @@ type streamResult struct {
 	// no content, which hides tok/s for a single buffered reply.
 	FirstChunkAt time.Time
 	LastChunkAt  time.Time
+}
+
+// retryTransientFinish reports whether a round that produced no text and no
+// tool call should be sent again. retry is true after the backoff, so the
+// caller reruns the round. stopped is true when ctx ends during that wait;
+// the turn must end without recording the empty reply.
+func (r *Runner) retryTransientFinish(
+	ctx context.Context,
+	out chan<- ui.StreamEvent,
+	req *provider.GenerateRequest,
+	res streamResult,
+	providerID, model, mode string,
+	round int,
+	retries *int,
+) (retry, stopped bool) {
+	if !provider.IsTransientFinish(res.FinishReason) ||
+		strings.TrimSpace(res.Text) != "" ||
+		len(res.ToolCalls) != 0 ||
+		*retries >= maxTransientFinishRetries ||
+		ctx.Err() != nil {
+		return false, false
+	}
+	*retries++
+	if r.sessionRecorder != nil {
+		r.sessionRecorder.RecordEvent("transient_finish_retry", map[string]any{
+			"round":   round,
+			"reason":  res.FinishReason,
+			"attempt": *retries,
+		})
+	}
+	r.recordAbortedRoundUsage(req, providerID, model, mode, res.Reasoning)
+	notice := ui.StreamEvent{
+		Type: ui.StreamInfo,
+		Text: fmt.Sprintf("Gemini sent back a malformed reply. Retrying (%d/%d).", *retries, maxTransientFinishRetries),
+	}
+	select {
+	case <-ctx.Done():
+		return false, true
+	case out <- notice:
+	}
+	timer := time.NewTimer(transientFinishBackoff(*retries))
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false, true
+	case <-timer.C:
+		return true, false
+	}
+}
+
+// transientFinishBackoff returns the pause before retry attempt n (1-based).
+func transientFinishBackoff(attempt int) time.Duration {
+	if attempt <= 1 {
+		return transientFinishBackoffFirst
+	}
+	return transientFinishBackoffSecond
 }
 
 // consumeStream drains one provider stream, forwarding UI events as it goes

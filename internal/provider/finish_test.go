@@ -26,6 +26,7 @@ func TestFinishNotice(t *testing.T) {
 		{"content filter", "content_filter", []string{"content_filter", "content filter"}},
 		{"prompt blocked", "PROMPT_BLOCKED_SAFETY", []string{"PROMPT_BLOCKED_SAFETY", "content filter"}},
 		{"malformed call", "MALFORMED_FUNCTION_CALL", []string{"MALFORMED_FUNCTION_CALL", "tool call"}},
+		{"malformed response", "MALFORMED_RESPONSE", []string{"MALFORMED_RESPONSE", "garbled"}},
 		{"unknown reason is still named", "SOMETHING_NEW", []string{"SOMETHING_NEW"}},
 	}
 	for _, tt := range tests {
@@ -42,6 +43,29 @@ func TestFinishNotice(t *testing.T) {
 
 	if got := FinishNotice(""); got != "" {
 		t.Errorf("FinishNotice(\"\") = %q, want empty (a normal finish is silent)", got)
+	}
+}
+
+func TestIsTransientFinish(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		reason string
+		want   bool
+	}{
+		{"MALFORMED_RESPONSE", true},
+		{"malformed_response", true},
+		{" MALFORMED_FUNCTION_CALL ", true},
+		{"RECITATION", false},
+		{"MAX_TOKENS", false},
+		{"SAFETY", false},
+		{"", false},
+		{"unexpected_tool_call", false},
+	}
+	for _, tt := range tests {
+		if got := IsTransientFinish(tt.reason); got != tt.want {
+			t.Errorf("IsTransientFinish(%q) = %v, want %v", tt.reason, got, tt.want)
+		}
 	}
 }
 
