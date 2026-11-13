@@ -178,6 +178,35 @@ func TestMissingParamErrorWithNoArgs(t *testing.T) {
 	}
 }
 
+// The scheduler stamps a private call id onto the args the tool sees. That
+// map must not be the caller's: history replays the caller's map to the model.
+func TestSchedulerCallIDDoesNotMutateCallerArgs(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	ws, err := NewWorkspace(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduler := NewScheduler(NewBuiltinRegistry(ws), Policy{Mode: ApprovalYolo}, false, nil, ws)
+	// Canonical keys: NormalizeToolArgs returns this map unchanged, so a write
+	// into it would be the leak. Aliased keys already get a clone.
+	args := map[string]any{"file_path": "plain.txt", "content": "kept\n"}
+	calls := []provider.ToolCall{{
+		ID:   "call_keep",
+		Name: WriteFileToolName,
+		Args: args,
+	}}
+	if _, err := scheduler.Execute(context.Background(), calls, func(ui.StreamEvent) {}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if _, ok := args[provider.InternalCallIDArg]; ok {
+		t.Fatalf("caller args gained %s: %#v", provider.InternalCallIDArg, args)
+	}
+	if args["file_path"] != "plain.txt" || args["content"] != "kept\n" {
+		t.Fatalf("caller args changed: %#v", args)
+	}
+}
+
 // End to end through the scheduler: the gates, confirm preview, and the tool
 // itself all read canonical keys, so a Qwen-shaped call must write the file.
 func TestSchedulerWritesFileFromAliasedArgs(t *testing.T) {

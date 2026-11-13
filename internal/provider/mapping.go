@@ -42,7 +42,7 @@ func partsToGenai(parts []Part) []*genai.Part {
 		case part.FunctionCall != nil:
 			gp = genai.NewPartFromFunctionCall(
 				part.FunctionCall.Name,
-				part.FunctionCall.Args,
+				withoutInternalCallID(part.FunctionCall.Args),
 			)
 			if part.FunctionCall.ID != "" && gp.FunctionCall != nil {
 				gp.FunctionCall.ID = part.FunctionCall.ID

@@ -33,6 +33,27 @@ func TestThoughtSignatureRoundTrip(t *testing.T) {
 	}
 }
 
+func TestGeminiWireDropsInternalCallID(t *testing.T) {
+	t.Parallel()
+
+	args := map[string]any{"path": "a", InternalCallIDArg: "call_9"}
+	parts := partsToGenai([]Part{{
+		FunctionCall: &ToolCall{ID: "call_9", Name: "list_directory", Args: args},
+	}})
+	if len(parts) != 1 || parts[0].FunctionCall == nil {
+		t.Fatalf("parts = %#v", parts)
+	}
+	if _, ok := parts[0].FunctionCall.Args[InternalCallIDArg]; ok {
+		t.Fatalf("wire args = %#v, want %s omitted", parts[0].FunctionCall.Args, InternalCallIDArg)
+	}
+	if parts[0].FunctionCall.Args["path"] != "a" {
+		t.Fatalf("path = %#v, want a", parts[0].FunctionCall.Args["path"])
+	}
+	if args[InternalCallIDArg] != "call_9" {
+		t.Fatalf("history args mutated: %#v", args)
+	}
+}
+
 // TestThoughtSignatureParallelCalls verifies that for parallel function calls
 // only the first part carries a signature (Gemini's contract) and both calls
 // survive the conversion.

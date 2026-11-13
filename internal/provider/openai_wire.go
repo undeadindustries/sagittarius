@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"regexp"
 	"strings"
 
@@ -291,6 +292,23 @@ func functionMatchToToolCall(funcName, paramsBody string, idIndex int) openAIToo
 	}
 }
 
+// InternalCallIDArg is the scheduler's private key on a tool-call args map.
+// Tools read it to learn their own call id. It is not a model parameter, so
+// every wire conversion drops it. Leaving it in replayed history teaches the
+// model to emit the key on later calls.
+const InternalCallIDArg = "_call_id"
+
+// withoutInternalCallID returns args without InternalCallIDArg. The input map
+// is left unchanged so history keeps the key for in-process tools.
+func withoutInternalCallID(args map[string]any) map[string]any {
+	if _, ok := args[InternalCallIDArg]; !ok {
+		return args
+	}
+	out := maps.Clone(args)
+	delete(out, InternalCallIDArg)
+	return out
+}
+
 // emptyToolCallArguments is the wire value for a tool call carrying no
 // arguments. Gemini-native history stores a no-argument call with a nil Args
 // map, and json.Marshal of a nil map is the literal "null", which strict
@@ -304,6 +322,7 @@ const emptyToolCallArguments = "{}"
 // the request stays well formed; a marshal failure is logged rather than
 // discarded.
 func marshalToolCallArgs(args map[string]any) string {
+	args = withoutInternalCallID(args)
 	if len(args) == 0 {
 		return emptyToolCallArguments
 	}

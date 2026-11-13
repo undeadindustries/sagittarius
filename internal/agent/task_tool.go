@@ -24,7 +24,7 @@ func callIDFromArgs(args map[string]any) string {
 	if args == nil {
 		return ""
 	}
-	if id, ok := args["_call_id"].(string); ok {
+	if id, ok := args[provider.InternalCallIDArg].(string); ok {
 		return id
 	}
 	return ""

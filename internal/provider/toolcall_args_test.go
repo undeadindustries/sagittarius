@@ -76,6 +76,49 @@ func TestNoArgToolCallSerializesAsObject(t *testing.T) {
 	})
 }
 
+func TestInternalCallIDStrippedOnBothWirePaths(t *testing.T) {
+	t.Parallel()
+
+	const want = `{"file_path":"main.go"}`
+	original := map[string]any{"file_path": "main.go", InternalCallIDArg: "call_1"}
+	history := []Message{
+		{Role: RoleModel, Parts: []Part{{FunctionCall: &ToolCall{
+			ID:   "call_1",
+			Name: "read_file",
+			Args: original,
+		}}}},
+		{Role: RoleUser, Parts: []Part{{FunctionResponse: &FunctionResponse{
+			CallID: "call_1", Name: "read_file", Response: map[string]any{"output": "package main"},
+		}}}},
+	}
+
+	msgs := MessagesToOpenAIMessages(history, "gpt-4o")
+	for _, m := range msgs {
+		for _, tc := range m.ToolCalls {
+			if tc.Function.Arguments != want {
+				t.Fatalf("openai-chat arguments = %q, want %q", tc.Function.Arguments, want)
+			}
+		}
+	}
+	plan := BuildResponsesRequestPlan(&GenerateRequest{Messages: history}, false)
+	found := false
+	for _, item := range plan.Input {
+		if item.Type != "function_call" {
+			continue
+		}
+		found = true
+		if item.Arguments != want {
+			t.Fatalf("openai-responses arguments = %q, want %q", item.Arguments, want)
+		}
+	}
+	if !found {
+		t.Fatal("openai-responses: no function_call in plan input")
+	}
+	if original[InternalCallIDArg] != "call_1" {
+		t.Fatalf("history args mutated: %#v", original)
+	}
+}
+
 func TestToolCallArgsPreservedOnBothWirePaths(t *testing.T) {
 	t.Parallel()
 

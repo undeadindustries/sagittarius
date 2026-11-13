@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -564,7 +565,10 @@ func (s *Scheduler) executeOne(
 	// and history all see one set of names.
 	args = NormalizeToolArgs(name, args)
 	if id != "" {
-		args["_call_id"] = id
+		// The call's map is the one stored in history. Clone before adding
+		// the private id so replay does not show the model a fake parameter.
+		args = maps.Clone(args)
+		args[provider.InternalCallIDArg] = id
 	}
 	call.Args = args
 
