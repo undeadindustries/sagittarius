@@ -1,7 +1,7 @@
 # Sagittarius — build and quality targets
 
 GO ?= go
-GO_VERSION := 1.26.10
+GO_VERSION := 1.27.4
 # Pin the toolchain to match go.mod for reproducible builds (local + CI).
 # go(1) auto-downloads this version if the system Go is older.
 export GOTOOLCHAIN := go$(GO_VERSION)
@@ -9,7 +9,7 @@ export GOTOOLCHAIN := go$(GO_VERSION)
 GOPATH := $(shell $(GO) env GOPATH)
 export PATH := $(GOPATH)/bin:$(PATH)
 
-GOLANGCI_LINT := github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2
+GOLANGCI_LINT := github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
 GOVULNCHECK := golang.org/x/vuln/cmd/govulncheck@latest
 
 BIN_DIR := bin
