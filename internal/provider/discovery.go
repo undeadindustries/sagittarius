@@ -49,17 +49,32 @@ func DiscoverModels(
 	bearer string,
 	client *http.Client,
 ) []ModelInfo {
+	infos, err := DiscoverModelsWithError(ctx, baseURL, bearer, client)
+	if err != nil {
+		return nil
+	}
+	return infos
+}
+
+// DiscoverModelsWithError queries GET {baseUrl}/v1/models and returns an
+// actionable error on transport failure, non-2xx HTTP status, or bad JSON.
+func DiscoverModelsWithError(
+	ctx context.Context,
+	baseURL string,
+	bearer string,
+	client *http.Client,
+) ([]ModelInfo, error) {
 	if client == nil {
 		client = &http.Client{Timeout: defaultDiscoveryTimeout}
 	}
-	url := ModelsURL(baseURL)
+	modelsURL := ModelsURL(baseURL)
 
 	reqCtx, cancel := context.WithTimeout(ctx, defaultDiscoveryTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, modelsURL, nil)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("create models request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
 	if bearer != "" {
@@ -68,20 +83,25 @@ func DiscoverModels(
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil
+		return nil, mapHTTPTransportError(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil
+		preview := readBodyPreview(resp.Body, 512)
+		msg := extractHTTPErrorMessage(preview)
+		if msg != "" {
+			return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, msg)
+		}
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("read models response: %w", err)
 	}
 	var payload openAIModelsResponse
 	if err := json.Unmarshal(stripBOM(raw), &payload); err != nil {
-		return nil
+		return nil, fmt.Errorf("decode models response: %w", err)
 	}
 
 	out := make([]ModelInfo, 0, len(payload.Data))
@@ -97,7 +117,7 @@ func DiscoverModels(
 		out = append(out, ModelInfo{ID: id, ContextLimit: limit, Reasoning: reasoningInfoFromWire(entry.Reasoning)})
 	}
 	sortModelInfos(out)
-	return out
+	return out, nil
 }
 
 // reasoningInfoFromWire converts the OpenRouter wire reasoning object into the

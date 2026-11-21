@@ -4,10 +4,37 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/undeadindustries/sagittarius/internal/config"
 )
+
+func TestDiscoverModelsWithErrorSurfacesHTTPFailure(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	infos, err := DiscoverModelsWithError(context.Background(), srv.URL+"/v1/chat/completions", "bad", srv.Client())
+	if err == nil {
+		t.Fatal("expected error for HTTP 401")
+	}
+	if len(infos) != 0 {
+		t.Fatalf("infos = %#v, want nil", infos)
+	}
+	if !strings.Contains(err.Error(), "HTTP 401") || !strings.Contains(err.Error(), "invalid x-api-key") {
+		t.Fatalf("err = %q, want HTTP 401 and invalid x-api-key", err.Error())
+	}
+
+	// Best-effort wrapper keeps returning nil on failure.
+	if got := DiscoverModels(context.Background(), srv.URL+"/v1/chat/completions", "bad", srv.Client()); got != nil {
+		t.Fatalf("DiscoverModels = %#v, want nil", got)
+	}
+}
 
 func TestDiscoverModelsParsesContextLength(t *testing.T) {
 	t.Parallel()

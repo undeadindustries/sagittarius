@@ -13,7 +13,7 @@ import (
 func postSSE(ctx context.Context, client *http.Client, url, bearer string, body []byte) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("create openai request: %w", err)
+		return nil, fmt.Errorf("create provider request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
@@ -22,7 +22,7 @@ func postSSE(ctx context.Context, client *http.Client, url, bearer string, body 
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, mapOpenAITransportError(err)
+		return nil, mapHTTPTransportError(err)
 	}
 	return resp, nil
 }

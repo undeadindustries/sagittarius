@@ -40,7 +40,7 @@ func (e *StallError) Error() string {
 }
 
 // stallFixHint tells the user where the budget lives. /providers edits it for
-// OpenAI-style providers; settings.json works for every provider.
+// compatible providers; settings.json works for every provider.
 const stallFixHint = "set providers.%s.%s (seconds) in /providers or ~/.sagittarius/settings.json. 0 means no timeout."
 
 func (e *StallError) Unwrap() error { return e.Kind }

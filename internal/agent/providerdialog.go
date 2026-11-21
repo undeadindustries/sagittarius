@@ -273,19 +273,15 @@ func (d *providerDialogDeps) DiscoverModels(ctx context.Context, id string) ([]s
 	if err != nil {
 		return nil, err
 	}
-	if endpoint.WireFormat == config.WireFormatGemini {
-		infos, err := discoverModelInfos(ctx, d.settings(), id)
-		if err != nil {
-			return nil, err
-		}
-		return modelIDsFromInfos(infos), nil
-	}
-	if endpoint.BaseURL == "" {
+	if endpoint.WireFormat != config.WireFormatGemini && endpoint.BaseURL == "" {
 		return nil, fmt.Errorf("provider %q has no endpoint URL to query", config.ProviderDisplayID(id))
 	}
 	infos, err := discoverModelInfos(ctx, d.settings(), id)
 	if err != nil {
-		return nil, err
+		if strings.Contains(strings.ToLower(err.Error()), "not scoped to a workspace") {
+			return nil, fmt.Errorf("discover models from %s: %w (set workspace id wrkspc_... in provider settings)", config.ProviderDisplayID(id), err)
+		}
+		return nil, fmt.Errorf("discover models from %s: %w", config.ProviderDisplayID(id), err)
 	}
 	models := modelIDsFromInfos(infos)
 	if len(models) == 0 {
@@ -295,8 +291,8 @@ func (d *providerDialogDeps) DiscoverModels(ctx context.Context, id string) ([]s
 }
 
 // discoverModelInfos resolves a provider's endpoint and queries it for the model
-// list (including context limits). It is best-effort for the non-Gemini path and
-// surfaces the Gemini error so callers can report a missing key.
+// list (including context limits). Callers that do best-effort background cache
+// fills ignore the returned error; interactive discovery surfaces it.
 func discoverModelInfos(ctx context.Context, settings *config.Settings, id string) ([]provider.ModelInfo, error) {
 	endpoint, err := provider.ResolveEndpointForProvider(settings, id)
 	if err != nil {
@@ -319,7 +315,7 @@ func discoverModelInfos(ctx context.Context, settings *config.Settings, id strin
 	if endpoint.BaseURL == "" {
 		return nil, nil
 	}
-	return provider.DiscoverModels(ctx, endpoint.BaseURL, resolveBearer(), nil), nil
+	return provider.DiscoverModelsWithError(ctx, endpoint.BaseURL, resolveBearer(), nil)
 }
 
 // reasoningDiscoveryApplies reports whether activation-time catalog discovery

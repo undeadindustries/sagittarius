@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -19,6 +20,12 @@ var ErrModelNotFound = errors.New("model not found")
 
 // ErrContextOverflow indicates the request exceeded the provider's context window.
 var ErrContextOverflow = errors.New("context length exceeded")
+
+// ErrProviderOverloaded indicates the provider returned HTTP 529 or an overload error.
+var ErrProviderOverloaded = errors.New("provider overloaded")
+
+// ErrPayloadTooLarge indicates the provider rejected the request with HTTP 413.
+var ErrPayloadTooLarge = errors.New("request payload too large")
 
 // IsContextOverflow reports whether err indicates the request exceeded the
 // provider's context window.
@@ -122,8 +129,8 @@ func mapAPIError(apiErr genai.APIError) error {
 	return fmt.Errorf("gemini api error (%d): %w", apiErr.Code, apiErr)
 }
 
-func mapOpenAIHTTPError(status int, body string) error {
-	msg := strings.TrimSpace(body)
+func mapHTTPError(status int, body string) error {
+	msg := extractHTTPErrorMessage(body)
 	lower := strings.ToLower(msg)
 	switch status {
 	case 401, 403:
@@ -136,11 +143,24 @@ func mapOpenAIHTTPError(status int, body string) error {
 			msg = "the requested model was not found"
 		}
 		return fmt.Errorf("%w: %s", ErrModelNotFound, msg)
+	case 413:
+		if msg == "" {
+			msg = "request payload too large"
+		}
+		if isOverflowMessage(lower) {
+			return fmt.Errorf("%w: %s", ErrContextOverflow, msg)
+		}
+		return fmt.Errorf("%w: %s", ErrPayloadTooLarge, msg)
 	case 429:
 		if msg == "" {
 			msg = "quota or rate limit exceeded"
 		}
 		return fmt.Errorf("%w: %s", ErrQuotaExceeded, msg)
+	case 529:
+		if msg == "" {
+			msg = "provider is temporarily overloaded"
+		}
+		return fmt.Errorf("%w: %s", ErrProviderOverloaded, msg)
 	}
 	if strings.Contains(lower, "invalid api key") || strings.Contains(lower, "incorrect api key") {
 		return fmt.Errorf("%w: %s", ErrInvalidAPIKey, msg)
@@ -149,12 +169,12 @@ func mapOpenAIHTTPError(status int, body string) error {
 		return fmt.Errorf("%w: %s", ErrContextOverflow, msg)
 	}
 	if msg != "" {
-		return fmt.Errorf("openai request failed (HTTP %d): %s", status, msg)
+		return fmt.Errorf("provider request failed (HTTP %d): %s", status, msg)
 	}
-	return fmt.Errorf("openai request failed: HTTP %d", status)
+	return fmt.Errorf("provider request failed: HTTP %d", status)
 }
 
-func mapOpenAITransportError(err error) error {
+func mapHTTPTransportError(err error) error {
 	if err == nil {
 		return nil
 	}
@@ -166,6 +186,35 @@ func mapOpenAITransportError(err error) error {
 		strings.Contains(msg, "deadline exceeded"):
 		return fmt.Errorf("cannot reach provider endpoint: %w", err)
 	default:
-		return fmt.Errorf("openai request failed: %w", err)
+		return fmt.Errorf("provider request failed: %w", err)
 	}
+}
+
+// extractHTTPErrorMessage pulls a concise error message from common JSON API
+// error envelopes ({error: {message}}, {message}, {detail}) and falls back to
+// the trimmed body when the response is plain text or unparseable.
+func extractHTTPErrorMessage(body string) string {
+	trimmed := strings.TrimSpace(body)
+	if trimmed == "" || !strings.HasPrefix(trimmed, "{") {
+		return trimmed
+	}
+	var env struct {
+		Error *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+		Message string `json:"message"`
+		Detail  string `json:"detail"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &env); err == nil {
+		if env.Error != nil && strings.TrimSpace(env.Error.Message) != "" {
+			return strings.TrimSpace(env.Error.Message)
+		}
+		if strings.TrimSpace(env.Message) != "" {
+			return strings.TrimSpace(env.Message)
+		}
+		if strings.TrimSpace(env.Detail) != "" {
+			return strings.TrimSpace(env.Detail)
+		}
+	}
+	return trimmed
 }

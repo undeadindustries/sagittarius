@@ -2,6 +2,7 @@ package provider
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -70,7 +71,7 @@ func TestIsContextOverflowClassification(t *testing.T) {
 			if tc.err != nil {
 				err = tc.err
 			} else {
-				err = mapOpenAIHTTPError(tc.status, tc.body)
+				err = mapHTTPError(tc.status, tc.body)
 			}
 			got := IsContextOverflow(err)
 			if got != tc.wantOver {
@@ -78,6 +79,64 @@ func TestIsContextOverflowClassification(t *testing.T) {
 			}
 			if tc.wantOver && !errors.Is(err, ErrContextOverflow) {
 				t.Errorf("expected error to wrap ErrContextOverflow, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestMapHTTPErrorStatusAndNeutralCopy(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		status    int
+		body      string
+		wantIs    error
+		wantSub   string
+		rejectSub string
+	}{
+		{
+			name:    "529 overloaded",
+			status:  529,
+			body:    `{"error":{"type":"overloaded_error","message":"Overloaded"}}`,
+			wantIs:  ErrProviderOverloaded,
+			wantSub: "Overloaded",
+		},
+		{
+			name:    "413 payload too large",
+			status:  413,
+			body:    `{"error":{"message":"request body exceeds limit"}}`,
+			wantIs:  ErrPayloadTooLarge,
+			wantSub: "exceeds limit",
+		},
+		{
+			name:    "413 with overflow phrasing wraps context overflow",
+			status:  413,
+			body:    `{"error":{"message":"prompt is too long: 210000 tokens"}}`,
+			wantIs:  ErrContextOverflow,
+			wantSub: "prompt is too long",
+		},
+		{
+			name:      "500 uses neutral provider copy",
+			status:    500,
+			body:      `{"error":{"message":"backend failure"}}`,
+			wantSub:   "provider request failed (HTTP 500): backend failure",
+			rejectSub: "openai",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := mapHTTPError(tc.status, tc.body)
+			if tc.wantIs != nil && !errors.Is(err, tc.wantIs) {
+				t.Fatalf("err = %v, want errors.Is %v", err, tc.wantIs)
+			}
+			if tc.wantSub != "" && !strings.Contains(err.Error(), tc.wantSub) {
+				t.Fatalf("err = %q, want substring %q", err.Error(), tc.wantSub)
+			}
+			if tc.rejectSub != "" && strings.Contains(strings.ToLower(err.Error()), tc.rejectSub) {
+				t.Fatalf("err = %q, must not mention %q", err.Error(), tc.rejectSub)
 			}
 		})
 	}

@@ -205,7 +205,7 @@ func (g *OpenAIResponsesGenerator) streamOnce(ctx context.Context, body []byte, 
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		preview := readBodyPreview(resp.Body, 2048)
-		mapped := mapOpenAIHTTPError(resp.StatusCode, preview)
+		mapped := mapHTTPError(resp.StatusCode, preview)
 		if g.rejectedSummary(resp.StatusCode, preview) {
 			return &reasoningSummaryRejectedError{err: mapped}
 		}

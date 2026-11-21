@@ -160,7 +160,7 @@ func (g *OpenAIChatGenerator) streamOnce(
 	guard.headersReceived()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return mapOpenAIHTTPError(resp.StatusCode, readBodyPreview(resp.Body, 2048))
+		return mapHTTPError(resp.StatusCode, readBodyPreview(resp.Body, 2048))
 	}
 
 	contentType := resp.Header.Get("Content-Type")
@@ -197,7 +197,7 @@ func (g *OpenAIChatGenerator) retryNonStreaming(ctx context.Context, streamBody 
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return mapOpenAIHTTPError(resp.StatusCode, readBodyPreview(resp.Body, 2048))
+		return mapHTTPError(resp.StatusCode, readBodyPreview(resp.Body, 2048))
 	}
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
