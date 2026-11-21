@@ -3,6 +3,8 @@ package provider
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -13,6 +15,9 @@ const (
 	// AnthropicAPIVersion is the Messages/Models anthropic-version header sent
 	// on every native Anthropic request.
 	AnthropicAPIVersion = "2026-10-21"
+	// AnthropicThinkingBindingBeta enables thinking.block_binding controls so
+	// preserved thinking blocks survive legitimate system/mode prompt updates.
+	AnthropicThinkingBindingBeta = "thinking-binding-controls-2026-08-01"
 
 	anthropicDefaultMaxTokens          = 32_000
 	anthropicDefaultThinkingBudget     = 10_000
@@ -37,10 +42,15 @@ type anthropicTool struct {
 	InputSchema map[string]any `json:"input_schema"`
 }
 
+type anthropicBlockBinding struct {
+	PrefixMismatchBehavior string `json:"prefix_mismatch_behavior,omitempty"`
+}
+
 type anthropicThinkingConfig struct {
-	Type         string `json:"type"`
-	BudgetTokens int    `json:"budget_tokens,omitempty"`
-	Display      string `json:"display,omitempty"`
+	Type         string                 `json:"type"`
+	BudgetTokens int                    `json:"budget_tokens,omitempty"`
+	Display      string                 `json:"display,omitempty"`
+	BlockBinding *anthropicBlockBinding `json:"block_binding,omitempty"`
 }
 
 type anthropicOutputConfig struct {
@@ -97,7 +107,8 @@ type AnthropicPlanOptions struct {
 
 // AnthropicRequestPlan is the wire-ready Anthropic Messages payload.
 type AnthropicRequestPlan struct {
-	Body anthropicRequestBody
+	Body               anthropicRequestBody
+	IncludeBindingBeta bool
 }
 
 // BuildAnthropicRequestPlan translates a neutral GenerateRequest to an
@@ -127,7 +138,29 @@ func BuildAnthropicRequestPlan(req *GenerateRequest, opts AnthropicPlanOptions) 
 		tools = ToolDeclarationsToAnthropic(req.Tools)
 	}
 
+	wireMessages := messagesToAnthropicMessages(req.Messages, req.KeepReasoningHistory)
 	thinking, outputCfg := resolveAnthropicThinking(req, opts)
+	includeBindingBeta := false
+	if anthropicMessagesHaveThinking(wireMessages) {
+		if thinking != nil && thinking.Type == "disabled" {
+			// Anthropic forbids block_binding when thinking is disabled; strip
+			// thinking blocks on the outbound wire instead.
+			wireMessages = stripThinkingFromAnthropicMessages(wireMessages, 0)
+		} else {
+			if thinking == nil {
+				adaptive, enabled, _ := anthropicThinkingCapabilities(req.Model, opts.ThinkingTypes)
+				if adaptive {
+					thinking = &anthropicThinkingConfig{Type: "adaptive"}
+				} else if enabled {
+					thinking = &anthropicThinkingConfig{Type: "enabled", BudgetTokens: anthropicDefaultThinkingBudget}
+				}
+			}
+			if thinking != nil {
+				thinking.BlockBinding = &anthropicBlockBinding{PrefixMismatchBehavior: "drop_block"}
+				includeBindingBeta = true
+			}
+		}
+	}
 
 	maxTokens := opts.DefaultMaxTokens
 	if maxTokens <= 0 {
@@ -141,11 +174,12 @@ func BuildAnthropicRequestPlan(req *GenerateRequest, opts AnthropicPlanOptions) 
 	}
 
 	return AnthropicRequestPlan{
+		IncludeBindingBeta: includeBindingBeta,
 		Body: anthropicRequestBody{
 			Model:         req.Model,
 			MaxTokens:     maxTokens,
 			System:        systemBlocks,
-			Messages:      messagesToAnthropicMessages(req.Messages, req.KeepReasoningHistory),
+			Messages:      wireMessages,
 			Tools:         tools,
 			Stream:        true,
 			CacheControl:  &anthropicCacheControl{Type: anthropicCacheControlTypeEphemeral},
@@ -473,22 +507,30 @@ func anthropicToolResultIsError(resp map[string]any) bool {
 	return false
 }
 
+type anthropicInputTransformation struct {
+	Type   string `json:"type"`
+	Path   string `json:"path"`
+	Reason string `json:"reason"`
+}
+
 // AnthropicSseEvent models one JSON data payload from Anthropic /v1/messages SSE.
 type AnthropicSseEvent struct {
-	Type         string                `json:"type"`
-	Index        *int                  `json:"index,omitempty"`
-	Message      *anthropicSseMessage  `json:"message,omitempty"`
-	ContentBlock *anthropicSseBlock    `json:"content_block,omitempty"`
-	Delta        *anthropicSseDelta    `json:"delta,omitempty"`
-	Usage        *anthropicSseUsage    `json:"usage,omitempty"`
-	Error        *anthropicSseErrorObj `json:"error,omitempty"`
+	Type                 string                         `json:"type"`
+	Index                *int                           `json:"index,omitempty"`
+	Message              *anthropicSseMessage           `json:"message,omitempty"`
+	ContentBlock         *anthropicSseBlock             `json:"content_block,omitempty"`
+	Delta                *anthropicSseDelta             `json:"delta,omitempty"`
+	Usage                *anthropicSseUsage             `json:"usage,omitempty"`
+	InputTransformations []anthropicInputTransformation `json:"input_transformations,omitempty"`
+	Error                *anthropicSseErrorObj          `json:"error,omitempty"`
 }
 
 type anthropicSseMessage struct {
-	ID         string             `json:"id"`
-	Model      string             `json:"model"`
-	StopReason string             `json:"stop_reason"`
-	Usage      *anthropicSseUsage `json:"usage,omitempty"`
+	ID                   string                         `json:"id"`
+	Model                string                         `json:"model"`
+	StopReason           string                         `json:"stop_reason"`
+	Usage                *anthropicSseUsage             `json:"usage,omitempty"`
+	InputTransformations []anthropicInputTransformation `json:"input_transformations,omitempty"`
 }
 
 type anthropicSseBlock struct {
@@ -589,6 +631,7 @@ func MapAnthropicSseEvent(event AnthropicSseEvent, state *AnthropicSseMapperStat
 			if event.Message.StopReason != "" {
 				state.stopReason = event.Message.StopReason
 			}
+			logAnthropicInputTransformations(event.Message.InputTransformations)
 		}
 		return nil, nil
 
@@ -685,6 +728,7 @@ func MapAnthropicSseEvent(event AnthropicSseEvent, state *AnthropicSseMapperStat
 			state.stopReason = event.Delta.StopReason
 		}
 		state.applyUsage(event.Usage)
+		logAnthropicInputTransformations(event.InputTransformations)
 		return nil, nil
 
 	case "message_stop":
@@ -800,4 +844,84 @@ func parseAnthropicToolArgs(blk *anthropicAccumBlock) map[string]any {
 		return blk.seedInput
 	}
 	return map[string]any{}
+}
+
+func anthropicMessagesHaveThinking(msgs []anthropicMessage) bool {
+	for _, m := range msgs {
+		for _, blk := range m.Content {
+			if blk.Type == "thinking" || blk.Type == "redacted_thinking" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func stripThinkingFromAnthropicMessages(msgs []anthropicMessage, fromIndex int) []anthropicMessage {
+	if fromIndex < 0 {
+		fromIndex = 0
+	}
+	out := make([]anthropicMessage, 0, len(msgs))
+	for i, m := range msgs {
+		if i < fromIndex {
+			out = append(out, m)
+			continue
+		}
+		filtered := make([]anthropicContentBlock, 0, len(m.Content))
+		for _, blk := range m.Content {
+			if blk.Type == "thinking" || blk.Type == "redacted_thinking" {
+				continue
+			}
+			filtered = append(filtered, blk)
+		}
+		if len(filtered) > 0 {
+			out = append(out, anthropicMessage{Role: m.Role, Content: filtered})
+		}
+	}
+	return out
+}
+
+func logAnthropicInputTransformations(transforms []anthropicInputTransformation) {
+	for _, t := range transforms {
+		slog.Debug("anthropic input transformation", "type", t.Type, "path", t.Path, "reason", t.Reason)
+	}
+}
+
+var anthropicMsgIndexRE = regexp.MustCompile(`messages\.(\d+)`)
+
+func isAnthropicThinkingBindingError(status int, body string) bool {
+	if status != 400 {
+		return false
+	}
+	lower := strings.ToLower(body)
+	return strings.Contains(lower, "thinking") &&
+		(strings.Contains(lower, "signature") ||
+			strings.Contains(lower, "bound to a different conversation") ||
+			strings.Contains(lower, "block_binding") ||
+			strings.Contains(lower, "thinking-binding-controls") ||
+			strings.Contains(lower, "cannot be modified"))
+}
+
+func stripAnthropicThinkingForFallback(plan AnthropicRequestPlan, errBody string) (AnthropicRequestPlan, bool) {
+	fromIdx := 0
+	if m := anthropicMsgIndexRE.FindStringSubmatch(errBody); len(m) == 2 {
+		if n, err := strconv.Atoi(m[1]); err == nil && n >= 0 {
+			fromIdx = n
+		}
+	}
+	stripped := stripThinkingFromAnthropicMessages(plan.Body.Messages, fromIdx)
+	// Also drop BlockBinding + beta header in case a proxy rejected block_binding.
+	hadBinding := plan.IncludeBindingBeta || (plan.Body.Thinking != nil && plan.Body.Thinking.BlockBinding != nil)
+	hadThinking := anthropicMessagesHaveThinking(plan.Body.Messages)
+	if !hadBinding && !hadThinking {
+		return plan, false
+	}
+	plan.Body.Messages = stripped
+	if plan.Body.Thinking != nil && plan.Body.Thinking.BlockBinding != nil {
+		tc := *plan.Body.Thinking
+		tc.BlockBinding = nil
+		plan.Body.Thinking = &tc
+	}
+	plan.IncludeBindingBeta = false
+	return plan, true
 }

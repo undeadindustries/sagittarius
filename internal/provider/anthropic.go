@@ -103,7 +103,7 @@ func (g *AnthropicGenerator) GenerateContentStream(
 	if req.Model != "" {
 		model = req.Model
 	}
-	body, err := g.buildRequestBody(req, model)
+	plan, body, err := g.buildRequestPlan(req, model)
 	if err != nil {
 		return nil, fmt.Errorf("encode anthropic request: %w", err)
 	}
@@ -111,7 +111,7 @@ func (g *AnthropicGenerator) GenerateContentStream(
 	ch := make(chan StreamResponse)
 	go func() {
 		defer close(ch)
-		if err := g.streamWithRetry(ctx, body, ch); err != nil {
+		if err := g.streamWithRetry(ctx, plan, body, ch); err != nil {
 			sendOrDone(ctx, ch, StreamResponse{Error: err})
 		}
 	}()
@@ -127,7 +127,7 @@ func (g *AnthropicGenerator) DebugWireRequest(req *GenerateRequest) ([]byte, err
 	if req.Model != "" {
 		model = req.Model
 	}
-	body, err := g.buildRequestBody(req, model)
+	_, body, err := g.buildRequestPlan(req, model)
 	if err != nil {
 		return nil, err
 	}
@@ -138,7 +138,7 @@ func (g *AnthropicGenerator) DebugWireRequest(req *GenerateRequest) ([]byte, err
 	return pretty.Bytes(), nil
 }
 
-func (g *AnthropicGenerator) buildRequestBody(req *GenerateRequest, model string) ([]byte, error) {
+func (g *AnthropicGenerator) buildRequestPlan(req *GenerateRequest, model string) (AnthropicRequestPlan, []byte, error) {
 	cloned := *req
 	cloned.Model = model
 	plan := BuildAnthropicRequestPlan(&cloned, AnthropicPlanOptions{
@@ -148,14 +148,32 @@ func (g *AnthropicGenerator) buildRequestBody(req *GenerateRequest, model string
 		ThinkingTypes:        g.thinkingTypes,
 		SupportedEfforts:     g.supportedEfforts,
 	})
-	return json.Marshal(plan.Body)
+	body, err := json.Marshal(plan.Body)
+	return plan, body, err
 }
 
-func (g *AnthropicGenerator) streamWithRetry(ctx context.Context, body []byte, ch chan<- StreamResponse) error {
+func (g *AnthropicGenerator) streamWithRetry(ctx context.Context, plan AnthropicRequestPlan, body []byte, ch chan<- StreamResponse) error {
+	fallbackUsed := false
 	for attempt := 0; ; attempt++ {
-		retryAfter, retryable, err := g.streamOnce(ctx, body, ch)
+		beta := ""
+		if plan.IncludeBindingBeta {
+			beta = AnthropicThinkingBindingBeta
+		}
+		retryAfter, retryable, thinkingErrBody, err := g.streamOnce(ctx, body, beta, ch)
 		if err == nil {
 			return nil
+		}
+		if thinkingErrBody != "" && !fallbackUsed {
+			if nextPlan, changed := stripAnthropicThinkingForFallback(plan, thinkingErrBody); changed {
+				nextBody, mErr := json.Marshal(nextPlan.Body)
+				if mErr == nil {
+					plan = nextPlan
+					body = nextBody
+					fallbackUsed = true
+					attempt-- // fallback doesn't consume a 429/529 backoff slot
+					continue
+				}
+			}
 		}
 		if !retryable || attempt >= maxAnthropicPreStreamRetries {
 			return err
@@ -181,8 +199,9 @@ func (g *AnthropicGenerator) streamWithRetry(ctx context.Context, body []byte, c
 func (g *AnthropicGenerator) streamOnce(
 	ctx context.Context,
 	body []byte,
+	betaHeader string,
 	ch chan<- StreamResponse,
-) (retryAfter time.Duration, retryable bool, err error) {
+) (retryAfter time.Duration, retryable bool, thinkingErrBody string, err error) {
 	streamCtx := ctx
 	if g.timeout > 0 {
 		var cancel context.CancelFunc
@@ -195,9 +214,9 @@ func (g *AnthropicGenerator) streamOnce(
 	streamCtx = guard.ctx
 
 	guard.armConnect()
-	resp, err := postAnthropicSSE(streamCtx, g.client, g.url, g.bearer, g.workspaceID, body)
+	resp, err := postAnthropicSSE(streamCtx, g.client, g.url, g.bearer, g.workspaceID, betaHeader, body)
 	if err != nil {
-		return 0, false, err
+		return 0, false, "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	guard.headersReceived()
@@ -206,15 +225,18 @@ func (g *AnthropicGenerator) streamOnce(
 		preview := readBodyPreview(resp.Body, 2048)
 		mapped := mapHTTPError(resp.StatusCode, preview)
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode == 529 {
-			return parseRetryAfterHeader(resp.Header.Get("Retry-After")), true, mapped
+			return parseRetryAfterHeader(resp.Header.Get("Retry-After")), true, "", mapped
 		}
-		return 0, false, mapped
+		if isAnthropicThinkingBindingError(resp.StatusCode, preview) {
+			return 0, false, preview, mapped
+		}
+		return 0, false, "", mapped
 	}
 
 	contentType := resp.Header.Get("Content-Type")
 	if !isSSEContentType(contentType) {
 		preview := readBodyPreview(resp.Body, 2048)
-		return 0, false, fmt.Errorf("provider at %s returned unexpected Content-Type %q (expected text/event-stream). Body preview: %s",
+		return 0, false, "", fmt.Errorf("provider at %s returned unexpected Content-Type %q (expected text/event-stream). Body preview: %s",
 			g.url, contentType, preview)
 	}
 
@@ -230,15 +252,15 @@ func (g *AnthropicGenerator) streamOnce(
 		// An SSE overloaded_error before any visible output is equivalent to a
 		// pre-stream HTTP 529 and is safe to retry cleanly without duplicating
 		// deltas to the consumer.
-		return parseRetryAfterHeader(resp.Header.Get("Retry-After")), true, err
+		return parseRetryAfterHeader(resp.Header.Get("Retry-After")), true, "", err
 	}
-	return 0, false, err
+	return 0, false, "", err
 }
 
 func postAnthropicSSE(
 	ctx context.Context,
 	client *http.Client,
-	url, bearer, workspaceID string,
+	url, bearer, workspaceID, betaHeader string,
 	body []byte,
 ) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
@@ -248,6 +270,9 @@ func postAnthropicSSE(
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Set("anthropic-version", AnthropicAPIVersion)
+	if betaHeader != "" {
+		req.Header.Set("anthropic-beta", betaHeader)
+	}
 	if bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+bearer)
 	}
@@ -334,7 +359,7 @@ func scanAnthropicSSE(
 
 // EncodeAnthropicRequestBody exposes the request body for httptest assertions.
 func EncodeAnthropicRequestBody(g *AnthropicGenerator, req *GenerateRequest, model string) (map[string]any, error) {
-	raw, err := g.buildRequestBody(req, model)
+	_, raw, err := g.buildRequestPlan(req, model)
 	if err != nil {
 		return nil, err
 	}
