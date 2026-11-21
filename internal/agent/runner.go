@@ -1305,35 +1305,7 @@ outerLoop:
 				if provider.IsContextOverflow(err) && !overflowRetried {
 					overflowRetried = true
 					llmCalls++
-					if r.sessionRecorder != nil {
-						r.sessionRecorder.RecordEvent("context_overflow_retry", map[string]any{"round": round})
-					}
-					r.historyMu.Lock()
-					mgr := r.contextManager()
-					overhead := contextmgmt.EstimateRequestOverhead(req.SystemInstruction, req.Tools)
-					target := 0
-					if mgr != nil && mgr.Enabled() {
-						target = mgr.MessageBudget(overhead) / 2
-					}
-					if target <= 0 {
-						target = estimateMessageTokens(r.history) / 2
-					}
-					res := contextmgmt.TruncateHistoryToFit(r.history, target, contextmgmt.EstimateTokens)
-					if res.DroppedCount > 0 {
-						r.history = res.NewHistory
-					}
-					if res.NewTokenCount > target {
-						r.capOversizedHistoryLocked(target)
-					}
-					r.historyMu.Unlock()
-					r.refreshSystemAtRebuild("truncation")
-					if out != nil {
-						out <- ui.StreamEvent{
-							Type: ui.StreamInfo,
-							Text: "Context length overflow reported by provider. Truncated history and retrying once.",
-						}
-					}
-					r.syncContextGauge()
+					r.truncateHistoryForOverflow(req, round, out)
 					req = r.enforceRequestBudget(r.buildGenerateRequest(), out)
 					r.storeLastRequest(req)
 					prefixObs, err = r.observeRoundPrefix(req)
@@ -1377,6 +1349,15 @@ outerLoop:
 				continue
 			}
 			if streamErr != nil {
+				if provider.IsContextOverflow(streamErr) && strings.TrimSpace(res.Text) == "" && len(res.ToolCalls) == 0 {
+					if !overflowRetried && ctx.Err() == nil {
+						overflowRetried = true
+						r.truncateHistoryForOverflow(req, round, out)
+						round--
+						continue
+					}
+					out <- ui.StreamEvent{Type: ui.StreamError, Err: streamErr}
+				}
 				r.verboseLog.LogError(streamErr)
 				return
 			}
@@ -2535,6 +2516,40 @@ type streamResult struct {
 	LastChunkAt  time.Time
 }
 
+// truncateHistoryForOverflow halves history after a provider context-length
+// error so the caller can retry once.
+func (r *Runner) truncateHistoryForOverflow(req *provider.GenerateRequest, round int, out chan<- ui.StreamEvent) {
+	if r.sessionRecorder != nil {
+		r.sessionRecorder.RecordEvent("context_overflow_retry", map[string]any{"round": round})
+	}
+	r.historyMu.Lock()
+	mgr := r.contextManager()
+	overhead := contextmgmt.EstimateRequestOverhead(req.SystemInstruction, req.Tools)
+	target := 0
+	if mgr != nil && mgr.Enabled() {
+		target = mgr.MessageBudget(overhead) / 2
+	}
+	if target <= 0 {
+		target = estimateMessageTokens(r.history) / 2
+	}
+	res := contextmgmt.TruncateHistoryToFit(r.history, target, contextmgmt.EstimateTokens)
+	if res.DroppedCount > 0 {
+		r.history = res.NewHistory
+	}
+	if res.NewTokenCount > target {
+		r.capOversizedHistoryLocked(target)
+	}
+	r.historyMu.Unlock()
+	r.refreshSystemAtRebuild("truncation")
+	if out != nil {
+		out <- ui.StreamEvent{
+			Type: ui.StreamInfo,
+			Text: "Context length overflow reported by provider. Truncated history and retrying once.",
+		}
+	}
+	r.syncContextGauge()
+}
+
 // retryTransientFinish reports whether a round that produced no text and no
 // tool call should be sent again. retry is true after the backoff, so the
 // caller reruns the round. stopped is true when ctx ends during that wait;
@@ -2625,6 +2640,9 @@ func (r *Runner) consumeStream(
 				continue
 			}
 			if resp.Error != nil {
+				if provider.IsContextOverflow(resp.Error) && modelText.Len() == 0 && len(res.ToolCalls) == 0 {
+					return streamResult{HadReasoning: res.HadReasoning, Reasoning: reasoningText.String()}, resp.Error
+				}
 				return fail(resp.Error)
 			}
 			if streamChunkHasContent(resp) {

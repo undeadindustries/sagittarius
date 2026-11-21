@@ -22,12 +22,13 @@ type Part struct {
 	Reasoning        string
 	FunctionCall     *ToolCall
 	FunctionResponse *FunctionResponse
-	// ThoughtSignature is Gemini-only metadata: an opaque, encrypted handle for
-	// the model's reasoning attached to a model part (text or functionCall).
-	// Gemini 3 requires it to be replayed verbatim on model functionCall parts
-	// within the active tool-calling turn, otherwise the API returns a 400.
-	// Other providers ignore this field.
+	// ThoughtSignature carries provider-opaque reasoning metadata that must
+	// round-trip unchanged on model turns: Gemini thoughtSignature bytes and
+	// Anthropic thinking block signature strings.
 	ThoughtSignature []byte
+	// RedactedThinking carries the opaque data payload of an Anthropic
+	// redacted_thinking block so it round-trips unmodified in tool loops.
+	RedactedThinking string
 }
 
 // FunctionResponse carries the result of a tool invocation back to the model.
@@ -183,6 +184,7 @@ type StreamResponse struct {
 	//   - Gemini native: Part.Thought text when IncludeThoughts is set
 	//   - OpenAI-chat / OpenRouter: reasoning or reasoning_content SSE fields
 	//   - OpenAI Responses: response.reasoning_summary_text.delta
+	//   - Anthropic native: thinking_delta when display is "summarized"
 	ReasoningDelta string
 	ToolCalls      []ToolCall
 	Usage          *Usage

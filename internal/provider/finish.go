@@ -38,6 +38,8 @@ func finishHint(reason string) string {
 		return "The provider returned a garbled reply. Send the message again."
 	case lower == "malformed_function_call" || lower == "unexpected_tool_call":
 		return "The model produced an invalid tool call; retry the request."
+	case lower == "refusal":
+		return "The provider refused the request; rephrase the prompt."
 	case lower == "safety" || lower == "content_filter" || lower == "blocklist" ||
 		lower == "prohibited_content" || lower == "spii" || lower == "image_safety" ||
 		strings.HasPrefix(lower, strings.ToLower(promptBlockedPrefix)):
@@ -77,6 +79,18 @@ func openAIFinishIsAbnormal(reason string) bool {
 		return true
 	}
 	return false
+}
+
+// anthropicFinishIsAbnormal reports whether an Anthropic stop_reason means the
+// reply ended abnormally. Normal completions (end_turn, tool_use, stop_sequence)
+// return false; max_tokens, refusal, and any future non-normal reason return true.
+func anthropicFinishIsAbnormal(reason string) bool {
+	switch strings.ToLower(strings.TrimSpace(reason)) {
+	case "", "end_turn", "tool_use", "stop_sequence":
+		return false
+	default:
+		return true
+	}
 }
 
 // abnormalGeminiFinish extracts the abnormal stop reason carried by one Gemini

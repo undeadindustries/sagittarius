@@ -132,6 +132,46 @@ func newOpenAIResponsesGenerator(ctx context.Context, settings *config.Settings,
 	return gen, nil
 }
 
-func newAnthropicGenerator(_ context.Context, _ *config.Settings, endpoint EndpointConfig) (ContentGenerator, error) {
-	return nil, fmt.Errorf("content generator: provider %q anthropic adapter not yet initialized", endpoint.ProviderID)
+func newAnthropicGenerator(ctx context.Context, settings *config.Settings, endpoint EndpointConfig) (ContentGenerator, error) {
+	var bearer string
+	if endpoint.RequiresAPIKey {
+		apiKey, err := resolveAPIKey(ctx, endpoint.ProviderID)
+		if err != nil {
+			if errors.Is(err, credentials.ErrAPIKeyMissing) {
+				return nil, err
+			}
+			return nil, fmt.Errorf("resolve anthropic api key: %w", err)
+		}
+		bearer = apiKey
+	} else if key, err := resolveAPIKey(ctx, endpoint.ProviderID); err == nil && key != "" {
+		bearer = key
+	}
+
+	var defaultMaxTokens int
+	var thinkingTypes, supportedEfforts []string
+	if inst := settings.ProviderInstance(endpoint.ProviderID); inst != nil {
+		if mc, ok := config.LookupModelConfig(inst, endpoint.Model); ok {
+			supportedEfforts = mc.ReasoningEfforts
+		}
+	}
+
+	gen, err := NewAnthropicGenerator(AnthropicConfig{
+		BaseURL:              endpoint.BaseURL,
+		Model:                endpoint.Model,
+		Timeout:              endpoint.Timeout,
+		Bearer:               bearer,
+		WorkspaceID:          endpoint.WorkspaceID,
+		SystemPromptOverride: endpoint.SystemPromptOverride,
+		ToolsEnabled:         endpoint.ToolsEnabled,
+		DefaultMaxTokens:     defaultMaxTokens,
+		ThinkingTypes:        thinkingTypes,
+		SupportedEfforts:     supportedEfforts,
+		ProviderID:           endpoint.ProviderID,
+		ConnectTimeout:       endpoint.ConnectTimeout,
+		FirstTokenTimeout:    endpoint.FirstTokenTimeout,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create anthropic generator: %w", err)
+	}
+	return gen, nil
 }
