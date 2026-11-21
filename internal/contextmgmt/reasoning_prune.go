@@ -155,12 +155,15 @@ func stripMessageReasoning(msg Message) Message {
 	}
 	out := make([]Part, 0, len(msg.Parts))
 	for _, p := range msg.Parts {
-		if p.Reasoning == "" {
+		if p.Reasoning == "" && p.RedactedThinking == "" {
 			out = append(out, p)
 			continue
 		}
 		p.Reasoning = ""
-		if p.Text == "" && p.FunctionCall == nil && p.FunctionResponse == nil && len(p.ThoughtSignature) == 0 {
+		p.RedactedThinking = ""
+		if p.Text == "" && p.FunctionCall == nil && p.FunctionResponse == nil {
+			// Drop standalone signed thinking parts completely so we never
+			// replay an edited empty thinking block with a stale signature.
 			continue
 		}
 		out = append(out, p)

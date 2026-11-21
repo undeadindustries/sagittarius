@@ -136,17 +136,28 @@ type ReasoningResolution struct {
 // resolveWireFormat looks up the wire format for a provider id, consulting
 // its custom definition (if any) so presets and user-defined providers
 // resolve the same way provider.ResolveEndpointConfig does.
-func resolveWireFormat(settings *Settings, providerID string) WireFormat {
+// ResolveProviderWireFormat returns the effective WireFormat for providerID,
+// checking a provider instance override before custom definition and preset
+// defaults.
+func ResolveProviderWireFormat(settings *Settings, providerID string) WireFormat {
 	if settings == nil {
 		return ""
 	}
+	norm := NormalizeProviderID(providerID)
+	if inst := settings.ProviderInstance(norm); inst != nil && inst.WireFormat != "" {
+		return inst.WireFormat
+	}
 	var custom *CustomProviderDefinition
 	if settings.Providers != nil {
-		if c, ok := settings.Providers.Custom[NormalizeProviderID(providerID)]; ok {
+		if c, ok := settings.Providers.Custom[norm]; ok {
 			custom = &c
 		}
 	}
-	return ProviderWireFormat(providerID, custom)
+	return ProviderWireFormat(norm, custom)
+}
+
+func resolveWireFormat(settings *Settings, providerID string) WireFormat {
+	return ResolveProviderWireFormat(settings, providerID)
 }
 
 // ResolveReasoningRequest resolves what reasoning request (if any) should be

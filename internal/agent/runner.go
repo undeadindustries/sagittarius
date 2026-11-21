@@ -2753,7 +2753,15 @@ func (r *Runner) dropUnreplayedReasoning() {
 	r.modelMu.RLock()
 	model := r.model
 	r.modelMu.RUnlock()
-	if keep, _, _ := config.ResolveReasoningHistory(r.settingsSnapshot(), r.activeProviderID(), model); keep {
+	settings := r.settingsSnapshot()
+	pid := r.activeProviderID()
+	if config.ResolveProviderWireFormat(settings, pid) == config.WireFormatAnthropic {
+		// Anthropic tool loops must always keep thinking + redacted_thinking
+		// blocks in history; a "none" policy only omits completed earlier
+		// turns on the wire (see messagesToAnthropicMessages).
+		return
+	}
+	if keep, _, _ := config.ResolveReasoningHistory(settings, pid, model); keep {
 		return
 	}
 	r.historyMu.Lock()

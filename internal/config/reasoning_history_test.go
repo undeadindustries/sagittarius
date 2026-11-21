@@ -189,3 +189,23 @@ func TestResolveReasoningHistoryPrecedenceAndKwargsMerge(t *testing.T) {
 		t.Errorf("Qwen3.8 inheriting provider none: wire=%v prune=%v kwargs=%#v, want false/false/empty", wire, prune, kwargs)
 	}
 }
+
+func TestResolveReasoningHistoryAnthropicAutoKeeps(t *testing.T) {
+	t.Parallel()
+	s := &Settings{
+		Providers: &ProvidersSettings{
+			Active: "anthropic",
+			Custom: map[string]CustomProviderDefinition{
+				"anthropic": {
+					DisplayName: "Anthropic",
+					BaseURL:     "https://api.anthropic.com/v1/messages",
+					WireFormat:  WireFormatAnthropic,
+				},
+			},
+		},
+	}
+	wire, prune, _ := ResolveReasoningHistory(s, "anthropic", "claude-opus-5-5")
+	if !wire || !prune {
+		t.Fatalf("anthropic auto: wire=%v prune=%v, want true/true", wire, prune)
+	}
+}

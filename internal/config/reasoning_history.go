@@ -142,6 +142,12 @@ func ResolveReasoningHistory(settings *Settings, providerID, model string) (send
 	policy, _ := EffectiveReasoningHistoryPolicy(settings, providerID, model)
 	baseURL := providerBaseURL(settings, providerID)
 	autoKeep, autoKwargs := ModelReasoningHistoryRule(providerID, baseURL, model)
+	if resolveWireFormat(settings, providerID) == WireFormatAnthropic {
+		// Anthropic requires thinking and redacted_thinking blocks to stay
+		// intact on every replay in an active tool loop; auto defaults to keep
+		// + batched pruning of completed earlier turns.
+		autoKeep = true
+	}
 
 	switch ReasoningHistoryPolicy(policy) {
 	case ReasoningHistoryNone:

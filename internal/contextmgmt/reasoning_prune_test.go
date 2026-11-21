@@ -182,3 +182,24 @@ func TestBuildCompressedHistoryStripsReasoningBeforeLastUserInPreservedTail(t *t
 		t.Errorf("expected reasoning after latest user message to be preserved, got %q", compressed[5].Parts[0].Reasoning)
 	}
 }
+
+func TestStripMessageReasoningDropsSignedThinkingWithoutTouchingToolCallSignature(t *testing.T) {
+	t.Parallel()
+
+	call := &ToolCall{ID: "t1", Name: "read_file", Args: map[string]any{"file_path": "x.go"}}
+	msg := Message{
+		Role: RoleModel,
+		Parts: []Part{
+			{Reasoning: "secret thought", ThoughtSignature: []byte("sig-think")},
+			{RedactedThinking: "opaque-redacted"},
+			{FunctionCall: call, ThoughtSignature: []byte("sig-gemini-call")},
+		},
+	}
+	stripped := stripMessageReasoning(msg)
+	if len(stripped.Parts) != 1 || stripped.Parts[0].FunctionCall == nil {
+		t.Fatalf("stripped parts = %#v, want only FunctionCall part remaining", stripped.Parts)
+	}
+	if string(stripped.Parts[0].ThoughtSignature) != "sig-gemini-call" {
+		t.Fatalf("FunctionCall signature = %q, want sig-gemini-call", stripped.Parts[0].ThoughtSignature)
+	}
+}

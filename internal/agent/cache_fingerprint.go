@@ -144,6 +144,9 @@ func hashMessageWithReasoning(m provider.Message, keepReasoning bool) uint64 {
 		if len(p.ThoughtSignature) > 0 {
 			_, _ = h.Write(p.ThoughtSignature)
 		}
+		if p.RedactedThinking != "" {
+			writeHashStr(h, p.RedactedThinking)
+		}
 		_, _ = h.Write([]byte{0xff})
 		if p.FunctionCall != nil {
 			writeHashStr(h, p.FunctionCall.ID)
