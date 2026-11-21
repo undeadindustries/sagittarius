@@ -23,11 +23,17 @@ type ModelInfo struct {
 	ID string
 	// ContextLimit is the model's context window in tokens, when the provider
 	// reports it (OpenRouter context_length, vLLM max_model_len, Gemini
-	// inputTokenLimit). 0 means unknown.
+	// inputTokenLimit, Anthropic max_input_tokens). 0 means unknown.
 	ContextLimit int
-	// Reasoning is the model's discovered reasoning capability, currently
-	// populated only by OpenRouter's `reasoning` object. Nil when the
-	// provider doesn't report it (every other OpenAI-compat server today).
+	// MaxOutputTokens is the model's advertised max output token cap (e.g.
+	// Anthropic max_tokens). 0 means unknown.
+	MaxOutputTokens int
+	// ThinkingTypes lists Anthropic's capabilities.thinking.types values when
+	// discovered from /v1/models.
+	ThinkingTypes []string
+	// Reasoning is the model's discovered reasoning capability, populated by
+	// OpenRouter's `reasoning` object or Anthropic's `capabilities` object.
+	// Nil when the provider doesn't report it.
 	Reasoning *ModelReasoningInfo
 }
 
@@ -155,6 +161,204 @@ type geminiModelEntry struct {
 	Name                       string   `json:"name"`
 	SupportedGenerationMethods []string `json:"supportedGenerationMethods"`
 	InputTokenLimit            int      `json:"inputTokenLimit"`
+}
+
+type anthropicModelsResponse struct {
+	Data    []anthropicModelEntry `json:"data"`
+	HasMore bool                  `json:"has_more"`
+	LastID  string                `json:"last_id"`
+}
+
+type anthropicModelEntry struct {
+	ID             string                      `json:"id"`
+	MaxInputTokens int                         `json:"max_input_tokens"`
+	MaxTokens      int                         `json:"max_tokens"`
+	Capabilities   *anthropicModelCapabilities `json:"capabilities"`
+}
+
+type anthropicModelCapabilities struct {
+	Effort   *anthropicEffortCap   `json:"effort"`
+	Thinking *anthropicThinkingCap `json:"thinking"`
+}
+
+type anthropicCapabilitySupport struct {
+	Supported bool `json:"supported"`
+}
+
+type anthropicEffortCap struct {
+	Supported bool                       `json:"supported"`
+	Low       anthropicCapabilitySupport `json:"low"`
+	Medium    anthropicCapabilitySupport `json:"medium"`
+	High      anthropicCapabilitySupport `json:"high"`
+	XHigh     anthropicCapabilitySupport `json:"xhigh"`
+	Max       anthropicCapabilitySupport `json:"max"`
+}
+
+type anthropicThinkingCap struct {
+	Supported bool                       `json:"supported"`
+	Types     *anthropicThinkingTypesCap `json:"types"`
+}
+
+type anthropicThinkingTypesCap struct {
+	Adaptive     anthropicCapabilitySupport `json:"adaptive"`
+	BetweenTools anthropicCapabilitySupport `json:"between_tools"`
+	Disabled     anthropicCapabilitySupport `json:"disabled"`
+	Enabled      anthropicCapabilitySupport `json:"enabled"`
+}
+
+// DiscoverAnthropicModels paginates GET {serverRoot}/v1/models using the
+// Anthropic version and optional workspace headers, returning an error on
+// HTTP failure or invalid JSON.
+func DiscoverAnthropicModels(
+	ctx context.Context,
+	baseURL string,
+	bearer string,
+	workspaceID string,
+	client *http.Client,
+) ([]ModelInfo, error) {
+	if client == nil {
+		client = &http.Client{Timeout: defaultDiscoveryTimeout}
+	}
+	base, err := url.Parse(ModelsURL(baseURL))
+	if err != nil {
+		return nil, fmt.Errorf("parse Anthropic models URL: %w", err)
+	}
+
+	var all []ModelInfo
+	afterID := ""
+	for {
+		u := *base
+		q := u.Query()
+		q.Set("limit", "1000")
+		if afterID != "" {
+			q.Set("after_id", afterID)
+		} else {
+			q.Del("after_id")
+		}
+		u.RawQuery = q.Encode()
+
+		reqCtx, cancel := context.WithTimeout(ctx, defaultDiscoveryTimeout)
+		req, reqErr := http.NewRequestWithContext(reqCtx, http.MethodGet, u.String(), nil)
+		if reqErr != nil {
+			cancel()
+			return nil, fmt.Errorf("create Anthropic models request: %w", reqErr)
+		}
+		req.Header.Set("Accept", "application/json")
+		req.Header.Set("anthropic-version", AnthropicAPIVersion)
+		if bearer != "" {
+			req.Header.Set("Authorization", "Bearer "+bearer)
+		}
+		if ws := strings.TrimSpace(workspaceID); ws != "" {
+			req.Header.Set("anthropic-workspace-id", ws)
+		}
+
+		resp, doErr := client.Do(req)
+		if doErr != nil {
+			cancel()
+			return nil, mapHTTPTransportError(doErr)
+		}
+		raw, readErr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		cancel()
+		if readErr != nil {
+			return nil, fmt.Errorf("read Anthropic models response: %w", readErr)
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			preview := strings.TrimSpace(string(raw))
+			if len(preview) > 512 {
+				preview = preview[:512]
+			}
+			msg := extractHTTPErrorMessage(preview)
+			if msg != "" {
+				return nil, fmt.Errorf("HTTP %d: %s", resp.StatusCode, msg)
+			}
+			return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
+		}
+
+		var payload anthropicModelsResponse
+		if err := json.Unmarshal(stripBOM(raw), &payload); err != nil {
+			return nil, fmt.Errorf("decode Anthropic models: %w", err)
+		}
+
+		for _, entry := range payload.Data {
+			id := strings.TrimSpace(entry.ID)
+			if id == "" {
+				continue
+			}
+			info := ModelInfo{
+				ID:              id,
+				ContextLimit:    entry.MaxInputTokens,
+				MaxOutputTokens: entry.MaxTokens,
+			}
+			if entry.Capabilities != nil {
+				thinkingTypes := extractAnthropicThinkingTypes(entry.Capabilities.Thinking)
+				efforts := extractAnthropicEfforts(entry.Capabilities.Effort)
+				info.ThinkingTypes = thinkingTypes
+				if len(efforts) > 0 || len(thinkingTypes) > 0 {
+					defaultEnabled := (entry.Capabilities.Thinking != nil && entry.Capabilities.Thinking.Supported) ||
+						slices.Contains(thinkingTypes, "adaptive")
+					mandatory := len(thinkingTypes) > 0 && !slices.Contains(thinkingTypes, "disabled")
+					info.Reasoning = &ModelReasoningInfo{
+						SupportedEfforts: efforts,
+						DefaultEnabled:   defaultEnabled,
+						Mandatory:        mandatory,
+					}
+				}
+			}
+			all = append(all, info)
+		}
+
+		if !payload.HasMore || payload.LastID == "" || payload.LastID == afterID {
+			break
+		}
+		afterID = payload.LastID
+	}
+
+	sortModelInfos(all)
+	return all, nil
+}
+
+func extractAnthropicEfforts(cap *anthropicEffortCap) []string {
+	if cap == nil {
+		return nil
+	}
+	var out []string
+	if cap.Low.Supported {
+		out = append(out, "low")
+	}
+	if cap.Medium.Supported {
+		out = append(out, "medium")
+	}
+	if cap.High.Supported {
+		out = append(out, "high")
+	}
+	if cap.XHigh.Supported {
+		out = append(out, "xhigh")
+	}
+	if cap.Max.Supported {
+		out = append(out, "max")
+	}
+	return out
+}
+
+func extractAnthropicThinkingTypes(cap *anthropicThinkingCap) []string {
+	if cap == nil || cap.Types == nil {
+		return nil
+	}
+	var out []string
+	if cap.Types.Adaptive.Supported {
+		out = append(out, "adaptive")
+	}
+	if cap.Types.Enabled.Supported {
+		out = append(out, "enabled")
+	}
+	if cap.Types.Disabled.Supported {
+		out = append(out, "disabled")
+	}
+	if cap.Types.BetweenTools.Supported {
+		out = append(out, "between_tools")
+	}
+	return out
 }
 
 // DiscoverGeminiModels lists chat-capable models via the Gemini API models.list
@@ -299,6 +503,24 @@ var staticModelContextLimits = map[string]int{
 	"o3":            200_000,
 	"o3-mini":       200_000,
 	"o4-mini":       200_000,
+	// Anthropic Claude (verified against platform.claude.com/docs/en/models/overview)
+	"claude-opus-5-5":   1_000_000,
+	"claude-sonnet-5-5": 1_000_000,
+	"claude-haiku-5-5":  1_000_000,
+	"claude-fable-5-2":  1_000_000,
+	"claude-fable-5-1":  1_000_000,
+	"claude-fable-5":    1_000_000,
+	"claude-mythos-5-1": 1_000_000,
+	"claude-mythos-5":   1_000_000,
+	"claude-opus-5":     1_000_000,
+	"claude-sonnet-5":   1_000_000,
+	"claude-opus-4-8":   1_000_000,
+	"claude-opus-4-7":   1_000_000,
+	"claude-opus-4-6":   1_000_000,
+	"claude-sonnet-4-6": 1_000_000,
+	"claude-opus-4-5":   200_000,
+	"claude-sonnet-4-5": 200_000,
+	"claude-haiku-4-5":  200_000,
 }
 
 // staticContextPrefixes is the deterministic prefix fallback for versioned ids.
@@ -316,6 +538,18 @@ var staticContextPrefixes = []struct {
 	{"o4-mini", 200_000},
 	{"o3-mini", 200_000},
 	{"o3", 200_000},
+	{"claude-opus-5", 1_000_000},
+	{"claude-sonnet-5", 1_000_000},
+	{"claude-haiku-5", 1_000_000},
+	{"claude-fable-5", 1_000_000},
+	{"claude-mythos-5", 1_000_000},
+	{"claude-opus-4-8", 1_000_000},
+	{"claude-opus-4-7", 1_000_000},
+	{"claude-opus-4-6", 1_000_000},
+	{"claude-sonnet-4-6", 1_000_000},
+	{"claude-opus-4-5", 200_000},
+	{"claude-sonnet-4-5", 200_000},
+	{"claude-haiku-4-5", 200_000},
 }
 
 // StaticContextLimit returns a known context window for an OpenAI-direct model

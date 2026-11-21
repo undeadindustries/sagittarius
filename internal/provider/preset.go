@@ -189,6 +189,41 @@ func MaybeSetReasoningCapability(settings *config.Settings, providerID, model st
 	return true, setProviderInstance(settings, canonical, cfg)
 }
 
+// MaybeSetModelCapabilities caches Anthropic's discovered max_tokens and
+// thinking.types on ProviderModelConfig without overwriting user pins.
+func MaybeSetModelCapabilities(settings *config.Settings, providerID, model string, maxOutputTokens int, thinkingTypes []string) (bool, error) {
+	if settings == nil {
+		return false, fmt.Errorf("set model capabilities: settings are required")
+	}
+	if model == "" || (maxOutputTokens <= 0 && len(thinkingTypes) == 0) {
+		return false, nil
+	}
+	canonical := config.NormalizeProviderID(providerID)
+	cfg, err := ensureProviderInstance(settings, canonical)
+	if err != nil {
+		return false, err
+	}
+	if cfg.Models == nil {
+		cfg.Models = make(map[string]config.ProviderModelConfig)
+	}
+	mc := cfg.Models[model]
+	changed := false
+	if maxOutputTokens > 0 && (mc.MaxOutputTokens == nil || *mc.MaxOutputTokens != maxOutputTokens) {
+		v := maxOutputTokens
+		mc.MaxOutputTokens = &v
+		changed = true
+	}
+	if len(thinkingTypes) > 0 && !slices.Equal(mc.ThinkingTypes, thinkingTypes) {
+		mc.ThinkingTypes = append([]string(nil), thinkingTypes...)
+		changed = true
+	}
+	if !changed {
+		return false, nil
+	}
+	cfg.Models[model] = mc
+	return true, setProviderInstance(settings, canonical, cfg)
+}
+
 // MarkReasoningProbed records that activation-time discovery queried the
 // provider catalog for this model and found no reasoning block. Suppresses
 // re-fetches via ReasoningCapabilityKnown while leaving ModelReasoningOptions

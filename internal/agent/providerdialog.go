@@ -312,6 +312,12 @@ func discoverModelInfos(ctx context.Context, settings *config.Settings, id strin
 	if endpoint.WireFormat == config.WireFormatGemini {
 		return provider.DiscoverGeminiModels(ctx, resolveBearer(), nil)
 	}
+	if endpoint.WireFormat == config.WireFormatAnthropic {
+		if endpoint.BaseURL == "" {
+			return nil, nil
+		}
+		return provider.DiscoverAnthropicModels(ctx, endpoint.BaseURL, resolveBearer(), endpoint.WorkspaceID, nil)
+	}
 	if endpoint.BaseURL == "" {
 		return nil, nil
 	}
@@ -320,7 +326,8 @@ func discoverModelInfos(ctx context.Context, settings *config.Settings, id strin
 
 // reasoningDiscoveryApplies reports whether activation-time catalog discovery
 // is used to learn reasoning capability for this provider. Gemini and
-// openai-responses use the static ModelReasoningRule table instead.
+// openai-responses use static tables only; openai-chat and anthropic cache
+// model capabilities from /v1/models.
 func reasoningDiscoveryApplies(settings *config.Settings, providerID string) bool {
 	endpoint, err := provider.ResolveEndpointForProvider(settings, providerID)
 	if err != nil {
@@ -366,6 +373,12 @@ func applyReasoningInfos(settings *config.Settings, providerID string, models []
 		return
 	}
 	for _, m := range models {
+		for _, info := range infos {
+			if info.ID == m {
+				_, _ = provider.MaybeSetModelCapabilities(settings, providerID, m, info.MaxOutputTokens, info.ThinkingTypes)
+				break
+			}
+		}
 		if reasoning := provider.ReasoningInfoForModel(infos, m); reasoning != nil {
 			_, _ = provider.MaybeSetReasoningCapability(settings, providerID, m, reasoning)
 			continue
