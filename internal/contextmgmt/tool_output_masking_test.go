@@ -80,6 +80,29 @@ func TestMaskRespectsRemoteConfigOverrides(t *testing.T) {
 	}
 }
 
+// TestMaskPreservesCallID pins that a masked response still references its
+// call. Anthropic and OpenAI reject a tool result whose ID does not match a
+// call in the preceding assistant turn.
+func TestMaskPreservesCallID(t *testing.T) {
+	t.Parallel()
+	m := newMasker(t, maskedAwareEstimator(10, 0, map[string]int{"test_tool": 200}))
+	history := []Message{outMsg("test_tool", strings.Repeat("A", 200))}
+	history[0].Parts[0].FunctionResponse.CallID = "call_1"
+	res, err := m.Mask(history, ToolOutputMaskingConfig{
+		ProtectionThresholdTokens:  100,
+		MinPrunableThresholdTokens: 50,
+	})
+	if err != nil {
+		t.Fatalf("Mask: %v", err)
+	}
+	if res.MaskedCount != 1 {
+		t.Fatalf("MaskedCount = %d, want 1", res.MaskedCount)
+	}
+	if got := res.NewHistory[0].Parts[0].FunctionResponse.CallID; got != "call_1" {
+		t.Fatalf("masked CallID = %q, want %q", got, "call_1")
+	}
+}
+
 func TestMaskSkipsBelowProtectionThreshold(t *testing.T) {
 	t.Parallel()
 	m := newMasker(t, maskedAwareEstimator(10, 100, nil))

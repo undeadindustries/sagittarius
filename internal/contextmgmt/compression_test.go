@@ -486,13 +486,16 @@ func TestCompressTruncatesOversizedToolResponses(t *testing.T) {
 	c.TruncateThreshold = DefaultTruncateToolOutputThreshold
 
 	large := strings.Repeat("a", 170_000)
+	firstGrep, secondGrep := grepMsg(large), grepMsg(large)
+	firstGrep.Parts[0].FunctionResponse.CallID = "call_grep_1"
+	secondGrep.Parts[0].FunctionResponse.CallID = "call_grep_2"
 	history := []Message{
 		msg("user", "old msg"),
 		msg("model", "old resp"),
 		msg("user", "msg 1"),
-		grepMsg(large),
+		firstGrep,
 		msg("model", "resp 2"),
-		grepMsg(large),
+		secondGrep,
 	}
 	res, err := c.Compress(context.Background(), CompressOptions{
 		History: history, Force: true, OriginalTokenCount: 600_000, Threshold: 0.5, EffectiveLimit: 1_000_000, PreserveFraction: 0.3,
@@ -509,6 +512,13 @@ func TestCompressTruncatesOversizedToolResponses(t *testing.T) {
 	}
 	if !historyContains(res.NewHistory, "Showing first 8,000 and last 32,000 characters") {
 		t.Errorf("expected head/tail character notice")
+	}
+	for _, m := range res.NewHistory {
+		for _, p := range m.Parts {
+			if fr := p.FunctionResponse; fr != nil && fr.CallID == "" {
+				t.Errorf("truncated %s response lost its CallID; strict endpoints reject unpaired tool results", fr.Name)
+			}
+		}
 	}
 	entries, derr := os.ReadDir(dirJoin(dir))
 	if derr != nil || len(entries) == 0 {

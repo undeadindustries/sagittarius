@@ -186,6 +186,7 @@ func (m *Masker) maskPart(history []Message, item prunablePart, estimate Estimat
 	snippet := formatMaskedSnippet(preview, filePath)
 	maskedPart := Part{FunctionResponse: &FunctionResponse{
 		Name:     fr.Name,
+		CallID:   fr.CallID,
 		Response: map[string]any{"output": snippet},
 	}}
 

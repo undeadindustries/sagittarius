@@ -344,6 +344,7 @@ func (c *Compressor) truncatePart(part Part, contentStr string, estimate Estimat
 	truncatedMessage := formatTruncatedToolOutput(contentStr, outputFile, c.truncateThreshold())
 	truncatedPart := Part{FunctionResponse: &FunctionResponse{
 		Name:     part.FunctionResponse.Name,
+		CallID:   part.FunctionResponse.CallID,
 		Response: map[string]any{"output": truncatedMessage},
 	}}
 	return truncatedPart, estimate([]Part{{Text: truncatedMessage}}), nil

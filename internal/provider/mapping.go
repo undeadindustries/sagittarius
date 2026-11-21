@@ -109,6 +109,7 @@ func GenaiPartsToParts(parts []*genai.Part) []Part {
 			p = Part{
 				FunctionResponse: &FunctionResponse{
 					Name:     part.FunctionResponse.Name,
+					CallID:   part.FunctionResponse.ID,
 					Response: part.FunctionResponse.Response,
 				},
 			}
@@ -472,10 +473,10 @@ func MessagesToOpenAIMessagesWithReasoning(messages []Message, modelID string, k
 	isMistral := IsMistralFamilyModel(modelID)
 
 	legacyCounter := 0
-	legacyIDs := make(map[string][]string)
+	pairer := newToolCallPairer()
 
 	for _, msg := range messages {
-		mapped := messageToOpenAIMessages(msg, &legacyCounter, legacyIDs, keepReasoning)
+		mapped := messageToOpenAIMessages(msg, &legacyCounter, pairer, keepReasoning)
 		for _, m := range mapped {
 			if isMistral &&
 				m.Role == OpenAIRoleUser &&
@@ -498,7 +499,7 @@ func patchToolCallOrderOrMistral(repaired []OpenAIMessage, modelID string) []Ope
 	return patchToolUserTransitionForMistral(repaired, modelID)
 }
 
-func messageToOpenAIMessages(msg Message, legacyCounter *int, legacyIDs map[string][]string, keepReasoning bool) []OpenAIMessage {
+func messageToOpenAIMessages(msg Message, legacyCounter *int, pairer *toolCallPairer, keepReasoning bool) []OpenAIMessage {
 	if len(msg.Parts) == 0 {
 		return nil
 	}
@@ -514,15 +515,8 @@ func messageToOpenAIMessages(msg Message, legacyCounter *int, legacyIDs map[stri
 		}
 		switch {
 		case part.FunctionResponse != nil:
-			rawID := part.FunctionResponse.CallID
-			if rawID == "" {
-				if q := legacyIDs[part.FunctionResponse.Name]; len(q) > 0 {
-					rawID = q[0]
-					legacyIDs[part.FunctionResponse.Name] = q[1:]
-				} else {
-					rawID = "call_" + part.FunctionResponse.Name
-				}
-			}
+			fr := part.FunctionResponse
+			rawID := pairer.resolve(fr.Name, fr.CallID, "call_"+fr.Name)
 			content, _ := json.Marshal(part.FunctionResponse.Response)
 			s := string(content)
 			out = append(out, OpenAIMessage{
@@ -536,10 +530,7 @@ func messageToOpenAIMessages(msg Message, legacyCounter *int, legacyIDs map[stri
 				rawID = "call_" + part.FunctionCall.Name + "_" + strconv.Itoa(*legacyCounter)
 				*legacyCounter++
 			}
-			// Always register the id so that responses loaded without a CallID
-			// (e.g. old session JSONL saved before the CallID fix) can fall back
-			// to the correct id rather than producing a bogus "call_<name>" string.
-			legacyIDs[part.FunctionCall.Name] = append(legacyIDs[part.FunctionCall.Name], rawID)
+			pairer.addCall(part.FunctionCall.Name, rawID)
 			toolCalls = append(toolCalls, openAIToolCall{
 				ID:   rawID,
 				Type: "function",
