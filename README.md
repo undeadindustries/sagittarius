@@ -24,7 +24,7 @@ We test Sagittarius against OpenCode, Hermes, and DeepSeek. The goal of these co
 
 **It has a real shell.** The shell tool runs in a PTY. Press `Tab` on a running command to type into it, for example a `sudo` password or an interactive prompt. Long-running processes can move to the background, and `Ctrl+B` lists them.
 
-**It talks to the providers you already use.** Sagittarius has native adapters for Google Gemini, OpenAI Chat Completions (OpenRouter, DeepSeek, local vLLM, llama-server, and other compatible endpoints), and the OpenAI Responses API. A connect timeout and a first-token timeout catch a server that accepts a request and then stops responding. No Node.js or Python runtime is necessary.
+**It talks to the providers you already use.** Sagittarius has native adapters for Google Gemini, Anthropic Messages (Claude with prompt caching, tool use, and adaptive or extended thinking), OpenAI Chat Completions (OpenRouter, DeepSeek, local vLLM, llama-server, and other compatible endpoints), and the OpenAI Responses API. A connect timeout and a first-token timeout catch a server that accepts a request and then stops responding. No Node.js or Python runtime is necessary.
 
 **Each mode can use a different model.** The modes are `agent`, `plan` (read-only, except for `docs/plans/`), `ask` (read-only), and `debug`. You can route each mode to a different provider and model, and switch with `Shift+Tab`.
 
@@ -81,7 +81,7 @@ Run `/update` in the TUI to check for a new version, and `/update install` to re
 
 ## Quick start
 
-Run `sagittarius` in a project directory. On the first launch, a setup screen asks for a provider (Gemini, OpenRouter, or a custom OpenAI-compatible endpoint), an API key, and a starting model. Later, use `/providers` and `/models` to change them.
+Run `sagittarius` in a project directory. On the first launch, a setup screen asks for a provider (Gemini, Anthropic, OpenRouter, or a custom OpenAI-compatible endpoint), an API key, and a starting model. Later, use `/providers` and `/models` to change them.
 
 Write your standards in `AGENTS.md`. Sagittarius reads `~/.sagittarius/AGENTS.md` for all projects and `AGENTS.md` in the project root for that project. The agent never edits these files through its memory tools. Facts it learns go to a separate `MEMORY.md`, which you manage with `/memory`.
 

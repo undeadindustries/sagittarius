@@ -5,13 +5,14 @@ practical). Provider-scoped options live under `providers.<id>.*`, where `<id>`
 is a built-in provider (`openai`, `gemini-apikey`, `openai-responses`) or a key
 under `providers.custom.<id>`.
 
-## Context-management settings (openai-chat only)
+## Context-management settings
 
-These tune the Phase 11 local-context defenses. They take effect **only when the
-active provider uses the `openai-chat` wire format** (the fork's local mode).
-Gemini-native and `openai-responses` providers ignore them — those paths are
-never masked or compressed client-side. Leaf names match the fork for
-`settings.json` compatibility; omitting a key uses the built-in default.
+These tune the client-side context defenses. They take effect on stateless wire
+formats (`openai-chat`, `gemini`, and `anthropic`). `openai-responses` ignores
+them because it chains turns server-side and cannot rewrite history safely on
+the client. Adaptive threshold tightening applies only on `openai-chat`. Leaf
+names match the fork for `settings.json` compatibility; omitting a key uses the
+built-in default.
 
 | Key | Type | Default | Purpose |
 |-----|------|---------|---------|

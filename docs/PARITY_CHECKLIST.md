@@ -105,7 +105,7 @@ Fork-superset commands present in the fork but not in scope:
 | `openai-responses` | ✅ Implemented | OpenAI Responses API (SSE, reasoning effort) |
 | Custom OpenAI-compat | ✅ Implemented | `/providers` wizard → Add provider + `wireFormat: openai-chat` |
 | OpenRouter | ✅ Implemented | Same adapter as custom OpenAI-compat |
-| `anthropic-messages` | ❌ Deferred | Fork open TODO — native Anthropic adapter |
+| `anthropic` | ✅ Implemented | Native Anthropic Messages API (SSE, tool use, adaptive/extended thinking, prompt caching, optional workspace id) |
 | `aws-bedrock` | ❌ Deferred | Fork open TODO |
 | Gemini OAuth / Vertex | ❌ Deferred | AD-002 |
 
@@ -118,6 +118,7 @@ Fork-superset commands present in the fork but not in scope:
 | OpenAI-chat SSE headless | ✅ Verified | `TestParityHeadlessMock` — mock server, exit 0, non-empty text |
 | Gemini streaming | ✅ Implemented | Provider-level tests (TestGeminiStreamTextDelta); binary test requires real key |
 | OpenAI Responses SSE | ✅ Implemented | Provider-level tests (TestResponsesTextDelta) |
+| Anthropic Messages SSE | ✅ Verified | `TestE2E_MockAnthropicToolCall` — mock `/v1/messages` server, thinking + tool use |
 
 ---
 

@@ -333,18 +333,20 @@ Screen reader mode stays in the plain terminal and refuses the switch.
   DeepSeek, xAI, z.ai, Groq, Together, Mistral, Fireworks) plus a **Custom Local (blank)**
   entry.
   - **Choosing a template** pre-fills the base URL, wire format, and API-key
-    environment variable, then jumps straight to the **API key** step. The
-    suggested provider id defaults to the template id (de-duplicated with a
-    numeric suffix if it already exists). Any caveat (e.g. Anthropic's OpenAI-compat
-    layer, z.ai's unavailable model discovery) is shown as a note.
+    environment variable, then jumps straight to the **API key** step (and an
+    optional **Workspace id** step for `anthropic` when using a key that is not
+    scoped to one workspace). The suggested provider id defaults to the template
+    id (de-duplicated with a numeric suffix if it already exists). Any caveat
+    (e.g. z.ai's unavailable model discovery) is shown as a note.
   - **Custom Local (blank)** starts the field-by-field flow:
     1. **Provider name** — display name (required).
     2. **URL or host** — full URL (`http://127.0.0.1:8000`) or bare host (`127.0.0.1`).
     3. **Port** — shown only when the URL above has no port; defaults to `8000`.
-    4. **Wire format** — toggle between `openai-chat` (default) and `openai-responses`.
+    4. **Wire format** — cycle between `openai-chat` (default), `openai-responses`, and `anthropic`.
     5. **API key env var** — optional environment variable name.
     6. **API key** — optional; stored in OS keychain.
-    7. **Provider id** — auto-generated from the URL; edit to override before confirm.
+    7. **Workspace id** — shown only for `anthropic`; optional `wrkspc_...` id for keys not scoped to a single workspace.
+    8. **Provider id** — auto-generated from the URL; edit to override before confirm.
   After submission the wizard discovers available models and prompts you to pick a
   default. When discovery returns nothing (e.g. a non-`/v1` endpoint like z.ai),
   the template's default model is offered and you can press `a` to type a model
@@ -360,7 +362,9 @@ Screen reader mode stays in the plain terminal and refuses the switch.
     is saved to `providers.<id>.activeModels`. If you deactivate the model currently
     in use, the live model is automatically switched to the first still-active model.
   - **Provider-wide settings** (wire-format-gated): `temperature`, `contextLimit`,
-    `toolCallParsing`, and for `openai-responses` also `reasoningEffort`, `useResponseChaining`.
+    `toolCallParsing` (on `openai-chat`), `reasoningEffort` (on `openai-responses`
+    and `anthropic`), `useResponseChaining` (on `openai-responses`), and
+    `workspaceId` (on `anthropic`, saved globally).
   - **Reset all** — remove all provider-level instance overrides.
 - **Delete (`x` on custom provider):** shows a confirmation screen; press `y` or Enter to confirm removal of the definition, instance overrides, and stored API key. Press Esc to cancel.
 - **Where changes are saved:** the dialog opens on Global. Press Tab on the
@@ -910,7 +914,7 @@ See also: [MCP server configuration](../tools/mcp-server.md).
 - **Description:** Show live session token, tool, model, and prompt-cache statistics.
 - **Usage:** `/stats [session|model|tools|cache]`
 - **Sub-commands:**
-  - **`session`** (or bare `/stats`): Total input, output, cached, and reasoning tokens, round count, tool calls, and estimated cost when reported by the provider. When the provider reports cached prompt tokens (`usage.prompt_tokens_details.cached_tokens` on `openai-chat`, `usage.input_tokens_details.cached_tokens` on `openai-responses`, or `CachedContentTokenCount` on Gemini), the hit rate (`cached / input`) is shown even when `0%` so a cold cache is distinguishable from a server that does not report cache usage.
+  - **`session`** (or bare `/stats`): Total input, output, cached, and reasoning tokens, round count, tool calls, and estimated cost when reported by the provider. When the provider reports cached prompt tokens (`usage.prompt_tokens_details.cached_tokens` on `openai-chat`, `usage.input_tokens_details.cached_tokens` on `openai-responses`, `cache_read_input_tokens` on `anthropic`, or `CachedContentTokenCount` on Gemini), the hit rate (`cached / input`) is shown even when `0%` so a cold cache is distinguishable from a server that does not report cache usage.
   - **`model`**: Per-model and per-mode token breakdown, including a `Cached` column whenever any active model reports prompt-cache usage.
   - **`tools`**: Tool call counts, successes, failures, and cumulative latency.
   - **`cache`**: Client-side prompt prefix stability and provider-reported cache hits. Tracks SHA-256 fingerprints of the system prompt and tool declarations plus incremental FNV-64a message hashes across rounds, separating expected prefix invalidations (`compression`, `truncation`, `reasoning-prune`, `user-command`, `mode-switch`, `model-switch`, `mcp-reload`) from unexpected prefix mutations.
