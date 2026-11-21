@@ -145,6 +145,9 @@ func messageReasoningTokens(msg Message, estimate EstimateFn) int {
 		if p.Reasoning != "" {
 			total += estimate([]Part{{Reasoning: p.Reasoning}})
 		}
+		if p.RedactedThinking != "" {
+			total += estimate([]Part{{Reasoning: p.RedactedThinking}})
+		}
 	}
 	return total
 }
@@ -155,15 +158,17 @@ func stripMessageReasoning(msg Message) Message {
 	}
 	out := make([]Part, 0, len(msg.Parts))
 	for _, p := range msg.Parts {
-		if p.Reasoning == "" && p.RedactedThinking == "" {
+		standaloneSignedThinking := len(p.ThoughtSignature) > 0 && p.Text == "" && p.FunctionCall == nil && p.FunctionResponse == nil
+		if p.Reasoning == "" && p.RedactedThinking == "" && !standaloneSignedThinking {
 			out = append(out, p)
 			continue
 		}
 		p.Reasoning = ""
 		p.RedactedThinking = ""
 		if p.Text == "" && p.FunctionCall == nil && p.FunctionResponse == nil {
-			// Drop standalone signed thinking parts completely so we never
-			// replay an edited empty thinking block with a stale signature.
+			// Drop standalone signed thinking (including omitted-display empty
+			// thinking blocks) and redacted_thinking parts together so we never
+			// replay a partially stripped thinking sequence or stale signature.
 			continue
 		}
 		out = append(out, p)

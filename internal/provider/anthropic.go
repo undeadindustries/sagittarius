@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -218,9 +219,19 @@ func (g *AnthropicGenerator) streamOnce(
 	}
 
 	state := NewAnthropicSseMapperState()
+	emittedVisible := false
 	err = scanAnthropicSSE(resp.Body, state, guard.firstOutput, func(chunk StreamResponse) bool {
+		if chunk.TextDelta != "" || chunk.ReasoningDelta != "" || len(chunk.ToolCalls) > 0 {
+			emittedVisible = true
+		}
 		return sendOrDone(streamCtx, ch, chunk)
 	})
+	if err != nil && !emittedVisible && errors.Is(err, ErrProviderOverloaded) {
+		// An SSE overloaded_error before any visible output is equivalent to a
+		// pre-stream HTTP 529 and is safe to retry cleanly without duplicating
+		// deltas to the consumer.
+		return parseRetryAfterHeader(resp.Header.Get("Retry-After")), true, err
+	}
 	return 0, false, err
 }
 
@@ -298,7 +309,11 @@ func scanAnthropicSSE(
 
 		var event AnthropicSseEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
-			continue
+			preview := payload
+			if len(preview) > 256 {
+				preview = preview[:256] + "..."
+			}
+			return fmt.Errorf("decode anthropic SSE event (%s): %w", preview, err)
 		}
 		if onOutput != nil && anthropicEventIsOutput(event.Type) {
 			onOutput()

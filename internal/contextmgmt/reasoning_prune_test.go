@@ -191,6 +191,7 @@ func TestStripMessageReasoningDropsSignedThinkingWithoutTouchingToolCallSignatur
 		Role: RoleModel,
 		Parts: []Part{
 			{Reasoning: "secret thought", ThoughtSignature: []byte("sig-think")},
+			{Reasoning: "", ThoughtSignature: []byte("sig-omitted-empty")},
 			{RedactedThinking: "opaque-redacted"},
 			{FunctionCall: call, ThoughtSignature: []byte("sig-gemini-call")},
 		},

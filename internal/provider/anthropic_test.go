@@ -401,4 +401,105 @@ func TestAnthropicHeadersPreStreamRetryAndCancel(t *testing.T) {
 			t.Fatalf("DebugWireRequest err=%v out=%s", err, out)
 		}
 	})
+
+	t.Run("retries SSE overloaded_error before output, does not retry after output", func(t *testing.T) {
+		t.Parallel()
+		var preAttempts atomic.Int32
+		srvPre := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			n := preAttempts.Add(1)
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Retry-After", "0")
+			if n == 1 {
+				_, _ = w.Write([]byte("data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude-opus-5-5\"}}\n\n" +
+					"data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n"))
+				return
+			}
+			_, _ = w.Write([]byte("data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"recovered\"}}\n\n" +
+				"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n" +
+				"data: {\"type\":\"message_stop\"}\n\n"))
+		}))
+		t.Cleanup(srvPre.Close)
+
+		genPre, err := NewAnthropicGenerator(AnthropicConfig{
+			BaseURL:    srvPre.URL + "/v1/messages",
+			Model:      "claude-opus-5-5",
+			Bearer:     "sk-ant-test",
+			HTTPClient: srvPre.Client(),
+		})
+		if err != nil {
+			t.Fatalf("NewAnthropicGenerator: %v", err)
+		}
+		chPre, err := genPre.GenerateContentStream(testContext(t), &GenerateRequest{
+			Messages: []Message{{Role: RoleUser, Parts: []Part{{Text: "hi"}}}},
+		})
+		if err != nil {
+			t.Fatalf("GenerateContentStream: %v", err)
+		}
+		var text string
+		for sr := range chPre {
+			if sr.Error != nil {
+				t.Fatalf("unexpected error after retry: %v", sr.Error)
+			}
+			text += sr.TextDelta
+		}
+		if text != "recovered" || preAttempts.Load() != 2 {
+			t.Fatalf("text=%q attempts=%d, want recovered / 2", text, preAttempts.Load())
+		}
+
+		// Once visible text streamed, mid-stream overloaded_error must NOT retry.
+		var midAttempts atomic.Int32
+		srvMid := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			midAttempts.Add(1)
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}\n\n" +
+				"data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Overloaded\"}}\n\n"))
+		}))
+		t.Cleanup(srvMid.Close)
+
+		genMid, err := NewAnthropicGenerator(AnthropicConfig{
+			BaseURL:    srvMid.URL + "/v1/messages",
+			Model:      "claude-opus-5-5",
+			Bearer:     "sk-ant-test",
+			HTTPClient: srvMid.Client(),
+		})
+		if err != nil {
+			t.Fatalf("NewAnthropicGenerator: %v", err)
+		}
+		chMid, err := genMid.GenerateContentStream(testContext(t), &GenerateRequest{
+			Messages: []Message{{Role: RoleUser, Parts: []Part{{Text: "hi"}}}},
+		})
+		if err != nil {
+			t.Fatalf("GenerateContentStream: %v", err)
+		}
+		var gotMidErr error
+		for sr := range chMid {
+			if sr.Error != nil {
+				gotMidErr = sr.Error
+			}
+		}
+		if !errors.Is(gotMidErr, ErrProviderOverloaded) || midAttempts.Load() != 1 {
+			t.Fatalf("mid-stream err=%v attempts=%d, want ErrProviderOverloaded / 1", gotMidErr, midAttempts.Load())
+		}
+	})
+
+	t.Run("malformed SSE JSON fails stream instead of emitting partial tool call", func(t *testing.T) {
+		t.Parallel()
+		sse := strings.Join([]string{
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"write_file","input":{}}}`,
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":TRUNCATED`,
+			`data: {"type":"content_block_stop","index":0}`,
+			``,
+		}, "\n")
+		var emittedCalls []ToolCall
+		err := scanAnthropicSSE(strings.NewReader(sse), NewAnthropicSseMapperState(), nil, func(sr StreamResponse) bool {
+			emittedCalls = append(emittedCalls, sr.ToolCalls...)
+			return true
+		})
+		if err == nil || !strings.Contains(err.Error(), "decode anthropic SSE event") {
+			t.Fatalf("err = %v, want decode anthropic SSE event error", err)
+		}
+		if len(emittedCalls) != 0 {
+			t.Fatalf("emittedCalls = %#v, want none on corrupted stream", emittedCalls)
+		}
+	})
 }

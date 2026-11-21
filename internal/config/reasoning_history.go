@@ -142,10 +142,12 @@ func ResolveReasoningHistory(settings *Settings, providerID, model string) (send
 	policy, _ := EffectiveReasoningHistoryPolicy(settings, providerID, model)
 	baseURL := providerBaseURL(settings, providerID)
 	autoKeep, autoKwargs := ModelReasoningHistoryRule(providerID, baseURL, model)
-	if resolveWireFormat(settings, providerID) == WireFormatAnthropic {
+	isAnthropic := resolveWireFormat(settings, providerID) == WireFormatAnthropic
+	if isAnthropic {
 		// Anthropic requires thinking and redacted_thinking blocks to stay
-		// intact on every replay in an active tool loop; auto defaults to keep
-		// + batched pruning of completed earlier turns.
+		// intact on every replay in an active tool loop, and prompt caching
+		// breaks whenever earlier turns mutate. Under auto, keep all thinking
+		// on the wire without batched pruning (matching keep-all).
 		autoKeep = true
 	}
 
@@ -161,7 +163,7 @@ func ResolveReasoningHistory(settings *Settings, providerID, model string) (send
 		pruneRetention = false
 	default: // ReasoningHistoryAuto
 		sendOnWire = autoKeep
-		pruneRetention = autoKeep
+		pruneRetention = autoKeep && !isAnthropic
 	}
 
 	var merged map[string]any

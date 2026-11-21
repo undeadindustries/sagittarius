@@ -190,7 +190,7 @@ func TestResolveReasoningHistoryPrecedenceAndKwargsMerge(t *testing.T) {
 	}
 }
 
-func TestResolveReasoningHistoryAnthropicAutoKeeps(t *testing.T) {
+func TestResolveReasoningHistoryAnthropicAutoKeepsAll(t *testing.T) {
 	t.Parallel()
 	s := &Settings{
 		Providers: &ProvidersSettings{
@@ -205,7 +205,7 @@ func TestResolveReasoningHistoryAnthropicAutoKeeps(t *testing.T) {
 		},
 	}
 	wire, prune, _ := ResolveReasoningHistory(s, "anthropic", "claude-opus-5-5")
-	if !wire || !prune {
-		t.Fatalf("anthropic auto: wire=%v prune=%v, want true/true", wire, prune)
+	if !wire || prune {
+		t.Fatalf("anthropic auto: wire=%v prune=%v, want true/false (keep-all under auto)", wire, prune)
 	}
 }
