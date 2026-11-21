@@ -687,18 +687,26 @@ func runHeadlessJSON(ctx context.Context, runner *agent.Runner, prompt string, s
 
 func newCLIApp(runner *agent.Runner, docs *config.Documents, runtime *agent.Runtime, sessID, baseProviderID string) *agent.App {
 	providerLabel := "ready"
-	if docs != nil {
+	activeID := config.NormalizeProviderID(runner.ActiveProviderID())
+	if activeID != "" {
+		providerLabel = config.ProviderDisplayID(activeID)
+	} else if docs != nil {
 		if endpoint, epErr := provider.ResolveEndpointConfig(docs.Merged()); epErr == nil {
 			providerLabel = config.ProviderDisplayID(endpoint.ProviderID)
 		}
 	}
+	runtimeProviderID := ""
+	if activeID != "" && activeID != config.NormalizeProviderID(baseProviderID) {
+		runtimeProviderID = activeID
+	}
 	cfg := agent.AppConfig{
-		Runner:         runner,
-		Runtime:        runtime,
-		ProviderLabel:  providerLabel,
-		Model:          runner.Model(),
-		SessionID:      sessID,
-		BaseProviderID: baseProviderID,
+		Runner:            runner,
+		Runtime:           runtime,
+		ProviderLabel:     providerLabel,
+		Model:             runner.Model(),
+		SessionID:         sessID,
+		BaseProviderID:    baseProviderID,
+		RuntimeProviderID: runtimeProviderID,
 	}
 	if docs != nil {
 		cfg.Loader = docs.Loader()
@@ -890,32 +898,37 @@ func runInteractive(screenReader bool, debug bool, opts runnerOptions) int {
 
 	needsOnboarding := agent.NeedsProviderSetup(ctx, docs.Merged())
 
-	var endpoint provider.EndpointConfig
-	var endpointErr error
+	providerLabel := "Setup required"
+	runtimeProviderID := ""
 	if !needsOnboarding {
-		endpoint, endpointErr = provider.ResolveEndpointConfig(docs.Merged())
-		if endpointErr != nil {
-			writeStartupError(endpointErr)
-			return 1
+		activeID := config.NormalizeProviderID(runner.ActiveProviderID())
+		if activeID != "" {
+			providerLabel = config.ProviderDisplayID(activeID)
+			if activeID != config.NormalizeProviderID(baseProviderID) {
+				runtimeProviderID = activeID
+			}
+		} else {
+			endpoint, endpointErr := provider.ResolveEndpointConfig(docs.Merged())
+			if endpointErr != nil {
+				writeStartupError(endpointErr)
+				return 1
+			}
+			providerLabel = config.ProviderDisplayID(endpoint.ProviderID)
 		}
 	}
 
-	providerLabel := "Setup required"
-	if !needsOnboarding {
-		providerLabel = config.ProviderDisplayID(endpoint.ProviderID)
-	}
-
 	app := agent.NewApp(agent.AppConfig{
-		Runner:         runner,
-		Runtime:        runtime,
-		ProviderLabel:  providerLabel,
-		Model:          runner.Model(),
-		Loader:         docs.Loader(),
-		Settings:       docs.Global,
-		Documents:      docs,
-		SessionID:      sessID,
-		BaseProviderID: baseProviderID,
-		ScreenReader:   screenReader,
+		Runner:            runner,
+		Runtime:           runtime,
+		ProviderLabel:     providerLabel,
+		Model:             runner.Model(),
+		Loader:            docs.Loader(),
+		Settings:          docs.Global,
+		Documents:         docs,
+		SessionID:         sessID,
+		BaseProviderID:    baseProviderID,
+		RuntimeProviderID: runtimeProviderID,
+		ScreenReader:      screenReader,
 	})
 
 	var notice string
@@ -1051,23 +1064,31 @@ func runGoogleChatOnly(debug bool, opts runnerOptions) int {
 	defer func() { _ = runtime.Close() }()
 	defer func() { _ = runner.Close() }()
 
-	endpoint, endpointErr := provider.ResolveEndpointConfig(docs.Merged())
-	if endpointErr != nil {
-		writeStartupError(endpointErr)
-		return 1
+	activeID := config.NormalizeProviderID(runner.ActiveProviderID())
+	providerLabel := config.ProviderDisplayID(activeID)
+	runtimeProviderID := ""
+	if activeID != "" && activeID != config.NormalizeProviderID(baseProviderID) {
+		runtimeProviderID = activeID
 	}
-
-	providerLabel := config.ProviderDisplayID(endpoint.ProviderID)
+	if providerLabel == "" {
+		endpoint, endpointErr := provider.ResolveEndpointConfig(docs.Merged())
+		if endpointErr != nil {
+			writeStartupError(endpointErr)
+			return 1
+		}
+		providerLabel = config.ProviderDisplayID(endpoint.ProviderID)
+	}
 	app := agent.NewApp(agent.AppConfig{
-		Runner:         runner,
-		Runtime:        runtime,
-		ProviderLabel:  providerLabel,
-		Model:          runner.Model(),
-		Loader:         docs.Loader(),
-		Settings:       docs.Global,
-		Documents:      docs,
-		SessionID:      sessID,
-		BaseProviderID: baseProviderID,
+		Runner:            runner,
+		Runtime:           runtime,
+		ProviderLabel:     providerLabel,
+		Model:             runner.Model(),
+		Loader:            docs.Loader(),
+		Settings:          docs.Global,
+		Documents:         docs,
+		SessionID:         sessID,
+		BaseProviderID:    baseProviderID,
+		RuntimeProviderID: runtimeProviderID,
 	})
 
 	gcUI, err := buildGoogleChatUI(ctx, docs)
@@ -1153,13 +1174,14 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		initialMode = *opts.modeOverride
 	}
 	baseProviderID := config.NormalizeProviderID(settings.ActiveProvider())
+	effectiveSettings := settings
 	if !needsSetup {
 		if modeProvider, _ := modes.ResolveModeOverride(initialMode, settings.Sagittarius); modeProvider != "" {
 			modeProvider = config.NormalizeProviderID(modeProvider)
 			if modeProvider != baseProviderID {
-				// Switch in-memory only (never persisted) so endpoint + generator
-				// reflect the mode's provider at startup without touching settings.json.
-				_ = provider.SetActiveProvider(settings, modeProvider)
+				// Apply on a shallow copy so docs.Global / docs.Merged() are
+				// never mutated in place by a mode's temporary provider.
+				effectiveSettings = provider.WithActiveProvider(settings, modeProvider)
 			}
 		}
 	}
@@ -1167,7 +1189,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 	var endpoint provider.EndpointConfig
 	var endpointErr error
 	if !needsSetup {
-		endpoint, endpointErr = provider.ResolveEndpointConfig(settings)
+		endpoint, endpointErr = provider.ResolveEndpointConfig(effectiveSettings)
 		if endpointErr != nil {
 			return nil, nil, nil, "", "", endpointErr
 		}
@@ -1182,7 +1204,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		model = modelOverride
 	}
 
-	gen, genErr := provider.NewContentGenerator(ctx, settings)
+	gen, genErr := provider.NewContentGenerator(ctx, effectiveSettings)
 	if genErr != nil {
 		if !needsSetup && (!interactive || !errors.Is(genErr, credentials.ErrAPIKeyMissing)) {
 			return nil, nil, nil, "", "", genErr
@@ -1358,7 +1380,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		InitialConstraints:   initialConstraints,
 		InitialReadOnly:      initialReadOnly,
 		InitialScratchpad:    initialScratchpad,
-		Settings:             settings,
+		Settings:             effectiveSettings,
 		InitialMode:          initialMode,
 		ModelPinned:          modelPinned,
 		ProjectBoundary:      boundary,
@@ -1387,7 +1409,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 	}
 	// Build the context manager after the runner so its summarizer reads the
 	// runner's live (mode-resolved) model rather than the startup default.
-	runner.SetContextManager(agent.NewContextManager(settings, gen,
+	runner.SetContextManager(agent.NewContextManager(effectiveSettings, gen,
 		runner.CompressionModel,
 		runner.ActiveProviderID,
 		func() string { return runner.InteractionMode().String() },

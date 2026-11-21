@@ -63,6 +63,9 @@ type AppConfig struct {
 	// passes it here; SetInteractionMode uses it to return to the right base
 	// when leaving a mode whose override is empty.
 	BaseProviderID string
+	// RuntimeProviderID is the temporary mode-override provider active at
+	// startup when it differs from BaseProviderID.
+	RuntimeProviderID string
 }
 
 // App implements the optional ui.Completer, ui.MentionCompleter, and
@@ -103,7 +106,13 @@ type App struct {
 	// baseProviderID records the canonical provider id that was active before a
 	// mode override temporarily switched to a different provider. Empty when no
 	// provider override is active.
-	baseProviderID string
+	// runtimeProviderID holds the temporary mode-override provider without
+	// mutating docs.Global or docs.Merged() in place. providerMu guards both.
+	providerMu        sync.RWMutex
+	baseProviderID    string
+	runtimeProviderID string
+	switchNoticeMu    sync.Mutex
+	switchNotice      string
 	// mentions is the lazily-built "@path" completion index over the runner's
 	// workspace. nil until the first CompleteMention call.
 	mentions *atmention.Index
@@ -122,14 +131,15 @@ func NewApp(cfg AppConfig) *App {
 		mode = cfg.Runner.InteractionMode()
 	}
 	app := &App{
-		runner:          cfg.Runner,
-		runtime:         cfg.Runtime,
-		processor:       slash.NewProcessor(),
-		sessionID:       cfg.SessionID,
-		docs:            cfg.Documents,
-		generatorCache:  provider.NewGeneratorCache(),
-		baseProviderID:  config.NormalizeProviderID(cfg.BaseProviderID),
-		providerDisplay: cfg.ProviderLabel,
+		runner:            cfg.Runner,
+		runtime:           cfg.Runtime,
+		processor:         slash.NewProcessor(),
+		sessionID:         cfg.SessionID,
+		docs:              cfg.Documents,
+		generatorCache:    provider.NewGeneratorCache(),
+		baseProviderID:    config.NormalizeProviderID(cfg.BaseProviderID),
+		runtimeProviderID: config.NormalizeProviderID(cfg.RuntimeProviderID),
+		providerDisplay:   cfg.ProviderLabel,
 		status: ui.StatusBar{
 			Left:   workspaceLeft(cfg.Runner),
 			Right:  providerModelLabel(cfg.ProviderLabel, cfg.Model),
@@ -262,15 +272,63 @@ func (a *App) ComposerStatus() ui.ComposerStatus {
 }
 
 // effectiveSettings returns the merged (global+project) view for runtime READS
-// (lists, pickers, autocomplete, resolution). Writes must target a scope via
-// Documents; never mutate or persist through this pointer.
+// (lists, pickers, autocomplete, resolution), overlaid with any temporary
+// mode-provider override. Writes must target a scope via Documents; never
+// mutate or persist through this pointer.
 func (a *App) effectiveSettings() *config.Settings {
+	var s *config.Settings
 	if a.docs != nil {
-		if m := a.docs.Merged(); m != nil {
-			return m
-		}
+		s = a.docs.Merged()
 	}
-	return a.deps.Settings
+	if s == nil {
+		s = a.deps.Settings
+	}
+	a.providerMu.RLock()
+	rt := a.runtimeProviderID
+	a.providerMu.RUnlock()
+	if rt != "" {
+		return provider.WithActiveProvider(s, rt)
+	}
+	return s
+}
+
+func (a *App) runtimeProvider() string {
+	a.providerMu.RLock()
+	defer a.providerMu.RUnlock()
+	return a.runtimeProviderID
+}
+
+func (a *App) baseProvider() string {
+	a.providerMu.RLock()
+	defer a.providerMu.RUnlock()
+	return a.baseProviderID
+}
+
+func (a *App) setProvidersState(base, runtime string) {
+	a.providerMu.Lock()
+	a.baseProviderID = config.NormalizeProviderID(base)
+	a.runtimeProviderID = config.NormalizeProviderID(runtime)
+	a.providerMu.Unlock()
+}
+
+func (a *App) setRuntimeProvider(runtime string) {
+	a.providerMu.Lock()
+	a.runtimeProviderID = config.NormalizeProviderID(runtime)
+	a.providerMu.Unlock()
+}
+
+func (a *App) setSwitchNotice(msg string) {
+	a.switchNoticeMu.Lock()
+	a.switchNotice = msg
+	a.switchNoticeMu.Unlock()
+}
+
+func (a *App) takeSwitchNotice() string {
+	a.switchNoticeMu.Lock()
+	msg := a.switchNotice
+	a.switchNotice = ""
+	a.switchNoticeMu.Unlock()
+	return msg
 }
 
 // coerceLiveModel keeps the active provider's live model inside its curated
@@ -553,10 +611,10 @@ func (a *App) CycleModelReverse(ctx context.Context) (<-chan ui.StreamEvent, err
 // (provider, model) list (wrapping), updates the active provider+model, rebuilds
 // the runner, and emits an info message showing the resolved live model.
 func (a *App) cycleModel(ctx context.Context, step int) (<-chan ui.StreamEvent, error) {
-	if a.runner == nil || a.deps.Settings == nil || a.deps.Loader == nil {
+	if a.runner == nil || (a.deps.Settings == nil && a.docs == nil) {
 		return nil, fmt.Errorf("runner not available")
 	}
-	s := a.deps.Settings
+	s := a.effectiveSettings()
 
 	// Gather every (provider, model) pair across all providers.
 	pairs := provider.AllActiveModels(s)
@@ -564,11 +622,13 @@ func (a *App) cycleModel(ctx context.Context, step int) (<-chan ui.StreamEvent, 
 		return nil, fmt.Errorf("no curated models — activate some in /providers → (select provider) → Manage models…")
 	}
 
-	// Current selection: active provider + its configured model.
+	// Current selection: active provider + its live/configured model.
 	activeID := config.NormalizeProviderID(s.ActiveProvider())
-	currentModel := ""
-	if ep, err := provider.ResolveEndpointForProvider(s, activeID); err == nil {
-		currentModel = strings.TrimSpace(ep.Model)
+	currentModel := strings.TrimSpace(a.runner.Model())
+	if currentModel == "" {
+		if ep, err := provider.ResolveEndpointForProvider(s, activeID); err == nil {
+			currentModel = strings.TrimSpace(ep.Model)
+		}
 	}
 	idx := 0
 	for i, p := range pairs {
@@ -579,34 +639,27 @@ func (a *App) cycleModel(ctx context.Context, step int) (<-chan ui.StreamEvent, 
 	}
 	next := pairs[wrapIndex(idx, step, len(pairs))]
 
-	if err := provider.SelectCurrentModel(a.deps.Loader, s, next.ProviderID, next.Model); err != nil {
-		return nil, err
-	}
-	provLabel, resolvedModel, rebuildErr := a.deps.Hooks.RebuildRunner(ctx)
-	_ = provLabel
-
 	out := make(chan ui.StreamEvent, 4)
 	go func() {
 		defer close(out)
-		if rebuildErr != nil {
-			out <- ui.StreamEvent{Type: ui.StreamError, Err: rebuildErr}
+		resolvedModel, shadowNotice, switchErr := a.selectLiveModel(ctx, next.ProviderID, next.Model, config.ScopeGlobal)
+		if switchErr != nil {
+			out <- ui.StreamEvent{Type: ui.StreamError, Err: switchErr}
 			out <- ui.StreamEvent{Type: ui.StreamDone}
 			return
 		}
+		// Consume any stored shadowNotice so a subsequent /model doesn't replay it.
+		_ = a.takeSwitchNotice()
 		label := next.DisplayID + "/" + next.Model
 		msg := fmt.Sprintf("Model → %s", label)
+		if shadowNotice != "" {
+			msg += shadowNotice
+		}
 		if resolvedModel != "" && resolvedModel != next.Model {
 			msg += fmt.Sprintf(" (mode override active: using %s)", resolvedModel)
 		}
-		model := resolvedModel
-		if model == "" {
-			model = next.Model
-		}
-		a.statusMu.Lock()
-		a.status.Right = providerModelLabel(a.providerDisplay, model)
-		a.statusMu.Unlock()
 		out <- ui.StreamEvent{Type: ui.StreamInfo, Text: msg + "\n"}
-		if notice := a.contextFitNotice(); notice != "" {
+		if notice := a.runner.ContextFitNotice(); notice != "" {
 			out <- ui.StreamEvent{Type: ui.StreamInfo, Text: notice + "\n"}
 		}
 		out <- ui.StreamEvent{Type: ui.StreamDone}
@@ -701,22 +754,19 @@ func (h *appHooks) RebuildRunner(ctx context.Context) (string, string, error) {
 		return "", "", fmt.Errorf("settings not loaded")
 	}
 
-	// Use the merged settings (global + project overlay) for endpoint resolution
-	// so project-scoped mode and model overrides take effect after any save.
-	// deps.Settings (= Global) remains the mutation target for dialog saves.
-	effectiveSettings := h.app.deps.Settings
+	// Reload merged settings (global + project) and apply any runtime
+	// mode-provider override on a shallow copy without mutating docs.Merged().
 	if h.app.docs != nil {
 		h.app.docs.ReloadMerged()
-		effectiveSettings = h.app.docs.Merged()
 	}
+	if h.app.coerceLiveModel() && h.app.docs != nil {
+		h.app.docs.ReloadMerged()
+	}
+	effectiveSettings := h.app.effectiveSettings()
 
 	gen, err := h.app.generatorCache.GetOrCreate(ctx, effectiveSettings)
 	if err != nil {
 		return "", "", err
-	}
-
-	if h.app.coerceLiveModel() && h.app.docs != nil {
-		effectiveSettings = h.app.docs.Merged()
 	}
 
 	endpoint, err := provider.ResolveEndpointConfig(effectiveSettings)
@@ -1607,10 +1657,19 @@ func (h *appHooks) ContextFitNotice() string {
 // contextFitNotice reports an over-window conversation after a model or mode
 // switch, or "" when there is nothing to say (including before a runner exists).
 func (a *App) contextFitNotice() string {
-	if a == nil || a.runner == nil {
+	if a == nil {
 		return ""
 	}
-	return a.runner.ContextFitNotice()
+	var parts []string
+	if sn := a.takeSwitchNotice(); sn != "" {
+		parts = append(parts, sn)
+	}
+	if a.runner != nil {
+		if cf := a.runner.ContextFitNotice(); cf != "" {
+			parts = append(parts, cf)
+		}
+	}
+	return strings.Join(parts, "\n")
 }
 
 // completeGrillAfterSpec flips a summarizing grill session to StatusComplete
@@ -1886,13 +1945,7 @@ func (h *appHooks) SetInteractionMode(ctx context.Context, mode modes.Mode) (str
 	if h.app == nil || h.app.runner == nil {
 		return "", fmt.Errorf("runner not available")
 	}
-	// Use the merged view so project-scoped mode overrides (sagittarius.modes.*
-	// and the active provider) are respected. Mutations (SetActiveProvider) still
-	// target deps.Settings (= global) so writes go to the correct file.
-	settings := h.app.deps.Settings
-	if h.app.docs != nil {
-		settings = h.app.docs.Merged()
-	}
+	settings := h.app.effectiveSettings()
 
 	// Resolve this mode's provider override, if any.
 	modeProvider := ""
@@ -1907,23 +1960,25 @@ func (h *appHooks) SetInteractionMode(ctx context.Context, mode modes.Mode) (str
 		currentActive = config.NormalizeProviderID(settings.ActiveProvider())
 	}
 
-	// Deterministic target: use the mode's provider when set, otherwise fall
-	// back to the base provider the user selected (or started with). This
-	// replaces the fragile needProviderRevert branch — the logic is now a
-	// single comparison instead of two separate switch/revert conditions.
-	base := h.app.baseProviderID
+	// Deterministic target: use the mode's provider when set, otherwise return
+	// to the base provider the user selected (or started with). Keep the
+	// temporary mode override in App.runtimeProviderID rather than mutating
+	// docs.Merged() or docs.Global in place.
+	base := h.app.baseProvider()
 	target := modeProvider
 	if target == "" {
 		target = base
 	}
 
 	if target != "" && target != currentActive {
-		if err := provider.SetActiveProvider(settings, target); err != nil {
-			return "", fmt.Errorf("mode %s: switch provider to %q: %w", mode.String(), target, err)
+		prevRuntime := h.app.runtimeProvider()
+		nextRuntime := ""
+		if target != base {
+			nextRuntime = target
 		}
+		h.app.setRuntimeProvider(nextRuntime)
 		if _, _, err := h.RebuildRunner(ctx); err != nil {
-			// Revert in-memory on failure so subsequent calls see a consistent state.
-			_ = provider.SetActiveProvider(settings, currentActive)
+			h.app.setRuntimeProvider(prevRuntime)
 			return "", fmt.Errorf("mode %s: rebuild runner: %w", mode.String(), err)
 		}
 	}
@@ -2052,27 +2107,88 @@ func (h *appHooks) SelectCurrentModel(ctx context.Context, providerID, model str
 	return h.app.selectCurrentModel(ctx, providerID, model, scope)
 }
 
-// selectCurrentModel validates a pick, writes it to scope's file, and rebuilds
-// the runner through deps.Hooks; it returns the resolved live model.
+// selectCurrentModel validates a pick and routes through selectLiveModel.
 func (a *App) selectCurrentModel(ctx context.Context, providerID, model string, scope config.SettingScope) (string, error) {
-	providerID, model, err := provider.ValidateModelSelection(a.effectiveSettings(), providerID, model)
+	resolvedModel, shadowNotice, err := a.selectLiveModel(ctx, providerID, model, scope)
 	if err != nil {
 		return "", err
 	}
-	if err := a.persistScope(scope, func(s *config.Settings) error {
-		return provider.WriteActiveModel(s, providerID, model)
-	}); err != nil {
-		return "", err
-	}
-	// An explicit /model pick redefines the base. Any subsequent mode switch
-	// that has no provider override will return to this provider, not the
-	// startup-default one.
-	a.baseProviderID = providerID
-	_, resolvedModel, err := a.deps.Hooks.RebuildRunner(ctx)
-	if err != nil {
-		return "", err
+	if shadowNotice != "" {
+		a.setSwitchNotice(strings.TrimSpace(shadowNotice))
 	}
 	return resolvedModel, nil
+}
+
+// selectLiveModel is the single path for every live provider/model switch
+// (Ctrl+/, /model, model picker, /providers switch, onboarding, fallback).
+// It writes to the owning scope so a project override never shadows a global
+// switch silently, updates baseProviderID, clears any temporary mode-provider
+// override, unpins --model when the provider changes, and rebuilds the runner.
+func (a *App) selectLiveModel(ctx context.Context, providerID, model string, scope config.SettingScope) (resolvedModel, shadowNotice string, err error) {
+	providerID = config.NormalizeProviderID(providerID)
+	model = strings.TrimSpace(model)
+	if model != "" {
+		providerID, model, err = provider.ValidateModelSelection(a.effectiveSettings(), providerID, model)
+		if err != nil {
+			return "", "", err
+		}
+	}
+
+	prevProvider := ""
+	if a.runner != nil {
+		prevProvider = config.NormalizeProviderID(a.runner.ActiveProviderID())
+	}
+
+	writeFn := func(s *config.Settings) error {
+		if model != "" {
+			return provider.WriteActiveModel(s, providerID, model)
+		}
+		return provider.SetActiveProvider(s, providerID)
+	}
+
+	if scope == config.ScopeGlobal && a.docs != nil && a.docs.Project != nil {
+		proj := a.docs.Project
+		projOwnsActive := proj.Providers != nil && strings.TrimSpace(proj.Providers.Active) != ""
+		projOwnsMod := projectOwnsModel(proj, providerID)
+		switch {
+		case projOwnsActive:
+			if err := a.persistScope(config.ScopeProject, writeFn); err != nil {
+				return "", "", err
+			}
+			shadowNotice = " (project settings own providers.active; updated project selection)"
+		case projOwnsMod && model != "":
+			if err := a.persistGlobal(func(s *config.Settings) error {
+				return provider.SetActiveProvider(s, providerID)
+			}); err != nil {
+				return "", "", err
+			}
+			if err := a.persistScope(config.ScopeProject, func(s *config.Settings) error {
+				return provider.SetProviderModel(s, providerID, model)
+			}); err != nil {
+				return "", "", err
+			}
+			shadowNotice = " (project settings own model for this provider; updated project model)"
+		default:
+			if err := a.persistScope(scope, writeFn); err != nil {
+				return "", "", err
+			}
+		}
+	} else {
+		if err := a.persistScope(scope, writeFn); err != nil {
+			return "", "", err
+		}
+	}
+
+	a.setProvidersState(providerID, "")
+	if a.runner != nil && prevProvider != "" && prevProvider != providerID {
+		a.runner.UnpinModel()
+	}
+
+	_, resolvedModel, err = a.deps.Hooks.RebuildRunner(ctx)
+	if err != nil {
+		return "", "", err
+	}
+	return resolvedModel, shadowNotice, nil
 }
 
 // AllActiveModels returns every curated (provider, model) pair for the /model

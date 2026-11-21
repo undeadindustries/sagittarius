@@ -113,10 +113,7 @@ func (d *onboardingDeps) CompleteSetup(ctx context.Context, providerID, model st
 	if err := d.loader().Save(d.settings()); err != nil {
 		return err
 	}
-	if err := provider.SaveActiveProvider(d.loader(), d.settings(), providerID); err != nil {
-		return err
-	}
-	_, _, err := d.inner.app.deps.Hooks.RebuildRunner(ctx)
+	_, _, err := d.inner.app.selectLiveModel(ctx, providerID, model, config.ScopeGlobal)
 	return err
 }
 

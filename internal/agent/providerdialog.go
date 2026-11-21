@@ -180,12 +180,7 @@ func (d *providerDialogDeps) SwitchProvider(ctx context.Context, id string, scop
 	if d.app == nil || d.settings() == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	if err := d.app.persistScope(scope, func(s *config.Settings) error {
-		return provider.SetActiveProvider(s, id)
-	}); err != nil {
-		return err
-	}
-	_, _, err := d.app.deps.Hooks.RebuildRunner(ctx)
+	_, _, err := d.app.selectLiveModel(ctx, id, "", scope)
 	return err
 }
 
@@ -246,12 +241,7 @@ func (d *providerDialogDeps) RemoveCustomProvider(ctx context.Context, id string
 		// new provider is added.
 		return nil
 	}
-	if err := d.app.persistGlobal(func(s *config.Settings) error {
-		return provider.WriteActiveModel(s, fallback.ProviderID, fallback.Model)
-	}); err != nil {
-		return fmt.Errorf("removed provider but selecting a fallback model failed: %w", err)
-	}
-	if _, _, err := d.app.deps.Hooks.RebuildRunner(ctx); err != nil {
+	if _, _, err := d.app.selectLiveModel(ctx, fallback.ProviderID, fallback.Model, config.ScopeGlobal); err != nil {
 		return fmt.Errorf("removed provider but rebuilding with fallback %s failed: %w",
 			config.ProviderDisplayID(fallback.ProviderID), err)
 	}

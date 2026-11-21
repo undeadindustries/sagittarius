@@ -113,7 +113,7 @@ func (s *State) SetMode(mode Mode) {
 // default from clobbering the active provider's configured model when switching
 // providers, while the per-mode override still trumps everything below it.
 func ResolveModel(mode Mode, cfg *config.SagittariusSettings, providerID, providerDefault string) string {
-	if m := modeModel(cfg, mode); m != "" {
+	if m := modeModel(cfg, mode, providerID); m != "" {
 		return m
 	}
 	if m := providerScopedDefault(cfg, providerID); m != "" {
@@ -253,9 +253,13 @@ func LogModeSelection(mode Mode, model, providerID, providerDefault string) {
 	)
 }
 
-func modeModel(cfg *config.SagittariusSettings, mode Mode) string {
+func modeModel(cfg *config.SagittariusSettings, mode Mode, activeProvider string) string {
 	mc := modeConfig(cfg, mode)
 	if mc == nil {
+		return ""
+	}
+	mp := config.NormalizeProviderID(strings.TrimSpace(mc.Provider))
+	if mp != "" && activeProvider != "" && mp != config.NormalizeProviderID(activeProvider) {
 		return ""
 	}
 	return strings.TrimSpace(mc.Model)

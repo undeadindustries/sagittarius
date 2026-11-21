@@ -815,6 +815,14 @@ func (r *Runner) pinned() bool {
 	return r.modelPinned
 }
 
+// UnpinModel clears a CLI --model pin so subsequent provider switches resolve
+// the new provider's default model rather than sending a foreign model id.
+func (r *Runner) UnpinModel() {
+	r.modelMu.Lock()
+	r.modelPinned = false
+	r.modelMu.Unlock()
+}
+
 // ApprovalMode returns the active tool-approval policy (default/autoEdit/yolo).
 func (r *Runner) ApprovalMode() ApprovalMode {
 	r.approvalMu.RLock()

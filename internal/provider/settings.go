@@ -243,6 +243,29 @@ func WriteActiveModel(settings *config.Settings, providerID, model string) error
 	return setProviderInstance(settings, providerID, &cfg)
 }
 
+// WithActiveProvider returns a shallow copy of settings with Providers.Active
+// set to providerID, leaving the original settings untouched. Use it for
+// runtime mode-provider overrides so temporary switches never leak into
+// persisted global or project documents.
+func WithActiveProvider(settings *config.Settings, providerID string) *config.Settings {
+	if settings == nil {
+		return nil
+	}
+	norm := config.NormalizeProviderID(providerID)
+	if norm == "" || config.NormalizeProviderID(settings.ActiveProvider()) == norm {
+		return settings
+	}
+	cp := *settings
+	if settings.Providers != nil {
+		ps := *settings.Providers
+		ps.Active = norm
+		cp.Providers = &ps
+	} else {
+		cp.Providers = &config.ProvidersSettings{Active: norm}
+	}
+	return &cp
+}
+
 // PruneModelOverrides clears every stale (provider, model) pin: the four
 // per-mode overrides, the subagent default/research/coding/reviewer slots, and
 // the goal evaluator pair. A pin is stale when its provider no longer exists
