@@ -78,8 +78,77 @@ func TestContextLimitForModel(t *testing.T) {
 	if got := ContextLimitForModel(nil, "openai/gpt-4o-2024-08-06"); got != 128_000 {
 		t.Errorf("prefix gpt-4o = %d, want 128000", got)
 	}
+	if got := ContextLimitForModel(nil, "claude-opus-5-5"); got != 1_000_000 {
+		t.Errorf("static claude-opus-5-5 = %d, want 1000000", got)
+	}
+	if got := ContextLimitForModel(nil, "claude-sonnet-4-5-20250929"); got != 200_000 {
+		t.Errorf("static claude-sonnet-4-5 = %d, want 200000", got)
+	}
 	if got := ContextLimitForModel(nil, "totally-unknown"); got != 0 {
 		t.Errorf("unknown = %d, want 0", got)
+	}
+}
+
+func TestDiscoverAnthropicModelsPaginationAndCapabilities(t *testing.T) {
+	t.Parallel()
+
+	page := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("anthropic-version") != AnthropicAPIVersion {
+			t.Errorf("anthropic-version = %q, want %q", r.Header.Get("anthropic-version"), AnthropicAPIVersion)
+		}
+		if r.Header.Get("anthropic-workspace-id") != "wrkspc_01XYZ" {
+			t.Errorf("anthropic-workspace-id = %q, want wrkspc_01XYZ", r.Header.Get("anthropic-workspace-id"))
+		}
+		page++
+		w.Header().Set("Content-Type", "application/json")
+		if page == 1 {
+			_, _ = w.Write([]byte(`{
+				"data": [{
+					"id": "claude-opus-5-5",
+					"max_input_tokens": 1000000,
+					"max_tokens": 128000,
+					"capabilities": {
+						"effort": {"supported": true, "low": {"supported": true}, "medium": {"supported": true}, "high": {"supported": true}, "xhigh": {"supported": true}, "max": {"supported": true}},
+						"thinking": {"supported": true, "types": {"adaptive": {"supported": true}}}
+					}
+				}],
+				"has_more": true,
+				"last_id": "claude-opus-5-5"
+			}`))
+			return
+		}
+		if r.URL.Query().Get("after_id") != "claude-opus-5-5" {
+			t.Errorf("after_id = %q, want claude-opus-5-5", r.URL.Query().Get("after_id"))
+		}
+		_, _ = w.Write([]byte(`{
+			"data": [{
+				"id": "claude-haiku-5-5",
+				"max_input_tokens": 1000000,
+				"max_tokens": 128000,
+				"capabilities": {
+					"effort": {"supported": true, "low": {"supported": true}, "high": {"supported": true}},
+					"thinking": {"supported": true, "types": {"adaptive": {"supported": true}, "disabled": {"supported": true}}}
+				}
+			}],
+			"has_more": false,
+			"last_id": "claude-haiku-5-5"
+		}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	infos, err := DiscoverAnthropicModels(context.Background(), srv.URL+"/v1/messages", "sk-ant-test", "wrkspc_01XYZ", srv.Client())
+	if err != nil {
+		t.Fatalf("DiscoverAnthropicModels: %v", err)
+	}
+	if len(infos) != 2 {
+		t.Fatalf("infos len = %d, want 2", len(infos))
+	}
+	if infos[0].ID != "claude-haiku-5-5" || infos[0].Reasoning.Mandatory {
+		t.Fatalf("haiku info = %#v, want non-mandatory", infos[0])
+	}
+	if infos[1].ID != "claude-opus-5-5" || infos[1].ContextLimit != 1_000_000 || infos[1].MaxOutputTokens != 128_000 || !infos[1].Reasoning.Mandatory {
+		t.Fatalf("opus info = %#v", infos[1])
 	}
 }
 

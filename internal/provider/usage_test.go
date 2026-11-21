@@ -27,6 +27,40 @@ func TestGeneratedTokens(t *testing.T) {
 	}
 }
 
+func TestAnthropicUsageTotalInputNeverExceeds100PercentCacheHit(t *testing.T) {
+	t.Parallel()
+	state := NewAnthropicSseMapperState()
+	_, _ = MapAnthropicSseEvent(AnthropicSseEvent{
+		Type: "message_start",
+		Message: &anthropicSseMessage{
+			Usage: &anthropicSseUsage{
+				InputTokens:              intPtr(10),
+				CacheReadInputTokens:     intPtr(900),
+				CacheCreationInputTokens: intPtr(90),
+				OutputTokens:             intPtr(1),
+			},
+		},
+	}, state)
+	_, _ = MapAnthropicSseEvent(AnthropicSseEvent{
+		Type:  "message_delta",
+		Delta: &anthropicSseDelta{StopReason: "end_turn"},
+		Usage: &anthropicSseUsage{OutputTokens: intPtr(25)},
+	}, state)
+	chunks, err := MapAnthropicSseEvent(AnthropicSseEvent{Type: "message_stop"}, state)
+	if err != nil {
+		t.Fatalf("message_stop: %v", err)
+	}
+	u := chunks[0].Usage
+	if u.InputTokens != 1000 || u.CachedTokens != 900 || !u.CachedReported {
+		t.Fatalf("usage = %#v, want Input=1000 Cached=900", u)
+	}
+	if hitPct := u.CachedTokens * 100 / u.InputTokens; hitPct > 100 {
+		t.Fatalf("cache hit pct = %d%%, must not exceed 100%%", hitPct)
+	}
+}
+
+func intPtr(v int) *int { return &v }
+
 // TestOpenAIChatUsageParsed verifies that a standard OpenAI-chat stream with a
 // trailing usage object emits a StreamResponse with non-zero token counts.
 func TestOpenAIChatUsageParsed(t *testing.T) {

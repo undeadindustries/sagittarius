@@ -41,6 +41,7 @@ var builtinSpecs = []providerSpec{
 	{id: string(config.BuiltInGeminiAPIKey), wire: config.WireFormatGemini, defaultModel: "gemini-2.0-flash", modelEnv: "SAGITTARIUS_E2E_MODEL_GEMINI"},
 	{id: string(config.BuiltInOpenAI), wire: config.WireFormatOpenAIChat, defaultModel: "gpt-4o-mini", modelEnv: "SAGITTARIUS_E2E_MODEL_OPENAI"},
 	{id: string(config.BuiltInOpenAIResponses), wire: config.WireFormatOpenAIResponses, defaultModel: "gpt-5-mini", modelEnv: "SAGITTARIUS_E2E_MODEL_OPENAI_RESPONSES"},
+	{id: "anthropic", wire: config.WireFormatAnthropic, defaultModel: "claude-haiku-5-5", modelEnv: "SAGITTARIUS_E2E_MODEL_ANTHROPIC"},
 }
 
 func (s providerSpec) model() string {

@@ -609,6 +609,7 @@ func TestChatCompletionsURL(t *testing.T) {
 		want string
 	}{
 		{"https://api.openai.com/v1/chat/completions", "https://api.openai.com"},
+		{"https://api.anthropic.com/v1/messages", "https://api.anthropic.com"},
 		{"https://api.groq.com/openai/v1/chat/completions", "https://api.groq.com/openai"},
 		{"https://api.z.ai/api/coding/paas/v4/chat/completions", "https://api.z.ai/api/coding/paas/v4"},
 		{"https://example.com/v1/completions", "https://example.com"},
@@ -617,6 +618,12 @@ func TestChatCompletionsURL(t *testing.T) {
 		if got := ExtractServerRoot(tt.in); got != tt.want {
 			t.Errorf("ExtractServerRoot(%q) = %q, want %q", tt.in, got, tt.want)
 		}
+	}
+	if got := MessagesURL("https://api.anthropic.com"); got != "https://api.anthropic.com/v1/messages" {
+		t.Errorf("MessagesURL root = %q", got)
+	}
+	if got := MessagesURL("https://api.anthropic.com/v1/messages"); got != "https://api.anthropic.com/v1/messages" {
+		t.Errorf("MessagesURL verbatim = %q", got)
 	}
 }
 

@@ -342,6 +342,70 @@ func TestOpenAIResponsesStallGuard(t *testing.T) {
 	}
 }
 
+func TestAnthropicStallGuard(t *testing.T) {
+	t.Parallel()
+
+	msgStart := `{"type":"message_start","message":{"id":"msg_1","model":"claude-opus-5-5"}}`
+	ping := `{"type":"ping"}`
+	delta := `{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}`
+	stop := `{"type":"message_stop"}`
+
+	tests := []struct {
+		name     string
+		steps    []sseStep
+		wantKind error
+		wantText string
+	}{
+		{
+			name:     "ping and message_start do not count as output",
+			steps:    []sseStep{{data: sseData(msgStart) + sseData(ping), pause: testHang}},
+			wantKind: ErrFirstTokenTimeout,
+		},
+		{
+			name: "pause after text delta is never cut off",
+			steps: []sseStep{
+				{data: sseData(msgStart) + sseData(delta), pause: testStallPause},
+				{data: sseData(stop)},
+			},
+			wantText: "hi",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			srv := scriptedSSE(t, 0, tt.steps...)
+			gen, err := NewAnthropicGenerator(AnthropicConfig{
+				BaseURL:           srv.URL + "/v1/messages",
+				Model:             "claude-opus-5-5",
+				HTTPClient:        srv.Client(),
+				ProviderID:        "local",
+				ConnectTimeout:    testStallBudget,
+				FirstTokenTimeout: testStallBudget,
+			})
+			if err != nil {
+				t.Fatalf("NewAnthropicGenerator: %v", err)
+			}
+			ch, err := gen.GenerateContentStream(testContext(t), &GenerateRequest{
+				Messages: []Message{{Role: RoleUser, Parts: []Part{{Text: "hi"}}}},
+			})
+			if err != nil {
+				t.Fatalf("GenerateContentStream: %v", err)
+			}
+			out := drainOutcome(ch)
+			if tt.wantKind != nil {
+				assertStall(t, out.err, tt.wantKind)
+				return
+			}
+			if out.err != nil {
+				t.Fatalf("unexpected error: %v", out.err)
+			}
+			if out.text != tt.wantText {
+				t.Fatalf("text = %q, want %q", out.text, tt.wantText)
+			}
+		})
+	}
+}
+
 // delayedStreamer waits before each chunk, honoring ctx the way the genai SDK
 // does when its request is canceled.
 type delayedStreamer struct {

@@ -1155,3 +1155,67 @@ func TestCustomEditSheetHasDecomposedURLRows(t *testing.T) {
 		t.Error("custom edit sheet should not have a raw baseUrl row")
 	}
 }
+
+func TestAddWizardThreeWayWireToggleAndAnthropicWorkspaceID(t *testing.T) {
+	deps := newFakeDeps()
+	m := New(context.Background(), deps)
+
+	// Blank add -> wire step -> cycle all three wire formats.
+	m = gotoBlankAdd(m)
+	m.input.SetValue("Claude Proxy")
+	m, _ = send(m, key("enter"))
+	m.input.SetValue("https://api.anthropic.com/v1/messages")
+	m, _ = send(m, key("enter"))
+	m, _ = send(m, key("enter")) // skip port
+	if m.add.fieldIdx != addFieldWire || m.add.wire != config.WireFormatOpenAIChat {
+		t.Fatalf("at wire step: field=%d wire=%q", m.add.fieldIdx, m.add.wire)
+	}
+	m, _ = send(m, key("right"))
+	if m.add.wire != config.WireFormatOpenAIResponses {
+		t.Fatalf("after 1 right: wire=%q, want openai-responses", m.add.wire)
+	}
+	m, _ = send(m, key("right"))
+	if m.add.wire != config.WireFormatAnthropic {
+		t.Fatalf("after 2 rights: wire=%q, want anthropic", m.add.wire)
+	}
+	m, _ = send(m, key("right"))
+	if m.add.wire != config.WireFormatOpenAIChat {
+		t.Fatalf("after 3 rights: wire=%q, want wrap to openai-chat", m.add.wire)
+	}
+
+	// Select anthropic preset: jumps to API key, then workspaceId, rejects "Default", accepts "wrkspc_01ABC".
+	m = New(context.Background(), deps)
+	m, _ = send(m, key("a"))
+	idx := -1
+	for i, opt := range m.pickerOptions {
+		if opt.id == "anthropic" {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		t.Fatal("anthropic preset missing from picker")
+	}
+	for i := 0; i < idx; i++ {
+		m, _ = send(m, key("down"))
+	}
+	m, _ = send(m, key("enter"))
+	if m.add.wire != config.WireFormatAnthropic || m.add.fieldIdx != addFieldAPIKey {
+		t.Fatalf("anthropic preset seed: wire=%q field=%d", m.add.wire, m.add.fieldIdx)
+	}
+	m.input.SetValue("sk-ant-test")
+	m, _ = send(m, key("enter"))
+	if m.add.fieldIdx != addFieldWorkspaceID {
+		t.Fatalf("after anthropic API key: field=%d, want addFieldWorkspaceID", m.add.fieldIdx)
+	}
+	m.input.SetValue("Default")
+	m, _ = send(m, key("enter"))
+	if m.errMsg == "" || m.add.fieldIdx != addFieldWorkspaceID {
+		t.Fatalf("Default workspace should be rejected on addFieldWorkspaceID: err=%q field=%d", m.errMsg, m.add.fieldIdx)
+	}
+	m.input.SetValue("wrkspc_01ABC")
+	m, _ = send(m, key("enter"))
+	if m.add.fieldIdx != addFieldIdOverride || m.add.workspaceID != "wrkspc_01ABC" {
+		t.Fatalf("after valid workspaceId: field=%d ws=%q", m.add.fieldIdx, m.add.workspaceID)
+	}
+}

@@ -340,3 +340,122 @@ func TestE2E_MockSlashStatsCache(t *testing.T) {
 		t.Fatalf("/stats cache output unexpected:\n%s", res.stdout)
 	}
 }
+
+func mockAnthropicServer(t *testing.T, model, writePath, writeContent string) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("anthropic-version") == "" {
+			http.Error(w, `{"error":{"message":"missing anthropic-version"}}`, http.StatusBadRequest)
+			return
+		}
+		if r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/models") {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"data":     []map[string]any{{"id": model, "max_input_tokens": 1000000, "max_tokens": 128000}},
+				"has_more": false,
+			})
+			return
+		}
+		if !strings.HasSuffix(r.URL.Path, "/messages") {
+			http.NotFound(w, r)
+			return
+		}
+		var body struct {
+			Messages []struct {
+				Role    string          `json:"role"`
+				Content json.RawMessage `json:"content"`
+			} `json:"messages"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		sawToolResult := false
+		for _, m := range body.Messages {
+			if m.Role == "user" && strings.Contains(string(m.Content), `"tool_result"`) {
+				sawToolResult = true
+			}
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		emitAnth := func(ev string, payload map[string]any) {
+			data, _ := json.Marshal(payload)
+			_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", ev, data)
+		}
+		emitAnth("message_start", map[string]any{
+			"type":    "message_start",
+			"message": map[string]any{"id": "msg_mock", "model": model, "usage": map[string]any{"input_tokens": 50, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 100, "output_tokens": 1}},
+		})
+		if !sawToolResult {
+			args, _ := json.Marshal(map[string]string{"file_path": writePath, "content": writeContent})
+			emitAnth("content_block_start", map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]any{"type": "thinking", "thinking": "", "signature": ""}})
+			emitAnth("content_block_delta", map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "thinking_delta", "thinking": "writing file"}})
+			emitAnth("content_block_delta", map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "signature_delta", "signature": "sig-mock"}})
+			emitAnth("content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
+			emitAnth("content_block_start", map[string]any{"type": "content_block_start", "index": 1, "content_block": map[string]any{"type": "tool_use", "id": "toolu_mock_1", "name": "write_file", "input": map[string]any{}}})
+			emitAnth("content_block_delta", map[string]any{"type": "content_block_delta", "index": 1, "delta": map[string]any{"type": "input_json_delta", "partial_json": string(args)}})
+			emitAnth("content_block_stop", map[string]any{"type": "content_block_stop", "index": 1})
+			emitAnth("message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": "tool_use"}, "usage": map[string]any{"output_tokens": 20}})
+		} else {
+			emitAnth("content_block_start", map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]any{"type": "text", "text": ""}})
+			emitAnth("content_block_delta", map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "text_delta", "text": "done."}})
+			emitAnth("content_block_stop", map[string]any{"type": "content_block_stop", "index": 0})
+			emitAnth("message_delta", map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": "end_turn"}, "usage": map[string]any{"output_tokens": 5}})
+		}
+		emitAnth("message_stop", map[string]any{"type": "message_stop"})
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func TestE2E_MockAnthropicToolCall(t *testing.T) {
+	skipUnlessMock(t)
+	bin := sagittariusBin(t)
+	srv := mockAnthropicServer(t, "claude-opus-5-5", "anth.txt", "from anthropic\n")
+
+	home := t.TempDir()
+	dir := filepath.Join(home, ".sagittarius")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	settings := map[string]any{
+		"providers": map[string]any{
+			"active": "anthropic",
+			"custom": map[string]any{
+				"anthropic": map[string]any{
+					"displayName":  "Anthropic",
+					"baseUrl":      srv.URL + "/v1/messages",
+					"apiKeyEnvVar": "ANTHROPIC_API_KEY",
+					"wireFormat":   "anthropic",
+					"workspaceId":  "wrkspc_01MOCK",
+					"defaultModel": "claude-opus-5-5",
+				},
+			},
+			"anthropic": map[string]any{
+				"model": "claude-opus-5-5",
+			},
+		},
+	}
+	data, _ := json.MarshalIndent(settings, "", "  ")
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), data, 0o600); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	work := t.TempDir()
+	env := append(mockEnv(home, ""), "ANTHROPIC_API_KEY=sk-ant-mock-test-key")
+	res := invoke(t, bin, work, env, "--yolo", "-p", "write anth.txt")
+	if res.exitCode != 0 {
+		t.Fatalf("exit=%d stderr=%s stdout=%s", res.exitCode, res.stderr, res.stdout)
+	}
+	got, err := os.ReadFile(filepath.Join(work, "anth.txt"))
+	if err != nil {
+		t.Fatalf("anth.txt missing: %v", err)
+	}
+	if string(got) != "from anthropic\n" {
+		t.Fatalf("anth.txt = %q, want from anthropic", string(got))
+	}
+	if !strings.Contains(res.stdout, "done.") {
+		t.Fatalf("stdout = %q, want done.", res.stdout)
+	}
+}

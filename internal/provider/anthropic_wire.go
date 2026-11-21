@@ -321,11 +321,19 @@ func messagesToAnthropicMessages(messages []Message, keepReasoningHistory bool) 
 		if msg.Role != RoleUser {
 			continue
 		}
+		hasFR := false
+		hasText := false
 		for _, p := range msg.Parts {
-			if p.FunctionResponse == nil && strings.TrimSpace(p.Text) != "" {
-				lastUserTextIdx = i
+			if p.FunctionResponse != nil {
+				hasFR = true
 				break
 			}
+			if strings.TrimSpace(p.Text) != "" {
+				hasText = true
+			}
+		}
+		if !hasFR && hasText {
+			lastUserTextIdx = i
 		}
 	}
 

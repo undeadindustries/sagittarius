@@ -76,3 +76,62 @@ func TestMigrateLegacyBuiltins_PreservesExistingCustom(t *testing.T) {
 		t.Errorf("baseURL overwritten: %q", got)
 	}
 }
+
+func TestMigrateAnthropicPreset(t *testing.T) {
+	t.Run("rewrites uncustomized legacy anthropic preset", func(t *testing.T) {
+		oldLimit := 200_000
+		s := &Settings{Providers: &ProvidersSettings{
+			Active: "anthropic",
+			Custom: map[string]CustomProviderDefinition{
+				"anthropic": {
+					DisplayName:         "Anthropic",
+					BaseURL:             "https://api.anthropic.com/v1/chat/completions",
+					APIKeyEnvVar:        "ANTHROPIC_API_KEY",
+					WireFormat:          WireFormatOpenAIChat,
+					DefaultContextLimit: &oldLimit,
+				},
+			},
+		}}
+		if !MigrateAnthropicPreset(s) {
+			t.Fatal("expected migration to apply")
+		}
+		def := s.Providers.Custom["anthropic"]
+		if def.WireFormat != WireFormatAnthropic || def.BaseURL != "https://api.anthropic.com/v1/messages" {
+			t.Fatalf("migrated def = %+v", def)
+		}
+		if def.DefaultContextLimit == nil || *def.DefaultContextLimit != 1_000_000 {
+			t.Fatalf("DefaultContextLimit = %v, want 1000000", def.DefaultContextLimit)
+		}
+		if MigrateAnthropicPreset(s) {
+			t.Fatal("second pass should be a no-op")
+		}
+	})
+
+	t.Run("skips custom user-edited anthropic URL", func(t *testing.T) {
+		s := &Settings{Providers: &ProvidersSettings{
+			Custom: map[string]CustomProviderDefinition{
+				"anthropic": {
+					DisplayName: "Anthropic Proxy",
+					BaseURL:     "https://proxy.internal/v1/chat/completions",
+					WireFormat:  WireFormatOpenAIChat,
+				},
+			},
+		}}
+		if MigrateAnthropicPreset(s) {
+			t.Fatal("user-edited URL should not be overwritten")
+		}
+	})
+}
+
+func TestValidateAnthropicWorkspaceID(t *testing.T) {
+	for _, valid := range []string{"", "wrkspc_01JwQvzr7rXLA5AGx3HKfFUJ"} {
+		if err := ValidateAnthropicWorkspaceID(valid); err != nil {
+			t.Errorf("ValidateAnthropicWorkspaceID(%q) = %v, want nil", valid, err)
+		}
+	}
+	for _, invalid := range []string{"Default", "default", "workspace_123", "wrkspc_bad!"} {
+		if err := ValidateAnthropicWorkspaceID(invalid); err == nil {
+			t.Errorf("ValidateAnthropicWorkspaceID(%q) = nil, want error", invalid)
+		}
+	}
+}

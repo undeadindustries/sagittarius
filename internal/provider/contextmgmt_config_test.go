@@ -27,6 +27,7 @@ func TestResolveContextManagementGating(t *testing.T) {
 		// generic DefaultLocalContextLimit placeholder.
 		{"openai-chat is enabled and adaptive", string(config.BuiltInOpenAI), true, true, 128_000},
 		{"gemini-native is enabled but not adaptive", string(config.BuiltInGeminiAPIKey), true, false, 1_048_576},
+		{"anthropic is enabled but not adaptive", "anthropic", true, false, 1_000_000},
 		{"openai-responses is not masked", string(config.BuiltInOpenAIResponses), false, false, 400_000},
 	}
 

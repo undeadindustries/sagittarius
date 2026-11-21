@@ -44,6 +44,19 @@ func TestValidSettingKeysOpenAIResponses(t *testing.T) {
 	}
 }
 
+func TestValidSettingKeysAnthropic(t *testing.T) {
+	t.Parallel()
+	keys := ValidSettingKeys(WireFormatAnthropic)
+	for _, want := range []string{"model", "baseUrl", "workspaceId", "reasoningEffort", "toolOutputMaskingEnabled"} {
+		if !hasKey(keys, want) {
+			t.Errorf("anthropic keys missing %q (got %v)", want, keys)
+		}
+	}
+	if hasKey(keys, "useResponseChaining") {
+		t.Error("anthropic must not include useResponseChaining")
+	}
+}
+
 func TestValidSettingKeysForProviderCustomWireFormat(t *testing.T) {
 	t.Parallel()
 	custom := &CustomProviderDefinition{WireFormat: WireFormatOpenAIResponses}

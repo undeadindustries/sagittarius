@@ -114,6 +114,14 @@ func TestInternalCallIDStrippedOnBothWirePaths(t *testing.T) {
 	if !found {
 		t.Fatal("openai-responses: no function_call in plan input")
 	}
+	planAnth := BuildAnthropicRequestPlan(&GenerateRequest{Messages: history}, AnthropicPlanOptions{ToolsEnabled: true})
+	toolInput := planAnth.Body.Messages[0].Content[0].Input
+	if _, leaked := toolInput[InternalCallIDArg]; leaked {
+		t.Fatalf("anthropic tool_use input leaked %s: %#v", InternalCallIDArg, toolInput)
+	}
+	if toolInput["file_path"] != "main.go" {
+		t.Fatalf("anthropic tool_use input = %#v, want file_path=main.go", toolInput)
+	}
 	if original[InternalCallIDArg] != "call_1" {
 		t.Fatalf("history args mutated: %#v", original)
 	}

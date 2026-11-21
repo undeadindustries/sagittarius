@@ -112,6 +112,19 @@ func TestUpdateCustomProviderDefinition(t *testing.T) {
 		t.Fatalf("wireFormat not updated: %q", s.Providers.Custom["my-vllm"].WireFormat)
 	}
 
+	if err := UpdateCustomProviderDefinition(s, "my-vllm", "wireFormat", "anthropic"); err != nil {
+		t.Fatalf("wireFormat anthropic: %v", err)
+	}
+	if s.Providers.Custom["my-vllm"].WireFormat != config.WireFormatAnthropic {
+		t.Fatalf("wireFormat not updated to anthropic: %q", s.Providers.Custom["my-vllm"].WireFormat)
+	}
+	if err := UpdateCustomProviderDefinition(s, "my-vllm", "workspaceId", "wrkspc_01XYZ"); err != nil {
+		t.Fatalf("workspaceId valid: %v", err)
+	}
+	if err := UpdateCustomProviderDefinition(s, "my-vllm", "workspaceId", "Default"); err == nil {
+		t.Fatal("expected workspaceId \"Default\" to be rejected")
+	}
+
 	if err := UpdateCustomProviderDefinition(s, "my-vllm", "wireFormat", "bogus"); err == nil {
 		t.Fatal("expected invalid wireFormat to be rejected")
 	}

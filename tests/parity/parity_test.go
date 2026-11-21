@@ -213,11 +213,14 @@ func TestParityProviderList(t *testing.T) {
 		t.Errorf("config.BuiltInProviders has %d entries, want 1 (gemini-apikey only)",
 			len(config.BuiltInProviders))
 	}
-	// openai + openai-responses must remain resolvable as presets.
-	for _, id := range []string{"openai", "openai-responses"} {
+	// openai + openai-responses + anthropic must remain resolvable as presets.
+	for _, id := range []string{"openai", "openai-responses", "anthropic"} {
 		if _, ok := config.LookupProviderPreset(id); !ok {
 			t.Errorf("provider preset %q missing from config.ProviderPresets", id)
 		}
+	}
+	if p, ok := config.LookupProviderPreset("anthropic"); ok && p.WireFormat != config.WireFormatAnthropic {
+		t.Errorf("anthropic preset WireFormat = %q, want anthropic", p.WireFormat)
 	}
 
 	// Live-fork comparison (opt-in only): just confirm the fork starts and
