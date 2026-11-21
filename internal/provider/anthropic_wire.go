@@ -406,7 +406,7 @@ func messagesToAnthropicMessages(messages []Message, keepReasoningHistory bool) 
 					}
 					continue
 				}
-				if len(part.ThoughtSignature) > 0 {
+				if len(part.ThoughtSignature) > 0 && part.Text == "" && part.FunctionCall == nil && part.FunctionResponse == nil {
 					if keepThinking {
 						txt := part.Reasoning
 						blocks = append(blocks, anthropicContentBlock{
@@ -415,10 +415,7 @@ func messagesToAnthropicMessages(messages []Message, keepReasoningHistory bool) 
 							Signature: string(part.ThoughtSignature),
 						})
 					}
-					// If a caller stored text/call on the same Part, keep processing below.
-					if part.Text == "" && part.FunctionCall == nil {
-						continue
-					}
+					continue
 				}
 				if part.Text != "" {
 					blocks = append(blocks, anthropicContentBlock{

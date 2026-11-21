@@ -197,7 +197,7 @@ func (m *Masker) maskPart(history []Message, item prunablePart, estimate Estimat
 	newParts := make([]Part, len(content.Parts))
 	copy(newParts, content.Parts)
 	newParts[item.partIndex] = maskedPart
-	history[item.contentIndex] = Message{Role: content.Role, Parts: newParts}
+	history[item.contentIndex] = Message{Role: content.Role, Parts: newParts, Provider: content.Provider, Model: content.Model, Wire: content.Wire}
 	return saved, nil
 }
 

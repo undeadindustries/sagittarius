@@ -330,7 +330,7 @@ func (c *Compressor) truncateHistoryToBudget(history []Message) ([]Message, erro
 			newParts = prepend(newParts, truncatedPart)
 			counter += addTokens
 		}
-		out[i] = Message{Role: content.Role, Parts: newParts}
+		out[i] = Message{Role: content.Role, Parts: newParts, Provider: content.Provider, Model: content.Model, Wire: content.Wire}
 	}
 	return out, nil
 }

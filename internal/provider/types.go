@@ -3,6 +3,8 @@ package provider
 import (
 	"strings"
 	"time"
+
+	"github.com/undeadindustries/sagittarius/internal/config"
 )
 
 // Role identifies who produced a message in a conversation turn.
@@ -40,9 +42,15 @@ type FunctionResponse struct {
 }
 
 // Message is one turn in a multi-turn conversation.
+// Provider, Model, and Wire record provenance on RoleModel turns so switching
+// providers or resuming a session never leaks foreign signatures or reasoning
+// to an incompatible endpoint.
 type Message struct {
-	Role  Role
-	Parts []Part
+	Role     Role
+	Parts    []Part
+	Provider string
+	Model    string
+	Wire     config.WireFormat
 }
 
 // ToolCall is a model-initiated function invocation.

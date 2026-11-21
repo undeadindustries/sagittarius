@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 )
 
@@ -140,9 +141,16 @@ func ConvertToProviderHistory(record *ConversationRecord) []provider.Message {
 			if len(parts) == 0 {
 				continue
 			}
+			var prov, model string
+			if msg.Round != nil {
+				prov = config.NormalizeProviderID(msg.Round.Provider)
+				model = msg.Round.Model
+			}
 			history = append(history, provider.Message{
-				Role:  provider.RoleModel,
-				Parts: parts,
+				Role:     provider.RoleModel,
+				Parts:    parts,
+				Provider: prov,
+				Model:    model,
 			})
 		}
 	}

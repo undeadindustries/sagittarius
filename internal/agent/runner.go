@@ -1416,17 +1416,18 @@ outerLoop:
 				roundTelem.PrefixBreakReason = prefixObs.Reason
 			}
 
-			// Prefer the provider's verbatim model parts (carries Gemini thought
+			// Prefer the provider's verbatim model parts (carries Gemini/Anthropic
 			// signatures) when supplied; otherwise reconstruct from text +
 			// reasoning + tool calls (OpenAI-family path).
+			currentWire := config.ResolveProviderWireFormat(r.settingsSnapshot(), currentProvider)
 			if len(modelParts) > 0 {
-				r.appendModelParts(modelParts, modelText, toolCalls, roundTelem)
+				r.appendModelParts(modelParts, modelText, toolCalls, currentProvider, currentModel, currentWire, roundTelem)
 			} else {
 				replayReasoning := ""
 				if req.KeepReasoningHistory {
 					replayReasoning = res.Reasoning
 				}
-				r.appendModelMessageWithReasoning(modelText, replayReasoning, toolCalls, roundTelem)
+				r.appendModelMessageWithReasoning(modelText, replayReasoning, toolCalls, currentProvider, currentModel, currentWire, roundTelem)
 			}
 
 			if len(toolCalls) == 0 {
@@ -1725,6 +1726,8 @@ func (r *Runner) buildGenerateRequest() *provider.GenerateRequest {
 		slog.Warn("request: dropped trailing assistant text; a request must end on a user or tool message",
 			"count", trimmed, "provider", providerID, "model", model)
 	}
+	targetWire := config.ResolveProviderWireFormat(settings, providerID)
+	messages = provider.FilterHistoryForTarget(messages, providerID, model, targetWire)
 	if notice, ok := r.takeScratchpadClearedNotice(); ok {
 		if n := len(messages); n > 0 && messages[n-1].Role == provider.RoleUser && len(messages[n-1].Parts) > 0 {
 			lastParts := append([]provider.Part(nil), messages[n-1].Parts...)
@@ -2711,7 +2714,7 @@ func (r *Runner) dropUnreplayedReasoning() {
 	model := r.model
 	r.modelMu.RUnlock()
 	settings := r.settingsSnapshot()
-	pid := r.activeProviderID()
+	pid := config.NormalizeProviderID(r.activeProviderID())
 	if config.ResolveProviderWireFormat(settings, pid) == config.WireFormatAnthropic {
 		// Anthropic tool loops must always keep thinking + redacted_thinking
 		// blocks in history; a "none" policy only omits completed earlier
@@ -2723,12 +2726,47 @@ func (r *Runner) dropUnreplayedReasoning() {
 	}
 	r.historyMu.Lock()
 	defer r.historyMu.Unlock()
-	if stripped, n := contextmgmt.StripAllReasoning(r.history); n > 0 {
-		r.history = stripped
+	// Strip only same-provider (or legacy unprovenanced) messages so switching
+	// Anthropic -> Gemini -> Anthropic never destroys Anthropic thinking blocks;
+	// FilterHistoryForTarget handles cross-provider isolation on the wire.
+	var updated []provider.Message
+	for i, msg := range r.history {
+		if msg.Role != provider.RoleModel || msg.Wire == config.WireFormatAnthropic {
+			if updated != nil {
+				updated = append(updated, msg)
+			}
+			continue
+		}
+		normMsgProv := config.NormalizeProviderID(msg.Provider)
+		if normMsgProv != "" && pid != "" && normMsgProv != pid {
+			if updated != nil {
+				updated = append(updated, msg)
+			}
+			continue
+		}
+		single, n := contextmgmt.StripAllReasoning([]provider.Message{msg})
+		if n > 0 {
+			if updated == nil {
+				updated = make([]provider.Message, i, len(r.history))
+				copy(updated, r.history[:i])
+			}
+			updated = append(updated, single[0])
+		} else if updated != nil {
+			updated = append(updated, msg)
+		}
+	}
+	if updated != nil {
+		r.history = updated
 	}
 }
 
-func (r *Runner) appendModelMessageWithReasoning(text, reasoning string, toolCalls []provider.ToolCall, telemetry ...*session.RoundTelemetry) {
+func (r *Runner) appendModelMessageWithReasoning(
+	text, reasoning string,
+	toolCalls []provider.ToolCall,
+	providerID, model string,
+	wire config.WireFormat,
+	telemetry ...*session.RoundTelemetry,
+) {
 	parts := make([]provider.Part, 0, 1+len(toolCalls))
 	if text != "" || reasoning != "" {
 		parts = append(parts, provider.Part{Text: text, Reasoning: reasoning})
@@ -2742,8 +2780,11 @@ func (r *Runner) appendModelMessageWithReasoning(text, reasoning string, toolCal
 	}
 	r.historyMu.Lock()
 	r.history = append(r.history, provider.Message{
-		Role:  provider.RoleModel,
-		Parts: parts,
+		Role:     provider.RoleModel,
+		Parts:    parts,
+		Provider: config.NormalizeProviderID(providerID),
+		Model:    model,
+		Wire:     wire,
 	})
 	r.historyMu.Unlock()
 	if r.sessionRecorder != nil {
@@ -2770,17 +2811,28 @@ func (r *Runner) recordBranch() {
 }
 
 // appendModelParts stores the provider's verbatim model parts (preserving
-// Gemini thought signatures) in history. text and toolCalls are passed through
-// to the session recorder, which persists the provider-neutral projection;
-// signatures are not yet persisted across resume (tracked separately).
-func (r *Runner) appendModelParts(parts []provider.Part, text string, toolCalls []provider.ToolCall, telemetry ...*session.RoundTelemetry) {
+// Gemini/Anthropic signatures) in history along with provider/model/wire
+// provenance. text and toolCalls are passed through to the session recorder,
+// which persists the provider-neutral projection; signatures are not yet
+// persisted across resume (tracked separately).
+func (r *Runner) appendModelParts(
+	parts []provider.Part,
+	text string,
+	toolCalls []provider.ToolCall,
+	providerID, model string,
+	wire config.WireFormat,
+	telemetry ...*session.RoundTelemetry,
+) {
 	if len(parts) == 0 {
 		return
 	}
 	r.historyMu.Lock()
 	r.history = append(r.history, provider.Message{
-		Role:  provider.RoleModel,
-		Parts: parts,
+		Role:     provider.RoleModel,
+		Parts:    parts,
+		Provider: config.NormalizeProviderID(providerID),
+		Model:    model,
+		Wire:     wire,
 	})
 	r.historyMu.Unlock()
 	if r.sessionRecorder != nil {

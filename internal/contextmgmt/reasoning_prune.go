@@ -176,5 +176,11 @@ func stripMessageReasoning(msg Message) Message {
 	if len(out) == 0 {
 		out = []Part{{}}
 	}
-	return Message{Role: msg.Role, Parts: out}
+	return Message{
+		Role:     msg.Role,
+		Parts:    out,
+		Provider: msg.Provider,
+		Model:    msg.Model,
+		Wire:     msg.Wire,
+	}
 }

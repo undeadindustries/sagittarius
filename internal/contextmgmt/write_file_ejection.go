@@ -70,7 +70,7 @@ func EjectStaleWriteFileContent(history []Message, opts WriteFileEjectionOptions
 			result.NewHistory[idx] = content
 			continue
 		}
-		result.NewHistory[idx] = Message{Role: content.Role, Parts: newParts}
+		result.NewHistory[idx] = Message{Role: content.Role, Parts: newParts, Provider: content.Provider, Model: content.Model, Wire: content.Wire}
 		result.EjectedCount += ejected
 		result.TokensSaved += saved
 	}

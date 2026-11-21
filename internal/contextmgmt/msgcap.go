@@ -63,7 +63,7 @@ func CapMessagesForSummarizer(history []Message, maxChars int) []Message {
 		for j, p := range msg.Parts {
 			newParts[j] = capPartForSummarizer(p, maxChars, headChars, tailChars)
 		}
-		out[i] = Message{Role: msg.Role, Parts: newParts}
+		out[i] = Message{Role: msg.Role, Parts: newParts, Provider: msg.Provider, Model: msg.Model, Wire: msg.Wire}
 	}
 	return out
 }
@@ -227,7 +227,7 @@ func CapOversizedMessages(history []Message, targetTokens int, estimate Estimate
 			newParts[j] = p
 		}
 		if msgCapped {
-			out[i] = Message{Role: msg.Role, Parts: newParts}
+			out[i] = Message{Role: msg.Role, Parts: newParts, Provider: msg.Provider, Model: msg.Model, Wire: msg.Wire}
 			cappedCount++
 			currentTokens = estimateHistoryTokens(out, estimate)
 		}
