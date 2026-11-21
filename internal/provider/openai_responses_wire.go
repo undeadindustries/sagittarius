@@ -161,10 +161,10 @@ func BuildResponsesRequestPlan(req *GenerateRequest, toolsEnabled bool) Response
 	}
 
 	legacyCounter := 0
-	legacyIDs := make(map[string][]string)
+	pairer := newToolCallPairer()
 
 	for _, msg := range req.Messages {
-		plan.Input = append(plan.Input, messageToResponsesInput(msg, &legacyCounter, legacyIDs)...)
+		plan.Input = append(plan.Input, messageToResponsesInput(msg, &legacyCounter, pairer)...)
 	}
 	if toolsEnabled && len(req.Tools) > 0 {
 		plan.Tools = ToolDeclarationsToResponses(req.Tools)
@@ -172,7 +172,7 @@ func BuildResponsesRequestPlan(req *GenerateRequest, toolsEnabled bool) Response
 	return plan
 }
 
-func messageToResponsesInput(msg Message, legacyCounter *int, legacyIDs map[string][]string) []responsesInputItem {
+func messageToResponsesInput(msg Message, legacyCounter *int, pairer *toolCallPairer) []responsesInputItem {
 	if len(msg.Parts) == 0 {
 		return nil
 	}
@@ -190,15 +190,8 @@ func messageToResponsesInput(msg Message, legacyCounter *int, legacyIDs map[stri
 	for _, part := range msg.Parts {
 		switch {
 		case part.FunctionResponse != nil:
-			rawID := part.FunctionResponse.CallID
-			if rawID == "" {
-				if q := legacyIDs[part.FunctionResponse.Name]; len(q) > 0 {
-					rawID = q[0]
-					legacyIDs[part.FunctionResponse.Name] = q[1:]
-				} else {
-					rawID = "call_" + part.FunctionResponse.Name
-				}
-			}
+			fr := part.FunctionResponse
+			rawID := pairer.resolve(fr.Name, fr.CallID, "call_"+fr.Name)
 			items = append(items, responsesInputItem{
 				Type:   "function_call_output",
 				CallID: safeResponsesCallID(rawID),
@@ -209,8 +202,8 @@ func messageToResponsesInput(msg Message, legacyCounter *int, legacyIDs map[stri
 			if rawID == "" {
 				rawID = "call_" + part.FunctionCall.Name + "_" + strconv.Itoa(*legacyCounter)
 				*legacyCounter++
-				legacyIDs[part.FunctionCall.Name] = append(legacyIDs[part.FunctionCall.Name], rawID)
 			}
+			pairer.addCall(part.FunctionCall.Name, rawID)
 			items = append(items, responsesInputItem{
 				Type:      "function_call",
 				CallID:    safeResponsesCallID(rawID),

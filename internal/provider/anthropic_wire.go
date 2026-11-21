@@ -374,7 +374,7 @@ func messagesToAnthropicMessages(messages []Message, keepReasoningHistory bool) 
 	}
 
 	legacyCounter := 0
-	legacyIDs := make(map[string][]string)
+	pairer := newToolCallPairer()
 	out := make([]anthropicMessage, 0, len(messages))
 
 	appendMsg := func(role string, blocks []anthropicContentBlock) {
@@ -398,15 +398,8 @@ func messagesToAnthropicMessages(messages []Message, keepReasoningHistory bool) 
 			var texts []anthropicContentBlock
 			for _, part := range msg.Parts {
 				if part.FunctionResponse != nil {
-					callID := part.FunctionResponse.CallID
-					if callID == "" {
-						if q := legacyIDs[part.FunctionResponse.Name]; len(q) > 0 {
-							callID = q[0]
-							legacyIDs[part.FunctionResponse.Name] = q[1:]
-						} else {
-							callID = "toolu_legacy_" + part.FunctionResponse.Name
-						}
-					}
+					fr := part.FunctionResponse
+					callID := pairer.resolve(fr.Name, fr.CallID, "toolu_legacy_"+fr.Name)
 					results = append(results, anthropicContentBlock{
 						Type:      "tool_result",
 						ToolUseID: callID,
@@ -465,7 +458,7 @@ func messagesToAnthropicMessages(messages []Message, keepReasoningHistory bool) 
 						callID = "toolu_legacy_" + part.FunctionCall.Name + "_" + strconv.Itoa(legacyCounter)
 						legacyCounter++
 					}
-					legacyIDs[part.FunctionCall.Name] = append(legacyIDs[part.FunctionCall.Name], callID)
+					pairer.addCall(part.FunctionCall.Name, callID)
 					blocks = append(blocks, anthropicContentBlock{
 						Type:  "tool_use",
 						ID:    callID,
