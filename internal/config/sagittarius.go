@@ -116,6 +116,11 @@ type SagittariusSettings struct {
 	// execute per turn. Nil means use the compiled-in default (100).
 	// 0 means no cap. Negative values are invalid.
 	MaxToolRounds *int `json:"maxToolRounds,omitempty"`
+	// ModelSwitchConfirmTokens sets the live-context threshold (in tokens)
+	// above which interactive TUI model switches ask for confirmation because
+	// the next request re-reads history uncached. Nil uses the default (100000);
+	// 0 disables the confirmation.
+	ModelSwitchConfirmTokens *int `json:"modelSwitchConfirmTokens,omitempty"`
 	// ContextLimitPreferDiscovered, when true, causes the API-reported context
 	// limits to be preferred over manual pins.
 	ContextLimitPreferDiscovered *bool `json:"contextLimitPreferDiscovered,omitempty"`
@@ -349,6 +354,23 @@ func SessionsAutoTitle(global, project *Settings) AutoTitlePolicy {
 		return parseAutoTitlePolicy(v)
 	}
 	return AutoTitlePrompt
+}
+
+// DefaultModelSwitchConfirmTokens is the live-context threshold above which
+// TUI model switches warn about re-reading uncached context.
+const DefaultModelSwitchConfirmTokens = 100_000
+
+// ResolveModelSwitchConfirmTokens returns the configured large-context switch
+// confirmation threshold in tokens. Nil yields DefaultModelSwitchConfirmTokens;
+// non-positive values disable the warning (0).
+func ResolveModelSwitchConfirmTokens(s *Settings) int {
+	if s == nil || s.Sagittarius == nil || s.Sagittarius.ModelSwitchConfirmTokens == nil {
+		return DefaultModelSwitchConfirmTokens
+	}
+	if *s.Sagittarius.ModelSwitchConfirmTokens <= 0 {
+		return 0
+	}
+	return *s.Sagittarius.ModelSwitchConfirmTokens
 }
 
 // SessionsRecordReasoning reports whether raw reasoning text should be recorded in session JSONL.

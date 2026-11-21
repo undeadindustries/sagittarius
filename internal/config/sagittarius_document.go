@@ -25,6 +25,7 @@ var reservedSagittariusKeys = map[string]struct{}{
 	"grill":                        {},
 	"sessions":                     {},
 	"maxToolRounds":                {},
+	"modelSwitchConfirmTokens":     {},
 	"contextLimitPreferDiscovered": {},
 	"scriptToolEnabled":            {},
 	"scratchpadEnabled":            {},
@@ -1096,6 +1097,12 @@ func unmarshalSagittarius(raw json.RawMessage) (*SagittariusSettings, error) {
 				return nil, fmt.Errorf("decode sagittarius.maxToolRounds: %w", err)
 			}
 			s.MaxToolRounds = &n
+		case "modelSwitchConfirmTokens":
+			var n int
+			if err := json.Unmarshal(val, &n); err != nil {
+				return nil, fmt.Errorf("decode sagittarius.modelSwitchConfirmTokens: %w", err)
+			}
+			s.ModelSwitchConfirmTokens = &n
 		case "contextLimitPreferDiscovered":
 			var b bool
 			if err := json.Unmarshal(val, &b); err != nil {
@@ -1287,6 +1294,9 @@ func marshalSagittarius(s *SagittariusSettings) (json.RawMessage, error) {
 		obj["sessions"] = b
 	}
 	if err := add("maxToolRounds", s.MaxToolRounds); err != nil {
+		return nil, err
+	}
+	if err := add("modelSwitchConfirmTokens", s.ModelSwitchConfirmTokens); err != nil {
 		return nil, err
 	}
 	if err := add("contextLimitPreferDiscovered", s.ContextLimitPreferDiscovered); err != nil {

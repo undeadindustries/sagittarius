@@ -881,6 +881,10 @@ func (d *modelPickDialogDeps) ContextFitNotice() string {
 	return d.app.contextFitNotice()
 }
 
+func (d *modelPickDialogDeps) ModelSwitchWarning(providerID, model string) string {
+	return d.app.ModelSwitchWarningFor(providerID, model)
+}
+
 func (d *modelPickDialogDeps) SelectCurrentModel(ctx context.Context, providerID, model string, scope config.SettingScope) error {
 	if d.app.docs == nil {
 		return fmt.Errorf("settings not loaded")

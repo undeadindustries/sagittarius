@@ -36,4 +36,7 @@ type Deps interface {
 	// fits the newly-selected model's window, or "" when it fits. Called after
 	// SelectCurrentModel so it sees the model the user just picked.
 	ContextFitNotice() string
+	// ModelSwitchWarning returns a large-context prompt-cache warning before
+	// switching to (providerID, model), or "" when no confirmation is needed.
+	ModelSwitchWarning(providerID, model string) string
 }

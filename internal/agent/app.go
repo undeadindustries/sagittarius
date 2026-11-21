@@ -775,14 +775,9 @@ func (h *appHooks) RebuildRunner(ctx context.Context) (string, string, error) {
 	}
 
 	h.app.runner.SetGenerator(gen)
-	// Propagate the (possibly merged) effective settings so the runner's mode
-	// routing, system-prompt resolution, and per-model config always use the
-	// up-to-date merged view rather than the global-only snapshot it was built with.
-	h.app.runner.SetSettings(effectiveSettings)
-	h.app.runner.SetProviderDefaultModel(endpoint.Model)
-	if !h.app.runner.ModelPinned() {
-		h.app.runner.RefreshModelFromMode()
-	}
+	// Propagate merged settings and provider default atomically so RebuildRunner
+	// triggers a single system prompt rebuild instead of three.
+	h.app.runner.ApplyEndpointState(effectiveSettings, endpoint.Model)
 
 	// A /settings save routes here, so built-in tool toggles
 	// (sagittarius.symbols.*, sagittarius.web.*) must reach the live registry or
@@ -2135,8 +2130,10 @@ func (a *App) selectLiveModel(ctx context.Context, providerID, model string, sco
 	}
 
 	prevProvider := ""
+	prevModel := ""
 	if a.runner != nil {
 		prevProvider = config.NormalizeProviderID(a.runner.ActiveProviderID())
+		prevModel = a.runner.Model()
 	}
 
 	writeFn := func(s *config.Settings) error {
@@ -2188,7 +2185,42 @@ func (a *App) selectLiveModel(ctx context.Context, providerID, model string, sco
 	if err != nil {
 		return "", "", err
 	}
+	if a.runner != nil && ((prevProvider != "" && prevProvider != providerID) || (prevModel != "" && prevModel != resolvedModel)) {
+		a.runner.ResetModelScopedTelemetry()
+	}
 	return resolvedModel, shadowNotice, nil
+}
+
+// ModelSwitchWarning returns a large-context prompt-cache reset warning when
+// the live session exceeds sagittarius.modelSwitchConfirmTokens, or "".
+func (a *App) ModelSwitchWarning() string {
+	return a.ModelSwitchWarningFor("", "")
+}
+
+// ModelSwitchWarningFor returns a large-context cache-reset warning when
+// switching to (providerID, model), or "" when below threshold, disabled (0),
+// or re-selecting the active pair.
+func (a *App) ModelSwitchWarningFor(providerID, model string) string {
+	if a == nil || a.runner == nil {
+		return ""
+	}
+	curProv := config.NormalizeProviderID(a.runner.ActiveProviderID())
+	curModel := strings.TrimSpace(a.runner.Model())
+	if providerID != "" && config.NormalizeProviderID(providerID) == curProv && strings.TrimSpace(model) == curModel {
+		return ""
+	}
+	threshold := config.ResolveModelSwitchConfirmTokens(a.effectiveSettings())
+	if threshold <= 0 {
+		return ""
+	}
+	liveTokens := a.runner.Stats().ContextTokens
+	if liveTokens <= 0 {
+		liveTokens = estimateMessageTokens(a.runner.History())
+	}
+	if liveTokens <= threshold {
+		return ""
+	}
+	return fmt.Sprintf("Context is ~%dk tokens; switching models resets the prompt cache (next turn re-reads uncached).", (liveTokens+500)/1000)
 }
 
 // AllActiveModels returns every curated (provider, model) pair for the /model

@@ -173,6 +173,20 @@ func (s *sessionMetrics) resetCacheBreaks() {
 	s.mu.Unlock()
 }
 
+// resetModelScopedSnapshot clears the previous model's last-turn token and
+// cache-hit snapshot on a model or provider switch while keeping session
+// totals intact (DeepSeek TUI clear_model_scoped_telemetry pattern).
+func (s *sessionMetrics) resetModelScopedSnapshot() {
+	s.mu.Lock()
+	s.lastInTokens = 0
+	s.lastOutTokens = 0
+	s.lastCachedTokens = 0
+	s.lastCacheReported = false
+	s.lastCostUSD = 0
+	s.lastCostKnown = false
+	s.mu.Unlock()
+}
+
 // setContextTokens updates the footer context-% gauge without touching session
 // totals or the last-turn snapshot (used after /compress and prepareContext).
 func (s *sessionMetrics) setContextTokens(tokens int) {

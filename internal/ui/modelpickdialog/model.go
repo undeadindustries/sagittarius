@@ -32,8 +32,9 @@ type Model struct {
 	done     bool
 	status   string
 
-	spin     spinner.Model
-	applying bool
+	spin             spinner.Model
+	applying         bool
+	confirmingSwitch bool
 
 	errMsg string
 	info   string
@@ -122,15 +123,46 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 	}
 	switch key.String() {
 	case "esc", "q":
+		if m.confirmingSwitch {
+			m.confirmingSwitch = false
+			m.info = ""
+			return m, nil
+		}
 		m.done = true
 		return m, nil
+	case "n", "N":
+		if m.confirmingSwitch {
+			m.confirmingSwitch = false
+			m.info = ""
+			return m, nil
+		}
+	case "y", "Y":
+		if m.confirmingSwitch {
+			m.confirmingSwitch = false
+			return m.selectCurrent()
+		}
 	case "up", "k":
+		m.confirmingSwitch = false
 		m.cursor = wrapDec(m.cursor, len(m.entries))
 		return m, nil
 	case "down", "j":
+		m.confirmingSwitch = false
 		m.cursor = wrapInc(m.cursor, len(m.entries))
 		return m, nil
 	case "enter":
+		if m.confirmingSwitch {
+			m.confirmingSwitch = false
+			return m.selectCurrent()
+		}
+		if m.cursor >= 0 && m.cursor < len(m.entries) {
+			e := m.entries[m.cursor]
+			if warn := m.deps.ModelSwitchWarning(e.ProviderID, e.Model); warn != "" {
+				m.confirmingSwitch = true
+				m.info = warn + " Enter/y to switch, Esc/n to cancel."
+				m.errMsg = ""
+				return m, nil
+			}
+		}
 		return m.selectCurrent()
 	}
 	return m, nil

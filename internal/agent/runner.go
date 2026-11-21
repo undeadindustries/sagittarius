@@ -875,6 +875,54 @@ func (r *Runner) SetInteractionMode(mode modes.Mode) string {
 	return r.Model()
 }
 
+// ResetModelScopedTelemetry clears the previous model's last-turn token and
+// cache-hit snapshot and records a model-switch prefix break.
+func (r *Runner) ResetModelScopedTelemetry() {
+	if r == nil {
+		return
+	}
+	if r.metrics != nil {
+		r.metrics.resetModelScopedSnapshot()
+	}
+	r.prefixDet.noteExpectedBreak("model-switch")
+}
+
+// ApplyEndpointState atomically applies settings and providerDefault with a
+// single system-prompt rebuild (instead of rebuilding separately in SetSettings,
+// SetProviderDefaultModel, and RefreshModelFromMode).
+func (r *Runner) ApplyEndpointState(s *config.Settings, providerDefault string) {
+	providerDefault = strings.TrimSpace(providerDefault)
+	r.prefixDet.noteExpectedBreak("settings-change")
+	r.settingsMu.Lock()
+	r.settings = s
+	r.settingsMu.Unlock()
+
+	r.modelMu.Lock()
+	if providerDefault != "" {
+		r.providerDefaultModel = providerDefault
+	} else {
+		providerDefault = r.providerDefaultModel
+	}
+	prevModel := r.model
+	pinned := r.modelPinned
+	r.modelMu.Unlock()
+
+	if !pinned {
+		mode := r.InteractionMode()
+		providerID := r.activeProviderID()
+		resolved := modes.ResolveModel(mode, r.sagittariusSettings(), providerID, providerDefault)
+		modes.LogModeSelection(mode, resolved, providerID, providerDefault)
+		r.modelMu.Lock()
+		r.model = resolved
+		r.modelMu.Unlock()
+		if resolved != prevModel {
+			r.resetResponseChain()
+			r.ResetModelScopedTelemetry()
+		}
+	}
+	r.rebuildSystem()
+}
+
 // SetSettings updates settings used for mode routing (e.g. after reload). It
 // replaces the pointer atomically under settingsMu; s must be a fresh document
 // that the caller will not mutate afterwards (see settingsSnapshot's contract).
@@ -1924,6 +1972,7 @@ func (r *Runner) refreshModelFromMode() {
 	r.modelMu.Unlock()
 	if resolved != prevModel {
 		r.resetResponseChain()
+		r.ResetModelScopedTelemetry()
 	}
 	r.rebuildSystem()
 }
@@ -1949,6 +1998,7 @@ func (r *Runner) syncModeModel() {
 	r.model = resolved
 	r.modelMu.Unlock()
 	r.resetResponseChain()
+	r.ResetModelScopedTelemetry()
 	r.rebuildSystem()
 }
 

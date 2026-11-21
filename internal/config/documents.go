@@ -763,6 +763,7 @@ func mergeSagittarius(global, project *SagittariusSettings) *SagittariusSettings
 	}
 	merged.DefaultMode = overlayStr(global.DefaultMode, project.DefaultMode)
 	merged.MaxToolRounds = overlayPtr(global.MaxToolRounds, project.MaxToolRounds)
+	merged.ModelSwitchConfirmTokens = overlayPtr(global.ModelSwitchConfirmTokens, project.ModelSwitchConfirmTokens)
 	merged.ContextLimitPreferDiscovered = overlayPtr(global.ContextLimitPreferDiscovered, project.ContextLimitPreferDiscovered)
 	merged.ScriptToolEnabled = overlayPtr(global.ScriptToolEnabled, project.ScriptToolEnabled)
 	merged.ScratchpadEnabled = overlayPtr(global.ScratchpadEnabled, project.ScratchpadEnabled)

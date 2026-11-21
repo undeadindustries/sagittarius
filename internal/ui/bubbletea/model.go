@@ -389,6 +389,9 @@ type model struct {
 	// sidebarCancel cancels an in-flight mid-wait question. Esc while this is
 	// set cancels only the question, not the wait.
 	sidebarCancel context.CancelFunc
+	// pendingModelCycle holds +1 or -1 when a large-context Ctrl+/ or
+	// Ctrl+Shift+P model switch is awaiting user confirmation.
+	pendingModelCycle int
 
 	// overlay holds the active providers wizard. When non-nil it takes over
 	// input and rendering until it reports Done.
@@ -1684,6 +1687,32 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Confirm or cancel a pending large-context Ctrl+/ / Ctrl+Shift+P switch.
+	if m.pendingModelCycle != 0 {
+		switch msg.String() {
+		case "y", "Y", "enter":
+			step := m.pendingModelCycle
+			m.pendingModelCycle = 0
+			return m.executeModelCycle(step)
+		case "ctrl+/":
+			if m.pendingModelCycle > 0 {
+				m.pendingModelCycle = 0
+				return m.executeModelCycle(1)
+			}
+		case "ctrl+shift+p":
+			if m.pendingModelCycle < 0 {
+				m.pendingModelCycle = 0
+				return m.executeModelCycle(-1)
+			}
+		case "esc", "n", "N":
+			m.pendingModelCycle = 0
+			m.addBlock(roleInfo, "Model switch cancelled.")
+			return m, nil
+		default:
+			m.pendingModelCycle = 0
+		}
+	}
+
 	switch msg.String() {
 	case "ctrl+c":
 		return m, m.beginQuit()
@@ -1704,21 +1733,9 @@ func (m *model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "alt+4", "¢":
 		return m.startModeSwitch("debug")
 	case "ctrl+/":
-		if cycler, ok := m.app.(interface {
-			CycleModel(context.Context) (<-chan ui.StreamEvent, error)
-		}); ok {
-			events, err := cycler.CycleModel(m.streamContext())
-			return m.startAppStream(events, err, "model")
-		}
-		return m, nil
+		return m.tryModelCycle(1)
 	case "ctrl+shift+p":
-		if cycler, ok := m.app.(interface {
-			CycleModelReverse(context.Context) (<-chan ui.StreamEvent, error)
-		}); ok {
-			events, err := cycler.CycleModelReverse(m.streamContext())
-			return m.startAppStream(events, err, "model")
-		}
-		return m, nil
+		return m.tryModelCycle(-1)
 	case reasoningKeyAlt, reasoningKeyMac, reasoningKeyCtrlShift:
 		return m.cycleReasoningEffort()
 	case yoloKeyAlt, yoloKeyMac:
@@ -3129,6 +3146,36 @@ func (m *model) startAppStream(events <-chan ui.StreamEvent, err error, statusLe
 	m.streamGen++
 	m.activeStreamGen = m.streamGen
 	return m, waitStream(events, m.activeStreamGen)
+}
+
+func (m *model) tryModelCycle(step int) (tea.Model, tea.Cmd) {
+	if warner, ok := m.app.(interface{ ModelSwitchWarning() string }); ok {
+		if warn := warner.ModelSwitchWarning(); warn != "" {
+			m.pendingModelCycle = step
+			m.addBlock(roleInfo, warn+" Press Enter/y (or repeat shortcut) to switch, Esc/n to cancel.")
+			return m, nil
+		}
+	}
+	return m.executeModelCycle(step)
+}
+
+func (m *model) executeModelCycle(step int) (tea.Model, tea.Cmd) {
+	if step < 0 {
+		if cycler, ok := m.app.(interface {
+			CycleModelReverse(context.Context) (<-chan ui.StreamEvent, error)
+		}); ok {
+			events, err := cycler.CycleModelReverse(m.streamContext())
+			return m.startAppStream(events, err, "model")
+		}
+		return m, nil
+	}
+	if cycler, ok := m.app.(interface {
+		CycleModel(context.Context) (<-chan ui.StreamEvent, error)
+	}); ok {
+		events, err := cycler.CycleModel(m.streamContext())
+		return m.startAppStream(events, err, "model")
+	}
+	return m, nil
 }
 
 // startModeSwitch switches directly to the named interaction mode via the app's
