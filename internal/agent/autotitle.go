@@ -114,6 +114,7 @@ func (r *Runner) generateTitle(ctx context.Context, userText, assistantText stri
 
 	prompt := buildTitlePrompt(userText, assistantText)
 	req := &provider.GenerateRequest{
+		Model:             r.auxModel(),
 		SystemInstruction: titleSystemPrompt,
 		Messages: []provider.Message{
 			{Role: provider.RoleUser, Parts: []provider.Part{{Text: prompt}}},

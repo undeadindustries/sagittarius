@@ -144,6 +144,7 @@ func (r *Runner) generateCompact(ctx context.Context, before []memoryLine) (stri
 
 	prompt := renderMemoryOnlyFile(before)
 	req := &provider.GenerateRequest{
+		Model:             r.auxModel(),
 		SystemInstruction: memoryCompactSystemPrompt,
 		Messages: []provider.Message{
 			{Role: provider.RoleUser, Parts: []provider.Part{{Text: prompt}}},

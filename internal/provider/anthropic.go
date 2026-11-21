@@ -141,13 +141,20 @@ func (g *AnthropicGenerator) DebugWireRequest(req *GenerateRequest) ([]byte, err
 func (g *AnthropicGenerator) buildRequestPlan(req *GenerateRequest, model string) (AnthropicRequestPlan, []byte, error) {
 	cloned := *req
 	cloned.Model = model
-	plan := BuildAnthropicRequestPlan(&cloned, AnthropicPlanOptions{
+	opts := AnthropicPlanOptions{
 		ToolsEnabled:         g.toolsEnabled,
 		SystemPromptOverride: g.systemPromptOverride,
-		DefaultMaxTokens:     g.defaultMaxTokens,
-		ThinkingTypes:        g.thinkingTypes,
-		SupportedEfforts:     g.supportedEfforts,
-	})
+	}
+	if req.ModelMaxOutputTokens > 0 || len(req.ModelThinkingTypes) > 0 || len(req.ModelSupportedEfforts) > 0 {
+		opts.DefaultMaxTokens = req.ModelMaxOutputTokens
+		opts.ThinkingTypes = req.ModelThinkingTypes
+		opts.SupportedEfforts = req.ModelSupportedEfforts
+	} else if model == g.model || g.model == "" {
+		opts.DefaultMaxTokens = g.defaultMaxTokens
+		opts.ThinkingTypes = g.thinkingTypes
+		opts.SupportedEfforts = g.supportedEfforts
+	}
+	plan := BuildAnthropicRequestPlan(&cloned, opts)
 	body, err := json.Marshal(plan.Body)
 	return plan, body, err
 }

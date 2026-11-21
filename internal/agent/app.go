@@ -2617,9 +2617,20 @@ func formatMCPReloadSummary(states []mcp.ServerState) string {
 // and clears any recorded provider-unavailable error.
 func (r *Runner) SetGenerator(gen provider.ContentGenerator) {
 	r.genMu.Lock()
+	prev := r.gen
 	r.gen = gen
 	r.genErr = nil
 	r.genMu.Unlock()
+	if prev != nil && prev != gen {
+		if chain, ok := prev.(interface{ ResetResponseChain() }); ok {
+			chain.ResetResponseChain()
+		}
+	}
+	if gen != nil && gen != prev {
+		if chain, ok := gen.(interface{ ResetResponseChain() }); ok {
+			chain.ResetResponseChain()
+		}
+	}
 }
 
 // SetModel updates the model used for generate requests directly.
@@ -2630,8 +2641,12 @@ func (r *Runner) SetModel(model string) {
 	}
 	r.prefixDet.noteExpectedBreak("model-change")
 	r.modelMu.Lock()
+	changed := r.model != model
 	r.model = model
 	r.modelMu.Unlock()
+	if changed {
+		r.resetResponseChain()
+	}
 }
 
 // PinModel locks the runner to an explicit model, bypassing mode routing.

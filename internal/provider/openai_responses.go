@@ -13,6 +13,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/undeadindustries/sagittarius/internal/config"
 )
 
 // OpenAIResponsesGenerator streams content from the OpenAI Responses API.
@@ -288,12 +290,19 @@ func (g *OpenAIResponsesGenerator) buildRequestBody(req *GenerateRequest, model 
 		instructions = g.systemPromptOverride
 	}
 
+	temp := req.Temperature
+	if temp == nil {
+		if _, omit, matched := config.ModelTemperatureRule(model); !matched || !omit {
+			temp = g.temperature
+		}
+	}
+
 	body := responsesRequestBody{
 		Model:       model,
 		Input:       input,
 		Stream:      stream,
 		Tools:       plan.Tools,
-		Temperature: g.temperature,
+		Temperature: temp,
 	}
 	if instructions != "" {
 		body.Instructions = instructions

@@ -737,11 +737,64 @@ func (r *Runner) Model() string {
 }
 
 // CompressionModel returns the model used for context compression /
-// summarization: the sagittarius.compression.model override when set, otherwise
-// the live mode-resolved model. Resolved per call so it tracks mid-session model
-// changes (provider switch, /mode).
+// summarization: the sagittarius.compression.model override when set and
+// compatible with the active provider, otherwise the live mode-resolved model.
+// Resolved per call so it tracks mid-session model changes (provider switch, /mode).
 func (r *Runner) CompressionModel() string {
-	return modes.ResolveCompressionModel(r.sagittariusSettings(), r.Model())
+	live := r.Model()
+	override := modes.ResolveCompressionModel(r.sagittariusSettings(), live)
+	if override == "" || override == live {
+		return override
+	}
+	settings := r.settingsSnapshot()
+	pid := r.activeProviderID()
+	wire := config.ResolveProviderWireFormat(settings, pid)
+	if compressionModelBelongsElsewhere(override, pid, wire, settings) {
+		return live
+	}
+	return override
+}
+
+func compressionModelBelongsElsewhere(override, activeProvider string, activeWire config.WireFormat, settings *config.Settings) bool {
+	normActive := config.NormalizeProviderID(activeProvider)
+	isAggregator := normActive == "openrouter"
+	if !isAggregator && settings != nil {
+		if inst := settings.ProviderInstance(normActive); inst != nil && strings.Contains(strings.ToLower(inst.BaseURL), "openrouter.ai") {
+			isAggregator = true
+		}
+		if !isAggregator && settings.Providers != nil {
+			if def, ok := settings.Providers.Custom[normActive]; ok && strings.Contains(strings.ToLower(def.BaseURL), "openrouter.ai") {
+				isAggregator = true
+			}
+		}
+	}
+	if isAggregator {
+		return false
+	}
+	lower := strings.ToLower(strings.TrimSpace(override))
+	if prefix, _, hasSlash := strings.Cut(lower, "/"); hasSlash {
+		normPrefix := config.NormalizeProviderID(prefix)
+		if normPrefix != "" && normPrefix != normActive {
+			if _, ok := config.ProviderDefaults(normPrefix); ok {
+				return true
+			}
+			if settings != nil && settings.Providers != nil {
+				if _, ok := settings.Providers.Custom[normPrefix]; ok {
+					return true
+				}
+			}
+		}
+	}
+	switch activeWire {
+	case config.WireFormatAnthropic:
+		return strings.HasPrefix(lower, "gpt-") || strings.HasPrefix(lower, "o3") || strings.HasPrefix(lower, "o4") || strings.HasPrefix(lower, "gemini-")
+	case config.WireFormatGemini:
+		return !strings.Contains(lower, "gemini-")
+	case config.WireFormatOpenAIResponses:
+		return strings.HasPrefix(lower, "claude-") || strings.HasPrefix(lower, "gemini-")
+	default:
+		return false
+	}
 }
 
 // ToolsModel returns the model used for tool-utility calls: the
@@ -904,7 +957,23 @@ func (r *Runner) auxGenerator(ctx context.Context) (provider.ContentGenerator, e
 	settings := r.settingsSnapshot()
 	evalProvider, evalModel := auxEvaluatorTarget(settings)
 	if evalProvider == "" && evalModel == "" {
-		return r.generator()
+		if settings == nil || settings.ActiveProvider() == "" {
+			return r.generator()
+		}
+		clone, err := settingsForTarget(settings, settings.ActiveProvider(), r.Model())
+		if err != nil {
+			return nil, fmt.Errorf("aux generator: %w", err)
+		}
+		gen, err := provider.NewContentGenerator(ctx, clone)
+		if err == nil {
+			return gen, nil
+		}
+		if mainGen, gErr := r.generator(); gErr == nil {
+			if _, chainable := mainGen.(interface{ ResetResponseChain() }); !chainable {
+				return mainGen, nil
+			}
+		}
+		return nil, fmt.Errorf("aux generator: %w", err)
 	}
 
 	clone, err := settingsForTarget(settings, evalProvider, evalModel)
@@ -917,6 +986,14 @@ func (r *Runner) auxGenerator(ctx context.Context) (provider.ContentGenerator, e
 		return nil, fmt.Errorf("aux generator: %w", err)
 	}
 	return gen, nil
+}
+
+func (r *Runner) auxModel() string {
+	_, evalModel := auxEvaluatorTarget(r.settingsSnapshot())
+	if evalModel != "" {
+		return evalModel
+	}
+	return r.Model()
 }
 
 // settingsForTarget clones settings with the given (provider, model) pair
@@ -1750,6 +1827,17 @@ func (r *Runner) buildGenerateRequest() *provider.GenerateRequest {
 		Messages:          messages,
 		Tools:             r.toolRegistry().ListDeclarationsForMode(r.InteractionMode()),
 	}
+	if targetWire == config.WireFormatAnthropic && settings != nil {
+		if inst := settings.ProviderInstance(providerID); inst != nil {
+			if mc, ok := config.LookupModelConfig(inst, model); ok {
+				if mc.MaxOutputTokens != nil && *mc.MaxOutputTokens > 0 {
+					req.ModelMaxOutputTokens = *mc.MaxOutputTokens
+				}
+				req.ModelThinkingTypes = mc.ThinkingTypes
+				req.ModelSupportedEfforts = mc.ReasoningEfforts
+			}
+		}
+	}
 	// Resolve temperature against the live model so mid-session model changes
 	// (mode routing) apply the right sampling without rebuilding the generator.
 	req.Temperature = config.ResolveEffectiveTemperature(settings, providerID, model)
@@ -1827,12 +1915,16 @@ func (r *Runner) refreshModelFromMode() {
 	providerID := r.activeProviderID()
 	r.modelMu.RLock()
 	providerDefault := r.providerDefaultModel
+	prevModel := r.model
 	r.modelMu.RUnlock()
 	resolved := modes.ResolveModel(mode, r.sagittariusSettings(), providerID, providerDefault)
 	modes.LogModeSelection(mode, resolved, providerID, providerDefault)
 	r.modelMu.Lock()
 	r.model = resolved
 	r.modelMu.Unlock()
+	if resolved != prevModel {
+		r.resetResponseChain()
+	}
 	r.rebuildSystem()
 }
 
@@ -1856,6 +1948,7 @@ func (r *Runner) syncModeModel() {
 	r.modelMu.Lock()
 	r.model = resolved
 	r.modelMu.Unlock()
+	r.resetResponseChain()
 	r.rebuildSystem()
 }
 

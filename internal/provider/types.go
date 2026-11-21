@@ -106,6 +106,12 @@ type GenerateRequest struct {
 	// chat_template_kwargs for servers that render a Jinja chat template
 	// (vLLM, SGLang, llama-server).
 	ChatTemplateKwargs map[string]any
+	// Optional per-request Anthropic model capabilities (resolved per round
+	// by Runner for req.Model so a cached generator never leaks an earlier
+	// model's output limit, thinking types, or supported effort levels).
+	ModelMaxOutputTokens  int
+	ModelThinkingTypes    []string
+	ModelSupportedEfforts []string
 }
 
 // ThinkingBudgetMessage is the wrap-up text a server injects at the end of a

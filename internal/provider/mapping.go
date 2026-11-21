@@ -613,7 +613,9 @@ func BuildOpenAIChatRequest(req *GenerateRequest, model string, parseMode config
 	if req.Temperature != nil {
 		body.Temperature = req.Temperature
 	} else if defaultTemperature != nil {
-		body.Temperature = defaultTemperature
+		if _, omit, matched := config.ModelTemperatureRule(model); !matched || !omit {
+			body.Temperature = defaultTemperature
+		}
 	}
 	if req.MaxOutputTokens != nil {
 		body.MaxTokens = req.MaxOutputTokens
