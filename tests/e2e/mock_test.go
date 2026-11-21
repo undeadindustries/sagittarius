@@ -459,3 +459,71 @@ func TestE2E_MockAnthropicToolCall(t *testing.T) {
 		t.Fatalf("stdout = %q, want done.", res.stdout)
 	}
 }
+
+func TestE2E_MockCrossWireResumeSwitch(t *testing.T) {
+	skipUnlessMock(t)
+	bin := sagittariusBin(t)
+	chatSrv := mockChatServer(t, mockModel, "chat.txt", "from chat")
+	anthSrv := mockAnthropicServer(t, "claude-opus-5-5", "anth.txt", "from anth")
+
+	home := t.TempDir()
+	dir := filepath.Join(home, ".sagittarius")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	settings := map[string]any{
+		"providers": map[string]any{
+			"active": "openai",
+			"openai": map[string]any{
+				"baseUrl":      chatSrv.URL + "/v1",
+				"model":        mockModel,
+				"activeModels": []string{mockModel},
+			},
+			"custom": map[string]any{
+				"anthropic": map[string]any{
+					"displayName":  "Anthropic",
+					"baseUrl":      anthSrv.URL + "/v1/messages",
+					"apiKeyEnvVar": "ANTHROPIC_API_KEY",
+					"wireFormat":   "anthropic",
+					"defaultModel": "claude-opus-5-5",
+				},
+			},
+			"anthropic": map[string]any{
+				"model":        "claude-opus-5-5",
+				"activeModels": []string{"claude-opus-5-5"},
+			},
+		},
+	}
+	data, _ := json.MarshalIndent(settings, "", "  ")
+	if err := os.WriteFile(filepath.Join(dir, "settings.json"), data, 0o600); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	work := t.TempDir()
+	sessionID := fmt.Sprintf("e2e-xwire-%d", os.Getpid())
+	env := append(mockEnv(home, sessionID), "ANTHROPIC_API_KEY=sk-ant-mock-test-key")
+
+	// Turn 1 on openai-chat.
+	r1 := invoke(t, bin, work, env, "--yolo", "-p", "hello")
+	if r1.exitCode != 0 {
+		t.Fatalf("turn 1 exit=%d stderr=%s", r1.exitCode, r1.stderr)
+	}
+	// Switch to Anthropic and resume same session.
+	sw1 := invoke(t, bin, work, env, "--slash", "/model anthropic/claude-opus-5-5")
+	if sw1.exitCode != 0 {
+		t.Fatalf("switch to anthropic exit=%d stderr=%s", sw1.exitCode, sw1.stderr)
+	}
+	r2 := invoke(t, bin, work, env, "--yolo", "--resume", sessionID, "-p", "write anth.txt")
+	if r2.exitCode != 0 {
+		t.Fatalf("turn 2 anthropic exit=%d stderr=%s stdout=%s", r2.exitCode, r2.stderr, r2.stdout)
+	}
+	// Switch back to openai-chat and resume same session.
+	sw2 := invoke(t, bin, work, env, "--slash", "/model openai/"+mockModel)
+	if sw2.exitCode != 0 {
+		t.Fatalf("switch back to openai exit=%d stderr=%s", sw2.exitCode, sw2.stderr)
+	}
+	r3 := invoke(t, bin, work, env, "--yolo", "--resume", sessionID, "-p", "follow up")
+	if r3.exitCode != 0 {
+		t.Fatalf("turn 3 openai exit=%d stderr=%s stdout=%s", r3.exitCode, r3.stderr, r3.stdout)
+	}
+}

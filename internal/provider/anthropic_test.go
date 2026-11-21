@@ -502,4 +502,119 @@ func TestAnthropicHeadersPreStreamRetryAndCancel(t *testing.T) {
 			t.Fatalf("emittedCalls = %#v, want none on corrupted stream", emittedCalls)
 		}
 	})
+
+	t.Run("replaying thinking sends beta header and drop_block, and parses input_transformations", func(t *testing.T) {
+		t.Parallel()
+		var gotBeta string
+		var gotBody map[string]any
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotBeta = r.Header.Get("anthropic-beta")
+			_ = json.NewDecoder(r.Body).Decode(&gotBody)
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"model\":\"claude-opus-5-5\",\"input_transformations\":[{\"type\":\"thinking_dropped\",\"path\":\"messages.1.content.0\",\"reason\":\"prefix_binding_mismatch\"}]}}\n\n" +
+				"data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"ok\"}}\n\n" +
+				"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n" +
+				"data: {\"type\":\"message_stop\"}\n\n"))
+		}))
+		t.Cleanup(srv.Close)
+
+		gen, err := NewAnthropicGenerator(AnthropicConfig{
+			BaseURL:    srv.URL + "/v1/messages",
+			Model:      "claude-opus-5-5",
+			HTTPClient: srv.Client(),
+		})
+		if err != nil {
+			t.Fatalf("NewAnthropicGenerator: %v", err)
+		}
+		ch, err := gen.GenerateContentStream(testContext(t), &GenerateRequest{
+			KeepReasoningHistory: true,
+			Messages: []Message{
+				{Role: RoleUser, Parts: []Part{{Text: "one"}}},
+				{Role: RoleModel, Parts: []Part{{Reasoning: "think", ThoughtSignature: []byte("sig-1")}, {Text: "ans"}}},
+				{Role: RoleUser, Parts: []Part{{Text: "two"}}},
+			},
+		})
+		if err != nil {
+			t.Fatalf("GenerateContentStream: %v", err)
+		}
+		var text string
+		for sr := range ch {
+			if sr.Error != nil {
+				t.Fatalf("stream error: %v", sr.Error)
+			}
+			text += sr.TextDelta
+		}
+		if text != "ok" {
+			t.Fatalf("text = %q, want ok", text)
+		}
+		if gotBeta != AnthropicThinkingBindingBeta {
+			t.Fatalf("anthropic-beta = %q, want %q", gotBeta, AnthropicThinkingBindingBeta)
+		}
+		thinking := gotBody["thinking"].(map[string]any)
+		bb := thinking["block_binding"].(map[string]any)
+		if thinking["type"] != "adaptive" || bb["prefix_mismatch_behavior"] != "drop_block" {
+			t.Fatalf("thinking = %#v, want adaptive + drop_block", thinking)
+		}
+	})
+
+	t.Run("strip-and-retry fallback runs once on 400 signature error", func(t *testing.T) {
+		t.Parallel()
+		var attempts atomic.Int32
+		var secondMsgs []any
+		var secondBeta string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			n := attempts.Add(1)
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			if n == 1 {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"error":{"type":"invalid_request_error","message":"messages.1.content.0: Invalid signature in thinking block. The block is bound to a different conversation."}}`))
+				return
+			}
+			secondBeta = r.Header.Get("anthropic-beta")
+			secondMsgs = body["messages"].([]any)
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"recovered\"}}\n\n" +
+				"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n" +
+				"data: {\"type\":\"message_stop\"}\n\n"))
+		}))
+		t.Cleanup(srv.Close)
+
+		gen, err := NewAnthropicGenerator(AnthropicConfig{
+			BaseURL:    srv.URL + "/v1/messages",
+			Model:      "claude-opus-5-5",
+			HTTPClient: srv.Client(),
+		})
+		if err != nil {
+			t.Fatalf("NewAnthropicGenerator: %v", err)
+		}
+		ch, err := gen.GenerateContentStream(testContext(t), &GenerateRequest{
+			KeepReasoningHistory: true,
+			Messages: []Message{
+				{Role: RoleUser, Parts: []Part{{Text: "one"}}},
+				{Role: RoleModel, Parts: []Part{{Reasoning: "think", ThoughtSignature: []byte("sig-1")}, {Text: "ans"}}},
+				{Role: RoleUser, Parts: []Part{{Text: "two"}}},
+			},
+		})
+		if err != nil {
+			t.Fatalf("GenerateContentStream: %v", err)
+		}
+		var text string
+		for sr := range ch {
+			if sr.Error != nil {
+				t.Fatalf("unexpected error: %v", sr.Error)
+			}
+			text += sr.TextDelta
+		}
+		if text != "recovered" || attempts.Load() != 2 {
+			t.Fatalf("text=%q attempts=%d, want recovered / 2", text, attempts.Load())
+		}
+		if secondBeta != "" {
+			t.Fatalf("fallback beta header = %q, want empty", secondBeta)
+		}
+		asst := secondMsgs[1].(map[string]any)["content"].([]any)
+		if len(asst) != 1 || asst[0].(map[string]any)["type"] != "text" {
+			t.Fatalf("fallback should strip thinking from messages.1: %#v", asst)
+		}
+	})
 }
