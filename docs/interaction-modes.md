@@ -55,10 +55,13 @@ All keys live under the top-level `sagittarius` object so fork keys are never cl
 ```
 
 Mode overrides are **provider-qualified**: a `provider` field in `modes.<mode>`
-causes Sagittarius to rebuild the generator for that provider when the mode is
-activated, and revert to the base provider when leaving the mode. Omitting
-`provider` overrides only the model string; when leaving that mode Sagittarius
-returns to the base provider (the one selected with `/model` or active at startup).
+causes Sagittarius to switch to that provider in memory when the mode is
+activated, and return to the user's base provider when leaving the mode. A mode's
+`model` override applies only when its `provider` matches the active provider (or
+is omitted), so switching away with `/model` or `Ctrl+/` never sends a foreign
+model id to another provider. Omitting `provider` overrides only the model
+string; when leaving that mode Sagittarius returns to the base provider (the one
+selected with `/model` or `Ctrl+/`, or active at startup).
 
 `defaultModels` maps a provider id (canonical, e.g. `gemini-apikey`, or the short
 `gemini` alias) to the default model used while that provider is active. Unknown

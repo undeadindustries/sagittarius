@@ -202,6 +202,12 @@ The judge is a read-only sub-runner (ask-mode tools, 6 tool-round cap) with its 
 |-----|------|---------|---------|
 | `autoTitle` | string | `prompt` | Automatic session titling after your first full exchange. `prompt` applies the proposed title and shows a one-time `Named "…" — Ctrl+E rename` hint on the status row (Ctrl+E opens a rename editor, Enter on an empty input dismisses, everything else stays passive). `auto` applies the title silently. `off` disables titling entirely and leaves the first-message fallback. `/chat rename` always overrides manually. |
 
+### Model Switching (`sagittarius.modelSwitchConfirmTokens`)
+
+| Key | Type | Default | Purpose |
+|-----|------|---------|---------|
+| `modelSwitchConfirmTokens` | int (tokens) | `100000` | Live-context threshold above which interactive TUI switches (`Ctrl+/`, `/model` picker) confirm before resetting the prompt cache. `0` disables the prompt. |
+
 ### Google Chat Bridge (`sagittarius.chat.googleChat.*`)
 
 | Key | Type | Default | Purpose |

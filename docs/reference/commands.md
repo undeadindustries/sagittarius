@@ -124,7 +124,7 @@ These work in the interactive TUI in addition to the slash commands above.
 | `Ctrl+/` | Cycle forward through active models |
 | `Ctrl+Shift+P` | Cycle backward through active models |
 | `Alt+T` | Cycle the color theme (default ↔ greyscale) |
-| `Alt+R` | Step the reasoning effort for the current model: its levels in order, then back to the default. Session only, cleared when the model changes; `/reasoning save` persists a level. Ignored mid-turn |
+| `Alt+R` | Step and save the reasoning effort for the current model (`providers.<id>.models.<model>.reasoningEffort`): its levels in order, then back to the default. Ignored mid-turn |
 | `Alt+Y` | Turn yolo (run tools without asking) on or off for this session. Off restores the approval mode the session started with, or `default` if it started in yolo. Mode gates, the project boundary, and `/readonly` still apply. Ignored mid-turn |
 | `Ctrl+T` | Toggle the thinking ("reasoning") box |
 | `Ctrl+Shift+D` | Export the last provider request to a JSON file (works mid-turn; same as `/chat debug`) |
@@ -391,6 +391,11 @@ Screen reader mode stays in the plain terminal and refuses the switch.
   `--project` in front.
 - **`Ctrl+/`:** Cycles globally across all active models (wraps around). The status
   bar shows the resolved model after each cycle.
+- **Large-context confirmation:** In the interactive TUI, switching models via
+  `/model` or `Ctrl+/` prompts for confirmation when the live context exceeds
+  `sagittarius.modelSwitchConfirmTokens` (default `100000`, `0` disables) because
+  the next request re-reads history uncached. Headless and `--slash` switches skip
+  this prompt.
 - **Context:** The new model's context window applies immediately. The
   conversation is fitted on the next turn, not at the switch, so when the
   history is already too large for it you get one line telling you it will be
@@ -850,44 +855,47 @@ See also: [MCP server configuration](../tools/mcp-server.md).
   explicit opt-in per provider (AD-077).
 - **Capability-aware:** the accepted levels and default behavior depend on the
   live model's resolved reasoning mechanism, not a fixed wire-format gate:
-  - **Gemini 3 / 2.5 (`gemini-dynamic`):** adaptive by default (the model
-    decides depth per turn via dynamic thinking). Pin a level
-    (`minimal`/`low`/`medium`/`high`) to force one, or disable with
-    `/reasoning none`. Only Gemini 3 supports a genuine fixed-level pin;
-    pinning a level on Gemini 2.5 falls back to adaptive (its raw token budget
-    isn't safely derivable from a generic effort string).
+  - **Anthropic (`anthropic`):** adaptive thinking on Claude 4.6+ and 5+ (pin
+    `low`/`medium`/`high`/`xhigh`/`max` via `output_config.effort`, or `none`
+    where supported), and budget-based extended thinking on Claude 4.5.
+  - **Gemini 3 / 4 (`gemini-dynamic`):** adaptive by default (the model decides
+    depth per turn via dynamic thinking). Pin a level (`low`/`medium`/`high`,
+    plus `minimal` on 3.x where supported and `xhigh` on Gemini 4 Hydrogen),
+    or disable with `/reasoning none`.
   - **OpenAI Responses reasoning families (`fixed-effort`)** (gpt-5 / gpt-5.1+
     / gpt-5.4+ / gpt-5-pro / o3 / o4): accepts that family's documented effort
     set (see `/reasoning show` for the live list); `gpt-5-pro` is
     **mandatory** and rejects `/reasoning none`.
   - **OpenRouter models with a discovered `reasoning` capability:** enabled by
     default with OpenRouter's own default effort once model discovery has run
-    (`/providers` → discover models); no local effort validation beyond what
+    (`/providers` -> discover models); no local effort validation beyond what
     OpenRouter reports.
   - **Everything else** (custom/z.ai/DeepSeek-preset/local vLLM endpoints, or
-    any model with no known capability): stays opt-in — `/reasoning show`
-    reports "not applicable" and a level set here is sent as a best-effort
+    any model with no known capability): stays opt-in. `/reasoning show` reports
+    "not applicable" and a level set here is sent as a best-effort
     OpenRouter-style wire field that most non-OpenRouter servers ignore.
-- **Live immediately:** a session override (or `save`) takes effect on the
-  very next request — no restart or explicit rebuild needed.
+- **Live and remembered:** `/reasoning <level>` (and `Alt+R`) saves the level to
+  `providers.<id>.models.<model>.reasoningEffort` globally and applies it on the
+  next request, so switching models and returning (or restarting) restores each
+  model's own setting.
 
 #### Sub-commands
 
 - **`show`**
   - **Description:** Show the resolved reasoning mechanism, effort, its
-    source (session override / pinned setting / discovered default /
-    provider default), and the valid levels for the live model.
+    source (saved per-model setting / provider default / discovered default), and
+    the valid levels for the live model.
   - **Usage:** `/reasoning` or `/reasoning show`
 - **`clear`** (alias **`adaptive`**)
-  - **Description:** Drop the session-only override and fall back to the
-    capability-aware adaptive default (does not change `settings.json`).
+  - **Description:** Remove the saved per-model reasoning pin for the live
+    model and fall back to the provider or model default.
   - **Usage:** `/reasoning clear` or `/reasoning adaptive`
 - **`save <level>`**
-  - **Description:** Persist `<level>` to `providers.<active>.reasoningEffort`
-    (or the per-model override via `/models`).
+  - **Description:** Alias for `/reasoning <level>`: save `<level>` to
+    `providers.<active>.models.<model>.reasoningEffort`.
   - **Usage:** `/reasoning save low`
-- **`<none|minimal|low|medium|high|xhigh>`**
-  - **Description:** Set a session-only reasoning override (not persisted),
+- **`<none|minimal|low|medium|high|xhigh|max>`**
+  - **Description:** Set and persist the reasoning level for the active model,
     validated against the live model's accepted levels when known.
   - **Usage:** `/reasoning medium`
 
