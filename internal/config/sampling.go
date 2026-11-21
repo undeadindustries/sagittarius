@@ -46,14 +46,26 @@ func ModelTemperatureRule(model string) (temp *float64, omit bool, matched bool)
 		return nil, true, true
 	case strings.HasPrefix(m, "gpt-5"), strings.HasPrefix(m, "o3"), strings.HasPrefix(m, "o4"):
 		return nil, true, true
-	case strings.Contains(m, "opus-4.7"), strings.Contains(m, "opus-4.8"),
-		strings.Contains(m, "opus-4-7"), strings.Contains(m, "opus-4-8"):
+	case isClaudeTempOmitModel(m):
 		return nil, true, true
 	case strings.Contains(m, "qwen3-coder"):
 		return floatPtr(1.0), false, true
 	default:
 		return nil, false, false
 	}
+}
+
+func isClaudeTempOmitModel(m string) bool {
+	isClaude := strings.HasPrefix(m, "claude-") || strings.Contains(m, "opus-") ||
+		strings.Contains(m, "sonnet-") || strings.Contains(m, "haiku-") ||
+		strings.Contains(m, "fable-") || strings.Contains(m, "mythos")
+	if !isClaude {
+		return false
+	}
+	return strings.Contains(m, "4.7") || strings.Contains(m, "4-7") ||
+		strings.Contains(m, "4.8") || strings.Contains(m, "4-8") ||
+		strings.Contains(m, "-5") || strings.Contains(m, ".5") ||
+		strings.Contains(m, "fable-") || strings.Contains(m, "mythos")
 }
 
 // PersonalityDefaultTemperature returns the recommended generic temperature for

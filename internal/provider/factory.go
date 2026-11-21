@@ -151,6 +151,10 @@ func newAnthropicGenerator(ctx context.Context, settings *config.Settings, endpo
 	var thinkingTypes, supportedEfforts []string
 	if inst := settings.ProviderInstance(endpoint.ProviderID); inst != nil {
 		if mc, ok := config.LookupModelConfig(inst, endpoint.Model); ok {
+			if mc.MaxOutputTokens != nil && *mc.MaxOutputTokens > 0 {
+				defaultMaxTokens = *mc.MaxOutputTokens
+			}
+			thinkingTypes = mc.ThinkingTypes
 			supportedEfforts = mc.ReasoningEfforts
 		}
 	}

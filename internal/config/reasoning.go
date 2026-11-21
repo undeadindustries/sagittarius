@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -24,6 +25,10 @@ const (
 	// was discovered at runtime via OpenRouter's per-model `reasoning` object
 	// (GET /v1/models), cached into ProviderModelConfig.ReasoningSupported.
 	ReasoningMechanismOpenRouter ReasoningMechanism = "openrouter"
+	// ReasoningMechanismAnthropic covers native Anthropic Messages models:
+	// adaptive thinking + output_config.effort on Claude 4.6+ / 5+, and
+	// budget-based extended thinking on Claude 4.5.
+	ReasoningMechanismAnthropic ReasoningMechanism = "anthropic"
 )
 
 // ReasoningProfile describes what a model family supports for reasoning.
@@ -107,8 +112,50 @@ func ModelReasoningRule(wireFormat WireFormat, model string) (profile ReasoningP
 		default:
 			return ReasoningProfile{}, false
 		}
+	case WireFormatAnthropic:
+		return anthropicStaticReasoningProfile(m), true
 	default:
 		return ReasoningProfile{}, false
+	}
+}
+
+func anthropicStaticReasoningProfile(m string) ReasoningProfile {
+	switch {
+	case strings.Contains(m, "4-5"), strings.Contains(m, "4.5"), strings.Contains(m, "claude-3"):
+		// Claude 4.5 uses budget-based extended thinking (plus disabled);
+		// Opus 4.5 also accepts effort, while Sonnet/Haiku 4.5 only use budget.
+		return ReasoningProfile{
+			Mechanism:       ReasoningMechanismAnthropic,
+			ValidEfforts:    []string{"none", "low", "medium", "high"},
+			SupportsDynamic: true,
+		}
+	case strings.Contains(m, "opus-5-5"), strings.Contains(m, "opus-5.5"),
+		strings.Contains(m, "sonnet-5-5"), strings.Contains(m, "sonnet-5.5"),
+		strings.Contains(m, "fable-5"), strings.Contains(m, "mythos"):
+		def := "high"
+		if strings.Contains(m, "opus-5-5") || strings.Contains(m, "opus-5.5") {
+			def = "medium"
+		}
+		return ReasoningProfile{
+			Mechanism:       ReasoningMechanismAnthropic,
+			ValidEfforts:    []string{"low", "medium", "high", "xhigh", "max"},
+			DefaultEffort:   def,
+			SupportsDynamic: true,
+			Mandatory:       true,
+		}
+	case strings.Contains(m, "haiku-5-5"), strings.Contains(m, "haiku-5.5"):
+		return ReasoningProfile{
+			Mechanism:       ReasoningMechanismAnthropic,
+			ValidEfforts:    []string{"none", "low", "medium", "high", "xhigh", "max"},
+			DefaultEffort:   "medium",
+			SupportsDynamic: true,
+		}
+	default:
+		return ReasoningProfile{
+			Mechanism:       ReasoningMechanismAnthropic,
+			ValidEfforts:    []string{"none", "low", "medium", "high", "xhigh", "max"},
+			SupportsDynamic: true,
+		}
 	}
 }
 
@@ -206,9 +253,9 @@ func ResolveReasoningRequest(settings *Settings, providerID, model, sessionOverr
 	wireFormat := resolveWireFormat(settings, providerID)
 	if profile, matched := ModelReasoningRule(wireFormat, model); matched {
 		switch profile.Mechanism {
-		case ReasoningMechanismGeminiDynamic:
-			// Dynamic/adaptive by default: empty effort tells the Gemini
-			// adapter to request ThinkingBudget=-1 rather than a fixed level.
+		case ReasoningMechanismGeminiDynamic, ReasoningMechanismAnthropic:
+			// Dynamic/adaptive by default: empty effort tells the adapter to
+			// let the provider apply its own default reasoning behavior.
 			return &ReasoningResolution{Enabled: true}
 		case ReasoningMechanismFixedEffort:
 			// Let the provider apply its own family default; omitting the
@@ -239,6 +286,19 @@ func ResolveReasoningRequest(settings *Settings, providerID, model, sessionOverr
 // known=true with an empty efforts slice (callers should not offer levels).
 func ModelReasoningOptions(settings *Settings, providerID, model string) (efforts []string, defaultEffort string, mandatory, known bool) {
 	wireFormat := resolveWireFormat(settings, providerID)
+	if wireFormat == WireFormatAnthropic && settings != nil {
+		if inst := settings.ProviderInstance(providerID); inst != nil {
+			if mc, ok := lookupModelConfig(inst, model); ok && (len(mc.ThinkingTypes) > 0 || len(mc.ReasoningEfforts) > 0) {
+				mandatory = len(mc.ThinkingTypes) > 0 && !slices.Contains(mc.ThinkingTypes, "disabled")
+				out := make([]string, 0, 1+len(mc.ReasoningEfforts))
+				if !mandatory && !slices.Contains(mc.ReasoningEfforts, "none") {
+					out = append(out, "none")
+				}
+				out = append(out, mc.ReasoningEfforts...)
+				return out, mc.ReasoningDefaultEffort, mandatory, true
+			}
+		}
+	}
 	if profile, matched := ModelReasoningRule(wireFormat, model); matched {
 		return append([]string(nil), profile.ValidEfforts...), profile.DefaultEffort, profile.Mandatory, true
 	}
@@ -276,6 +336,12 @@ func DescribeReasoningCapability(settings *Settings, providerID, model string) s
 		switch profile.Mechanism {
 		case ReasoningMechanismGeminiDynamic:
 			return "adaptive (dynamic thinking) — decides depth per turn; pin a level or disable with 'none'"
+		case ReasoningMechanismAnthropic:
+			levels := strings.Join(efforts, ", ")
+			if mandatory {
+				return fmt.Sprintf("adaptive thinking, mandatory — %s", levels)
+			}
+			return fmt.Sprintf("adaptive thinking — %s (set 'none' to disable)", levels)
 		case ReasoningMechanismFixedEffort:
 			levels := strings.Join(profile.ValidEfforts, ", ")
 			if profile.Mandatory {

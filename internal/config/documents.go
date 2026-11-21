@@ -739,6 +739,10 @@ func mergeProviderModelConfig(global, project ProviderModelConfig) ProviderModel
 	if len(global.ReasoningEfforts) == 0 {
 		merged.ReasoningEfforts = project.ReasoningEfforts
 	}
+	if len(global.ThinkingTypes) == 0 {
+		merged.ThinkingTypes = project.ThinkingTypes
+	}
+	merged.MaxOutputTokens = overlayPtr(project.MaxOutputTokens, global.MaxOutputTokens)
 	merged.ReasoningDefaultEffort = overlayStr(project.ReasoningDefaultEffort, global.ReasoningDefaultEffort)
 	merged.ReasoningProbed = global.ReasoningProbed || project.ReasoningProbed
 	merged.Extra = mergeRaw(global.Extra, project.Extra)

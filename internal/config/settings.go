@@ -131,9 +131,15 @@ type ProviderModelConfig struct {
 	ReasoningSupported *bool `json:"reasoningSupported,omitempty"`
 	ReasoningMandatory *bool `json:"reasoningMandatory,omitempty"`
 	// ReasoningEfforts is the provider-advertised list of valid effort levels
-	// for this model (e.g. OpenRouter supported_efforts). Empty until discovery
-	// caches it at activation time. Used by the /models picker and validation.
+	// for this model (e.g. OpenRouter supported_efforts, Anthropic capabilities.effort).
+	// Empty until discovery caches it at activation time. Used by /models and validation.
 	ReasoningEfforts []string `json:"reasoningEfforts,omitempty"`
+	// ThinkingTypes caches Anthropic's capabilities.thinking.types values
+	// ("adaptive", "enabled", "disabled", "between_tools").
+	ThinkingTypes []string `json:"thinkingTypes,omitempty"`
+	// MaxOutputTokens caches the provider-advertised output token cap when
+	// known (e.g. Anthropic GET /v1/models max_tokens).
+	MaxOutputTokens *int `json:"maxOutputTokens,omitempty"`
 	// ReasoningDefaultEffort is the provider-advertised default effort for this
 	// model (e.g. OpenRouter default_effort). Empty when unknown.
 	ReasoningDefaultEffort string `json:"reasoningDefaultEffort,omitempty"`
@@ -156,7 +162,8 @@ func (c ProviderModelConfig) IsEmpty() bool {
 		c.ReasoningHistory == "" && len(c.ChatTemplateKwargs) == 0 &&
 		c.ThinkingBudgetTokens == nil && c.HardThinkingBudget == nil &&
 		c.ReasoningSupported == nil && c.ReasoningMandatory == nil &&
-		len(c.ReasoningEfforts) == 0 && c.ReasoningDefaultEffort == "" &&
+		len(c.ReasoningEfforts) == 0 && len(c.ThinkingTypes) == 0 &&
+		c.MaxOutputTokens == nil && c.ReasoningDefaultEffort == "" &&
 		!c.ReasoningProbed && c.Extra == nil
 }
 
@@ -227,6 +234,16 @@ func (c *ProviderModelConfig) UnmarshalJSON(data []byte) error {
 			if err := json.Unmarshal(val, &c.ReasoningEfforts); err != nil {
 				return err
 			}
+		case "thinkingTypes":
+			if err := json.Unmarshal(val, &c.ThinkingTypes); err != nil {
+				return err
+			}
+		case "maxOutputTokens":
+			var n int
+			if err := json.Unmarshal(val, &n); err != nil {
+				return err
+			}
+			c.MaxOutputTokens = &n
 		case "reasoningDefaultEffort":
 			if err := json.Unmarshal(val, &c.ReasoningDefaultEffort); err != nil {
 				return err
@@ -338,6 +355,20 @@ func (c ProviderModelConfig) MarshalJSON() ([]byte, error) {
 			return nil, err
 		}
 		obj["reasoningEfforts"] = b
+	}
+	if len(c.ThinkingTypes) > 0 {
+		b, err := json.Marshal(c.ThinkingTypes)
+		if err != nil {
+			return nil, err
+		}
+		obj["thinkingTypes"] = b
+	}
+	if c.MaxOutputTokens != nil {
+		b, err := json.Marshal(*c.MaxOutputTokens)
+		if err != nil {
+			return nil, err
+		}
+		obj["maxOutputTokens"] = b
 	}
 	if c.ReasoningDefaultEffort != "" {
 		b, err := json.Marshal(c.ReasoningDefaultEffort)

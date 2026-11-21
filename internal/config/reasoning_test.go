@@ -31,6 +31,9 @@ func TestModelReasoningRule(t *testing.T) {
 		{"gpt-5 base family", WireFormatOpenAIResponses, "gpt-5", true, ReasoningMechanismFixedEffort, false, false, []string{"minimal", "low", "medium", "high"}},
 		{"o3 family", WireFormatOpenAIResponses, "o3-mini", true, ReasoningMechanismFixedEffort, false, false, []string{"low", "medium", "high"}},
 		{"unmatched responses model", WireFormatOpenAIResponses, "text-davinci-003", false, ReasoningMechanismNone, false, false, nil},
+		{"anthropic opus 5.5 mandatory", WireFormatAnthropic, "claude-opus-5-5", true, ReasoningMechanismAnthropic, true, true, []string{"low", "medium", "high", "xhigh", "max"}},
+		{"anthropic opus 4.8 optional", WireFormatAnthropic, "claude-opus-4-8", true, ReasoningMechanismAnthropic, true, false, []string{"none", "low", "medium", "high", "xhigh", "max"}},
+		{"anthropic sonnet 4.5 budget", WireFormatAnthropic, "claude-sonnet-4-5", true, ReasoningMechanismAnthropic, true, false, []string{"none", "low", "medium", "high"}},
 		{"openai-chat never matches statically", WireFormatOpenAIChat, "openai/gpt-5", false, ReasoningMechanismNone, false, false, nil},
 		{"empty model", WireFormatGemini, "", false, ReasoningMechanismNone, false, false, nil},
 		{"case-insensitive + provider-prefixed", WireFormatGemini, "Google/GEMINI-3-Flash", true, ReasoningMechanismGeminiDynamic, true, false, []string{"minimal", "low", "medium", "high"}},
@@ -293,5 +296,52 @@ func TestModelReasoningOptionsProbedOnly(t *testing.T) {
 	}
 	if len(efforts) != 0 || defaultEffort != "" || mandatory {
 		t.Fatalf("unexpected options for probed-only: efforts=%v default=%q mandatory=%v", efforts, defaultEffort, mandatory)
+	}
+}
+
+func TestModelReasoningOptionsAnthropicUsesDiscoveredFirst(t *testing.T) {
+	t.Parallel()
+	s := &Settings{Providers: &ProvidersSettings{
+		Active: "anthropic",
+		Custom: map[string]CustomProviderDefinition{
+			"anthropic": {WireFormat: WireFormatAnthropic, BaseURL: "https://api.anthropic.com/v1/messages"},
+		},
+		Extra: map[string]json.RawMessage{
+			"anthropic": json.RawMessage(`{"models":{"claude-custom":{"thinkingTypes":["adaptive","disabled"],"reasoningEfforts":["low","high"],"maxOutputTokens":64000}}}`),
+		},
+	}}
+	efforts, _, mandatory, known := ModelReasoningOptions(s, "anthropic", "claude-custom")
+	if !known || mandatory {
+		t.Fatalf("known=%v mandatory=%v, want true/false", known, mandatory)
+	}
+	if len(efforts) != 3 || efforts[0] != "none" || efforts[1] != "low" || efforts[2] != "high" {
+		t.Fatalf("efforts = %v, want [none low high]", efforts)
+	}
+	res := ResolveReasoningRequest(s, "anthropic", "claude-custom", "")
+	if res == nil || !res.Enabled || res.Effort != "" {
+		t.Fatalf("ResolveReasoningRequest = %#v, want enabled dynamic", res)
+	}
+}
+
+func TestAnthropicModelConfigFieldsRoundTrip(t *testing.T) {
+	t.Parallel()
+	maxOut := 64000
+	orig := ProviderModelConfig{
+		ThinkingTypes:   []string{"adaptive", "disabled"},
+		MaxOutputTokens: &maxOut,
+	}
+	b, err := json.Marshal(orig)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got ProviderModelConfig
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got.ThinkingTypes) != 2 || got.ThinkingTypes[0] != "adaptive" || got.ThinkingTypes[1] != "disabled" {
+		t.Fatalf("ThinkingTypes = %v, want [adaptive disabled]", got.ThinkingTypes)
+	}
+	if got.MaxOutputTokens == nil || *got.MaxOutputTokens != 64000 {
+		t.Fatalf("MaxOutputTokens = %v, want 64000", got.MaxOutputTokens)
 	}
 }
