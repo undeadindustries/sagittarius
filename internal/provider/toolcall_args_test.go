@@ -1,6 +1,9 @@
 package provider
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestMarshalToolCallArgs(t *testing.T) {
 	t.Parallel()
@@ -76,6 +79,69 @@ func TestNoArgToolCallSerializesAsObject(t *testing.T) {
 	})
 }
 
+// TestAnthropicNoArgToolUseKeepsInput pins that every replayed tool_use block
+// carries "input". Anthropic rejects a block without it ("tool_use.input: Field
+// required"), and because the summarizer replays the same history, one
+// no-argument call poisons compression and every later turn.
+func TestAnthropicNoArgToolUseKeepsInput(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		args map[string]any
+	}{
+		{name: "nil args", args: nil},
+		{name: "empty args", args: map[string]any{}},
+		{name: "only internal call id", args: map[string]any{InternalCallIDArg: "toolu_1"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			history := []Message{
+				{Role: RoleUser, Parts: []Part{{Text: "list background processes"}}},
+				{Role: RoleModel, Parts: []Part{{FunctionCall: &ToolCall{
+					ID: "toolu_1", Name: "list_background_processes", Args: tc.args,
+				}}}},
+				{Role: RoleUser, Parts: []Part{{FunctionResponse: &FunctionResponse{
+					CallID: "toolu_1", Name: "list_background_processes", Response: map[string]any{"output": "none"},
+				}}}},
+			}
+			plan := BuildAnthropicRequestPlan(&GenerateRequest{Messages: history}, AnthropicPlanOptions{ToolsEnabled: true})
+			raw, err := json.Marshal(plan.Body)
+			if err != nil {
+				t.Fatalf("marshal body: %v", err)
+			}
+			var body struct {
+				Messages []struct {
+					Content []map[string]json.RawMessage `json:"content"`
+				} `json:"messages"`
+			}
+			if err := json.Unmarshal(raw, &body); err != nil {
+				t.Fatalf("unmarshal body: %v", err)
+			}
+			found := false
+			for _, msg := range body.Messages {
+				for _, blk := range msg.Content {
+					if string(blk["type"]) != `"tool_use"` {
+						continue
+					}
+					found = true
+					input, ok := blk["input"]
+					if !ok {
+						t.Fatalf("tool_use block missing input: %s", raw)
+					}
+					if string(input) != "{}" {
+						t.Fatalf("tool_use input = %s, want {}", input)
+					}
+				}
+			}
+			if !found {
+				t.Fatalf("no tool_use block in request: %s", raw)
+			}
+		})
+	}
+}
+
 func TestInternalCallIDStrippedOnBothWirePaths(t *testing.T) {
 	t.Parallel()
 
@@ -115,12 +181,8 @@ func TestInternalCallIDStrippedOnBothWirePaths(t *testing.T) {
 		t.Fatal("openai-responses: no function_call in plan input")
 	}
 	planAnth := BuildAnthropicRequestPlan(&GenerateRequest{Messages: history}, AnthropicPlanOptions{ToolsEnabled: true})
-	toolInput := planAnth.Body.Messages[0].Content[0].Input
-	if _, leaked := toolInput[InternalCallIDArg]; leaked {
-		t.Fatalf("anthropic tool_use input leaked %s: %#v", InternalCallIDArg, toolInput)
-	}
-	if toolInput["file_path"] != "main.go" {
-		t.Fatalf("anthropic tool_use input = %#v, want file_path=main.go", toolInput)
+	if got := string(planAnth.Body.Messages[0].Content[0].Input); got != want {
+		t.Fatalf("anthropic tool_use input = %s, want %s", got, want)
 	}
 	if original[InternalCallIDArg] != "call_1" {
 		t.Fatalf("history args mutated: %#v", original)

@@ -67,10 +67,12 @@ type anthropicContentBlock struct {
 	Signature string  `json:"signature,omitempty"`
 	// Data is used by type="redacted_thinking".
 	Data string `json:"data,omitempty"`
-	// ID, Name, and Input are used by type="tool_use".
-	ID    string         `json:"id,omitempty"`
-	Name  string         `json:"name,omitempty"`
-	Input map[string]any `json:"input,omitempty"`
+	// ID, Name, and Input are used by type="tool_use". Input is pre-encoded
+	// because Anthropic requires "input" on every tool_use block, and
+	// omitempty drops an empty map while keeping a non-empty RawMessage "{}".
+	ID    string          `json:"id,omitempty"`
+	Name  string          `json:"name,omitempty"`
+	Input json.RawMessage `json:"input,omitempty"`
 	// ToolUseID, Content, and IsError are used by type="tool_result".
 	ToolUseID string `json:"tool_use_id,omitempty"`
 	Content   string `json:"content,omitempty"`
@@ -464,15 +466,11 @@ func messagesToAnthropicMessages(messages []Message, keepReasoningHistory bool) 
 						legacyCounter++
 					}
 					legacyIDs[part.FunctionCall.Name] = append(legacyIDs[part.FunctionCall.Name], callID)
-					input := withoutInternalCallID(part.FunctionCall.Args)
-					if input == nil {
-						input = map[string]any{}
-					}
 					blocks = append(blocks, anthropicContentBlock{
 						Type:  "tool_use",
 						ID:    callID,
 						Name:  part.FunctionCall.Name,
-						Input: input,
+						Input: json.RawMessage(marshalToolCallArgs(part.FunctionCall.Args)),
 					})
 				}
 			}

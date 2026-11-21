@@ -317,10 +317,10 @@ func withoutInternalCallID(args map[string]any) map[string]any {
 // the summarizer's.
 const emptyToolCallArguments = "{}"
 
-// marshalToolCallArgs serializes tool-call arguments for the OpenAI wire
-// formats. A nil, empty, or unserializable map yields an empty JSON object so
-// the request stays well formed; a marshal failure is logged rather than
-// discarded.
+// marshalToolCallArgs serializes tool-call arguments for the OpenAI and
+// Anthropic wire formats. A nil, empty, or unserializable map yields an empty
+// JSON object so the request stays well formed; a marshal failure is logged
+// rather than discarded.
 func marshalToolCallArgs(args map[string]any) string {
 	args = withoutInternalCallID(args)
 	if len(args) == 0 {
