@@ -83,7 +83,8 @@ func (l *Loader) Load() (*Settings, error) {
 
 	migratedLocal := MigrateLegacyLocalSettings(s).Migrated
 	migratedBuiltins := MigrateLegacyBuiltins(s)
-	if migratedLocal || migratedBuiltins {
+	migratedAnthropic := MigrateAnthropicPreset(s)
+	if migratedLocal || migratedBuiltins || migratedAnthropic {
 		if err := l.saveDocument(s); err != nil {
 			return s, fmt.Errorf("persist legacy migration: %w", err)
 		}

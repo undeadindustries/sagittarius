@@ -71,6 +71,7 @@ type addState struct {
 	idOverride  string // empty → auto-generated from URL at submit
 	envVar      string
 	apiKey      string
+	workspaceID string
 	wire        config.WireFormat
 	// presetID is set when the add flow was seeded from a ProviderPreset
 	// template; it seeds the suggested provider id and is empty for the blank
@@ -88,9 +89,28 @@ const (
 	addFieldWire
 	addFieldEnvVar
 	addFieldAPIKey
-	addFieldIdOverride // shows auto-generated id; user may change before confirm
+	addFieldWorkspaceID // shown only when wire == WireFormatAnthropic
+	addFieldIdOverride  // shows auto-generated id; user may change before confirm
 	addFieldCount
 )
+
+var customWireOrder = []config.WireFormat{
+	config.WireFormatOpenAIChat,
+	config.WireFormatOpenAIResponses,
+	config.WireFormatAnthropic,
+}
+
+func nextWireFormat(current config.WireFormat, delta int) config.WireFormat {
+	idx := 0
+	for i, wf := range customWireOrder {
+		if wf == current {
+			idx = i
+			break
+		}
+	}
+	n := len(customWireOrder)
+	return customWireOrder[((idx+delta)%n+n)%n]
+}
 
 // modelsLoadedMsg is delivered when an async DiscoverModels call completes.
 type modelsLoadedMsg struct {
@@ -809,11 +829,8 @@ func (m Model) selectEdit() (Model, tea.Cmd) {
 		// chosen from that set via /models (and coerced when deactivated).
 		return m.enterModels(m.targetID)
 	case editWireDefn:
-		// Toggle and apply immediately.
-		next := config.WireFormatOpenAIChat
-		if m.targetWire == config.WireFormatOpenAIChat {
-			next = config.WireFormatOpenAIResponses
-		}
+		// Cycle through openai-chat -> openai-responses -> anthropic.
+		next := nextWireFormat(m.targetWire, 1)
 		if err := m.deps.UpdateCustomDefinition(m.ctx, m.targetID, "wireFormat", string(next)); err != nil {
 			m.errMsg = err.Error()
 			return m, nil
@@ -1141,12 +1158,11 @@ func (m Model) handleAddKey(msg tea.KeyMsg) (Model, tea.Cmd) {
 		switch msg.String() {
 		case "esc":
 			return m.back()
-		case "left", "right", " ":
-			if m.add.wire == config.WireFormatOpenAIChat {
-				m.add.wire = config.WireFormatOpenAIResponses
-			} else {
-				m.add.wire = config.WireFormatOpenAIChat
-			}
+		case "left":
+			m.add.wire = nextWireFormat(m.add.wire, -1)
+			return m, nil
+		case "right", " ":
+			m.add.wire = nextWireFormat(m.add.wire, 1)
 			return m, nil
 		case "enter":
 			m.add.fieldIdx = addFieldEnvVar
@@ -1202,25 +1218,19 @@ func (m Model) advanceAdd() (Model, tea.Cmd) {
 		m.input = freshSecretInput(m.th)
 	case addFieldAPIKey:
 		m.add.apiKey = value
-		// Show auto-generated id for optional override.
-		baseURL, err := composeAddURL(m.add.hostOrURL, m.add.port)
-		if err != nil {
+		if m.add.wire == config.WireFormatAnthropic {
+			m.add.fieldIdx = addFieldWorkspaceID
+			m.input = freshInput(m.th, "wrkspc_... (optional; leave blank if key is workspace-scoped)")
+			return m, nil
+		}
+		return m.enterAddIDOverride()
+	case addFieldWorkspaceID:
+		if err := config.ValidateAnthropicWorkspaceID(value); err != nil {
 			m.errMsg = err.Error()
 			return m, nil
 		}
-		// A template-seeded add defaults its id to the preset id (collision
-		// de-duplicated); a blank add derives one from the URL host.
-		suggested := ""
-		if m.add.presetID != "" {
-			suggested = m.claimProviderID(m.add.presetID)
-		} else {
-			suggested = m.deps.GenerateProviderID(baseURL)
-		}
-		m.add.idOverride = suggested
-		m.add.fieldIdx = addFieldIdOverride
-		ti := freshInput(m.th, "provider id (edit or Enter to accept)")
-		ti.SetValue(suggested)
-		m.input = ti
+		m.add.workspaceID = value
+		return m.enterAddIDOverride()
 	case addFieldIdOverride:
 		if value == "" {
 			m.errMsg = "Provider id cannot be empty."
@@ -1237,6 +1247,29 @@ func (m Model) advanceAdd() (Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) enterAddIDOverride() (Model, tea.Cmd) {
+	baseURL, err := composeAddURL(m.add.hostOrURL, m.add.port)
+	if err != nil {
+		m.errMsg = err.Error()
+		return m, nil
+	}
+	// A template-seeded add defaults its id to the preset id (collision
+	// de-duplicated); a blank add derives one from the URL host.
+	suggested := ""
+	if m.add.presetID != "" {
+		suggested = m.claimProviderID(m.add.presetID)
+	} else {
+		suggested = m.deps.GenerateProviderID(baseURL)
+	}
+	m.add.idOverride = suggested
+	m.add.fieldIdx = addFieldIdOverride
+	ti := freshInput(m.th, "provider id (edit or Enter to accept)")
+	ti.SetValue(suggested)
+	m.input = ti
+	m.errMsg = ""
+	return m, nil
+}
+
 func (m Model) submitAdd() (Model, tea.Cmd) {
 	baseURL, err := composeAddURL(m.add.hostOrURL, m.add.port)
 	if err != nil {
@@ -1248,6 +1281,7 @@ func (m Model) submitAdd() (Model, tea.Cmd) {
 		BaseURL:      baseURL,
 		APIKeyEnvVar: m.add.envVar,
 		WireFormat:   m.add.wire,
+		WorkspaceID:  m.add.workspaceID,
 	}
 	id := m.add.idOverride
 	apiKey := m.add.apiKey

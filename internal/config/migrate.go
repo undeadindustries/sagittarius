@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"strings"
 )
 
 // LegacyLocalMigrationResult mirrors fork migrateLegacyLocalSettings.ts output.
@@ -144,6 +145,42 @@ func legacyBuiltinReferenced(s *Settings, id string) bool {
 		return s.Providers.OpenAIResponses != nil
 	}
 	return false
+}
+
+const (
+	legacyAnthropicBaseURL = "https://api.anthropic.com/v1/chat/completions"
+	nativeAnthropicBaseURL = "https://api.anthropic.com/v1/messages"
+)
+
+// MigrateAnthropicPreset upgrades an uncustomized providers.custom.anthropic
+// entry from the old OpenAI-compatible preset to the native Anthropic Messages
+// endpoint. User-edited URLs or wire formats are left untouched.
+func MigrateAnthropicPreset(s *Settings) bool {
+	if s == nil || s.Providers == nil || s.Providers.Custom == nil {
+		return false
+	}
+	def, ok := s.Providers.Custom["anthropic"]
+	if !ok {
+		return false
+	}
+	wf := def.WireFormat
+	if wf != "" && wf != WireFormatOpenAIChat {
+		return false
+	}
+	if strings.TrimRight(strings.TrimSpace(def.BaseURL), "/") != legacyAnthropicBaseURL {
+		return false
+	}
+	def.WireFormat = WireFormatAnthropic
+	def.BaseURL = nativeAnthropicBaseURL
+	if def.DefaultModel == "" {
+		def.DefaultModel = "claude-opus-5-5"
+	}
+	if def.DefaultContextLimit == nil || *def.DefaultContextLimit == 200_000 {
+		limit := 1_000_000
+		def.DefaultContextLimit = &limit
+	}
+	s.Providers.Custom["anthropic"] = def
+	return true
 }
 
 func legacyNonEmptyKeys(local map[string]json.RawMessage) []string {

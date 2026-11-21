@@ -27,16 +27,16 @@ func TestProviderPresetsWellFormed(t *testing.T) {
 			t.Errorf("duplicate preset id %q", p.ID)
 		}
 		seen[p.ID] = true
-		if p.WireFormat != WireFormatOpenAIChat && p.WireFormat != WireFormatOpenAIResponses {
+		if p.WireFormat != WireFormatOpenAIChat && p.WireFormat != WireFormatOpenAIResponses && p.WireFormat != WireFormatAnthropic {
 			t.Errorf("preset %q has unexpected wire format %q", p.ID, p.WireFormat)
 		}
 		if p.WireFormat == WireFormatOpenAIResponses {
 			responsesCount++
 		}
-		// The base URL must already carry the completions/responses path so the
-		// normalizer honors it verbatim (AD-072).
-		if !strings.HasSuffix(p.BaseURL, "/chat/completions") && !strings.HasSuffix(p.BaseURL, "/responses") {
-			t.Errorf("preset %q base URL %q lacks a completions/responses suffix", p.ID, p.BaseURL)
+		// The base URL must already carry the completions/responses/messages path
+		// so the normalizer honors it verbatim (AD-072).
+		if !strings.HasSuffix(p.BaseURL, "/chat/completions") && !strings.HasSuffix(p.BaseURL, "/responses") && !strings.HasSuffix(p.BaseURL, "/messages") {
+			t.Errorf("preset %q base URL %q lacks a completions/responses/messages suffix", p.ID, p.BaseURL)
 		}
 	}
 	// The two former built-ins must ship as presets.

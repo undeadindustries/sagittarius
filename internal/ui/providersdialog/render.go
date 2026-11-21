@@ -116,6 +116,8 @@ func (m Model) activationHeader() string {
 		wire = " (OpenAI-compatible)"
 	case config.WireFormatOpenAIResponses:
 		wire = " (OpenAI Responses API)"
+	case config.WireFormatAnthropic:
+		wire = " (Anthropic Messages API)"
 	}
 	header := "Activate models on " + displayID + wire
 	if m.targetID == "openrouter" {
@@ -409,15 +411,20 @@ func (m Model) renderRow(label string, selected bool) string {
 func (m Model) renderWireToggle(wire config.WireFormat) string {
 	sel := m.th.Accent
 	dim := m.th.Dim
-	var chat, responses string
-	if wire == config.WireFormatOpenAIChat {
-		chat = sel.Render("[openai-chat]")
-		responses = dim.Render(" openai-responses ")
-	} else {
-		chat = dim.Render(" openai-chat ")
-		responses = sel.Render("[openai-responses]")
+	formats := []config.WireFormat{
+		config.WireFormatOpenAIChat,
+		config.WireFormatOpenAIResponses,
+		config.WireFormatAnthropic,
 	}
-	return chat + "  " + responses
+	parts := make([]string, 0, len(formats))
+	for _, wf := range formats {
+		if wf == wire {
+			parts = append(parts, sel.Render("["+string(wf)+"]"))
+		} else {
+			parts = append(parts, dim.Render(" "+string(wf)+" "))
+		}
+	}
+	return strings.Join(parts, "  ")
 }
 
 func addFieldLabel(idx int) string {
@@ -432,6 +439,8 @@ func addFieldLabel(idx int) string {
 		return "API key env var  (optional)"
 	case addFieldAPIKey:
 		return "API key  (optional)"
+	case addFieldWorkspaceID:
+		return "Workspace id  (blank if your key is workspace-scoped)"
 	case addFieldIdOverride:
 		return "Provider id  (auto-generated — edit to override)"
 	}

@@ -70,11 +70,11 @@ var ProviderPresets = []ProviderPreset{
 	{
 		ID:                  "anthropic",
 		DisplayName:         "Anthropic",
-		BaseURL:             "https://api.anthropic.com/v1/chat/completions",
+		BaseURL:             "https://api.anthropic.com/v1/messages",
 		APIKeyEnvVar:        "ANTHROPIC_API_KEY",
-		WireFormat:          WireFormatOpenAIChat,
-		DefaultContextLimit: 200_000,
-		Note:                "OpenAI-compat layer (eval-grade); use OpenRouter for full Claude features.",
+		WireFormat:          WireFormatAnthropic,
+		DefaultModel:        "claude-opus-5-5",
+		DefaultContextLimit: 1_000_000,
 	},
 	{
 		ID:           "deepseek",
