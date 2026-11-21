@@ -1061,8 +1061,11 @@ func SetModelConfig(settings *config.Settings, providerID, model, key, value str
 // the generic cross-family allowlist.
 func validateModelReasoningEffort(settings *config.Settings, providerID, model, level string) error {
 	efforts, _, mandatory, known := config.ModelReasoningOptions(settings, providerID, model)
-	if mandatory && (level == "none" || level == "off") {
-		return fmt.Errorf("reasoningEffort %q is not allowed: reasoning is mandatory for %s", level, model)
+	if level == "none" || level == "off" {
+		if mandatory {
+			return fmt.Errorf("reasoningEffort %q is not allowed: reasoning is mandatory for %s", level, model)
+		}
+		return nil
 	}
 	if known && len(efforts) > 0 {
 		if !slices.Contains(efforts, level) {

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/undeadindustries/sagittarius/internal/config"
+	"github.com/undeadindustries/sagittarius/internal/provider"
 )
 
 // reasoningOff is the level that disables reasoning on every wire format
@@ -68,8 +69,9 @@ func (a *App) liveReasoningTarget() (*config.Settings, string, string, error) {
 }
 
 // CycleReasoningEffort implements ui.ReasoningController (Alt+R). It steps the
-// session-only reasoning override through the levels the live model accepts.
-// Settings are never written; /reasoning save persists a level.
+// persisted per-model reasoningEffort in global settings through the levels the
+// live model accepts, so switching away and back or restarting restores each
+// model's choice.
 func (a *App) CycleReasoningEffort() (level, desc string, err error) {
 	s, providerID, model, err := a.liveReasoningTarget()
 	if err != nil {
@@ -80,31 +82,79 @@ func (a *App) CycleReasoningEffort() (level, desc string, err error) {
 	if len(cycle) < 2 {
 		return "", "", fmt.Errorf("%s has no reasoning levels to switch between", model)
 	}
-	next := nextInCycle(cycle, a.runner.ReasoningOverride())
-	if next == "" {
-		a.runner.ClearReasoningOverride()
-	} else {
-		a.runner.SetReasoningOverride(next)
+	current := currentModelReasoningPin(s, providerID, model)
+	next := nextInCycle(cycle, current)
+	if err := a.saveModelReasoningEffort(providerID, model, next); err != nil {
+		return "", "", err
 	}
-	return next, describeReasoningStep(s, providerID, model, next), nil
+	updated := a.effectiveSettings()
+	if updated == nil {
+		updated = s
+	}
+	return next, describeReasoningStep(updated, providerID, model, next), nil
+}
+
+func currentModelReasoningPin(s *config.Settings, providerID, model string) string {
+	if s == nil {
+		return ""
+	}
+	inst := s.ProviderInstance(providerID)
+	if inst == nil {
+		return ""
+	}
+	if mc, ok := config.LookupModelConfig(inst, model); ok {
+		return strings.TrimSpace(mc.ReasoningEffort)
+	}
+	return ""
+}
+
+func (a *App) saveModelReasoningEffort(providerID, model, level string) error {
+	providerID = config.NormalizeProviderID(providerID)
+	model = strings.TrimSpace(model)
+	level = strings.TrimSpace(level)
+
+	mutate := func(s *config.Settings) error {
+		if level == "" {
+			return provider.ClearModelConfig(s, providerID, model, "reasoningEffort")
+		}
+		return provider.SetModelReasoningEffort(s, providerID, model, level)
+	}
+
+	if a.docs != nil || a.deps.Loader != nil {
+		if err := a.persistGlobal(mutate); err != nil {
+			return err
+		}
+	} else if a.deps.Settings != nil {
+		if err := mutate(a.deps.Settings); err != nil {
+			return err
+		}
+	}
+
+	if a.runner != nil {
+		if updated := a.effectiveSettings(); updated != nil {
+			// Update settings snapshot without a redundant system prompt
+			// rebuild when only reasoningEffort changed.
+			a.runner.SetSettings(updated)
+		}
+	}
+	return nil
 }
 
 // describeReasoningStep is the transcript line for one Alt+R press. Clearing
-// the override names what takes over, because "default" alone would hide a
-// level pinned in settings.
+// the per-model pin names what takes over (provider default or model default).
 func describeReasoningStep(s *config.Settings, providerID, model, level string) string {
 	if level != "" {
-		return fmt.Sprintf("Reasoning effort → %s for %s this session (Alt+R).", level, model)
+		return fmt.Sprintf("Reasoning effort → %s for %s (Alt+R).", level, model)
 	}
 	if res := config.ResolveReasoningRequest(s, providerID, model, ""); res != nil && res.Effort != "" {
-		return fmt.Sprintf("Reasoning effort → saved setting (%s) for %s (Alt+R).", res.Effort, model)
+		return fmt.Sprintf("Reasoning effort → provider default (%s) for %s (Alt+R).", res.Effort, model)
 	}
 	return fmt.Sprintf("Reasoning effort → model default for %s (Alt+R).", model)
 }
 
 // liveReasoningEffort is the explicit effort the next request will carry for
-// the footer: the session override, else a level pinned in settings. Empty
-// when the model or provider picks the depth itself.
+// the footer, resolved from per-model or provider settings. Empty when the
+// model or provider picks the depth itself.
 func (a *App) liveReasoningEffort(s *config.Settings) string {
 	if a.runner == nil || s == nil {
 		return ""
@@ -114,7 +164,7 @@ func (a *App) liveReasoningEffort(s *config.Settings) string {
 		return ""
 	}
 	providerID := config.NormalizeProviderID(s.ActiveProvider())
-	res := config.ResolveReasoningRequest(s, providerID, model, a.runner.ReasoningOverride())
+	res := config.ResolveReasoningRequest(s, providerID, model, "")
 	if res == nil {
 		return ""
 	}

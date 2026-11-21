@@ -2441,28 +2441,23 @@ func (h *appHooks) InstallUpdate(ctx context.Context) (*selfupdate.InstallResult
 	return res, nil
 }
 
-// ReasoningOverride implements slash.Hooks.
-func (h *appHooks) ReasoningOverride() string {
-	if h.app == nil || h.app.runner == nil {
-		return ""
+// EffectiveSettings implements slash.Hooks: returns the merged settings
+// overlaid with any runtime mode-provider override for consistent reads.
+func (h *appHooks) EffectiveSettings() *config.Settings {
+	if h.app == nil {
+		return nil
 	}
-	return h.app.runner.ReasoningOverride()
+	return h.app.effectiveSettings()
 }
 
-// SetReasoningOverride implements slash.Hooks.
-func (h *appHooks) SetReasoningOverride(effort string) {
-	if h.app == nil || h.app.runner == nil {
-		return
+// SaveModelReasoningEffort implements slash.Hooks: persists (or clears when
+// level == "") providers.<id>.models.<model>.reasoningEffort globally and
+// refreshes the runner's settings snapshot so the next request sees it.
+func (h *appHooks) SaveModelReasoningEffort(providerID, model, level string) error {
+	if h.app == nil {
+		return fmt.Errorf("app not available")
 	}
-	h.app.runner.SetReasoningOverride(effort)
-}
-
-// ClearReasoningOverride implements slash.Hooks.
-func (h *appHooks) ClearReasoningOverride() {
-	if h.app == nil || h.app.runner == nil {
-		return
-	}
-	h.app.runner.ClearReasoningOverride()
+	return h.app.saveModelReasoningEffort(providerID, model, level)
 }
 
 // ExportATIF implements slash.Hooks.

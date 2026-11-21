@@ -201,12 +201,11 @@ type Hooks interface {
 	CheckForUpdate(ctx context.Context, force bool) (*selfupdate.CheckResult, error)
 	InstallUpdate(ctx context.Context) (*selfupdate.InstallResult, error)
 
-	// Reasoning hooks (AD-077). The override is ephemeral (never persisted)
-	// and scoped to the live (provider, model) pair; it self-invalidates on a
-	// provider/model switch (see Runner.ReasoningOverride).
-	ReasoningOverride() string
-	SetReasoningOverride(effort string)
-	ClearReasoningOverride()
+	// Reasoning hooks: read live merged+runtime settings and persist per-model
+	// reasoningEffort globally so /reasoning, Alt+R, the footer, and the runner
+	// always agree on the active (provider, model).
+	EffectiveSettings() *config.Settings
+	SaveModelReasoningEffort(providerID, model, level string) error
 
 	// ExportATIF exports the active session (and its subagent children) as an ATIF JSON trajectory.
 	ExportATIF(outPath string) (string, error)

@@ -76,7 +76,11 @@ func TestIncludeThoughtsOffWhenReasoningDisabled(t *testing.T) {
 
 	off := false
 	r := newThoughtsTestRunner(t, "gemini-2.5-pro", &off)
-	r.SetReasoningOverride("none")
+	s := r.settingsSnapshot()
+	s.Providers.GeminiAPIKey.Models = map[string]config.ProviderModelConfig{
+		"gemini-2.5-pro": {ReasoningEffort: "none"},
+	}
+	r.SetSettings(s)
 
 	// "none" stays Enabled on the wire: the effort has to reach the provider to
 	// actively turn thinking off (Gemini maps it to ThinkingBudget=0). What must

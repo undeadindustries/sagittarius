@@ -218,19 +218,9 @@ type Runner struct {
 	// the only source of the inspection gate: it is set deliberately, by
 	// /readonly on or --read-only, never inferred from what the user said.
 	readOnlyPosture bool
-	// reasoningOverride* implement the ephemeral, per-(provider,model)
-	// /reasoning pin. It replaces a former process-global (provider.
-	// SessionReasoningOverride) that could bleed across Runner instances and
-	// never invalidated itself on a provider/model switch. Storing the
-	// (provider, model) it was set for and comparing on read means the
-	// override self-invalidates the moment the live model changes, with no
-	// explicit clear-on-switch call required at every switch call site.
-	reasoningOverrideProviderID string
-	reasoningOverrideModel      string
-	reasoningOverrideEffort     string
-	settingsMu                  sync.RWMutex
-	settings                    *config.Settings
-	modeState                   *modes.State
+	settingsMu      sync.RWMutex
+	settings        *config.Settings
+	modeState       *modes.State
 	// system is the full system instruction sent to the provider:
 	// systemBase + mode suffix. systemBase is the personality prompt + memory.
 	// memory is the AGENTS.md content alone (re-composed on rebuild). All three
@@ -744,47 +734,6 @@ func (r *Runner) Model() string {
 	r.modelMu.RLock()
 	defer r.modelMu.RUnlock()
 	return r.model
-}
-
-// SetReasoningOverride pins an ephemeral (non-persisted) reasoning effort for
-// the live (provider, model) pair, driving /reasoning <level>. It reads
-// providerID before taking modelMu (activeProviderID locks settingsMu
-// separately; the two mutexes are never held nested, so this ordering is
-// safe) so the recorded scope always matches what buildGenerateRequest will
-// see on the next round.
-func (r *Runner) SetReasoningOverride(effort string) {
-	providerID := r.activeProviderID()
-	r.modelMu.Lock()
-	r.reasoningOverrideProviderID = providerID
-	r.reasoningOverrideModel = r.model
-	r.reasoningOverrideEffort = strings.TrimSpace(effort)
-	r.modelMu.Unlock()
-}
-
-// ClearReasoningOverride drops the pinned reasoning override, driving
-// /reasoning clear.
-func (r *Runner) ClearReasoningOverride() {
-	r.modelMu.Lock()
-	r.reasoningOverrideProviderID = ""
-	r.reasoningOverrideModel = ""
-	r.reasoningOverrideEffort = ""
-	r.modelMu.Unlock()
-}
-
-// ReasoningOverride returns the pinned reasoning override for the live
-// (provider, model) pair, or "" when none is set or it was set for a
-// different provider/model (a switch since then self-invalidates it).
-func (r *Runner) ReasoningOverride() string {
-	providerID := r.activeProviderID()
-	r.modelMu.RLock()
-	defer r.modelMu.RUnlock()
-	if r.reasoningOverrideEffort == "" {
-		return ""
-	}
-	if r.reasoningOverrideProviderID != providerID || r.reasoningOverrideModel != r.model {
-		return ""
-	}
-	return r.reasoningOverrideEffort
 }
 
 // CompressionModel returns the model used for context compression /
@@ -1807,7 +1756,7 @@ func (r *Runner) buildGenerateRequest() *provider.GenerateRequest {
 	// Resolve adaptive/fixed reasoning defaults per round so a mid-session
 	// model or /reasoning change takes effect on the very next request; see
 	// config.ResolveReasoningRequest for the precedence order.
-	if resolution := config.ResolveReasoningRequest(settings, providerID, model, r.ReasoningOverride()); resolution != nil {
+	if resolution := config.ResolveReasoningRequest(settings, providerID, model, ""); resolution != nil {
 		req.Reasoning = &provider.ReasoningRequest{Effort: resolution.Effort, Enabled: resolution.Enabled}
 	}
 	// Ask for readable reasoning text whenever reasoning is actually enabled for

@@ -25,7 +25,7 @@ func reasoningCommand() Command {
 			},
 			{
 				Name:        "clear",
-				Description: "Clear the session reasoning override (does not touch settings)",
+				Description: "Clear the saved per-model reasoning effort pin",
 				Handler:     handleReasoningClear,
 			},
 			{
@@ -35,7 +35,7 @@ func reasoningCommand() Command {
 			},
 			{
 				Name:        "save",
-				Description: "Persist <level> to providers.<active>.models.<model>.reasoningEffort",
+				Description: "Alias for /reasoning <level> — save providers.<active>.models.<model>.reasoningEffort",
 				Handler:     handleReasoningSave,
 			},
 		}, levels...),
@@ -47,7 +47,7 @@ func reasoningLevelCommand(level provider.ReasoningEffortLevel) Command {
 	name := string(level)
 	return Command{
 		Name:        name,
-		Description: fmt.Sprintf("Set session reasoning effort to '%s' (not persisted)", name),
+		Description: fmt.Sprintf("Set and remember reasoning effort '%s' for the active model", name),
 		Handler: func(ctx *Context) Result {
 			return handleReasoningSetLevel(ctx, name)
 		},
@@ -55,27 +55,49 @@ func reasoningLevelCommand(level provider.ReasoningEffortLevel) Command {
 }
 
 // reasoningContext resolves the shared state every /reasoning sub-command
-// needs: the active provider summary and the live mode-resolved model.
-func reasoningContext(ctx *Context) (provider.EffectiveProviderSummary, string, error) {
-	eff, err := provider.EffectiveProvider(ctx.Deps.Settings)
-	if err != nil {
-		return provider.EffectiveProviderSummary{}, "", err
+// needs: the live settings (merged + runtime mode provider), active provider
+// summary, and live mode-resolved model.
+func reasoningContext(ctx *Context) (*config.Settings, provider.EffectiveProviderSummary, string, error) {
+	s := ctx.Deps.Settings
+	if ctx.Deps.Hooks != nil {
+		if live := ctx.Deps.Hooks.EffectiveSettings(); live != nil {
+			s = live
+		}
 	}
-	_, model := ctx.Deps.Hooks.InteractionMode()
-	return eff, model, nil
+	if s == nil {
+		return nil, provider.EffectiveProviderSummary{}, "", fmt.Errorf("settings not loaded")
+	}
+	eff, err := provider.EffectiveProvider(s)
+	if err != nil {
+		return nil, provider.EffectiveProviderSummary{}, "", err
+	}
+	model := ""
+	if ctx.Deps.Hooks != nil {
+		_, model = ctx.Deps.Hooks.InteractionMode()
+	}
+	if model == "" {
+		if ep, epErr := provider.ResolveEndpointConfig(s); epErr == nil {
+			model = ep.Model
+		}
+	}
+	return s, eff, model, nil
 }
 
 func handleReasoningShow(ctx *Context) Result {
-	if ctx.Deps.Settings == nil {
+	if ctx.Deps.Settings == nil && (ctx.Deps.Hooks == nil || ctx.Deps.Hooks.EffectiveSettings() == nil) {
 		return InfoResult("Reasoning commands unavailable: settings not loaded.")
 	}
-	eff, model, err := reasoningContext(ctx)
+	s, eff, model, err := reasoningContext(ctx)
 	if err != nil {
 		return ErrorResult(err)
 	}
-	override := ctx.Deps.Hooks.ReasoningOverride()
-	persisted := eff.ReasoningEffort
-	resolution := config.ResolveReasoningRequest(ctx.Deps.Settings, eff.ProviderID, model, override)
+	modelPin := ""
+	if inst := s.ProviderInstance(eff.ProviderID); inst != nil {
+		if mc, ok := config.LookupModelConfig(inst, model); ok {
+			modelPin = strings.TrimSpace(mc.ReasoningEffort)
+		}
+	}
+	resolution := config.ResolveReasoningRequest(s, eff.ProviderID, model, "")
 	profile, matched := config.ModelReasoningRule(eff.WireFormat, model)
 
 	lines := []string{
@@ -84,23 +106,22 @@ func handleReasoningShow(ctx *Context) Result {
 
 	switch {
 	case resolution == nil:
-		lines = append(lines, "Resolved reasoning: off (server/provider default) — no override, pin, or known reasoning capability for this model.")
+		lines = append(lines, "Resolved reasoning: off (server/provider default) — no pin or known reasoning capability for this model.")
 	case resolution.Effort != "":
 		source := fmt.Sprintf("provider default (providers.%s.reasoningEffort)", eff.ProviderID)
-		if override != "" {
-			source = "session override (set via /reasoning <level>)"
+		if modelPin != "" {
+			source = fmt.Sprintf("saved per-model setting (providers.%s.models.%s.reasoningEffort)", eff.ProviderID, model)
 		}
 		lines = append(lines, fmt.Sprintf("Resolved reasoning effort: %s — %s", resolution.Effort, source))
 	case matched && profile.Mechanism == config.ReasoningMechanismGeminiDynamic:
 		lines = append(lines, "Resolved reasoning: adaptive (dynamic thinking) — Gemini decides depth per turn. Pin a level with /reasoning <level> or disable with /reasoning none.")
+	case matched && profile.Mechanism == config.ReasoningMechanismAnthropic:
+		lines = append(lines, "Resolved reasoning: adaptive thinking — Claude decides depth per turn. Pin a level with /reasoning <level>.")
 	default:
 		lines = append(lines, "Resolved reasoning: on, provider default effort (discovered reasoning-capable model).")
 	}
 
-	if override != "" && persisted != "" && override != persisted {
-		lines = append(lines, fmt.Sprintf("  Persisted value: %s (clear session override with /reasoning clear)", persisted))
-	}
-	efforts, defaultEffort, mandatory, known := config.ModelReasoningOptions(ctx.Deps.Settings, eff.ProviderID, model)
+	efforts, defaultEffort, mandatory, known := config.ModelReasoningOptions(s, eff.ProviderID, model)
 	if known && len(efforts) > 0 {
 		extra := "Valid levels: " + strings.Join(efforts, ", ")
 		if defaultEffort != "" {
@@ -121,53 +142,58 @@ func handleReasoningShow(ctx *Context) Result {
 }
 
 func handleReasoningClear(ctx *Context) Result {
-	if ctx.Deps.Settings == nil {
-		return InfoResult("Reasoning commands unavailable: settings not loaded.")
-	}
-	eff, _, err := reasoningContext(ctx)
+	s, eff, model, err := reasoningContext(ctx)
 	if err != nil {
+		if ctx.Deps.Settings == nil {
+			return InfoResult("Reasoning commands unavailable: settings not loaded.")
+		}
 		return ErrorResult(err)
 	}
 
-	had := ctx.Deps.Hooks.ReasoningOverride()
-	ctx.Deps.Hooks.ClearReasoningOverride()
+	had := ""
+	if inst := s.ProviderInstance(eff.ProviderID); inst != nil {
+		if mc, ok := config.LookupModelConfig(inst, model); ok {
+			had = strings.TrimSpace(mc.ReasoningEffort)
+		}
+	}
+	if err := saveReasoningLevel(ctx, eff.ProviderID, model, ""); err != nil {
+		return ErrorResult(err)
+	}
 	if had == "" {
 		return InfoResult(fmt.Sprintf(
-			"No session reasoning override was set; nothing to clear. Falling back to %s.",
+			"No per-model reasoning pin was set for %s. Falling back to %s.",
+			model,
 			defaultOrServer(eff.ReasoningEffort),
 		))
 	}
 	return InfoResult(fmt.Sprintf(
-		"Session reasoning override cleared. Falling back to %s.",
+		"Cleared reasoning effort for %s. Falling back to %s.",
+		model,
 		defaultOrServer(eff.ReasoningEffort),
 	))
 }
 
 func handleReasoningSave(ctx *Context) Result {
-	if ctx.Deps.Loader == nil || ctx.Deps.Settings == nil {
-		return InfoResult("Reasoning commands unavailable: settings not loaded.")
-	}
-	eff, model, err := reasoningContext(ctx)
-	if err != nil {
-		return ErrorResult(err)
-	}
-
 	level := strings.TrimSpace(ctx.Args)
 	if level == "" {
 		return InfoResult("Usage: /reasoning save <level>  (see /reasoning show for valid levels)")
 	}
-	if verr := validateReasoningLevel(ctx.Deps.Settings, eff.WireFormat, eff.ProviderID, model, level); verr != nil {
-		return InfoResult(verr.Error())
-	}
-	if err := provider.SetModelReasoningEffort(ctx.Deps.Settings, eff.ProviderID, model, level); err != nil {
+	return handleReasoningSetLevel(ctx, level)
+}
+
+func handleReasoningSetLevel(ctx *Context, level string) Result {
+	s, eff, model, err := reasoningContext(ctx)
+	if err != nil {
+		if ctx.Deps.Settings == nil {
+			return InfoResult("Reasoning commands unavailable: settings not loaded.")
+		}
 		return ErrorResult(err)
 	}
-	if err := ctx.Deps.Loader.Save(ctx.Deps.Settings); err != nil {
-		return ErrorResult(fmt.Errorf("persist reasoning effort: %w", err))
+	if verr := validateReasoningLevel(s, eff.WireFormat, eff.ProviderID, model, level); verr != nil {
+		return InfoResult(verr.Error())
 	}
-	ctx.Deps.Hooks.ClearReasoningOverride()
-	if _, _, err := ctx.Deps.Hooks.RebuildRunner(ctx.Ctx); err != nil {
-		return ErrorResult(fmt.Errorf("rebuild runner after reasoning save: %w", err))
+	if err := saveReasoningLevel(ctx, eff.ProviderID, model, level); err != nil {
+		return ErrorResult(err)
 	}
 	return InfoResult(fmt.Sprintf(
 		"Saved providers.%s.models.%s.reasoningEffort = %s. Live on the next request — no restart needed.",
@@ -177,23 +203,23 @@ func handleReasoningSave(ctx *Context) Result {
 	))
 }
 
-func handleReasoningSetLevel(ctx *Context, level string) Result {
-	if ctx.Deps.Settings == nil {
-		return InfoResult("Reasoning commands unavailable: settings not loaded.")
+func saveReasoningLevel(ctx *Context, providerID, model, level string) error {
+	if ctx.Deps.Hooks != nil {
+		return ctx.Deps.Hooks.SaveModelReasoningEffort(providerID, model, level)
 	}
-	eff, model, err := reasoningContext(ctx)
-	if err != nil {
-		return ErrorResult(err)
+	if ctx.Deps.Settings == nil || ctx.Deps.Loader == nil {
+		return fmt.Errorf("settings not loaded")
 	}
-	if verr := validateReasoningLevel(ctx.Deps.Settings, eff.WireFormat, eff.ProviderID, model, level); verr != nil {
-		return InfoResult(verr.Error())
+	if level == "" {
+		if err := provider.ClearModelConfig(ctx.Deps.Settings, providerID, model, "reasoningEffort"); err != nil {
+			return err
+		}
+	} else {
+		if err := provider.SetModelReasoningEffort(ctx.Deps.Settings, providerID, model, level); err != nil {
+			return err
+		}
 	}
-	ctx.Deps.Hooks.SetReasoningOverride(level)
-	return InfoResult(fmt.Sprintf(
-		"Session reasoning override set to '%s'. Persist it with /reasoning save %s or drop it with /reasoning clear.",
-		level,
-		level,
-	))
+	return ctx.Deps.Loader.Save(ctx.Deps.Settings)
 }
 
 func handleReasoningRoot(ctx *Context) Result {
@@ -227,8 +253,11 @@ func validateReasoningLevel(settings *config.Settings, wireFormat config.WireFor
 	level = strings.TrimSpace(level)
 	efforts, _, mandatory, known := config.ModelReasoningOptions(settings, providerID, model)
 	if known {
-		if mandatory && (level == "none" || level == "off") {
-			return fmt.Errorf("reasoning is mandatory for %s and cannot be disabled", model)
+		if level == "none" || level == "off" {
+			if mandatory {
+				return fmt.Errorf("reasoning is mandatory for %s and cannot be disabled", model)
+			}
+			return nil
 		}
 		if len(efforts) > 0 && !slices.Contains(efforts, level) {
 			return fmt.Errorf("unknown reasoning level %q for %s. Expected one of: %s", level, model, strings.Join(efforts, ", "))

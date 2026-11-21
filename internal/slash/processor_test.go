@@ -47,9 +47,9 @@ type mockHooks struct {
 	// so /grill command tests can assert real start/pause/resume/done/clear
 	// transitions rather than fixed stubs.
 	grillSession *grill.Session
-	// reasoningOverride backs ReasoningOverride()/SetReasoningOverride()/
-	// ClearReasoningOverride(), mirroring Runner's ephemeral /reasoning pin.
-	reasoningOverride string
+	// settingsRef backs EffectiveSettings() and SaveModelReasoningEffort().
+	settingsRef *config.Settings
+	loaderRef   *config.Loader
 	// memoryEntries backs AddMemory()/ListMemories()/RemoveMemory() with a
 	// stateful in-memory slice, so /memory command tests can assert real
 	// add/list/remove behavior.
@@ -407,16 +407,27 @@ func (m *mockHooks) ToolkitDismiss() error {
 	return nil
 }
 
-func (m *mockHooks) ReasoningOverride() string {
-	return m.reasoningOverride
+func (m *mockHooks) EffectiveSettings() *config.Settings {
+	return m.settingsRef
 }
 
-func (m *mockHooks) SetReasoningOverride(effort string) {
-	m.reasoningOverride = effort
-}
-
-func (m *mockHooks) ClearReasoningOverride() {
-	m.reasoningOverride = ""
+func (m *mockHooks) SaveModelReasoningEffort(providerID, model, level string) error {
+	if m.settingsRef == nil {
+		return fmt.Errorf("settings not loaded")
+	}
+	if level == "" {
+		if err := provider.ClearModelConfig(m.settingsRef, providerID, model, "reasoningEffort"); err != nil {
+			return err
+		}
+	} else {
+		if err := provider.SetModelReasoningEffort(m.settingsRef, providerID, model, level); err != nil {
+			return err
+		}
+	}
+	if m.loaderRef != nil {
+		return m.loaderRef.Save(m.settingsRef)
+	}
+	return nil
 }
 
 func (m *mockHooks) CheckForUpdate(ctx context.Context, force bool) (*selfupdate.CheckResult, error) {
@@ -465,7 +476,7 @@ func testDeps(t *testing.T, settings *config.Settings) (slash.Deps, *config.Load
 			Raw: map[string]json.RawMessage{},
 		}
 	}
-	hooks := &mockHooks{rebuildLabel: "OpenAI", rebuildModel: "gpt-4o-mini", lastAssistant: "assistant reply"}
+	hooks := &mockHooks{rebuildLabel: "OpenAI", rebuildModel: "gpt-4o-mini", lastAssistant: "assistant reply", settingsRef: settings, loaderRef: loader}
 	return slash.Deps{Loader: loader, Settings: settings, Hooks: hooks}, loader, hooks
 }
 
@@ -1244,7 +1255,7 @@ func TestReasoningApplicableOnResponses(t *testing.T) {
 		},
 		Raw: map[string]json.RawMessage{},
 	}
-	deps, _, hooks := testDeps(t, settings)
+	deps, _, _ := testDeps(t, settings)
 	p := slash.NewProcessor()
 
 	show := p.Process(context.Background(), "/reasoning show", deps)
@@ -1260,8 +1271,8 @@ func TestReasoningApplicableOnResponses(t *testing.T) {
 	if set.Err != nil {
 		t.Fatalf("set error: %v", set.Err)
 	}
-	if hooks.reasoningOverride != "high" {
-		t.Fatalf("override = %q, want high", hooks.reasoningOverride)
+	if got := settings.Providers.OpenAIResponses.Models["gpt-4o-mini"].ReasoningEffort; got != "high" {
+		t.Fatalf("persisted effort = %q, want high", got)
 	}
 }
 
@@ -1289,8 +1300,10 @@ func TestReasoningMandatoryRejectsDisable(t *testing.T) {
 	if !strings.Contains(combined, "mandatory") {
 		t.Fatalf("expected mandatory rejection message, got: %q", combined)
 	}
-	if hooks.reasoningOverride != "" {
-		t.Fatalf("override should not have been set, got: %q", hooks.reasoningOverride)
+	if settings.Providers.OpenAIResponses.Models != nil {
+		if got := settings.Providers.OpenAIResponses.Models["gpt-5-pro"].ReasoningEffort; got != "" {
+			t.Fatalf("effort should not have been saved, got: %q", got)
+		}
 	}
 }
 

@@ -154,8 +154,8 @@ func TestAppCycleReasoningEffortLapsAndFeedsRequest(t *testing.T) {
 		if !strings.Contains(desc, model) {
 			t.Errorf("description %q does not name the model", desc)
 		}
-		if got := r.ReasoningOverride(); got != level {
-			t.Fatalf("override = %q after step %d, want %q", got, step, level)
+		if got := currentModelReasoningPin(r.settingsSnapshot(), string(config.BuiltInGeminiAPIKey), model); got != level {
+			t.Fatalf("persisted pin = %q after step %d, want %q", got, step, level)
 		}
 		if got := app.ComposerStatus().ReasoningEffort; got != level {
 			t.Errorf("footer effort = %q, want %q", got, level)
