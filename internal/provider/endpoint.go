@@ -38,6 +38,7 @@ type EndpointConfig struct {
 	ConnectTimeout       time.Duration
 	FirstTokenTimeout    time.Duration
 	Bearer               string
+	WorkspaceID          string
 	RequiresAPIKey       bool
 	ToolCallParsing      config.ToolCallParsingMode
 	ReasoningEffort      string
@@ -56,7 +57,7 @@ func ExtractServerRoot(rawURL string) string {
 	s := strings.TrimRight(strings.TrimSpace(rawURL), "/")
 	// Order matters: "/chat/completions" must be tested before "/completions"
 	// because the former also ends with the latter.
-	for _, suffix := range []string{"/chat/completions", "/completions", "/responses"} {
+	for _, suffix := range []string{"/chat/completions", "/completions", "/responses", "/messages"} {
 		if strings.HasSuffix(s, suffix) {
 			s = strings.TrimSuffix(s, suffix)
 			break
@@ -87,6 +88,17 @@ func ResponsesURL(baseURL string) string {
 		return s
 	}
 	return ExtractServerRoot(s) + "/v1/responses"
+}
+
+// MessagesURL returns the POST target for the Anthropic Messages API. Any URL
+// already ending in /messages is honored verbatim; otherwise /v1/messages is
+// appended to the server root.
+func MessagesURL(baseURL string) string {
+	s := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	if strings.HasSuffix(s, "/messages") {
+		return s
+	}
+	return ExtractServerRoot(s) + "/v1/messages"
 }
 
 // ResolveEndpointConfig merges registry defaults, custom definitions, and
@@ -247,6 +259,11 @@ func resolveCustomEndpoint(
 		model = "local-model"
 	}
 
+	workspaceID := strings.TrimSpace(custom.WorkspaceID)
+	if inst != nil && strings.TrimSpace(inst.WorkspaceID) != "" {
+		workspaceID = strings.TrimSpace(inst.WorkspaceID)
+	}
+
 	requiresKey := custom.APIKeyEnvVar != ""
 	return withStallTimeouts(EndpointConfig{
 		ProviderID:           providerID,
@@ -254,6 +271,7 @@ func resolveCustomEndpoint(
 		Model:                model,
 		WireFormat:           wireFormat,
 		Timeout:              resolveTimeout(inst, defaultOpenAITimeout),
+		WorkspaceID:          workspaceID,
 		RequiresAPIKey:       requiresKey,
 		ToolCallParsing:      resolveToolCallParsing(inst),
 		ReasoningEffort:      resolveReasoningEffort(inst, model),
@@ -265,10 +283,14 @@ func resolveCustomEndpoint(
 }
 
 func normalizeEndpointURL(baseURL string, wireFormat config.WireFormat) string {
-	if wireFormat == config.WireFormatOpenAIResponses {
+	switch wireFormat {
+	case config.WireFormatOpenAIResponses:
 		return ResponsesURL(baseURL)
+	case config.WireFormatAnthropic:
+		return MessagesURL(baseURL)
+	default:
+		return ChatCompletionsURL(baseURL)
 	}
-	return ChatCompletionsURL(baseURL)
 }
 
 func providerInstance(settings *config.Settings, providerID string) *config.ProviderInstanceConfig {

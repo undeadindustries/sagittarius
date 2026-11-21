@@ -12,6 +12,7 @@ const (
 	ReasoningMedium  ReasoningEffortLevel = "medium"
 	ReasoningHigh    ReasoningEffortLevel = "high"
 	ReasoningXHigh   ReasoningEffortLevel = "xhigh"
+	ReasoningMax     ReasoningEffortLevel = "max"
 )
 
 // ValidReasoningLevels lists accepted reasoning effort values across every
@@ -25,6 +26,7 @@ var ValidReasoningLevels = []ReasoningEffortLevel{
 	ReasoningMedium,
 	ReasoningHigh,
 	ReasoningXHigh,
+	ReasoningMax,
 }
 
 // IsValidReasoningLevel reports whether level is an accepted effort value.

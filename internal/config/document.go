@@ -51,6 +51,7 @@ func unmarshalProviderInstance(raw json.RawMessage) (*ProviderInstanceConfig, er
 		"chatTemplateKwargs":  func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.ChatTemplateKwargs) },
 		"useResponseChaining": func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.UseResponseChaining) },
 		"wireFormat":          func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.WireFormat) },
+		"workspaceId":         func(b json.RawMessage) error { return json.Unmarshal(b, &cfg.WorkspaceID) },
 		"toolOutputMaskingEnabled": func(b json.RawMessage) error {
 			return json.Unmarshal(b, &cfg.ToolOutputMaskingEnabled)
 		},
@@ -122,6 +123,7 @@ func marshalProviderInstance(cfg *ProviderInstanceConfig) (json.RawMessage, erro
 		{"chatTemplateKwargs", cfg.ChatTemplateKwargs},
 		{"useResponseChaining", cfg.UseResponseChaining},
 		{"wireFormat", cfg.WireFormat},
+		{"workspaceId", cfg.WorkspaceID},
 		{"toolOutputMaskingEnabled", cfg.ToolOutputMaskingEnabled},
 		{"toolOutputMaskingProtectionFraction", cfg.ToolOutputMaskingProtectionFraction},
 		{"toolOutputMaskingPrunableFraction", cfg.ToolOutputMaskingPrunableFraction},
@@ -162,6 +164,7 @@ func unmarshalCustomProvider(raw json.RawMessage) (CustomProviderDefinition, err
 		},
 		"apiKeyEnvVar": func(b json.RawMessage) error { return json.Unmarshal(b, &def.APIKeyEnvVar) },
 		"wireFormat":   func(b json.RawMessage) error { return json.Unmarshal(b, &def.WireFormat) },
+		"workspaceId":  func(b json.RawMessage) error { return json.Unmarshal(b, &def.WorkspaceID) },
 	}
 	def.Extra = make(map[string]json.RawMessage)
 	for key, val := range obj {
@@ -208,6 +211,9 @@ func marshalCustomProvider(def CustomProviderDefinition) (json.RawMessage, error
 		return nil, err
 	}
 	if err := add("wireFormat", def.WireFormat); err != nil {
+		return nil, err
+	}
+	if err := add("workspaceId", def.WorkspaceID); err != nil {
 		return nil, err
 	}
 	for key, val := range def.Extra {

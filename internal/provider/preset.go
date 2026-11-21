@@ -277,6 +277,8 @@ func ClearProviderSetting(settings *config.Settings, providerID, key string) err
 		cfg.Model = ""
 	case "baseUrl":
 		cfg.BaseURL = ""
+	case "workspaceId":
+		cfg.WorkspaceID = ""
 	case "promptMode":
 		cfg.PromptMode = ""
 	case "personality":

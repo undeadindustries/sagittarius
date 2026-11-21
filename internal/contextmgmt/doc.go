@@ -1,6 +1,5 @@
-// Package contextmgmt implements the local-context defenses Sagittarius applies
-// when the active provider uses the openai-chat wire format (the fork's
-// isLocalMode semantics — see provider.IsOpenAIChatMode).
+// Package contextmgmt implements the client-side context defenses Sagittarius
+// applies on stateless wire formats (openai-chat, gemini, and anthropic).
 //
 // These defenses keep a turn within a small local context window:
 //
@@ -20,7 +19,8 @@
 // take injected dependencies (token estimator, summarizer, file saver) so they
 // unit-test deterministically.
 //
-// These defenses are supported for openai-chat and gemini wire formats. They
-// are disabled for openai-responses, which chains turns server-side via
-// previous_response_id and would desynchronize if history mutated client-side.
+// These defenses are supported for openai-chat, gemini, and anthropic wire
+// formats. They are disabled for openai-responses, which chains turns
+// server-side via previous_response_id and would desynchronize if history
+// mutated client-side.
 package contextmgmt

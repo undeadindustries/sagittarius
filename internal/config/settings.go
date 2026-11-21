@@ -49,6 +49,7 @@ type ProviderInstanceConfig struct {
 	ReasoningEffort      string              `json:"reasoningEffort,omitempty"`
 	UseResponseChaining  *bool               `json:"useResponseChaining,omitempty"`
 	WireFormat           WireFormat          `json:"wireFormat,omitempty"`
+	WorkspaceID          string              `json:"workspaceId,omitempty"`
 	// ShowThinking reveals the model reasoning box for this provider. Nil
 	// inherits the global ui.showThinking; per-model entries can override it.
 	ShowThinking *bool `json:"showThinking,omitempty"`
@@ -367,6 +368,7 @@ type CustomProviderDefinition struct {
 	DefaultContextLimit *int                       `json:"defaultContextLimit,omitempty"`
 	APIKeyEnvVar        string                     `json:"apiKeyEnvVar,omitempty"`
 	WireFormat          WireFormat                 `json:"wireFormat,omitempty"`
+	WorkspaceID         string                     `json:"workspaceId,omitempty"`
 	Extra               map[string]json.RawMessage `json:"-"`
 }
 

@@ -191,7 +191,7 @@ func globalOnlyItem(item editItem) bool {
 	case editAPIKey, editDefn, editWireDefn:
 		return true
 	case editOverride:
-		return item.key == "baseUrl" || item.key == "wireFormat"
+		return item.key == "baseUrl" || item.key == "wireFormat" || item.key == "workspaceId"
 	}
 	return false
 }

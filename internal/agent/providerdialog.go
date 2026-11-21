@@ -97,7 +97,7 @@ func (a *App) scopeDocument(scope config.SettingScope) *config.Settings {
 // connectionSettingKeys decide where requests and the API key go. They are
 // global-only (the merge ignores them in a project file), so a project-scoped
 // edit of one is written globally rather than saved where it has no effect.
-var connectionSettingKeys = map[string]bool{"baseUrl": true, "wireFormat": true}
+var connectionSettingKeys = map[string]bool{"baseUrl": true, "wireFormat": true, "workspaceId": true}
 
 // settingScope routes key to the global tier when it is a connection field.
 func settingScope(key string, scope config.SettingScope) config.SettingScope {
@@ -513,6 +513,9 @@ func (d *providerDialogDeps) ProviderSettings(id string, scope config.SettingSco
 			values["baseUrl"] = custom.BaseURL
 			if custom.WireFormat != "" {
 				values["wireFormat"] = string(custom.WireFormat)
+			}
+			if custom.WorkspaceID != "" && values["workspaceId"] == "" {
+				values["workspaceId"] = custom.WorkspaceID
 			}
 			values["apiKeyEnvVar"] = custom.APIKeyEnvVar
 			// Virtual decomposed URL fields for the edit sheet.

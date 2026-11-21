@@ -1,6 +1,10 @@
 package config
 
-import "strings"
+import (
+	"fmt"
+	"regexp"
+	"strings"
+)
 
 // WireFormat identifies the HTTP wire protocol spoken by a provider endpoint.
 type WireFormat string
@@ -9,7 +13,25 @@ const (
 	WireFormatOpenAIChat      WireFormat = "openai-chat"
 	WireFormatOpenAIResponses WireFormat = "openai-responses"
 	WireFormatGemini          WireFormat = "gemini"
+	WireFormatAnthropic       WireFormat = "anthropic"
 )
+
+var anthropicWorkspaceIDRE = regexp.MustCompile(`^wrkspc_[A-Za-z0-9]+$`)
+
+// ValidateAnthropicWorkspaceID validates an optional Anthropic workspace id.
+// An empty value is valid (for workspace-scoped keys); non-empty values must
+// match Anthropic's wrkspc_... identifier shape so display names like "Default"
+// are rejected before reaching the API.
+func ValidateAnthropicWorkspaceID(id string) error {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil
+	}
+	if !anthropicWorkspaceIDRE.MatchString(id) {
+		return fmt.Errorf("workspaceId %q must start with wrkspc_ followed by letters or digits (find it in Claude Console -> Settings -> Workspaces)", id)
+	}
+	return nil
+}
 
 // BuiltInProviderID identifies a built-in provider registry entry.
 type BuiltInProviderID string
@@ -167,6 +189,32 @@ var openAIResponsesSettingKeys = []string{
 	"showThinking",
 }
 
+// anthropicSettingKeys are the per-instance keys editable for a native
+// Anthropic provider: Responses minus useResponseChaining, plus workspaceId and
+// the tool-output masking knobs (since context management is enabled).
+var anthropicSettingKeys = []string{
+	"model",
+	"baseUrl",
+	"workspaceId",
+	"contextLimit",
+	"promptMode",
+	"personality",
+	"enableTools",
+	"timeout",
+	"connectTimeout",
+	"firstTokenTimeout",
+	"compressionThreshold",
+	"preserveFraction",
+	"temperature",
+	"reasoningEffort",
+	"systemPromptOverride",
+	"showThinking",
+	"toolOutputMaskingEnabled",
+	"toolOutputMaskingProtectionFraction",
+	"toolOutputMaskingPrunableFraction",
+	"toolOutputMaskingProtectLatestTurn",
+}
+
 // ValidSettingKeys returns the editable providers.<id>.* leaf keys for a wire
 // format. Gemini providers expose none — upstream owns those defaults (fork
 // GEMINI_SETTING_KEYS = []).
@@ -176,6 +224,8 @@ func ValidSettingKeys(wf WireFormat) []string {
 		return append([]string(nil), openAIChatSettingKeys...)
 	case WireFormatOpenAIResponses:
 		return append([]string(nil), openAIResponsesSettingKeys...)
+	case WireFormatAnthropic:
+		return append([]string(nil), anthropicSettingKeys...)
 	default:
 		return nil
 	}

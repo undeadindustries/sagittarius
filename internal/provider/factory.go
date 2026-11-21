@@ -31,6 +31,8 @@ func NewContentGenerator(ctx context.Context, settings *config.Settings) (Conten
 		return newOpenAIChatGenerator(ctx, settings, endpoint)
 	case config.WireFormatOpenAIResponses:
 		return newOpenAIResponsesGenerator(ctx, settings, endpoint)
+	case config.WireFormatAnthropic:
+		return newAnthropicGenerator(ctx, settings, endpoint)
 	default:
 		return nil, fmt.Errorf("content generator: provider %q uses wire format %q, which is not supported yet",
 			endpoint.ProviderID, endpoint.WireFormat)
@@ -128,4 +130,8 @@ func newOpenAIResponsesGenerator(ctx context.Context, settings *config.Settings,
 	}
 	_ = settings
 	return gen, nil
+}
+
+func newAnthropicGenerator(_ context.Context, _ *config.Settings, endpoint EndpointConfig) (ContentGenerator, error) {
+	return nil, fmt.Errorf("content generator: provider %q anthropic adapter not yet initialized", endpoint.ProviderID)
 }

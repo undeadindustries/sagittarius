@@ -549,7 +549,7 @@ func mergeProviders(global, project *ProvidersSettings) *ProvidersSettings {
 // with whatever repository was cloned, so letting it set baseUrl or wireFormat
 // would let that repository redirect the user's credentials.
 func stripProjectConnection(providerID string, inst *ProviderInstanceConfig) *ProviderInstanceConfig {
-	if inst == nil || (inst.BaseURL == "" && inst.WireFormat == "") {
+	if inst == nil || (inst.BaseURL == "" && inst.WireFormat == "" && inst.WorkspaceID == "") {
 		return inst
 	}
 	out := *inst
@@ -563,6 +563,11 @@ func stripProjectConnection(providerID string, inst *ProviderInstanceConfig) *Pr
 			"provider", providerID, "field", "wireFormat")
 		out.WireFormat = ""
 	}
+	if out.WorkspaceID != "" {
+		slog.Warn("ignoring project settings field; connection fields are global-only",
+			"provider", providerID, "field", "workspaceId")
+		out.WorkspaceID = ""
+	}
 	return &out
 }
 
@@ -575,7 +580,7 @@ func stripProjectConnectionRaw(providerID string, raw json.RawMessage) (json.Raw
 		slog.Warn("ignoring undecodable project provider block", "provider", providerID, "error", err)
 		return nil, false
 	}
-	if inst.BaseURL == "" && inst.WireFormat == "" {
+	if inst.BaseURL == "" && inst.WireFormat == "" && inst.WorkspaceID == "" {
 		return raw, true
 	}
 	out, err := json.Marshal(stripProjectConnection(providerID, &inst))
@@ -666,6 +671,7 @@ func mergeProviderInstance(global, project *ProviderInstanceConfig) *ProviderIns
 	merged.ReasoningEffort = overlayStr(global.ReasoningEffort, project.ReasoningEffort)
 	merged.UseResponseChaining = overlayPtr(global.UseResponseChaining, project.UseResponseChaining)
 	merged.WireFormat = overlayStr(global.WireFormat, project.WireFormat)
+	merged.WorkspaceID = overlayStr(global.WorkspaceID, project.WorkspaceID)
 	merged.ShowThinking = overlayPtr(global.ShowThinking, project.ShowThinking)
 	merged.ReasoningHistory = overlayStr(global.ReasoningHistory, project.ReasoningHistory)
 	if len(project.ChatTemplateKwargs) > 0 {

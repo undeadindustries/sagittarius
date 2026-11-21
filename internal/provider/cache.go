@@ -21,6 +21,7 @@ type generatorCacheKey struct {
 	wireFormat           config.WireFormat
 	baseURL              string
 	bearer               string
+	workspaceID          string
 	timeout              time.Duration
 	toolCallParsing      config.ToolCallParsingMode
 	reasoningEffort      string
@@ -83,6 +84,7 @@ func (c *GeneratorCache) GetOrCreate(ctx context.Context, settings *config.Setti
 		wireFormat:           endpoint.WireFormat,
 		baseURL:              endpoint.BaseURL,
 		bearer:               bearer,
+		workspaceID:          endpoint.WorkspaceID,
 		timeout:              endpoint.Timeout,
 		toolCallParsing:      endpoint.ToolCallParsing,
 		reasoningEffort:      endpoint.ReasoningEffort,

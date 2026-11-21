@@ -509,6 +509,9 @@ func InstanceSettingValues(settings *config.Settings, providerID string) map[str
 	if inst.BaseURL != "" {
 		out["baseUrl"] = inst.BaseURL
 	}
+	if inst.WorkspaceID != "" {
+		out["workspaceId"] = inst.WorkspaceID
+	}
 	if inst.PromptMode != "" {
 		out["promptMode"] = string(inst.PromptMode)
 	}
@@ -617,6 +620,11 @@ func assignInstanceSetting(cfg *config.ProviderInstanceConfig, key, value string
 		cfg.Model = value
 	case "baseUrl":
 		cfg.BaseURL = value
+	case "workspaceId":
+		if err := config.ValidateAnthropicWorkspaceID(value); err != nil {
+			return err
+		}
+		cfg.WorkspaceID = strings.TrimSpace(value)
 	case "promptMode":
 		mode := config.PromptMode(value)
 		if mode != config.PromptModeLite && mode != config.PromptModeFull {
@@ -766,10 +774,15 @@ func UpdateCustomProviderDefinition(settings *config.Settings, id, field, value 
 		def.BaseURL = value
 	case "wireFormat":
 		wf := config.WireFormat(value)
-		if wf != config.WireFormatOpenAIChat && wf != config.WireFormatOpenAIResponses {
-			return fmt.Errorf("wireFormat must be %q or %q", config.WireFormatOpenAIChat, config.WireFormatOpenAIResponses)
+		if wf != config.WireFormatOpenAIChat && wf != config.WireFormatOpenAIResponses && wf != config.WireFormatAnthropic {
+			return fmt.Errorf("wireFormat must be %q, %q, or %q", config.WireFormatOpenAIChat, config.WireFormatOpenAIResponses, config.WireFormatAnthropic)
 		}
 		def.WireFormat = wf
+	case "workspaceId":
+		if err := config.ValidateAnthropicWorkspaceID(value); err != nil {
+			return fmt.Errorf("update custom provider: %w", err)
+		}
+		def.WorkspaceID = value
 	case "apiKeyEnvVar":
 		def.APIKeyEnvVar = value
 	case "defaultModel":
@@ -860,6 +873,15 @@ func AddCustomProvider(settings *config.Settings, id string, def config.CustomPr
 	if def.WireFormat == "" {
 		def.WireFormat = config.WireFormatOpenAIChat
 	}
+	switch def.WireFormat {
+	case config.WireFormatOpenAIChat, config.WireFormatOpenAIResponses, config.WireFormatAnthropic:
+	default:
+		return fmt.Errorf("add custom provider: unsupported wireFormat %q", def.WireFormat)
+	}
+	if err := config.ValidateAnthropicWorkspaceID(def.WorkspaceID); err != nil {
+		return fmt.Errorf("add custom provider: %w", err)
+	}
+	def.WorkspaceID = strings.TrimSpace(def.WorkspaceID)
 	settings.Providers.Custom[id] = def
 	return nil
 }

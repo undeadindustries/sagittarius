@@ -11,10 +11,10 @@ const DefaultLocalContextLimit = 32_768
 // for the active provider. Zero-valued fraction/threshold fields mean "use the
 // contextmgmt package default" — callers must not treat 0 as a literal value.
 type ContextManagementConfig struct {
-	// Enabled is true when the active provider uses a supported wire format
-	// (openai-chat or gemini). Every defense is gated on this. openai-responses
-	// is disabled because it chains turns server-side via previous_response_id,
-	// so mutating history client-side desynchronizes the chain.
+	// Enabled is true when the active provider uses a stateless wire format
+	// (openai-chat, gemini, or anthropic). Every defense is gated on this.
+	// openai-responses is disabled because it chains turns server-side via
+	// previous_response_id, so mutating history client-side desynchronizes the chain.
 	Enabled bool
 
 	// Adaptive is true when adaptive threshold tightening is enabled. This is
@@ -61,7 +61,9 @@ func ResolveContextManagement(settings *config.Settings, liveModel string) Conte
 	if err != nil {
 		return cm
 	}
-	cm.Enabled = endpoint.WireFormat == config.WireFormatOpenAIChat || endpoint.WireFormat == config.WireFormatGemini
+	cm.Enabled = endpoint.WireFormat == config.WireFormatOpenAIChat ||
+		endpoint.WireFormat == config.WireFormatGemini ||
+		endpoint.WireFormat == config.WireFormatAnthropic
 	cm.Adaptive = endpoint.WireFormat == config.WireFormatOpenAIChat
 
 	providerID := endpoint.ProviderID
