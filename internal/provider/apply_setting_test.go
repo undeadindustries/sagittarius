@@ -3,6 +3,7 @@ package provider
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/undeadindustries/sagittarius/internal/config"
 )
@@ -78,15 +79,28 @@ func TestApplyProviderSettingRejectsBadValue(t *testing.T) {
 	}
 }
 
-func TestApplyProviderSettingGeminiHasNoEditableKeys(t *testing.T) {
+// TestApplyProviderSettingGeminiFirstTokenTimeout pins the one Gemini key the
+// providers wizard can edit. The Gemini stall error tells users to raise it in
+// /providers, so the value must save and reach the adapter's endpoint config.
+func TestApplyProviderSettingGeminiFirstTokenTimeout(t *testing.T) {
 	t.Parallel()
 	s := &config.Settings{Providers: &config.ProvidersSettings{
 		Active:       string(config.BuiltInGeminiAPIKey),
 		GeminiAPIKey: &config.ProviderInstanceConfig{},
 	}}
 	err := ApplyProviderSetting(s, "gemini", "temperature", "0.5")
-	if err == nil || !strings.Contains(err.Error(), "no editable settings") {
-		t.Fatalf("expected no-editable-settings error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "not editable") {
+		t.Fatalf("expected temperature to be rejected for gemini, got %v", err)
+	}
+	if err := ApplyProviderSetting(s, "gemini", "firstTokenTimeout", "900"); err != nil {
+		t.Fatalf("firstTokenTimeout: %v", err)
+	}
+	ep, err := ResolveEndpointForProvider(s, "gemini")
+	if err != nil {
+		t.Fatalf("resolve endpoint: %v", err)
+	}
+	if ep.FirstTokenTimeout != 900*time.Second {
+		t.Fatalf("FirstTokenTimeout = %s, want 15m0s", ep.FirstTokenTimeout)
 	}
 }
 

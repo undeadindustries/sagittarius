@@ -259,6 +259,33 @@ func assertStall(t *testing.T, err, wantKind error) {
 	}
 }
 
+// TestStallSettingsEditableInProviders keeps StallError's "/providers" hint
+// truthful: every wire format must expose the key for each stall kind its
+// adapter can raise. Gemini raises only first-token stalls.
+func TestStallSettingsEditableInProviders(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		wf   config.WireFormat
+		keys []string
+	}{
+		{config.WireFormatGemini, []string{"firstTokenTimeout"}},
+		{config.WireFormatOpenAIChat, []string{"connectTimeout", "firstTokenTimeout"}},
+		{config.WireFormatOpenAIResponses, []string{"connectTimeout", "firstTokenTimeout"}},
+		{config.WireFormatAnthropic, []string{"connectTimeout", "firstTokenTimeout"}},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.wf), func(t *testing.T) {
+			t.Parallel()
+			allowed := config.ValidSettingKeys(tc.wf)
+			for _, key := range tc.keys {
+				if !containsString(allowed, key) {
+					t.Fatalf("%s stall names %s, but /providers cannot edit it (allowed: %v)", tc.wf, key, allowed)
+				}
+			}
+		})
+	}
+}
+
 func TestOpenAIChatUserCancelIsNotStall(t *testing.T) {
 	t.Parallel()
 	srv := scriptedSSE(t, testHang)

@@ -96,8 +96,12 @@ When a budget runs out, the turn stops with an error that says which wait
 timed out and which setting to change, for example:
 
 ```text
-Timed out: local-vllm accepted the request but sent no output within 5m0s. The server may be stuck, or it may still be processing a very long prompt. If it's just slow, raise the limit: set providers.local-vllm.firstTokenTimeout (seconds) in /providers or ~/.sagittarius/settings.json. 0 means no timeout.
+Timed out: local-vllm accepted the request but sent no output within 5m0s. The server may be stuck, or it may still be processing a very long prompt. If it's just slow, raise the limit: open /providers, pick local-vllm, and set firstTokenTimeout (seconds), or set providers.local-vllm.firstTokenTimeout in ~/.sagittarius/settings.json. 0 means no timeout.
 ```
+
+Both keys are on the provider's edit sheet in `/providers`. Gemini-native
+providers show only `firstTokenTimeout`, since they don't use `connectTimeout`.
+You can also set either key in `settings.json`:
 
 ```json
 {

@@ -11,10 +11,11 @@ func hasKey(keys []string, want string) bool {
 	return false
 }
 
-func TestValidSettingKeysGeminiEmpty(t *testing.T) {
+func TestValidSettingKeysGeminiOnlyFirstTokenTimeout(t *testing.T) {
 	t.Parallel()
-	if keys := ValidSettingKeys(WireFormatGemini); len(keys) != 0 {
-		t.Fatalf("gemini ValidSettingKeys = %v, want empty", keys)
+	keys := ValidSettingKeys(WireFormatGemini)
+	if len(keys) != 1 || keys[0] != "firstTokenTimeout" {
+		t.Fatalf("gemini ValidSettingKeys = %v, want [firstTokenTimeout]", keys)
 	}
 }
 
@@ -66,7 +67,7 @@ func TestValidSettingKeysForProviderCustomWireFormat(t *testing.T) {
 	}
 
 	// Built-in id resolves from the registry regardless of the custom arg.
-	if keys := ValidSettingKeysForProvider("gemini", nil); len(keys) != 0 {
-		t.Fatalf("gemini provider keys = %v, want empty", keys)
+	if keys := ValidSettingKeysForProvider("gemini", nil); hasKey(keys, "baseUrl") || !hasKey(keys, "firstTokenTimeout") {
+		t.Fatalf("gemini provider keys = %v, want gemini allowlist", keys)
 	}
 }

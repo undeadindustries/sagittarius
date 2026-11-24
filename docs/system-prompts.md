@@ -264,7 +264,7 @@ A custom prompt selection looks like this:
 Set the project default interactively with `/system-prompt` (writes
 `<repo>/.sagittarius/settings.json`). The provider's `personality` is also editable
 from the providers wizard / via `provider.ApplyProviderSetting` (openai-chat and
-openai-responses wire formats; gemini exposes no editable keys).
+openai-responses wire formats; gemini exposes only `firstTokenTimeout`).
 
 ## Resetting overrides
 

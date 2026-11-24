@@ -215,11 +215,22 @@ var anthropicSettingKeys = []string{
 	"toolOutputMaskingProtectLatestTurn",
 }
 
+// geminiSettingKeys are the per-instance keys editable for a Gemini-native
+// provider. Upstream owns the other Gemini defaults (fork GEMINI_SETTING_KEYS
+// = []), but the first-token stall budget is Sagittarius's own and its
+// timeout error sends users to /providers to raise it. connectTimeout is
+// absent because the genai SDK does not report when headers arrive, so the
+// Gemini adapter cannot enforce it.
+var geminiSettingKeys = []string{
+	"firstTokenTimeout",
+}
+
 // ValidSettingKeys returns the editable providers.<id>.* leaf keys for a wire
-// format. Gemini providers expose none — upstream owns those defaults (fork
-// GEMINI_SETTING_KEYS = []).
+// format.
 func ValidSettingKeys(wf WireFormat) []string {
 	switch wf {
+	case WireFormatGemini:
+		return append([]string(nil), geminiSettingKeys...)
 	case WireFormatOpenAIChat:
 		return append([]string(nil), openAIChatSettingKeys...)
 	case WireFormatOpenAIResponses:

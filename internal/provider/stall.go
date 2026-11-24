@@ -31,17 +31,21 @@ func (e *StallError) Error() string {
 	}
 	if errors.Is(e.Kind, ErrConnectTimeout) {
 		return fmt.Sprintf("Timed out: %s didn't respond within %s. The endpoint may be down or overloaded. "+
-			"If it's just slow, raise the limit: "+stallFixHint,
-			displayProvider(e.ProviderID), e.After, id, "connectTimeout")
+			"If it's just slow, raise the limit: %s",
+			displayProvider(e.ProviderID), e.After, stallFixHint(id, "connectTimeout"))
 	}
 	return fmt.Sprintf("Timed out: %s accepted the request but sent no output within %s. The server may be stuck, "+
-		"or it may still be processing a very long prompt. If it's just slow, raise the limit: "+stallFixHint,
-		displayProvider(e.ProviderID), e.After, id, "firstTokenTimeout")
+		"or it may still be processing a very long prompt. If it's just slow, raise the limit: %s",
+		displayProvider(e.ProviderID), e.After, stallFixHint(id, "firstTokenTimeout"))
 }
 
-// stallFixHint tells the user where the budget lives. /providers edits it for
-// compatible providers; settings.json works for every provider.
-const stallFixHint = "set providers.%s.%s (seconds) in /providers or ~/.sagittarius/settings.json. 0 means no timeout."
+// stallFixHint tells the user where the budget lives. Every wire format that
+// can raise a stall of a given kind lists its key in config.ValidSettingKeys,
+// so /providers is always a valid place to change it.
+func stallFixHint(id, key string) string {
+	return fmt.Sprintf("open /providers, pick %s, and set %s (seconds), or set providers.%s.%s in ~/.sagittarius/settings.json. 0 means no timeout.",
+		id, key, id, key)
+}
 
 func (e *StallError) Unwrap() error { return e.Kind }
 
