@@ -23,6 +23,8 @@ type generatorCacheKey struct {
 	bearer               string
 	workspaceID          string
 	timeout              time.Duration
+	connectTimeout       time.Duration
+	firstTokenTimeout    time.Duration
 	toolCallParsing      config.ToolCallParsingMode
 	reasoningEffort      string
 	useResponseChaining  bool
@@ -86,6 +88,8 @@ func (c *GeneratorCache) GetOrCreate(ctx context.Context, settings *config.Setti
 		bearer:               bearer,
 		workspaceID:          endpoint.WorkspaceID,
 		timeout:              endpoint.Timeout,
+		connectTimeout:       endpoint.ConnectTimeout,
+		firstTokenTimeout:    endpoint.FirstTokenTimeout,
 		toolCallParsing:      endpoint.ToolCallParsing,
 		reasoningEffort:      endpoint.ReasoningEffort,
 		useResponseChaining:  endpoint.UseResponseChaining,
