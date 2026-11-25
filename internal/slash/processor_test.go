@@ -55,9 +55,10 @@ type mockHooks struct {
 	// add/list/remove behavior.
 	memoryEntries []slash.MemoryEntry
 	// customPrompts backs ListCustomPrompts; appliedSystemPrompt records the
-	// last ApplyProjectSystemPromptPreset argument.
-	customPrompts       []string
-	appliedSystemPrompt string
+	// last ApplySystemPromptPreset argument and scope.
+	customPrompts            []string
+	appliedSystemPrompt      string
+	appliedSystemPromptScope config.SettingScope
 	// constraints backs AddConstraint()/ListConstraints()/ClearConstraints()
 	// with a stateful in-memory slice, so /constraints command tests can
 	// assert real add/list/clear behavior.
@@ -260,11 +261,12 @@ func (m *mockHooks) AllActiveModels() []provider.ProviderModelPair { return m.ac
 
 func (m *mockHooks) ProjectSystemPromptPresetID() string { return "" }
 
-func (m *mockHooks) ApplyProjectSystemPromptPreset(ctx context.Context, presetID string) (string, error) {
+func (m *mockHooks) ApplySystemPromptPreset(ctx context.Context, presetID string, scope config.SettingScope) (string, error) {
 	_ = ctx
 	m.reloadCalls++
 	m.rebuildCalls++
 	m.appliedSystemPrompt = presetID
+	m.appliedSystemPromptScope = scope
 	return "System prompt → Programmer", nil
 }
 
@@ -790,6 +792,75 @@ func TestSystemPromptAppliesPresetArg(t *testing.T) {
 	}
 	if hooks.reloadCalls == 0 {
 		t.Fatal("expected ReloadSystemInstruction after preset apply")
+	}
+}
+
+func TestSystemPromptScopeFlagsAndClear(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		cmd       string
+		wantID    string
+		wantScope config.SettingScope
+	}{
+		{"default project scope", "/system-prompt programmer", "programmer", config.ScopeProject},
+		{"--global flag after", "/system-prompt programmer --global", "programmer", config.ScopeGlobal},
+		{"--global flag before", "/system-prompt --global sysadmin", "sysadmin", config.ScopeGlobal},
+		{"trailing global token", "/system-prompt programmer global", "programmer", config.ScopeGlobal},
+		{"clear project", "/system-prompt clear", "", config.ScopeProject},
+		{"clear global flag", "/system-prompt clear --global", "", config.ScopeGlobal},
+		{"clear trailing global", "/system-prompt clear global", "", config.ScopeGlobal},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			deps, _, hooks := testDeps(t, nil)
+			p := slash.NewProcessor()
+			res := p.Process(context.Background(), tc.cmd, deps)
+			if !res.Handled || res.Err != nil {
+				t.Fatalf("%q: result = %+v", tc.cmd, res)
+			}
+			if hooks.appliedSystemPrompt != tc.wantID || hooks.appliedSystemPromptScope != tc.wantScope {
+				t.Fatalf("%q: got (%q, %v), want (%q, %v)", tc.cmd,
+					hooks.appliedSystemPrompt, hooks.appliedSystemPromptScope, tc.wantID, tc.wantScope)
+			}
+		})
+	}
+}
+
+func TestThemeShowUsesMergedProjectSettings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SAGITTARIUS_HOME", home)
+	projDir := t.TempDir()
+
+	docs, err := config.LoadDocuments(projDir)
+	if err != nil {
+		t.Fatalf("LoadDocuments: %v", err)
+	}
+	if err := docs.Global.SetUITheme("default"); err != nil {
+		t.Fatal(err)
+	}
+	if err := docs.Save(config.ScopeGlobal); err != nil {
+		t.Fatal(err)
+	}
+	if err := docs.TargetSettings(config.ScopeProject).SetUITheme("greyscale"); err != nil {
+		t.Fatal(err)
+	}
+	if err := docs.Save(config.ScopeProject); err != nil {
+		t.Fatal(err)
+	}
+
+	p := slash.NewProcessor()
+	res := p.Process(context.Background(), "/theme show", slash.Deps{
+		Settings:  docs.Global,
+		Documents: docs,
+	})
+	if !res.Handled || res.Err != nil {
+		t.Fatalf("/theme show: %+v", res)
+	}
+	if len(res.Messages) == 0 || !strings.Contains(res.Messages[0], "greyscale") {
+		t.Fatalf("/theme show = %v, want greyscale from project settings", res.Messages)
 	}
 }
 

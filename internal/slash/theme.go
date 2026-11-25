@@ -51,8 +51,18 @@ func themeCommand() Command {
 
 func handleThemeShow(ctx *Context) Result {
 	name := themeDefault
-	if ctx.Deps.Settings != nil {
-		if t := ctx.Deps.Settings.UI().Theme; t != "" {
+	s := ctx.Deps.Settings
+	if ctx.Deps.Hooks != nil {
+		if live := ctx.Deps.Hooks.EffectiveSettings(); live != nil {
+			s = live
+		}
+	} else if ctx.Deps.Documents != nil {
+		if merged := ctx.Deps.Documents.Merged(); merged != nil {
+			s = merged
+		}
+	}
+	if s != nil {
+		if t := s.UI().Theme; t != "" {
 			name = t
 		}
 	}

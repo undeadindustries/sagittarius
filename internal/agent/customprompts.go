@@ -148,6 +148,7 @@ func (a *App) afterCustomPromptWrite(name string) (string, error) {
 	if err := a.runner.ReloadSystemInstruction(); err != nil {
 		return "", fmt.Errorf("saved %s, but reloading the system prompt failed: %w", name, err)
 	}
+	a.refreshStatusDetail()
 	return fmt.Sprintf("Saved %s. It is in use, so the change applies to the next request.", name), nil
 }
 

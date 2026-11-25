@@ -188,10 +188,11 @@ func (s *sessionMetrics) resetModelScopedSnapshot() {
 }
 
 // setContextTokens updates the footer context-% gauge without touching session
-// totals or the last-turn snapshot (used after /compress and prepareContext).
+// totals or the last-turn snapshot (used after /compress, /clear, --resume, and
+// prepareContext). Negative counts clamp to zero.
 func (s *sessionMetrics) setContextTokens(tokens int) {
-	if tokens <= 0 {
-		return
+	if tokens < 0 {
+		tokens = 0
 	}
 	s.mu.Lock()
 	s.contextTokens = tokens

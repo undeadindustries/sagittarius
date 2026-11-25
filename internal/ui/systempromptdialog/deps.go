@@ -1,17 +1,24 @@
 package systempromptdialog
 
-import "context"
+import (
+	"context"
+
+	"github.com/undeadindustries/sagittarius/internal/config"
+)
 
 // Deps performs the side effects the system-prompt picker needs. Every method
-// except CurrentPresetID may touch disk or rebuild the runner, so the dialog
-// calls them only from tea.Cmd goroutines.
+// except CurrentPresetID and ProjectAvailable may touch disk or rebuild the
+// runner, so the dialog calls them only from tea.Cmd goroutines.
 type Deps interface {
 	// CurrentPresetID returns the active selection: a built-in preset id (e.g.
 	// "programmer-lite") or a custom prompt name.
 	CurrentPresetID() string
-	// ApplyPreset selects a built-in preset id or a custom prompt name, saves
-	// it to settings, and reloads the runner.
-	ApplyPreset(ctx context.Context, presetID string) (string, error)
+	// ProjectAvailable reports whether the project settings scope is writable.
+	ProjectAvailable() bool
+	// ApplyPreset selects a built-in preset id or a custom prompt name in
+	// scope (or clears sagittarius.systemPrompt in scope when presetID is
+	// empty), saves it to settings, and reloads the runner.
+	ApplyPreset(ctx context.Context, presetID string, scope config.SettingScope) (string, error)
 
 	// ListCustomPrompts returns saved custom prompt names, sorted.
 	ListCustomPrompts() ([]string, error)

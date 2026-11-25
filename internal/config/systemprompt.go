@@ -128,6 +128,22 @@ func ResolveCustomPrompt(settings *Settings, providerID, model string) string {
 	return name
 }
 
+// EffectiveSystemPromptID returns the active system-prompt identifier for
+// (providerID, model): the selected custom prompt name (unless shadowed by a
+// model or provider personality override), otherwise the resolved built-in
+// preset id (e.g. "programmer", "sysadmin-lite").
+func EffectiveSystemPromptID(settings *Settings, providerID, model string) string {
+	if name := ResolveCustomPrompt(settings, providerID, model); name != "" {
+		return name
+	}
+	personality := ResolvePersonality(settings, providerID, model)
+	variant := ResolveVariant(settings, providerID, model)
+	if p, ok := PresetForPersonalityVariant(personality, variant); ok {
+		return p.ID
+	}
+	return PersonalityProgrammer
+}
+
 // ResolveVariant picks the prompt variant ("full"/"lite") for (providerID,
 // model) using the same tier order, reusing the promptMode setting.
 func ResolveVariant(settings *Settings, providerID, model string) string {

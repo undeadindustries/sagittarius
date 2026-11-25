@@ -14,6 +14,7 @@ import (
 	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/customprompt"
 	"github.com/undeadindustries/sagittarius/internal/ui/overlay"
+	"github.com/undeadindustries/sagittarius/internal/ui/scopedialog"
 	"github.com/undeadindustries/sagittarius/internal/ui/theme"
 )
 
@@ -82,6 +83,7 @@ type Model struct {
 	height int
 
 	screen    screen
+	scopeSel  scopedialog.ScopeSelector
 	presets   []presetOption
 	customs   []string
 	currentID string
@@ -145,10 +147,17 @@ func New(ctx context.Context, deps Deps) (Model, tea.Cmd) {
 	for i, p := range presets {
 		opts[i] = presetOption{id: p.ID, label: p.Label}
 	}
+	defaultScope := config.ScopeProject
+	if !deps.ProjectAvailable() {
+		defaultScope = config.ScopeGlobal
+	}
+	sel := scopedialog.NewScopeSelector(defaultScope)
+	sel.Disabled = !deps.ProjectAvailable()
 	m := Model{
 		deps:      deps,
 		ctx:       ctx,
 		th:        theme.Default(),
+		scopeSel:  sel,
 		presets:   opts,
 		currentID: deps.CurrentPresetID(),
 		spin:      spinner.New(spinner.WithSpinner(spinner.MiniDot)),
@@ -229,6 +238,8 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m.handleBodyLoaded(msg)
 	case opDoneMsg:
 		return m.handleOpDone(msg)
+	case scopedialog.ScopeChangedMsg:
+		return m, nil
 	}
 	if m.busy {
 		return m, nil
@@ -268,6 +279,11 @@ func (m Model) forwardToInput(msg tea.Msg) (Model, tea.Cmd) {
 }
 
 func (m Model) updatePick(key tea.KeyMsg) (Model, tea.Cmd) {
+	if sel, cmd, taken := m.scopeSel.HandleKey(key); taken {
+		m.scopeSel = sel
+		m.errMsg = ""
+		return m, cmd
+	}
 	opts := m.pickOptions()
 	switch key.String() {
 	case "esc", "q":
@@ -276,6 +292,8 @@ func (m Model) updatePick(key tea.KeyMsg) (Model, tea.Cmd) {
 		m.pickCursor = (m.pickCursor - 1 + len(opts)) % len(opts)
 	case "down", "j":
 		m.pickCursor = (m.pickCursor + 1) % len(opts)
+	case "r":
+		return m.clearSelection()
 	case "enter":
 		if m.pickCursor < 0 || m.pickCursor >= len(opts) {
 			return m, nil
@@ -537,15 +555,29 @@ func (m Model) runOp(info string, op func(context.Context, Deps) (string, error)
 }
 
 func (m Model) apply(o pickOption) (Model, tea.Cmd) {
-	ctx, deps := m.ctx, m.deps
+	ctx, deps, scope := m.ctx, m.deps, m.scopeSel.Scope
 	m.busy = true
 	m.errMsg = ""
 	m.info = fmt.Sprintf("Applying %s…", o.label)
 	return m, tea.Batch(
 		m.spin.Tick,
 		func() tea.Msg {
-			info, err := deps.ApplyPreset(ctx, o.id)
+			info, err := deps.ApplyPreset(ctx, o.id, scope)
 			return applyResultMsg{info: info, label: o.label, err: err}
+		},
+	)
+}
+
+func (m Model) clearSelection() (Model, tea.Cmd) {
+	ctx, deps, scope := m.ctx, m.deps, m.scopeSel.Scope
+	m.busy = true
+	m.errMsg = ""
+	m.info = fmt.Sprintf("Clearing %s system prompt…", scope)
+	return m, tea.Batch(
+		m.spin.Tick,
+		func() tea.Msg {
+			info, err := deps.ApplyPreset(ctx, "", scope)
+			return applyResultMsg{info: info, label: "default", err: err}
 		},
 	)
 }
@@ -604,7 +636,11 @@ func (m Model) handleApplyResult(msg applyResultMsg) (Model, tea.Cmd) {
 		return m, nil
 	}
 	m.info = msg.info
-	m.status = fmt.Sprintf("System prompt → %s", msg.label)
+	if msg.info != "" {
+		m.status = msg.info
+	} else {
+		m.status = fmt.Sprintf("System prompt → %s", msg.label)
+	}
 	m.done = true
 	return m, nil
 }

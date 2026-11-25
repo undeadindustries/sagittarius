@@ -79,6 +79,11 @@ func (r *Runner) SwitchSession(res *session.SelectionResult) error {
 		release()
 		return fmt.Errorf("switch session: %w", err)
 	}
+	preset := strings.TrimSpace(res.Record.PersonaPreset)
+	if preset == "" {
+		preset = r.EffectivePersonaPreset()
+	}
+	r.sessionRecorder.SetPersonaPreset(preset)
 	r.swapLiveness(release, id)
 
 	r.restoreSwitchedState(res.Record)

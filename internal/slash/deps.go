@@ -87,10 +87,10 @@ type Hooks interface {
 	AllActiveModels() []provider.ProviderModelPair
 	// ProjectSystemPromptPresetID returns the active project system-prompt preset id.
 	ProjectSystemPromptPresetID() string
-	// ApplyProjectSystemPromptPreset writes a built-in preset id or a custom
-	// prompt name to the project settings file (global when there is no
-	// project tier) and reloads the runner system instruction.
-	ApplyProjectSystemPromptPreset(ctx context.Context, presetID string) (string, error)
+	// ApplySystemPromptPreset writes a built-in preset id or a custom prompt
+	// name to scope's settings file (or clears sagittarius.systemPrompt when
+	// presetID is empty) and reloads the runner system instruction.
+	ApplySystemPromptPreset(ctx context.Context, presetID string, scope config.SettingScope) (string, error)
 	// ListCustomPrompts returns the names of saved custom system prompts.
 	ListCustomPrompts() ([]string, error)
 	// Chat checkpoint + export hooks (/chat).

@@ -116,7 +116,7 @@ func TestApplyRejectsUnknownCustomPrompt(t *testing.T) {
 	h := &appHooks{app: app}
 
 	for _, id := range []string{"no-such-prompt", "Bad/Name"} {
-		if _, err := h.ApplyProjectSystemPromptPreset(context.Background(), id); err == nil {
+		if _, err := h.ApplySystemPromptPreset(context.Background(), id, config.ScopeProject); err == nil {
 			t.Fatalf("apply %q: expected error", id)
 		}
 	}

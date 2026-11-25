@@ -206,21 +206,24 @@ func modelsCommand() Command {
 func systemPromptCommand() Command {
 	return Command{
 		Name:        "system-prompt",
-		Description: "Set the project system prompt (saved to .sagittarius/settings.json). Opens a picker, or accepts a preset id or custom prompt name",
+		Description: "Set or clear the system prompt (project or global). Opens a picker, or accepts a preset id, custom prompt name, or 'clear' with optional --global/--project",
 		Handler:     handleSystemPrompt,
 		ArgComplete: systemPromptArgComplete,
 	}
 }
 
-// systemPromptArgComplete lists built-in preset ids, then saved custom prompt
-// names. Custom names are read when completion runs, like checkpoint tags, so
-// a prompt saved in another session shows up without a restart.
+// systemPromptArgComplete lists built-in preset ids, "clear", then saved custom
+// prompt names. Custom names are read when completion runs, like checkpoint
+// tags, so a prompt saved in another session shows up without a restart.
 func systemPromptArgComplete(deps Deps, argPrefix string) []string {
 	var out []string
 	for _, p := range config.SortedSystemPromptPresets() {
 		if strings.HasPrefix(p.ID, argPrefix) {
 			out = append(out, p.ID)
 		}
+	}
+	if strings.HasPrefix("clear", argPrefix) {
+		out = append(out, "clear")
 	}
 	if deps.Hooks == nil {
 		return out
@@ -232,14 +235,58 @@ func systemPromptArgComplete(deps Deps, argPrefix string) []string {
 	return append(out, filterByPrefix(names, argPrefix)...)
 }
 
-// handleSystemPrompt opens the picker when no argument is given, or applies a
-// preset id or custom prompt name directly for headless use.
+// parseSystemPromptArgs parses `/system-prompt [<name>|clear] [--global|--project|global|project]`.
+// Default scope is Project (falling back to Global in home directory).
+func parseSystemPromptArgs(raw string) (presetID string, clearSelection bool, scope config.SettingScope, err error) {
+	scope = config.ScopeProject
+	fields := strings.Fields(strings.TrimSpace(raw))
+	if len(fields) == 0 {
+		return "", false, scope, nil
+	}
+	var positional []string
+	scopeSet := false
+	for _, tok := range fields {
+		switch strings.ToLower(tok) {
+		case "--global", "-g":
+			scope = config.ScopeGlobal
+			scopeSet = true
+		case "--project", "-p":
+			scope = config.ScopeProject
+			scopeSet = true
+		default:
+			positional = append(positional, tok)
+		}
+	}
+	if len(positional) == 2 && !scopeSet {
+		parsed, sErr := parseScope(positional[1])
+		if sErr != nil {
+			return "", false, scope, sErr
+		}
+		scope = parsed
+		positional = positional[:1]
+	} else if len(positional) > 1 {
+		return "", false, scope, fmt.Errorf("/system-prompt: unexpected arguments %q (usage: /system-prompt [<preset|custom|clear>] [--global|--project])", strings.Join(positional, " "))
+	}
+	if len(positional) == 0 {
+		return "", false, scope, nil
+	}
+	if strings.EqualFold(positional[0], "clear") || strings.EqualFold(positional[0], "reset") {
+		return "", true, scope, nil
+	}
+	return positional[0], false, scope, nil
+}
+
+// handleSystemPrompt opens the picker when no selection argument is given, or
+// applies/clears a preset id or custom prompt name directly for headless use.
 func handleSystemPrompt(ctx *Context) Result {
-	arg := strings.TrimSpace(ctx.Args)
-	if arg == "" {
+	presetID, clearSel, scope, err := parseSystemPromptArgs(ctx.Args)
+	if err != nil {
+		return ErrorResult(err)
+	}
+	if presetID == "" && !clearSel {
 		return DialogResult(DialogSystemPrompt)
 	}
-	msg, err := ctx.Deps.Hooks.ApplyProjectSystemPromptPreset(ctx.Ctx, arg)
+	msg, err := ctx.Deps.Hooks.ApplySystemPromptPreset(ctx.Ctx, presetID, scope)
 	if err != nil {
 		return ErrorResult(err)
 	}

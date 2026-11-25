@@ -450,3 +450,60 @@ func TestCrossProviderSessionRoundTripPreservesAndIsolatesHistory(t *testing.T) 
 		t.Fatalf("anthCallCount=%d anthSeenThink=%v, want 2 / true", anthCallCount, anthSeenThink)
 	}
 }
+
+// TestPinnedCLIModelSurvivesModeSwitchAndUnpinsOnModelPick guards Bugbot #1:
+// switching modes while --model is pinned must not swap the generator to a
+// mode's provider override or revert to baseProviderID, and an explicit
+// same-provider /model pick must release the pin.
+func TestPinnedCLIModelSurvivesModeSwitchAndUnpinsOnModelPick(t *testing.T) {
+	app, docs := setupSwitchIntegrityApp(t, false)
+	// Base persisted provider is gemini-apikey; plan mode overrides to gemini-4-carbon;
+	// simulate launching with `-m anthropic/claude-opus-5-5` (runtimeProviderID=anthropic, pinned).
+	docs.Global.Providers.Active = string(config.BuiltInGeminiAPIKey)
+	docs.Global.Sagittarius = &config.SagittariusSettings{
+		Modes: &config.SagittariusModes{
+			Plan: &config.SagittariusModeConfig{
+				Provider: string(config.BuiltInGeminiAPIKey),
+				Model:    "gemini-4-carbon",
+			},
+		},
+	}
+	if err := docs.Save(config.ScopeGlobal); err != nil {
+		t.Fatal(err)
+	}
+	docs.ReloadMerged()
+
+	app.setProvidersState(string(config.BuiltInGeminiAPIKey), "anthropic")
+	app.runner.PinModel("claude-opus-5-5")
+	if _, _, err := app.deps.Hooks.RebuildRunner(context.Background()); err != nil {
+		t.Fatalf("initial RebuildRunner: %v", err)
+	}
+	if got := app.runner.ActiveProviderID(); got != "anthropic" {
+		t.Fatalf("before mode switch ActiveProviderID = %q, want anthropic", got)
+	}
+
+	// Switching to plan (and back to agent) while pinned must keep provider=anthropic and model=claude-opus-5-5.
+	if _, err := app.deps.Hooks.SetInteractionMode(context.Background(), modes.ModePlan); err != nil {
+		t.Fatalf("SetInteractionMode(plan): %v", err)
+	}
+	if got := app.runner.ActiveProviderID(); got != "anthropic" {
+		t.Fatalf("plan ActiveProviderID = %q, want anthropic (must not swap provider while pinned)", got)
+	}
+	if got := app.runner.Model(); got != "claude-opus-5-5" {
+		t.Fatalf("plan Model = %q, want claude-opus-5-5", got)
+	}
+	if _, err := app.deps.Hooks.SetInteractionMode(context.Background(), modes.ModeAgent); err != nil {
+		t.Fatalf("SetInteractionMode(agent): %v", err)
+	}
+	if got := app.runner.ActiveProviderID(); got != "anthropic" {
+		t.Fatalf("agent ActiveProviderID = %q, want anthropic", got)
+	}
+
+	// An explicit same-provider /model pick releases the CLI pin.
+	if _, _, err := app.selectLiveModel(context.Background(), "anthropic", "claude-opus-5-5", config.ScopeGlobal); err != nil {
+		t.Fatalf("selectLiveModel(same provider): %v", err)
+	}
+	if app.runner.ModelPinned() {
+		t.Fatal("ModelPinned should be false after explicit /model pick on the same provider")
+	}
+}

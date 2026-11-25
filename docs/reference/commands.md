@@ -474,22 +474,29 @@ again.
 
 ### `/system-prompt`
 
-- **Description:** Set the **project-wide** system prompt: a built-in
-  personality (programmer, sysadmin, personal assistant, creative assistant ×
+- **Description:** Set or clear the project or global system prompt: a built-in
+  personality (programmer, sysadmin, personal assistant, creative assistant x
   full/lite variants) or one of your custom prompts.
-- **Menu-first:** `/system-prompt` opens a picker. Pass a preset id or a custom
-  prompt name directly for headless use (e.g.
-  `--slash "/system-prompt programmer-lite"` or
-  `--slash "/system-prompt code-reviewer"`). Tab completion lists both.
+- **Menu-first:** `/system-prompt` opens a picker. Press Tab to toggle between
+  Project (`<repo>/.sagittarius/settings.json`) and Global
+  (`~/.sagittarius/settings.json`), Enter to apply, and `r` to clear the
+  selected scope so inherited defaults apply. Pass a preset id, custom prompt
+  name, or `clear` directly for headless use with optional `--global` or
+  `--project` (for example `--slash "/system-prompt programmer --global"`,
+  `--slash "/system-prompt code-reviewer"`, or
+  `--slash "/system-prompt clear"`). Tab completion lists built-in presets,
+  `clear`, and saved custom prompts.
 - **Custom prompts:** choose **Custom prompts…** at the end of the picker to
   manage them. Keys: Enter edit, `n` new, `r` rename, `d` delete (asks `y`),
   Esc back. In the editor, paste or type the text, or press Tab to import a
   file instead; Ctrl+S saves and Esc cancels. Prompts are stored in
   `~/.sagittarius/prompts/`. See
   [Custom prompts](../system-prompts.md#custom-prompts).
-- **Persistence:** Saved to `<repo>/.sagittarius/settings.json` under
-  `sagittarius.systemPrompt` and merged over the global default for the current
-  workspace. Use `/providers` to set a per-provider override instead.
+- **Persistence & precedence:** Saved under `sagittarius.systemPrompt` in the
+  selected scope (project overrides global; in the home directory saves go to
+  the global file). Per-provider (`providers.<id>.personality`) and per-model
+  overrides still take precedence over `sagittarius.systemPrompt`; when one
+  shadows your choice, `/system-prompt` prints a note naming where to clear it.
 
 ### `/mode`
 

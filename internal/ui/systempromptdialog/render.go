@@ -38,14 +38,21 @@ func (m Model) infoLine() string {
 }
 
 func (m Model) viewPick() string {
-	head := overlay.Title(m.th, "System Prompt") + "\n\n" +
-		overlay.Hints(m.th, "Saved to .sagittarius/settings.json for this workspace") + "\n"
+	var scopeLine string
+	hints := "↑/↓ move • Enter apply • r clear • Esc close"
+	if !m.scopeSel.Disabled {
+		scopeLine = m.scopeSel.View(m.th)
+		hints = "↑/↓ move • Enter apply • Tab scope • r clear • Esc close"
+	} else {
+		scopeLine = overlay.Hints(m.th, "Saved to ~/.sagittarius/settings.json (home directory)")
+	}
+	head := overlay.Title(m.th, "System Prompt") + "\n" + scopeLine + "\n"
 	opts := m.pickOptions()
 	rows := make([]string, len(opts))
 	for i, o := range opts {
 		rows[i] = overlay.Row(m.th, o.label, i == m.pickCursor)
 	}
-	foot := overlay.Foot(m.th, m.infoLine(), m.errMsg, "↑/↓ move • Enter apply • Esc close")
+	foot := overlay.Foot(m.th, m.infoLine(), m.errMsg, hints)
 	return overlay.FitFrame(m.th, m.box(),
 		overlay.List{Head: head, Rows: rows, Foot: foot, Cursor: m.pickCursor})
 }

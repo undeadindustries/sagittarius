@@ -119,6 +119,14 @@ func (r *Recorder) PersonaPreset() string {
 	return r.personaPreset
 }
 
+// SetPersonaPreset updates the in-memory persona preset metadata (e.g. after
+// switching sessions so spawned subagents inherit the target session's preset).
+func (r *Recorder) SetPersonaPreset(preset string) {
+	r.mu.Lock()
+	r.personaPreset = strings.TrimSpace(preset)
+	r.mu.Unlock()
+}
+
 // Kind returns the session kind ("main", "subagent", or "evaluator"). Guarded by r.mu.
 func (r *Recorder) Kind() string {
 	r.mu.Lock()
@@ -211,11 +219,13 @@ func (r *Recorder) rotateLocked(newSessionID, filename string) {
 	r.disabled = false
 
 	meta := MetadataRecord{
-		SessionID:   newSessionID,
-		ProjectHash: r.projectHash,
-		StartTime:   time.Now().UTC().Format(time.RFC3339Nano),
-		LastUpdated: time.Now().UTC().Format(time.RFC3339Nano),
-		Kind:        r.kind,
+		SessionID:     newSessionID,
+		ProjectHash:   r.projectHash,
+		StartTime:     time.Now().UTC().Format(time.RFC3339Nano),
+		LastUpdated:   time.Now().UTC().Format(time.RFC3339Nano),
+		Kind:          r.kind,
+		AgentVersion:  r.agentVersion,
+		PersonaPreset: r.personaPreset,
 	}
 	if err := r.appendLineLocked(meta); err != nil {
 		slog.Warn("session: cannot write metadata after rotate, recording disabled", "err", err)

@@ -45,18 +45,44 @@ func NewManager(projectRoot, sessionID string) (*Manager, error) {
 // NewManagerForResume creates a Manager that resumes an existing session.
 // It creates a new Recorder pointing at the existing file, not a brand-new one.
 func NewManagerForResume(projectRoot, sessionID string, result *SelectionResult) (*Manager, error) {
+	return NewManagerForResumeWithConfig(projectRoot, sessionID, result, RecorderConfig{})
+}
+
+// NewManagerForResumeWithConfig creates a Manager that resumes an existing
+// session, seeding the recorder's kind, agent version, and persona preset from
+// the resumed record (falling back to cfg / "main" when omitted in older
+// session files) so child subagents inherit accurate metadata.
+func NewManagerForResumeWithConfig(projectRoot, sessionID string, result *SelectionResult, cfg RecorderConfig) (*Manager, error) {
 	chatsDir, err := ChatsDir(projectRoot)
 	if err != nil {
 		return nil, fmt.Errorf("session: resolve chats dir: %w", err)
 	}
 
-	// For resumed sessions we create a no-op recorder (the file is loaded from
-	// disk; we don't want to re-append the initial metadata line).
+	kind := "main"
+	agentVersion := cfg.AgentVersion
+	personaPreset := cfg.PersonaPreset
+	if result != nil && result.Record != nil {
+		if k := strings.TrimSpace(result.Record.Kind); k != "" {
+			kind = k
+		}
+		if v := strings.TrimSpace(result.Record.AgentVersion); v != "" {
+			agentVersion = v
+		}
+		if p := strings.TrimSpace(result.Record.PersonaPreset); p != "" {
+			personaPreset = p
+		}
+	}
+
+	// For resumed sessions we create an attached recorder (the file is loaded
+	// from disk; we don't want to re-append the initial metadata line).
 	rec := &Recorder{
-		chatsDir:    chatsDir,
-		filePath:    result.SessionPath,
-		sessionID:   result.Record.SessionID,
-		projectHash: result.Record.ProjectHash,
+		chatsDir:      chatsDir,
+		filePath:      result.SessionPath,
+		sessionID:     result.Record.SessionID,
+		projectHash:   result.Record.ProjectHash,
+		kind:          kind,
+		agentVersion:  agentVersion,
+		personaPreset: personaPreset,
 	}
 	// Seed the in-memory title so auto-titling does not overwrite a title that
 	// already exists on disk.

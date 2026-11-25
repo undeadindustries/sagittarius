@@ -261,10 +261,15 @@ A custom prompt selection looks like this:
 }
 ```
 
-Set the project default interactively with `/system-prompt` (writes
-`<repo>/.sagittarius/settings.json`). The provider's `personality` is also editable
-from the providers wizard / via `provider.ApplyProviderSetting` (openai-chat and
-openai-responses wire formats; gemini exposes only `firstTokenTimeout`).
+Set the project or global default interactively with `/system-prompt` (press
+Tab in the picker to switch between Project `<repo>/.sagittarius/settings.json`
+and Global `~/.sagittarius/settings.json`, or `r` to clear a scope's override;
+headlessly use `--global` / `--project` or `/system-prompt clear`). If a
+per-provider or per-model `personality` override takes precedence, Sagittarius
+prints a note naming where to clear it. The provider's `personality` is also
+editable from the providers wizard / via `provider.ApplyProviderSetting`
+(openai-chat, openai-responses, and anthropic wire formats; gemini exposes only
+`firstTokenTimeout`).
 
 ## Resetting overrides
 

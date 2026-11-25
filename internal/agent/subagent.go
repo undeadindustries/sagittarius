@@ -146,7 +146,7 @@ func (r *Runner) newSubagent(ctx context.Context, spec subagentSpec) (*subagent,
 	if err != nil {
 		return nil, fmt.Errorf("create subagent runner: %w", err)
 	}
-	if mgr := NewContextManager(childSettings, gen, child.Model, child.ActiveProviderID,
+	if mgr := NewContextManager(childSettings, gen, child.Model, nil, child.ActiveProviderID,
 		func() string { return child.InteractionMode().String() },
 		subID, child.RecordUsage, child.OnWillCompress); mgr != nil {
 		child.SetContextManager(mgr)

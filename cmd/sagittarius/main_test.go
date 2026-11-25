@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,7 +11,9 @@ import (
 	"testing"
 
 	"github.com/undeadindustries/sagittarius/internal/agent"
+	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/credentials"
+	"github.com/undeadindustries/sagittarius/internal/modes"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 	"github.com/undeadindustries/sagittarius/internal/session"
 	"github.com/undeadindustries/sagittarius/internal/tools"
@@ -239,9 +242,7 @@ func TestBuildRunnerAllowsMissingProviderWhenInteractive(t *testing.T) {
 func TestBuildRunnerResumeUsesResumedSessionID(t *testing.T) {
 	home := t.TempDir()
 	project := t.TempDir()
-	if err := os.Chdir(project); err != nil {
-		t.Fatalf("Chdir: %v", err)
-	}
+	t.Chdir(project)
 	t.Setenv("SAGITTARIUS_HOME", home)
 	withoutEnv(t, "SAGITTARIUS_SESSION_ID")
 	withEmptyCredentials(t)
@@ -461,5 +462,219 @@ func TestGoogleChatCLIGuards(t *testing.T) {
 	}
 	if code := run([]string{"--google-chat-only"}); code != 2 {
 		t.Errorf("run(--google-chat-only) inside child = %d, want 2", code)
+	}
+}
+
+func TestResolveCLIModelOverride(t *testing.T) {
+	t.Parallel()
+
+	s := &config.Settings{
+		Providers: &config.ProvidersSettings{
+			Active: string(config.BuiltInGeminiAPIKey),
+			GeminiAPIKey: &config.ProviderInstanceConfig{
+				ActiveModels: []string{"gemini-4-carbon"},
+			},
+			Custom: map[string]config.CustomProviderDefinition{
+				"anthropic":  {BaseURL: "https://api.anthropic.com/v1/messages", WireFormat: config.WireFormatAnthropic, DefaultModel: "claude-opus-5-5"},
+				"openrouter": {BaseURL: "https://openrouter.ai/api/v1/chat/completions", WireFormat: config.WireFormatOpenAIChat, DefaultModel: "anthropic/claude-opus-5.5"},
+			},
+			Extra: map[string]json.RawMessage{
+				"anthropic":  json.RawMessage(`{"activeModels":["claude-opus-5-5","claude-sonnet-4-6"]}`),
+				"openrouter": json.RawMessage(`{"activeModels":["anthropic/claude-opus-5.5","qwen/qwen3-coder"]}`),
+			},
+		},
+	}
+
+	cases := []struct {
+		name     string
+		base     string
+		raw      string
+		wantProv string
+		wantMod  string
+	}{
+		{"plain model stays on base", "gemini-apikey", "gemini-4-argon", "gemini-apikey", "gemini-4-argon"},
+		{"qualified provider/model routes to anthropic", "gemini-apikey", "anthropic/claude-opus-5-5", "anthropic", "claude-opus-5-5"},
+		{"gemini display alias routes to gemini-apikey", "anthropic", "gemini/gemini-4-carbon", "gemini-apikey", "gemini-4-carbon"},
+		{"openrouter slash model stays on openrouter", "openrouter", "anthropic/claude-opus-5.5", "openrouter", "anthropic/claude-opus-5.5"},
+		{"unlisted openrouter slash model stays on openrouter", "openrouter", "deepseek/deepseek-v4", "openrouter", "deepseek/deepseek-v4"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			gotProv, gotMod := resolveCLIModelOverride(s, tc.base, tc.raw)
+			if gotProv != tc.wantProv || gotMod != tc.wantMod {
+				t.Fatalf("resolveCLIModelOverride(%q, %q) = (%q, %q), want (%q, %q)",
+					tc.base, tc.raw, gotProv, gotMod, tc.wantProv, tc.wantMod)
+			}
+		})
+	}
+}
+
+// TestBuildRunnerPreservesProjectPinsAndRespectsCLIModel guards Bugs C and E:
+// (1) startup must prune docs.Project against docs.Merged() so valid project
+// pins to global custom providers or curated models survive launch;
+// (2) CLI --model (-m) must not be routed to a different mode's provider
+// override, and must support <provider>/<model> qualification.
+func TestBuildRunnerPreservesProjectPinsAndRespectsCLIModel(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SAGITTARIUS_HOME", home)
+	t.Setenv("GEMINI_API_KEY", "test-gem-key")
+	t.Setenv("ANTHROPIC_API_KEY", "test-anth-key")
+	withEmptyCredentials(t)
+
+	projDir := t.TempDir()
+	t.Chdir(projDir)
+
+	globalSettings := `{
+  "providers": {
+    "active": "gemini-apikey",
+    "gemini-apikey": {
+      "model": "gemini-4-carbon",
+      "activeModels": ["gemini-4-carbon", "gemini-4-argon"]
+    },
+    "custom": {
+      "anthropic": {
+        "displayName": "Anthropic",
+        "baseUrl": "https://api.anthropic.com/v1/messages",
+        "apiKeyEnvVar": "ANTHROPIC_API_KEY",
+        "wireFormat": "anthropic",
+        "defaultModel": "claude-opus-5-5"
+      }
+    },
+    "anthropic": {
+      "model": "claude-opus-5-5",
+      "activeModels": ["claude-opus-5-5", "claude-sonnet-4-6"]
+    }
+  }
+}`
+	globalSagDir := filepath.Join(home, ".sagittarius")
+	if err := os.MkdirAll(globalSagDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(globalSagDir, "settings.json"), []byte(globalSettings), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	projSagDir := filepath.Join(projDir, ".sagittarius")
+	if err := os.MkdirAll(projSagDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	projSettings := `{
+  "sagittarius": {
+    "modes": {
+      "plan": { "provider": "anthropic", "model": "claude-sonnet-4-6" },
+      "ask": { "provider": "gemini-apikey", "model": "gemini-4-argon" }
+    }
+  }
+}`
+	if err := os.WriteFile(filepath.Join(projSagDir, "settings.json"), []byte(projSettings), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	planMode := modes.ModePlan
+	runner, docs, rt, _, _, err := buildRunner(context.Background(), runnerOptions{
+		modelOverride: "gemini-4-argon",
+		modeOverride:  &planMode,
+	})
+	if err != nil {
+		t.Fatalf("buildRunner(-m gemini-4-argon --mode plan): %v", err)
+	}
+	_ = runner.Close()
+	_ = rt.Close()
+
+	if got := runner.ActiveProviderID(); got != string(config.BuiltInGeminiAPIKey) {
+		t.Fatalf("ActiveProviderID = %q, want gemini-apikey (CLI -m must beat plan's anthropic provider override)", got)
+	}
+	if got := runner.Model(); got != "gemini-4-argon" {
+		t.Fatalf("Model = %q, want gemini-4-argon", got)
+	}
+	if docs.Project.Sagittarius.Modes.Plan.Model != "claude-sonnet-4-6" {
+		t.Fatalf("startup pruning destroyed valid project plan pin: %+v", docs.Project.Sagittarius.Modes.Plan)
+	}
+	if docs.Project.Sagittarius.Modes.Ask.Model != "gemini-4-argon" {
+		t.Fatalf("startup pruning destroyed valid project ask pin: %+v", docs.Project.Sagittarius.Modes.Ask)
+	}
+
+	runner2, _, rt2, _, _, err := buildRunner(context.Background(), runnerOptions{
+		modelOverride: "anthropic/claude-sonnet-4-6",
+	})
+	if err != nil {
+		t.Fatalf("buildRunner(-m anthropic/claude-sonnet-4-6): %v", err)
+	}
+	_ = runner2.Close()
+	_ = rt2.Close()
+
+	if got := runner2.ActiveProviderID(); got != "anthropic" {
+		t.Fatalf("ActiveProviderID = %q, want anthropic", got)
+	}
+	if got := runner2.Model(); got != "claude-sonnet-4-6" {
+		t.Fatalf("Model = %q, want claude-sonnet-4-6", got)
+	}
+}
+
+// TestBuildRunnerCLIQualifiedModelSkipsOnboardingWhenBaseLacksKey guards
+// Bugbot #2: interactive launch with `-m anthropic/claude-opus-5-5` when
+// persisted providers.active (gemini-apikey) has no API key must route to
+// anthropic, split the model id, and skip onboarding.
+func TestBuildRunnerCLIQualifiedModelSkipsOnboardingWhenBaseLacksKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SAGITTARIUS_HOME", home)
+	withoutEnv(t, "GEMINI_API_KEY")
+	withoutEnv(t, "GOOGLE_API_KEY")
+	t.Setenv("ANTHROPIC_API_KEY", "test-anth-key")
+	withEmptyCredentials(t)
+
+	projDir := t.TempDir()
+	t.Chdir(projDir)
+
+	globalSagDir := filepath.Join(home, ".sagittarius")
+	if err := os.MkdirAll(globalSagDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	globalSettings := `{
+  "providers": {
+    "active": "gemini-apikey",
+    "custom": {
+      "anthropic": {
+        "displayName": "Anthropic",
+        "baseUrl": "https://api.anthropic.com/v1/messages",
+        "apiKeyEnvVar": "ANTHROPIC_API_KEY",
+        "wireFormat": "anthropic",
+        "defaultModel": "claude-opus-5-5"
+      }
+    },
+    "anthropic": {
+      "model": "claude-opus-5-5",
+      "activeModels": ["claude-opus-5-5"]
+    }
+  }
+}`
+	if err := os.WriteFile(filepath.Join(globalSagDir, "settings.json"), []byte(globalSettings), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	runner, docs, rt, _, baseProviderID, err := buildRunner(context.Background(), runnerOptions{
+		interactive:   true,
+		modelOverride: "anthropic/claude-opus-5-5",
+	})
+	if err != nil {
+		t.Fatalf("buildRunner: %v", err)
+	}
+	defer func() {
+		_ = runner.Close()
+		_ = rt.Close()
+	}()
+
+	if startupNeedsOnboarding(context.Background(), docs, runner) {
+		t.Fatal("startupNeedsOnboarding = true, want false when CLI-selected anthropic provider has a valid key")
+	}
+	if got := runner.ActiveProviderID(); got != "anthropic" {
+		t.Fatalf("ActiveProviderID = %q, want anthropic", got)
+	}
+	if got := runner.Model(); got != "claude-opus-5-5" {
+		t.Fatalf("Model = %q, want claude-opus-5-5 (unsplit provider prefix leaked)", got)
+	}
+	if got := startupRuntimeProviderID(docs, runner.ActiveProviderID(), baseProviderID); got != "anthropic" {
+		t.Fatalf("startupRuntimeProviderID = %q, want anthropic", got)
 	}
 }

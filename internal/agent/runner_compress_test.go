@@ -2,10 +2,12 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/contextmgmt"
 	"github.com/undeadindustries/sagittarius/internal/provider"
 	"github.com/undeadindustries/sagittarius/internal/ui"
@@ -456,5 +458,194 @@ func assertRetryShape(t *testing.T, req *provider.GenerateRequest, prompt string
 	last := req.Messages[len(req.Messages)-1]
 	if last.Role != provider.RoleUser || last.Parts[0].Text != prompt {
 		t.Errorf("retry ends on %+v, want the user's prompt %q", last, prompt)
+	}
+}
+
+func TestRunnerSyncsContextGaugeOnResumeReplaceAndClear(t *testing.T) {
+	t.Parallel()
+
+	history := []provider.Message{
+		{Role: provider.RoleUser, Parts: []provider.Part{{Text: strings.Repeat("word ", 400)}}},
+		{Role: provider.RoleModel, Parts: []provider.Part{{Text: strings.Repeat("reply ", 400)}}},
+	}
+	runner, err := NewRunner(RunnerConfig{
+		Generator:      &fakeGenerator{},
+		Model:          "test-model",
+		WorkDir:        t.TempDir(),
+		InitialHistory: history,
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	if got := runner.Stats().ContextTokens; got <= 0 {
+		t.Fatalf("ContextTokens after InitialHistory = %d, want > 0", got)
+	}
+
+	// Attaching a 1.5x cold-start manager (e.g. Opus 5.5) before turn 1 rescales
+	// the resumed gauge immediately.
+	beforeScale := runner.Stats().ContextTokens
+	runner.SetContextManager(contextmgmt.NewManager(contextmgmt.ManagerConfig{
+		Enabled:              true,
+		ContextLimit:         1_000_000,
+		DefaultEstimateScale: 1.5,
+	}))
+	if afterScale := runner.Stats().ContextTokens; afterScale <= beforeScale {
+		t.Fatalf("ContextTokens after 1.5x manager attach = %d, want > %d", afterScale, beforeScale)
+	}
+
+	// ClearHistory zeroes the gauge.
+	runner.ClearHistory()
+	if got := runner.Stats().ContextTokens; got != 0 {
+		t.Fatalf("ContextTokens after ClearHistory = %d, want 0", got)
+	}
+
+	// ReplaceHistory recomputes the gauge.
+	runner.ReplaceHistory(history, nil)
+	if got := runner.Stats().ContextTokens; got <= 0 {
+		t.Fatalf("ContextTokens after ReplaceHistory = %d, want > 0", got)
+	}
+}
+
+// TestRunnerCalibratesTokenEstimateFromProviderUsage verifies that real
+// Usage.InputTokens reported by the provider scales subsequent
+// enforceRequestBudget decisions and resets on model switch.
+func TestRunnerCalibratesTokenEstimateFromProviderUsage(t *testing.T) {
+	t.Parallel()
+
+	// 4800 ASCII chars -> 1200 raw estimated tokens (>= 1000 calibration floor).
+	chunk := strings.Repeat("a", 4800)
+	gen := &fakeGenerator{
+		batches: [][]provider.StreamResponse{
+			// Turn 1 reports 2400 real input tokens for ~1200 raw -> ~2.0x ratio.
+			{{TextDelta: "ok1", Usage: &provider.Usage{InputTokens: 2400, OutputTokens: 10}}, {Done: true}},
+			{{TextDelta: "ok2", Usage: &provider.Usage{InputTokens: 1500, OutputTokens: 10}}, {Done: true}},
+		},
+	}
+	mgr := contextmgmt.NewManager(contextmgmt.ManagerConfig{
+		Enabled:                true,
+		ContextLimit:           4_000,
+		EstimateSafetyFactor:   1.0,
+		ReservedResponseTokens: 200,
+		BudgetEnabled:          false,
+	})
+	runner, err := NewRunner(RunnerConfig{
+		Generator:      gen,
+		Model:          "test-model",
+		WorkDir:        t.TempDir(),
+		ContextManager: mgr,
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	ev1, err := runner.RunTurn(testContext(t), chunk)
+	if err != nil {
+		t.Fatalf("turn 1: %v", err)
+	}
+	collectEvents(t, ev1)
+
+	// Now that calibration learned ~1.8-2.0x, a second 1200-raw-token turn
+	// pushes total raw ~2400 -> calibrated ~4500 > MessageBudget (~3500),
+	// triggering pre-flight truncation instead of blowing past the window.
+	ev2, err := runner.RunTurn(testContext(t), chunk)
+	if err != nil {
+		t.Fatalf("turn 2: %v", err)
+	}
+	got2 := collectEvents(t, ev2)
+	truncated := false
+	for _, ev := range got2 {
+		if ev.Type == ui.StreamInfo && (strings.Contains(ev.Text, "Context exceeded") || strings.Contains(ev.Text, "Context budget exceeded")) {
+			truncated = true
+		}
+	}
+	if !truncated {
+		t.Fatalf("expected calibrated enforceRequestBudget to truncate turn 2, events = %#v", got2)
+	}
+
+	// ResetModelScopedTelemetry resets learned calibration back to 1.0x.
+	runner.ResetModelScopedTelemetry()
+	raw := contextmgmt.EstimateTokens([]provider.Part{{Text: chunk}})
+	if got := mgr.EstimateTokens([]provider.Part{{Text: chunk}}); got != raw {
+		t.Fatalf("after ResetModelScopedTelemetry EstimateTokens = %d, want raw %d", got, raw)
+	}
+}
+
+// TestContextManagerUsesLiveModelNotCompressionModelForBudgets guards
+// Bugbot #3: when sagittarius.compression.model overrides summarization onto a
+// smaller/older model (claude-opus-4-5), main-turn budget math (ContextLimit,
+// ReservedResponseTokens, EstimateScale) must still resolve against
+// Runner.Model() (claude-opus-5-5).
+func TestContextManagerUsesLiveModelNotCompressionModelForBudgets(t *testing.T) {
+	t.Parallel()
+
+	opus55Limit := 1_000_000
+	opus55MaxOut := 128_000
+	opus45Limit := 200_000
+	opus45MaxOut := 16_000
+
+	settings := &config.Settings{
+		Providers: &config.ProvidersSettings{
+			Active: "anthropic",
+			Custom: map[string]config.CustomProviderDefinition{
+				"anthropic": {
+					BaseURL:      "https://api.anthropic.com/v1/messages",
+					WireFormat:   config.WireFormatAnthropic,
+					DefaultModel: "claude-opus-5-5",
+				},
+			},
+			Extra: map[string]json.RawMessage{
+				"anthropic": func() json.RawMessage {
+					b, err := json.Marshal(config.ProviderInstanceConfig{
+						Model:        "claude-opus-5-5",
+						ActiveModels: []string{"claude-opus-5-5", "claude-opus-4-5"},
+						Models: map[string]config.ProviderModelConfig{
+							"claude-opus-5-5": {ContextLimit: &opus55Limit, MaxOutputTokens: &opus55MaxOut},
+							"claude-opus-4-5": {ContextLimit: &opus45Limit, MaxOutputTokens: &opus45MaxOut},
+						},
+					})
+					if err != nil {
+						t.Fatal(err)
+					}
+					return b
+				}(),
+			},
+		},
+		Sagittarius: &config.SagittariusSettings{
+			Compression: &config.SagittariusUtilityConfig{Model: "claude-opus-4-5"},
+		},
+	}
+
+	runner, err := NewRunner(RunnerConfig{
+		Generator:   &fakeGenerator{},
+		Model:       "claude-opus-5-5",
+		WorkDir:     t.TempDir(),
+		Settings:    settings,
+		ModelPinned: true,
+	})
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	if got := runner.CompressionModel(); got != "claude-opus-4-5" {
+		t.Fatalf("precondition: CompressionModel = %q, want claude-opus-4-5", got)
+	}
+
+	mgr := NewContextManager(settings, &fakeGenerator{}, runner.Model, runner.CompressionModel,
+		runner.ActiveProviderID, func() string { return runner.InteractionMode().String() },
+		"sess-split", nil, nil)
+	if mgr == nil {
+		t.Fatal("expected anthropic context manager")
+	}
+
+	if got := mgr.ContextLimit(); got != opus55Limit {
+		t.Fatalf("ContextLimit = %d, want live model limit %d (not summarizer %d)", got, opus55Limit, opus45Limit)
+	}
+	// BudgetLimit = 850,000; Opus 5.5 reserves 128,000 -> MessageBudget(0) = 722,000.
+	if got := mgr.MessageBudget(0); got != 722_000 {
+		t.Fatalf("MessageBudget(0) = %d, want 722000 (Opus 5.5 128k reservation)", got)
+	}
+	// Opus 5.5 uses 1.5x cold-start scale: 4000 chars = 1000 raw -> 1500 scaled.
+	sample := []provider.Part{{Text: strings.Repeat("a", 4000)}}
+	if got := mgr.EstimateTokens(sample); got != 1500 {
+		t.Fatalf("EstimateTokens = %d, want 1500 (Opus 5.5 1.5x scale, not Opus 4.5 1.0x)", got)
 	}
 }

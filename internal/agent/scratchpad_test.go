@@ -292,7 +292,7 @@ func TestScratchpadVisibilityInvariantAcrossLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
-	mgr := NewContextManager(settings, gen, runner.CompressionModel,
+	mgr := NewContextManager(settings, gen, runner.Model, runner.CompressionModel,
 		runner.ActiveProviderID, func() string { return runner.InteractionMode().String() },
 		"sess-invariant", nil, nil)
 	runner.SetContextManager(mgr)
@@ -433,7 +433,7 @@ func TestScratchpadSurvivesCompression(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
-	mgr := NewContextManager(settings, gen, runner.CompressionModel,
+	mgr := NewContextManager(settings, gen, runner.Model, runner.CompressionModel,
 		runner.ActiveProviderID, func() string { return runner.InteractionMode().String() },
 		"sess-scratchpad", nil, nil)
 	if mgr == nil {

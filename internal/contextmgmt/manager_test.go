@@ -441,3 +441,72 @@ func TestManagerMessageBudget(t *testing.T) {
 		t.Errorf("nilMgr.MessageBudget = %d, want 0", got)
 	}
 }
+
+func TestManagerCalibrationAndDynamicReservedTokens(t *testing.T) {
+	t.Parallel()
+
+	reserved := 128_000
+	coldScale := 1.5
+	m := NewManager(ManagerConfig{
+		Enabled:                  true,
+		ContextLimit:             1_000_000,
+		EstimateSafetyFactor:     0.85,
+		ReservedResponseTokensFn: func() int { return reserved },
+		DefaultEstimateScaleFn:   func() float64 { return coldScale },
+	})
+
+	// MessageBudget subtracts dynamic ReservedResponseTokens (128k).
+	if got := m.MessageBudget(10_000); got != 712_000 {
+		t.Fatalf("MessageBudget = %d, want 712000 (850000 - 10000 - 128000)", got)
+	}
+	reserved = 32_000
+	if got := m.MessageBudget(10_000); got != 808_000 {
+		t.Fatalf("MessageBudget after model switch = %d, want 808000", got)
+	}
+
+	// Cold start scales chars/4 by 1.5x. 4000 ASCII chars = 1000 raw -> 1500 scaled.
+	sample := []Part{{Text: strings.Repeat("a", 4000)}}
+	if got := m.EstimateTokens(sample); got != 1500 {
+		t.Fatalf("cold-start EstimateTokens = %d, want 1500", got)
+	}
+	if got := m.EstimateOverhead(strings.Repeat("b", 400), nil); got != 150 {
+		t.Fatalf("cold-start EstimateOverhead = %d, want 150", got)
+	}
+
+	// Small samples (< 1000 raw) are ignored and leave cold-start scale intact.
+	m.ObserveUsage(500, 1200)
+	if got := m.EstimateTokens(sample); got != 1500 {
+		t.Fatalf("small sample should not alter scale; got %d, want 1500", got)
+	}
+
+	// First real sample snaps calibration: ratio = 2000 / 1000 = 2.0.
+	m.ObserveUsage(1000, 2000)
+	if got := m.EstimateTokens(sample); got != 2000 {
+		t.Fatalf("post-first-sample EstimateTokens = %d, want 2000", got)
+	}
+
+	// Subsequent sample blends via EMA (alpha = 0.5): 0.5*1.2 + 0.5*2.0 = 1.6.
+	m.ObserveUsage(1000, 1200)
+	if got := m.EstimateTokens(sample); got != 1600 {
+		t.Fatalf("post-EMA EstimateTokens = %d, want 1600", got)
+	}
+
+	// Extreme ratios clamp to [1.0, 2.5].
+	m.ResetCalibration()
+	m.ObserveUsage(1000, 9999)
+	if got := m.EstimateTokens(sample); got != 2500 {
+		t.Fatalf("upper clamp EstimateTokens = %d, want 2500 (2.5x)", got)
+	}
+	m.ResetCalibration()
+	m.ObserveUsage(1000, 400)
+	if got := m.EstimateTokens(sample); got != 1000 {
+		t.Fatalf("lower clamp EstimateTokens = %d, want 1000 (1.0x)", got)
+	}
+
+	// ResetCalibration restores DefaultEstimateScaleFn for the new model.
+	coldScale = 1.0
+	m.ResetCalibration()
+	if got := m.EstimateTokens(sample); got != 1000 {
+		t.Fatalf("after reset EstimateTokens = %d, want 1000", got)
+	}
+}

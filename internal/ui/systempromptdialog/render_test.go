@@ -12,20 +12,23 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/undeadindustries/sagittarius/internal/config"
 	"github.com/undeadindustries/sagittarius/internal/customprompt"
 )
 
 // fakeDeps is an in-memory prompt store that records calls.
 type fakeDeps struct {
-	mu       sync.Mutex
-	current  string
-	prompts  map[string]string
-	applied  string
-	imported string
+	mu               sync.Mutex
+	current          string
+	projectAvailable bool
+	prompts          map[string]string
+	applied          string
+	appliedScope     config.SettingScope
+	imported         string
 }
 
 func newFakeDeps(current string, names ...string) *fakeDeps {
-	f := &fakeDeps{current: current, prompts: map[string]string{}}
+	f := &fakeDeps{current: current, projectAvailable: true, prompts: map[string]string{}}
 	for _, n := range names {
 		f.prompts[n] = "Body of " + n
 	}
@@ -34,10 +37,19 @@ func newFakeDeps(current string, names ...string) *fakeDeps {
 
 func (f *fakeDeps) CurrentPresetID() string { return f.current }
 
-func (f *fakeDeps) ApplyPreset(_ context.Context, id string) (string, error) {
+func (f *fakeDeps) ProjectAvailable() bool { return f.projectAvailable }
+
+func (f *fakeDeps) ApplyPreset(_ context.Context, id string, scope config.SettingScope) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.applied = id
+	f.appliedScope = scope
+	if id == "" {
+		return "System prompt → Programmer (cleared in " + scope.String() + ")", nil
+	}
+	if _, ok := f.prompts[id]; ok {
+		return "System prompt → " + id + " (custom)", nil
+	}
 	return "applied " + id, nil
 }
 
@@ -384,4 +396,46 @@ func TestResizeOnContentScreen(t *testing.T) {
 	if w := m.body.Width(); w <= 0 || w > 60 {
 		t.Fatalf("editor width = %d after resize to 60 columns", w)
 	}
+}
+
+func TestPickScopeToggleClearAndHomeDirFallback(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Tab switches scope and Enter saves globally", func(t *testing.T) {
+		t.Parallel()
+		deps := newFakeDeps("programmer")
+		m := open(t, deps, 100, 30)
+		m = press(t, m, "tab", "enter")
+		if deps.applied != "programmer" || deps.appliedScope != config.ScopeGlobal || !m.Done() {
+			t.Fatalf("applied=(%q, %v) done=%v, want (programmer, global) done=true", deps.applied, deps.appliedScope, m.Done())
+		}
+	})
+
+	t.Run("r clears selected scope", func(t *testing.T) {
+		t.Parallel()
+		deps := newFakeDeps("programmer")
+		m := open(t, deps, 100, 30)
+		m = press(t, m, "r")
+		if deps.applied != "" || deps.appliedScope != config.ScopeProject || !m.Done() {
+			t.Fatalf("applied=(%q, %v) done=%v, want (empty, project) done=true", deps.applied, deps.appliedScope, m.Done())
+		}
+		if !strings.Contains(m.Status(), "cleared in project") {
+			t.Fatalf("status = %q, want clear confirmation", m.Status())
+		}
+	})
+
+	t.Run("home directory hides scope selector and names global file", func(t *testing.T) {
+		t.Parallel()
+		deps := newFakeDeps("programmer")
+		deps.projectAvailable = false
+		m := open(t, deps, 100, 30)
+		view := m.View()
+		if !strings.Contains(view, "~/.sagittarius/settings.json") {
+			t.Fatalf("home-dir view should name global settings file:\n%s", view)
+		}
+		m = press(t, m, "tab", "enter")
+		if deps.appliedScope != config.ScopeGlobal || !m.Done() {
+			t.Fatalf("home-dir scope = %v done = %v, want ScopeGlobal / true", deps.appliedScope, m.Done())
+		}
+	})
 }

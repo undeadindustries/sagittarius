@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"sync"
+
+	"github.com/undeadindustries/sagittarius/internal/provider"
 )
 
 // ManagerConfig configures a Manager. The agent runner builds one per provider
@@ -58,6 +61,10 @@ type ManagerConfig struct {
 	BudgetEnabled bool
 	// ReservedResponseTokens is reserved for the model reply in budget math.
 	ReservedResponseTokens int
+	// ReservedResponseTokensFn, when set, resolves the output-token reservation
+	// of the live model on every read (e.g. Anthropic's max_tokens). A
+	// non-positive result falls back to ReservedResponseTokens.
+	ReservedResponseTokensFn func() int
 	// ProactiveCompressAt is the projected-usage trigger fraction.
 	ProactiveCompressAt float64
 
@@ -91,6 +98,12 @@ type ManagerConfig struct {
 	// has already overflowed. Zero (and values outside (0,1]) use
 	// defaultEstimateSafetyFactor. ContextLimit() still returns the true window.
 	EstimateSafetyFactor float64
+	// DefaultEstimateScale seeds the chars/4 multiplier before live usage
+	// calibrates it via ObserveUsage (e.g. 1.5 for Opus 4.7+/5.x).
+	DefaultEstimateScale float64
+	// DefaultEstimateScaleFn, when set, resolves the cold-start multiplier for
+	// the live model on every read before ObserveUsage records a real sample.
+	DefaultEstimateScaleFn func() float64
 	// Logger receives structured debug/warn logs; defaults to slog.Default.
 	Logger *slog.Logger
 }
@@ -106,9 +119,19 @@ type Manager struct {
 
 	latchMu              sync.Mutex
 	hasFailedCompression bool
+
+	calibMu      sync.Mutex
+	calibScale   float64
+	calibSampled bool
 }
 
-const defaultEstimateSafetyFactor = 0.85
+const (
+	defaultEstimateSafetyFactor = 0.85
+	minCalibrationSampleTokens  = 1_000
+	minCalibrationScale         = 1.0
+	maxCalibrationScale         = 2.5
+	calibrationEMAAlpha         = 0.5
+)
 
 // NewManager builds a Manager from cfg. A disabled config yields a pass-through.
 func NewManager(cfg ManagerConfig) *Manager {
@@ -130,6 +153,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 
 	if cfg.MaskingEnabled {
 		m.masker = &Masker{
+			Estimate:      m.EstimateTokens,
 			OutputDir:     cfg.OutputDir,
 			SessionID:     cfg.SessionID,
 			ExemptTools:   exempt,
@@ -138,9 +162,11 @@ func NewManager(cfg ManagerConfig) *Manager {
 	}
 	if cfg.Summarize != nil {
 		m.compressor = &Compressor{
-			Summarize:         cfg.Summarize,
-			OutputDir:         cfg.OutputDir,
-			CompressionPrompt: DefaultCompressionPrompt,
+			Summarize:          cfg.Summarize,
+			Estimate:           m.EstimateTokens,
+			CountRequestTokens: m.EstimateTokens,
+			OutputDir:          cfg.OutputDir,
+			CompressionPrompt:  DefaultCompressionPrompt,
 		}
 	}
 	return m
@@ -192,6 +218,121 @@ func (m *Manager) BudgetLimit() int {
 	return int(float64(limit) * factor)
 }
 
+// reservedResponseTokens resolves the output-token reservation for the live
+// model, falling back to cfg.ReservedResponseTokens.
+func (m *Manager) reservedResponseTokens() int {
+	if m == nil {
+		return 0
+	}
+	if m.cfg.ReservedResponseTokensFn != nil {
+		if r := m.cfg.ReservedResponseTokensFn(); r > 0 {
+			return r
+		}
+	}
+	if m.cfg.ReservedResponseTokens > 0 {
+		return m.cfg.ReservedResponseTokens
+	}
+	return 0
+}
+
+func clampCalibrationScale(v float64) float64 {
+	if v < minCalibrationScale {
+		return minCalibrationScale
+	}
+	if v > maxCalibrationScale {
+		return maxCalibrationScale
+	}
+	return v
+}
+
+// estimateScale returns the active multiplier over chars/4 estimates: the
+// live EMA calibrated from provider-reported InputTokens once sampled,
+// otherwise the model's cold-start default scale (clamped to [1.0, 2.5]).
+func (m *Manager) estimateScale() float64 {
+	if m == nil {
+		return minCalibrationScale
+	}
+	m.calibMu.Lock()
+	sampled := m.calibSampled
+	scale := m.calibScale
+	m.calibMu.Unlock()
+	if sampled {
+		return scale
+	}
+	if m.cfg.DefaultEstimateScaleFn != nil {
+		if s := m.cfg.DefaultEstimateScaleFn(); s > 0 {
+			return clampCalibrationScale(s)
+		}
+	}
+	if m.cfg.DefaultEstimateScale > 0 {
+		return clampCalibrationScale(m.cfg.DefaultEstimateScale)
+	}
+	return minCalibrationScale
+}
+
+// ObserveUsage calibrates the token estimator against provider-reported
+// InputTokens so denser tokenizers (such as Opus 4.7+/5.x at ~2.5 chars/token)
+// cannot slip past client-side budget gates. Samples below 1,000 raw estimated
+// tokens are ignored so small-turn JSON framing overhead does not skew the
+// ratio.
+func (m *Manager) ObserveUsage(rawEstimatedTokens, actualInputTokens int) {
+	if m == nil || !m.cfg.Enabled {
+		return
+	}
+	if rawEstimatedTokens < minCalibrationSampleTokens || actualInputTokens <= 0 {
+		return
+	}
+	ratio := clampCalibrationScale(float64(actualInputTokens) / float64(rawEstimatedTokens))
+	m.calibMu.Lock()
+	if !m.calibSampled {
+		m.calibScale = ratio
+		m.calibSampled = true
+	} else {
+		m.calibScale = calibrationEMAAlpha*ratio + (1-calibrationEMAAlpha)*m.calibScale
+	}
+	m.calibMu.Unlock()
+}
+
+// ResetCalibration clears learned tokenizer calibration so the next estimate
+// uses the active model's cold-start scale (call on model/provider switches).
+func (m *Manager) ResetCalibration() {
+	if m == nil {
+		return
+	}
+	m.calibMu.Lock()
+	m.calibScale = 0
+	m.calibSampled = false
+	m.calibMu.Unlock()
+}
+
+// EstimateTokens scales raw chars/4 estimation by the manager's active
+// calibration multiplier.
+func (m *Manager) EstimateTokens(parts []Part) int {
+	raw := EstimateTokens(parts)
+	if m == nil || raw <= 0 {
+		return raw
+	}
+	scale := m.estimateScale()
+	if scale <= minCalibrationScale {
+		return raw
+	}
+	return int(math.Ceil(float64(raw) * scale))
+}
+
+// EstimateOverhead scales raw request overhead (system prompt + tools) by the
+// manager's active calibration multiplier.
+func (m *Manager) EstimateOverhead(system string, tools []provider.ToolDeclaration) int {
+	raw := EstimateRequestOverhead(system, tools)
+	if m == nil || raw <= 0 {
+		return raw
+	}
+	scale := m.estimateScale()
+	if scale <= minCalibrationScale {
+		return raw
+	}
+	return int(math.Ceil(float64(raw) * scale))
+}
+
 // MessageBudget calculates the available token budget for messages after
 // subtracting system/tool overhead and reserved response tokens from BudgetLimit.
 // It is clamped to at least 1 so pre-flight truncation always receives a valid target.
@@ -203,10 +344,7 @@ func (m *Manager) MessageBudget(overheadTokens int) int {
 	if limit <= 0 {
 		return 0
 	}
-	reserved := m.cfg.ReservedResponseTokens
-	if reserved < 0 {
-		reserved = 0
-	}
+	reserved := m.reservedResponseTokens()
 	budget := limit - overheadTokens - reserved
 	if budget < 1 {
 		return 1
@@ -263,7 +401,7 @@ func (m *Manager) ForceCompress(ctx context.Context, history []Message) ([]Messa
 	if preserveFraction <= 0 {
 		preserveFraction = DefaultLocalPreserveFraction
 	}
-	original := EstimateTokens(flattenParts(history))
+	original := m.EstimateTokens(flattenParts(history))
 	opts := CompressOptions{
 		History:            history,
 		Force:              true,
@@ -348,7 +486,7 @@ func (m *Manager) applyEjection(history []Message) ([]Message, int) {
 	// content keeps the model's recent writes visible and avoids needlessly
 	// mutating its prior tool calls.
 	if m.contextLimit() > 0 {
-		historyTokens := EstimateTokens(flattenParts(history))
+		historyTokens := m.EstimateTokens(flattenParts(history))
 		if float64(historyTokens) < ejectionTriggerFraction*float64(m.BudgetLimit()) {
 			return history, 0
 		}
@@ -359,6 +497,7 @@ func (m *Manager) applyEjection(history []Message) ([]Message, int) {
 		ProtectLatestTurn: true,
 		MinAgeTurns:       m.cfg.EjectionMinAgeTurns,
 		MinTokensPerCall:  m.cfg.EjectionMinTokensPerCall,
+		Estimate:          m.EstimateTokens,
 	})
 	if res.EjectedCount > 0 {
 		m.logger.Debug("context: ejected stale write_file content",
@@ -427,7 +566,7 @@ func (m *Manager) applyReasoningPrune(history []Message) ([]Message, int) {
 	res := PruneReasoning(history, ReasoningPruneConfig{
 		ProtectionThresholdTokens:  maskCfg.ProtectionThresholdTokens,
 		MinPrunableThresholdTokens: maskCfg.MinPrunableThresholdTokens,
-	}, EstimateTokens)
+	}, m.EstimateTokens)
 	if res.PrunedCount > 0 {
 		m.logger.Debug("context: pruned older reasoning turns",
 			"pruned", res.PrunedCount, "tokensSaved", res.TokensSaved)
@@ -453,7 +592,7 @@ func (m *Manager) applyBudgetCompression(ctx context.Context, history []Message,
 		return history, false, nil
 	}
 
-	historyTokens := EstimateTokens(flattenParts(history))
+	historyTokens := m.EstimateTokens(flattenParts(history))
 
 	// The pre-turn budget layer only forces compression early; the normal
 	// threshold check (inside Compress) still runs when the budget does not
@@ -463,7 +602,7 @@ func (m *Manager) applyBudgetCompression(ctx context.Context, history []Message,
 		assessment := AssessTurnBudget(PreTurnBudgetInput{
 			CurrentHistoryTokens:   historyTokens,
 			ContextLimit:           m.BudgetLimit(),
-			ReservedResponseTokens: m.cfg.ReservedResponseTokens,
+			ReservedResponseTokens: m.reservedResponseTokens(),
 			ProactiveCompressAt:    m.cfg.ProactiveCompressAt,
 		})
 		budgetTriggered = assessment.ShouldCompressFirst

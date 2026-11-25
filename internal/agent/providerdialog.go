@@ -222,6 +222,7 @@ func (d *providerDialogDeps) RemoveCustomProvider(ctx context.Context, id string
 	}); err != nil {
 		return err
 	}
+	d.pruneProjectPins()
 	// Best-effort credential cleanup; ignore errors (key may not be stored).
 	_ = credentials.DeleteProviderAPIKey(ctx, id)
 
@@ -562,13 +563,29 @@ func (d *providerDialogDeps) SetActiveModels(ctx context.Context, id string, mod
 		return fmt.Errorf("settings not loaded")
 	}
 	// Network discovery off the Documents write lock.
-	infos, discovered := discoverReasoningInfosIfNeeded(ctx, d.settings(), id, models)
+	catalog := d.settings()
+	infos, discovered := discoverReasoningInfosIfNeeded(ctx, catalog, id, models)
 	if err := d.app.persistScope(scope, func(s *config.Settings) error {
-		return provider.SetActiveModels(s, id, models)
+		return provider.SetActiveModelsWithCatalog(s, catalog, id, models)
 	}); err != nil {
 		return err
 	}
+	if scope == config.ScopeGlobal || len(models) == 0 {
+		d.pruneProjectPins()
+	}
 	return d.cacheModelFacts(id, models, 0, modelDiscovery{infos: infos, discovered: discovered})
+}
+
+// pruneProjectPins removes project-scoped mode/subagent/evaluator pins that
+// became stale after a global curation change, custom-provider removal, or
+// cleared project curation, validating against the merged catalog.
+func (d *providerDialogDeps) pruneProjectPins() {
+	if d.app == nil || d.app.docs == nil || d.app.docs.Project == nil {
+		return
+	}
+	if provider.PruneModelOverridesAgainst(d.app.docs.Project, d.app.docs.Merged()) {
+		_ = d.app.docs.Save(config.ScopeProject)
+	}
 }
 
 // EffectiveProviderSettings returns resolved display strings (overrides plus
@@ -800,11 +817,15 @@ func (d *systemPromptDialogDeps) CurrentPresetID() string {
 	return config.ProjectSystemPromptPresetID(s)
 }
 
-func (d *systemPromptDialogDeps) ApplyPreset(ctx context.Context, presetID string) (string, error) {
+func (d *systemPromptDialogDeps) ProjectAvailable() bool {
+	return d.app != nil && d.app.docs != nil && d.app.docs.ProjectAvailable()
+}
+
+func (d *systemPromptDialogDeps) ApplyPreset(ctx context.Context, presetID string, scope config.SettingScope) (string, error) {
 	if d.app == nil || d.app.deps.Hooks == nil {
 		return "", fmt.Errorf("app not available")
 	}
-	return d.app.deps.Hooks.ApplyProjectSystemPromptPreset(ctx, presetID)
+	return d.app.deps.Hooks.ApplySystemPromptPreset(ctx, presetID, scope)
 }
 
 func (d *systemPromptDialogDeps) ListCustomPrompts() ([]string, error) {
@@ -902,7 +923,7 @@ type modesDialogDeps struct {
 	baseDialogDeps
 }
 
-func (d *modesDialogDeps) settings() *config.Settings { return d.app.deps.Settings }
+func (d *modesDialogDeps) settings() *config.Settings { return d.effective() }
 
 func (d *modesDialogDeps) ListModes() []modesdialog.ModeEntry {
 	// Read from merged settings so project overrides are visible.

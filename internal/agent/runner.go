@@ -112,6 +112,11 @@ type RunnerConfig struct {
 	InitialMode modes.Mode
 	// ModelPinned skips mode-based routing when true (CLI -m override).
 	ModelPinned bool
+	// ProviderDefaultModel records the active provider's configured default
+	// model separately from Model when ModelPinned overrides the startup model,
+	// so unpinning later falls back to the real provider default instead of the
+	// one-shot CLI flag. Empty defaults to Model.
+	ProviderDefaultModel string
 	// AllowFix permits run_project_checks to run mutating formatters (fix=true).
 	// Resolved from sagittarius.verify.allowFix; default false. Only seeds the
 	// placeholder registry built by NewRunner — the live value is a
@@ -560,11 +565,16 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		history = append(history, cfg.InitialHistory...)
 	}
 
+	providerDefault := strings.TrimSpace(cfg.ProviderDefaultModel)
+	if providerDefault == "" {
+		providerDefault = cfg.Model
+	}
+
 	runner := &Runner{
 		runtime:               cfg.Runtime,
 		gen:                   cfg.Generator,
 		model:                 cfg.Model,
-		providerDefaultModel:  cfg.Model,
+		providerDefaultModel:  providerDefault,
 		modelPinned:           cfg.ModelPinned,
 		settings:              cfg.Settings,
 		modeState:             modes.NewState(cfg.InitialMode),
@@ -667,6 +677,9 @@ func NewRunner(cfg RunnerConfig) (*Runner, error) {
 		runner.rebuildSystem()
 	}
 	runner.attachInteractionModeGate()
+	if len(history) > 0 {
+		runner.syncContextGauge()
+	}
 	return runner, nil
 }
 
@@ -876,7 +889,8 @@ func (r *Runner) SetInteractionMode(mode modes.Mode) string {
 }
 
 // ResetModelScopedTelemetry clears the previous model's last-turn token and
-// cache-hit snapshot and records a model-switch prefix break.
+// cache-hit snapshot, resets learned tokenizer calibration so the new model
+// uses its own ratio, and records a model-switch prefix break.
 func (r *Runner) ResetModelScopedTelemetry() {
 	if r == nil {
 		return
@@ -884,6 +898,7 @@ func (r *Runner) ResetModelScopedTelemetry() {
 	if r.metrics != nil {
 		r.metrics.resetModelScopedSnapshot()
 	}
+	r.contextManager().ResetCalibration()
 	r.prefixDet.noteExpectedBreak("model-switch")
 }
 
@@ -1350,6 +1365,8 @@ outerLoop:
 				r.syncModeModel()
 			}
 			req := r.enforceRequestBudget(r.buildGenerateRequest(), out)
+			rawEstimatedInput := estimateMessageTokens(req.Messages) +
+				contextmgmt.EstimateRequestOverhead(req.SystemInstruction, req.Tools)
 			r.storeLastRequest(req)
 			prefixObs, err := r.observeRoundPrefix(req)
 			if err != nil {
@@ -1389,6 +1406,8 @@ outerLoop:
 					llmCalls++
 					r.truncateHistoryForOverflow(req, round, out)
 					req = r.enforceRequestBudget(r.buildGenerateRequest(), out)
+					rawEstimatedInput = estimateMessageTokens(req.Messages) +
+						contextmgmt.EstimateRequestOverhead(req.SystemInstruction, req.Tools)
 					r.storeLastRequest(req)
 					prefixObs, err = r.observeRoundPrefix(req)
 					if err != nil {
@@ -1475,6 +1494,9 @@ outerLoop:
 			uKey := usageKey{provider: currentProvider, model: currentModel, mode: currentMode, agentType: r.agentKind()}
 			if streamUsage != nil {
 				r.metrics.recordTurnUsage(uKey, *streamUsage)
+				if streamUsage.InputTokens > 0 {
+					r.contextManager().ObserveUsage(rawEstimatedInput, streamUsage.InputTokens)
+				}
 			} else {
 				inTok := estimateMessageTokens(req.Messages)
 				outTok := 0
@@ -1733,21 +1755,52 @@ func (r *Runner) prepareContext(ctx context.Context, out chan<- ui.StreamEvent) 
 
 // SetContextManager swaps the active context manager. It is called after a
 // provider change so local-context defenses match the new wire format: a nil
-// manager (e.g. switching to gemini-native or openai-responses) makes context
-// management a pure pass-through.
+// manager (e.g. switching to openai-responses) makes context management a pure
+// pass-through.
 func (r *Runner) SetContextManager(mgr *contextmgmt.Manager) {
 	r.ctxMgrMu.Lock()
 	r.ctxMgr = mgr
 	r.ctxMgrMu.Unlock()
 	// A model/provider switch builds a fresh manager; reset anyway so a
-	// reused instance does not keep a prior summarizer-failure latch.
+	// reused instance does not keep a prior summarizer-failure latch or stale
+	// tokenizer calibration.
 	mgr.ResetCompressionFailure()
+	mgr.ResetCalibration()
+	// Before the first turn reports provider InputTokens (e.g. immediately
+	// after --resume), re-sync the context gauge so the footer reflects the
+	// manager's cold-start tokenizer scale (such as Opus 5.5's 1.5x).
+	if r.metrics != nil && r.metrics.snapshot().LastInputTokens == 0 {
+		r.syncContextGauge()
+	}
 }
 
 func (r *Runner) contextManager() *contextmgmt.Manager {
 	r.ctxMgrMu.RLock()
 	defer r.ctxMgrMu.RUnlock()
 	return r.ctxMgr
+}
+
+func (r *Runner) estimateFn() contextmgmt.EstimateFn {
+	if mgr := r.contextManager(); mgr != nil && mgr.Enabled() {
+		return mgr.EstimateTokens
+	}
+	return contextmgmt.EstimateTokens
+}
+
+func (r *Runner) estimateMessages(messages []provider.Message) int {
+	est := r.estimateFn()
+	total := 0
+	for i := range messages {
+		total += est(messages[i].Parts)
+	}
+	return total
+}
+
+func (r *Runner) estimateRequestOverhead(system string, decls []provider.ToolDeclaration) int {
+	if mgr := r.contextManager(); mgr != nil && mgr.Enabled() {
+		return mgr.EstimateOverhead(system, decls)
+	}
+	return contextmgmt.EstimateRequestOverhead(system, decls)
 }
 
 // enforceRequestBudget executes the pre-flight budget ladder before sending a request.
@@ -1761,17 +1814,18 @@ func (r *Runner) enforceRequestBudget(req *provider.GenerateRequest, out chan<- 
 	if mgr == nil || !mgr.Enabled() {
 		return req
 	}
-	overhead := contextmgmt.EstimateRequestOverhead(req.SystemInstruction, req.Tools)
+	overhead := r.estimateRequestOverhead(req.SystemInstruction, req.Tools)
 	target := mgr.MessageBudget(overhead)
 	if target <= 0 {
 		return req
 	}
-	if estimateMessageTokens(req.Messages) <= target {
+	est := r.estimateFn()
+	if r.estimateMessages(req.Messages) <= target {
 		return req
 	}
 
 	r.historyMu.Lock()
-	res := contextmgmt.TruncateHistoryToFit(r.history, target, contextmgmt.EstimateTokens)
+	res := contextmgmt.TruncateHistoryToFit(r.history, target, est)
 	if res.DroppedCount > 0 {
 		r.history = res.NewHistory
 		if r.sessionRecorder != nil {
@@ -1824,7 +1878,7 @@ func (r *Runner) enforceRequestBudget(req *provider.GenerateRequest, out chan<- 
 // turns cannot fit the window because the current turn itself is too large.
 // It returns how many messages were capped. Callers must hold historyMu.
 func (r *Runner) capOversizedHistoryLocked(target int) int {
-	capRes, err := contextmgmt.CapOversizedMessages(r.history, target, contextmgmt.EstimateTokens, "", r.CurrentSessionID())
+	capRes, err := contextmgmt.CapOversizedMessages(r.history, target, r.estimateFn(), "", r.CurrentSessionID())
 	if err != nil {
 		slog.Warn("context: capping oversized messages failed", "target_tokens", target, "error", err)
 		return 0
@@ -2143,6 +2197,25 @@ func (r *Runner) ActiveCustomPrompt() string {
 		return ""
 	}
 	return r.customPromptName
+}
+
+// EffectivePersonaPreset returns the live resolved system-prompt preset or
+// custom prompt name for the runner's current (provider, model).
+func (r *Runner) EffectivePersonaPreset() string {
+	if r == nil {
+		return ""
+	}
+	return config.EffectiveSystemPromptID(r.settingsSnapshot(), r.activeProviderID(), r.Model())
+}
+
+// SyncRecorderPersonaPreset updates the session recorder's in-memory
+// PersonaPreset so child subagents and rotated sessions reflect mid-session
+// system-prompt or provider/model persona changes.
+func (r *Runner) SyncRecorderPersonaPreset() {
+	if r == nil || r.sessionRecorder == nil {
+		return
+	}
+	r.sessionRecorder.SetPersonaPreset(r.EffectivePersonaPreset())
 }
 
 // rebuildBasePrompt resolves the custom prompt or the personality and variant
@@ -2627,15 +2700,16 @@ func (r *Runner) truncateHistoryForOverflow(req *provider.GenerateRequest, round
 	}
 	r.historyMu.Lock()
 	mgr := r.contextManager()
-	overhead := contextmgmt.EstimateRequestOverhead(req.SystemInstruction, req.Tools)
+	est := r.estimateFn()
+	overhead := r.estimateRequestOverhead(req.SystemInstruction, req.Tools)
 	target := 0
 	if mgr != nil && mgr.Enabled() {
 		target = mgr.MessageBudget(overhead) / 2
 	}
 	if target <= 0 {
-		target = estimateMessageTokens(r.history) / 2
+		target = r.estimateMessages(r.history) / 2
 	}
-	res := contextmgmt.TruncateHistoryToFit(r.history, target, contextmgmt.EstimateTokens)
+	res := contextmgmt.TruncateHistoryToFit(r.history, target, est)
 	if res.DroppedCount > 0 {
 		r.history = res.NewHistory
 	}
@@ -3043,6 +3117,7 @@ func (r *Runner) ClearHistory() {
 	r.resetSubagentAttempts()
 	r.prefixDet.reset()
 	r.metrics.resetCacheBreaks()
+	r.metrics.setContextTokens(0)
 }
 
 // History returns a defensive copy of the current conversation history. The
@@ -3131,6 +3206,7 @@ func (r *Runner) ReplaceHistory(h []provider.Message, grants []string) {
 	r.initialSessionGrants = append([]string(nil), grants...)
 	r.regMu.Unlock()
 	r.attachInteractionModeGate() // Recreate scheduler to adopt new grants
+	r.syncContextGauge()
 }
 
 // SessionGrants returns a copy of the current session tool grants.
@@ -3176,18 +3252,18 @@ func (r *Runner) ForceCompress(ctx context.Context) (contextmgmt.CompressionInfo
 }
 
 // syncContextGauge re-estimates context fill from the live history so the footer
-// reflects masking/compression without waiting for the next provider prompt_tokens.
+// reflects masking/compression/resume/clear without waiting for the next
+// provider prompt_tokens.
 func (r *Runner) syncContextGauge() {
 	r.historyMu.RLock()
 	msgs := r.history
 	r.historyMu.RUnlock()
 	if len(msgs) == 0 {
+		r.metrics.setContextTokens(0)
 		return
 	}
-	tok := estimateMessageTokens(msgs)
-	if tok > 0 {
-		r.metrics.setContextTokens(tok)
-	}
+	tok := r.estimateMessages(msgs)
+	r.metrics.setContextTokens(tok)
 }
 
 // ContextFitNotice returns one line describing an over-window history, or ""
@@ -3207,7 +3283,7 @@ func (r *Runner) ContextFitNotice() string {
 	if len(msgs) == 0 {
 		return ""
 	}
-	tokens := estimateMessageTokens(msgs)
+	tokens := r.estimateMessages(msgs)
 	if tokens <= budget {
 		return ""
 	}

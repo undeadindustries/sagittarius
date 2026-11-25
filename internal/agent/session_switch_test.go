@@ -256,6 +256,25 @@ func TestSwitchSessionRejectsNilSelection(t *testing.T) {
 	}
 }
 
+// TestSwitchSessionEmptyPersonaFallsBackToEffective guards Bugbot #5:
+// switching to a legacy/rotated session with empty PersonaPreset must replace
+// the departing session's preset with the runner's effective preset.
+func TestSwitchSessionEmptyPersonaFallsBackToEffective(t *testing.T) {
+	t.Parallel()
+	f := newSwitchFixture(t, t.TempDir())
+	f.runner.sessionRecorder.SetPersonaPreset("old-departing-preset")
+
+	legacy := session.NewRecorder(f.chatsDir, "legacy-session", "hash", "main")
+	legacy.RecordUserMessage("legacy prompt")
+
+	if err := f.runner.SwitchSession(f.targetSelection(t, "legacy-session")); err != nil {
+		t.Fatalf("SwitchSession(legacy): %v", err)
+	}
+	if got := f.runner.sessionRecorder.PersonaPreset(); got != "programmer" {
+		t.Fatalf("PersonaPreset after switching to legacy session = %q, want programmer", got)
+	}
+}
+
 // historyContains reports whether any message carries text.
 func historyContains(h []provider.Message, text string) bool {
 	for _, m := range h {

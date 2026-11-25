@@ -150,3 +150,70 @@ func TestResolveContextManagementGeminiFallback(t *testing.T) {
 		t.Error("Adaptive should be false for Gemini")
 	}
 }
+
+func TestResolveContextManagementAnthropicReservedAndScale(t *testing.T) {
+	t.Parallel()
+
+	mkAnthropic := func(ctxLimit, maxOut int) *config.Settings {
+		inst := config.ProviderInstanceConfig{Model: "claude-opus-5-5"}
+		if ctxLimit > 0 {
+			inst.ContextLimit = &ctxLimit
+		}
+		if maxOut > 0 {
+			inst.Models = map[string]config.ProviderModelConfig{
+				"claude-opus-5-5": {MaxOutputTokens: &maxOut},
+			}
+		}
+		s := &config.Settings{
+			Providers: &config.ProvidersSettings{
+				Active: "anthropic",
+				Custom: map[string]config.CustomProviderDefinition{
+					"anthropic": {
+						BaseURL:      "https://api.anthropic.com/v1/messages",
+						WireFormat:   config.WireFormatAnthropic,
+						DefaultModel: "claude-opus-5-5",
+					},
+				},
+			},
+		}
+		if err := setProviderInstance(s, "anthropic", &inst); err != nil {
+			t.Fatalf("setProviderInstance: %v", err)
+		}
+		return s
+	}
+
+	t.Run("discovered 128k max_tokens and 1.5x Opus 5.5 scale", func(t *testing.T) {
+		t.Parallel()
+		cm := ResolveContextManagement(mkAnthropic(0, 128_000), "claude-opus-5-5")
+		if cm.ReservedResponseTokens != 128_000 {
+			t.Errorf("ReservedResponseTokens = %d, want 128000", cm.ReservedResponseTokens)
+		}
+		if cm.EstimateScale != anthropicDenseTokenizerScale {
+			t.Errorf("EstimateScale = %v, want %v", cm.EstimateScale, anthropicDenseTokenizerScale)
+		}
+	})
+
+	t.Run("fallback 32k max_tokens when undiscovered", func(t *testing.T) {
+		t.Parallel()
+		cm := ResolveContextManagement(mkAnthropic(0, 0), "claude-opus-5-5")
+		if cm.ReservedResponseTokens != anthropicDefaultMaxTokens {
+			t.Errorf("ReservedResponseTokens = %d, want %d", cm.ReservedResponseTokens, anthropicDefaultMaxTokens)
+		}
+	})
+
+	t.Run("caps reserved tokens at 25 percent of small manual contextLimit", func(t *testing.T) {
+		t.Parallel()
+		cm := ResolveContextManagement(mkAnthropic(100_000, 128_000), "claude-opus-5-5")
+		if cm.ReservedResponseTokens != 25_000 {
+			t.Errorf("ReservedResponseTokens = %d, want 25000 (25%% cap)", cm.ReservedResponseTokens)
+		}
+	})
+
+	t.Run("older Claude 4.5 keeps 1.0 cold-start scale", func(t *testing.T) {
+		t.Parallel()
+		cm := ResolveContextManagement(mkAnthropic(0, 0), "claude-opus-4-5")
+		if cm.EstimateScale != 1.0 {
+			t.Errorf("EstimateScale(claude-opus-4-5) = %v, want 1.0", cm.EstimateScale)
+		}
+	})
+}

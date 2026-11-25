@@ -266,37 +266,49 @@ func WithActiveProvider(settings *config.Settings, providerID string) *config.Se
 	return &cp
 }
 
-// PruneModelOverrides clears every stale (provider, model) pin: the four
-// per-mode overrides, the subagent default/research/coding/reviewer slots, and
-// the goal evaluator pair. A pin is stale when its provider no longer exists
-// or its model left the provider's curated active-model set (e.g. after a
-// model is deactivated or a provider is removed). Settings are mutated in
-// place; the caller is responsible for persisting if the function returns true.
+// PruneModelOverrides clears every stale (provider, model) pin in settings,
+// validating against settings itself. Use PruneModelOverridesAgainst when
+// pruning a project tier whose custom provider definitions and curated
+// active-model sets live in the merged (global+project) document.
 func PruneModelOverrides(settings *config.Settings) bool {
-	if settings == nil || settings.Sagittarius == nil {
+	return PruneModelOverridesAgainst(settings, settings)
+}
+
+// PruneModelOverridesAgainst clears every stale (provider, model) pin in
+// target: the four per-mode overrides, the subagent default/research/coding/
+// reviewer slots, and the goal evaluator pair. Each pair is validated against
+// catalog (falling back to target when catalog is nil) so project-scoped pins
+// referencing global custom providers or global curated activeModels are not
+// misclassified as stale. target is mutated in place; the caller is responsible
+// for persisting if the function returns true.
+func PruneModelOverridesAgainst(target, catalog *config.Settings) bool {
+	if target == nil || target.Sagittarius == nil {
 		return false
 	}
+	if catalog == nil {
+		catalog = target
+	}
 	changed := false
-	if settings.Sagittarius.Modes != nil {
-		modes := settings.Sagittarius.Modes
+	if target.Sagittarius.Modes != nil {
+		modes := target.Sagittarius.Modes
 		for _, mc := range []*config.SagittariusModeConfig{modes.Agent, modes.Plan, modes.Ask, modes.Debug} {
-			if pruneModeSlot(settings, mc) {
+			if pruneModeSlot(catalog, mc) {
 				changed = true
 			}
 		}
 	}
-	if settings.Sagittarius.Subagents != nil {
-		sub := settings.Sagittarius.Subagents
+	if target.Sagittarius.Subagents != nil {
+		sub := target.Sagittarius.Subagents
 		for _, cls := range []*config.SagittariusSubagentClass{sub.Research, sub.Coding, sub.Reviewer} {
-			if pruneSubagentSlot(settings, cls) {
+			if pruneSubagentSlot(catalog, cls) {
 				changed = true
 			}
 		}
-		if pruneSubagentConfigSlot(settings, &sub.Default) {
+		if pruneSubagentConfigSlot(catalog, &sub.Default) {
 			changed = true
 		}
 	}
-	if pruneGoalEvaluatorSlot(settings) {
+	if pruneGoalEvaluatorSlot(catalog, target.Sagittarius.Goal) {
 		changed = true
 	}
 	return changed
@@ -379,12 +391,11 @@ func pruneSubagentConfigSlot(settings *config.Settings, cfg *config.SagittariusS
 	return true
 }
 
-func pruneGoalEvaluatorSlot(settings *config.Settings) bool {
-	goal := settings.Sagittarius.Goal
+func pruneGoalEvaluatorSlot(catalog *config.Settings, goal *config.SagittariusGoalConfig) bool {
 	if goal == nil || goal.EvaluatorModel == "" {
 		return false
 	}
-	if !prunePair(settings, goal.EvaluatorProvider, goal.EvaluatorModel) {
+	if !prunePair(catalog, goal.EvaluatorProvider, goal.EvaluatorModel) {
 		return false
 	}
 	goal.EvaluatorModel = ""
@@ -396,11 +407,20 @@ func pruneGoalEvaluatorSlot(settings *config.Settings) bool {
 // are trimmed, empties dropped, and duplicates removed preserving order. An
 // empty result clears the curation (back to the uncurated fallback).
 func SetActiveModels(settings *config.Settings, providerID string, models []string) error {
-	if settings == nil {
+	return SetActiveModelsWithCatalog(settings, settings, providerID, models)
+}
+
+// SetActiveModelsWithCatalog persists providerID's curated active-model set on
+// target and prunes target's stale pins against catalog (updated with
+// providerID's new active set on a shallow copy so catalog is never mutated).
+// Use this when editing a project settings document whose sibling providers
+// and global curated sets live in docs.Merged().
+func SetActiveModelsWithCatalog(target, catalog *config.Settings, providerID string, models []string) error {
+	if target == nil {
 		return fmt.Errorf("set active models: settings are required")
 	}
 	id := config.NormalizeProviderID(providerID)
-	cfg, err := ensureProviderInstance(settings, id)
+	cfg, err := ensureProviderInstance(target, id)
 	if err != nil {
 		return err
 	}
@@ -422,11 +442,43 @@ func SetActiveModels(settings *config.Settings, providerID string, models []stri
 	} else {
 		cfg.ActiveModels = cleaned
 	}
-	if err := setProviderInstance(settings, id, cfg); err != nil {
+	if err := setProviderInstance(target, id, cfg); err != nil {
 		return err
 	}
-	PruneModelOverrides(settings)
+	pruneCatalog := target
+	if catalog != nil && catalog != target {
+		pruneCatalog = withProviderActiveModels(catalog, id, cfg.ActiveModels)
+	}
+	PruneModelOverridesAgainst(target, pruneCatalog)
 	return nil
+}
+
+// withProviderActiveModels returns a shallow copy of settings with providerID's
+// ActiveModels replaced by models, leaving settings untouched.
+func withProviderActiveModels(settings *config.Settings, providerID string, models []string) *config.Settings {
+	if settings == nil {
+		return nil
+	}
+	cp := *settings
+	ps := config.ProvidersSettings{}
+	if settings.Providers != nil {
+		ps = *settings.Providers
+		if len(settings.Providers.Extra) > 0 {
+			ps.Extra = make(map[string]json.RawMessage, len(settings.Providers.Extra))
+			for k, v := range settings.Providers.Extra {
+				ps.Extra[k] = v
+			}
+		}
+	}
+	cp.Providers = &ps
+	inst := providerInstance(&cp, providerID)
+	var updated config.ProviderInstanceConfig
+	if inst != nil {
+		updated = *inst
+	}
+	updated.ActiveModels = models
+	_ = setProviderInstance(&cp, providerID, &updated)
+	return &cp
 }
 
 // CuratedActiveModels returns the explicitly-saved active-model set for

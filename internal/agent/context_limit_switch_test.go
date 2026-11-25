@@ -48,7 +48,7 @@ func contextLimitRunner(t *testing.T, agentModel, planModel string, pins map[str
 	}
 	runner.SetProviderDefaultModel(agentModel)
 
-	mgr := NewContextManager(settings, nil, runner.CompressionModel,
+	mgr := NewContextManager(settings, nil, runner.Model, runner.CompressionModel,
 		runner.ActiveProviderID, func() string { return runner.InteractionMode().String() },
 		"sess-ctx-limit", nil, nil)
 	if mgr == nil {

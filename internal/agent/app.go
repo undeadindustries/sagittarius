@@ -141,10 +141,9 @@ func NewApp(cfg AppConfig) *App {
 		runtimeProviderID: config.NormalizeProviderID(cfg.RuntimeProviderID),
 		providerDisplay:   cfg.ProviderLabel,
 		status: ui.StatusBar{
-			Left:   workspaceLeft(cfg.Runner),
-			Right:  providerModelLabel(cfg.ProviderLabel, cfg.Model),
-			Detail: systemPromptStatusDetail(cfg.Runner, cfg.Settings),
-			Mode:   mode.String(),
+			Left:  workspaceLeft(cfg.Runner),
+			Right: providerModelLabel(cfg.ProviderLabel, cfg.Model),
+			Mode:  mode.String(),
 		},
 		deps: slash.Deps{
 			Loader:       cfg.Loader,
@@ -154,6 +153,7 @@ func NewApp(cfg AppConfig) *App {
 			ScreenReader: cfg.ScreenReader,
 		},
 	}
+	app.status.Detail = systemPromptStatusDetail(cfg.Runner, app.effectiveSettings())
 	app.deps.Hooks = &appHooks{app: app}
 	return app
 }
@@ -759,7 +759,7 @@ func (h *appHooks) RebuildRunner(ctx context.Context) (string, string, error) {
 	if h.app.docs != nil {
 		h.app.docs.ReloadMerged()
 	}
-	if h.app.coerceLiveModel() && h.app.docs != nil {
+	if !h.app.runner.ModelPinned() && h.app.coerceLiveModel() && h.app.docs != nil {
 		h.app.docs.ReloadMerged()
 	}
 	effectiveSettings := h.app.effectiveSettings()
@@ -778,6 +778,7 @@ func (h *appHooks) RebuildRunner(ctx context.Context) (string, string, error) {
 	// Propagate merged settings and provider default atomically so RebuildRunner
 	// triggers a single system prompt rebuild instead of three.
 	h.app.runner.ApplyEndpointState(effectiveSettings, endpoint.Model)
+	h.app.runner.SyncRecorderPersonaPreset()
 
 	// A /settings save routes here, so built-in tool toggles
 	// (sagittarius.symbols.*, sagittarius.web.*) must reach the live registry or
@@ -798,6 +799,7 @@ func (h *appHooks) RebuildRunner(ctx context.Context) (string, string, error) {
 	// rule; per-utility override).
 	h.app.runner.SetContextManager(
 		NewContextManager(effectiveSettings, gen,
+			h.app.runner.Model,
 			h.app.runner.CompressionModel,
 			h.app.runner.ActiveProviderID,
 			func() string { return h.app.runner.InteractionMode().String() },
@@ -828,7 +830,11 @@ func (h *appHooks) ReloadSystemInstruction(ctx context.Context) error {
 		return fmt.Errorf("runner not available")
 	}
 	_ = ctx
-	return h.app.runner.ReloadSystemInstruction()
+	if err := h.app.runner.ReloadSystemInstruction(); err != nil {
+		return err
+	}
+	h.app.refreshStatusDetail()
+	return nil
 }
 
 // AddMemory appends text to scope's MEMORY.md and reloads the system
@@ -1940,47 +1946,56 @@ func (h *appHooks) SetInteractionMode(ctx context.Context, mode modes.Mode) (str
 	if h.app == nil || h.app.runner == nil {
 		return "", fmt.Errorf("runner not available")
 	}
-	settings := h.app.effectiveSettings()
 
-	// Resolve this mode's provider override, if any.
-	modeProvider := ""
-	if settings != nil && settings.Sagittarius != nil && settings.Sagittarius.Modes != nil {
-		mc := modeConfigForMode(settings.Sagittarius.Modes, mode)
-		if mc != nil {
-			modeProvider = config.NormalizeProviderID(mc.Provider)
+	// While a CLI --model pin is active, mode switches keep the pinned
+	// provider and model intact (only mode gates and system suffix change) so
+	// a pinned model ID is never sent to a different provider's endpoint.
+	if !h.app.runner.ModelPinned() {
+		settings := h.app.effectiveSettings()
+
+		// Resolve this mode's provider override, if any.
+		modeProvider := ""
+		if settings != nil && settings.Sagittarius != nil && settings.Sagittarius.Modes != nil {
+			mc := modeConfigForMode(settings.Sagittarius.Modes, mode)
+			if mc != nil {
+				modeProvider = config.NormalizeProviderID(mc.Provider)
+			}
 		}
-	}
-	currentActive := ""
-	if settings != nil {
-		currentActive = config.NormalizeProviderID(settings.ActiveProvider())
-	}
-
-	// Deterministic target: use the mode's provider when set, otherwise return
-	// to the base provider the user selected (or started with). Keep the
-	// temporary mode override in App.runtimeProviderID rather than mutating
-	// docs.Merged() or docs.Global in place.
-	base := h.app.baseProvider()
-	target := modeProvider
-	if target == "" {
-		target = base
-	}
-
-	if target != "" && target != currentActive {
-		prevRuntime := h.app.runtimeProvider()
-		nextRuntime := ""
-		if target != base {
-			nextRuntime = target
+		currentActive := ""
+		if settings != nil {
+			currentActive = config.NormalizeProviderID(settings.ActiveProvider())
 		}
-		h.app.setRuntimeProvider(nextRuntime)
-		if _, _, err := h.RebuildRunner(ctx); err != nil {
-			h.app.setRuntimeProvider(prevRuntime)
-			return "", fmt.Errorf("mode %s: rebuild runner: %w", mode.String(), err)
+
+		// Deterministic target: use the mode's provider when set, otherwise return
+		// to the base provider the user selected (or started with). Keep the
+		// temporary mode override in App.runtimeProviderID rather than mutating
+		// docs.Merged() or docs.Global in place.
+		base := h.app.baseProvider()
+		target := modeProvider
+		if target == "" {
+			target = base
+		}
+
+		if target != "" && target != currentActive {
+			prevRuntime := h.app.runtimeProvider()
+			nextRuntime := ""
+			if target != base {
+				nextRuntime = target
+			}
+			h.app.setRuntimeProvider(nextRuntime)
+			if _, _, err := h.RebuildRunner(ctx); err != nil {
+				h.app.setRuntimeProvider(prevRuntime)
+				return "", fmt.Errorf("mode %s: rebuild runner: %w", mode.String(), err)
+			}
 		}
 	}
 
 	model := h.app.runner.SetInteractionMode(mode)
+	h.app.runner.SyncRecorderPersonaPreset()
+	detail := systemPromptStatusDetail(h.app.runner, h.app.effectiveSettings())
 	h.app.statusMu.Lock()
 	h.app.status.Right = providerModelLabel(h.app.providerDisplay, model)
+	h.app.status.Detail = detail
 	h.app.status.Mode = mode.String()
 	h.app.statusMu.Unlock()
 	return model, nil
@@ -2177,7 +2192,7 @@ func (a *App) selectLiveModel(ctx context.Context, providerID, model string, sco
 	}
 
 	a.setProvidersState(providerID, "")
-	if a.runner != nil && prevProvider != "" && prevProvider != providerID {
+	if a.runner != nil && (model != "" || (prevProvider != "" && prevProvider != providerID)) {
 		a.runner.UnpinModel()
 	}
 
@@ -2247,40 +2262,46 @@ func (h *appHooks) ProjectSystemPromptPresetID() string {
 	return config.ProjectSystemPromptPresetID(s)
 }
 
-// ApplyProjectSystemPromptPreset selects a built-in preset id or a custom
-// prompt name. A custom name is loaded before anything is written, so a typo
-// or an unreadable file never saves a broken selection. One selection per
-// scope: choosing a custom prompt clears personality and variant, and choosing
-// a built-in clears custom.
-func (h *appHooks) ApplyProjectSystemPromptPreset(ctx context.Context, presetID string) (string, error) {
+// ApplySystemPromptPreset selects a built-in preset id or a custom prompt name
+// in scope (or clears sagittarius.systemPrompt when presetID is empty). A
+// custom name is loaded before anything is written, so a typo or an unreadable
+// file never saves a broken selection. One selection per scope: choosing a
+// custom prompt clears personality and variant, and choosing a built-in clears
+// custom.
+func (h *appHooks) ApplySystemPromptPreset(ctx context.Context, presetID string, scope config.SettingScope) (string, error) {
 	if h.app == nil || h.app.runner == nil {
 		return "", fmt.Errorf("runner not available")
 	}
+	presetID = strings.TrimSpace(presetID)
+	clearing := presetID == ""
+
 	var selection config.SagittariusSystemPromptConfig
 	var label string
-	if preset, ok := config.LookupPreset(presetID); ok {
-		selection = config.SagittariusSystemPromptConfig{
-			Personality: config.CanonicalPersonalityID(preset.Personality),
-			Variant:     config.CanonicalVariant(preset.Variant),
-		}
-		label = preset.Label
-	} else {
-		name, err := customprompt.NormalizeName(presetID)
-		if err != nil {
-			return "", fmt.Errorf("unknown system prompt %q: not a built-in preset or a valid custom prompt name", presetID)
-		}
-		if _, err := h.app.LoadCustomPrompt(name); err != nil {
-			if errors.Is(err, customprompt.ErrNotFound) {
-				return "", fmt.Errorf("unknown system prompt %q: no built-in preset or saved custom prompt has that name", presetID)
+	if !clearing {
+		if preset, ok := config.LookupPreset(presetID); ok {
+			selection = config.SagittariusSystemPromptConfig{
+				Personality: config.CanonicalPersonalityID(preset.Personality),
+				Variant:     config.CanonicalVariant(preset.Variant),
 			}
-			return "", err
+			label = preset.Label
+		} else {
+			name, err := customprompt.NormalizeName(presetID)
+			if err != nil {
+				return "", fmt.Errorf("unknown system prompt %q: not a built-in preset or a valid custom prompt name", presetID)
+			}
+			if _, err := h.app.LoadCustomPrompt(name); err != nil {
+				if errors.Is(err, customprompt.ErrNotFound) {
+					return "", fmt.Errorf("unknown system prompt %q: no built-in preset or saved custom prompt has that name", presetID)
+				}
+				return "", err
+			}
+			selection = config.SagittariusSystemPromptConfig{Custom: name}
+			label = customPromptLabel(name)
 		}
-		selection = config.SagittariusSystemPromptConfig{Custom: name}
-		label = customPromptLabel(name)
 	}
 
-	// Write directly to docs.Project and SaveProject so the merged view updates
-	// atomically. Documents is always wired in production; its absence is a
+	// Write directly to docs and Save so the merged view updates atomically.
+	// Documents is always wired in production; its absence is a
 	// programming/test error, not a reason to fall back to a divergent writer.
 	if h.app.docs == nil {
 		return "", errNoSettingsDocuments
@@ -2288,26 +2309,100 @@ func (h *appHooks) ApplyProjectSystemPromptPreset(ctx context.Context, presetID 
 	// Without a project tier (launched from the home directory) the only file
 	// there is to write is the global one; say so rather than claim a project
 	// save that would change the default for every other directory silently.
-	scope, where := config.ScopeProject, "saved to .sagittarius/settings.json"
-	if !h.app.docs.ProjectAvailable() {
-		scope, where = config.ScopeGlobal, "saved globally to ~/.sagittarius/settings.json; this directory has no separate project settings"
+	targetScope := scope
+	var where string
+	switch {
+	case targetScope == config.ScopeGlobal:
+		where = "saved to ~/.sagittarius/settings.json"
+		if clearing {
+			where = "cleared in ~/.sagittarius/settings.json"
+		}
+	case !h.app.docs.ProjectAvailable():
+		targetScope = config.ScopeGlobal
+		where = "saved globally to ~/.sagittarius/settings.json; this directory has no separate project settings"
+		if clearing {
+			where = "cleared globally in ~/.sagittarius/settings.json; this directory has no separate project settings"
+		}
+	default:
+		where = "saved to .sagittarius/settings.json"
+		if clearing {
+			where = "cleared in .sagittarius/settings.json"
+		}
 	}
-	s := h.app.docs.TargetSettings(scope)
-	if s.Sagittarius == nil {
-		s.Sagittarius = &config.SagittariusSettings{}
+
+	s := h.app.docs.TargetSettings(targetScope)
+	if clearing {
+		if s.Sagittarius != nil && s.Sagittarius.SystemPrompt != nil {
+			if len(s.Sagittarius.SystemPrompt.Extra) > 0 {
+				s.Sagittarius.SystemPrompt = &config.SagittariusSystemPromptConfig{
+					Extra: s.Sagittarius.SystemPrompt.Extra,
+				}
+			} else {
+				s.Sagittarius.SystemPrompt = nil
+			}
+		}
+	} else {
+		if s.Sagittarius == nil {
+			s.Sagittarius = &config.SagittariusSettings{}
+		}
+		if prev := s.Sagittarius.SystemPrompt; prev != nil {
+			selection.Extra = prev.Extra
+		}
+		s.Sagittarius.SystemPrompt = &selection
 	}
-	if prev := s.Sagittarius.SystemPrompt; prev != nil {
-		selection.Extra = prev.Extra
-	}
-	s.Sagittarius.SystemPrompt = &selection
-	if err := h.app.docs.Save(scope); err != nil {
+	if err := h.app.docs.Save(targetScope); err != nil {
 		return "", err
 	}
 
 	if err := h.app.reloadAfterSelectionChange(ctx); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("System prompt → %s (%s)", label, where), nil
+
+	var headline string
+	if clearing {
+		effectiveLabel := resolveSystemPromptLabel(h.app.runner, h.app.effectiveSettings())
+		headline = fmt.Sprintf("System prompt → %s (%s)", effectiveLabel, where)
+	} else {
+		headline = fmt.Sprintf("System prompt → %s (%s)", label, where)
+	}
+	if warn := h.app.systemPromptShadowWarning(targetScope); warn != "" {
+		return headline + "\n" + warn, nil
+	}
+	return headline, nil
+}
+
+// systemPromptShadowWarning reports when a higher-precedence override still
+// controls the active prompt after a /system-prompt write, so the user is not
+// surprised when the footer or next turn keeps a different persona.
+func (a *App) systemPromptShadowWarning(writtenScope config.SettingScope) string {
+	var notes []string
+	if eff := a.effectiveSettings(); eff != nil && a.runner != nil {
+		providerID := eff.ActiveProvider()
+		model := a.runner.Model()
+		if inst := eff.ProviderInstance(providerID); inst != nil {
+			modelShadowed := false
+			if mc, ok := config.LookupModelConfig(inst, model); ok {
+				if canon, ok := config.CanonicalPersonality(mc.Personality); ok {
+					modelShadowed = true
+					notes = append(notes, fmt.Sprintf(
+						"Note: model %s/%s has a per-model personality override (%s) that takes precedence. Clear it in /models or settings.json.",
+						config.ProviderDisplayID(providerID), model, canon))
+				}
+			}
+			if !modelShadowed {
+				if canon, ok := config.CanonicalPersonality(inst.Personality); ok {
+					notes = append(notes, fmt.Sprintf(
+						"Note: provider %s has a System prompt override (%s) that takes precedence. Clear it in /providers (highlight System prompt and press r).",
+						config.ProviderDisplayID(providerID), canon))
+				}
+			}
+		}
+	}
+	if writtenScope == config.ScopeGlobal && a.docs != nil && a.docs.Project != nil &&
+		a.docs.Project.Sagittarius != nil && !a.docs.Project.Sagittarius.SystemPrompt.IsEmpty() {
+		notes = append(notes, "Note: .sagittarius/settings.json still sets a project system prompt for this workspace. Clear it with /system-prompt clear (or press r on Project scope).")
+	}
+	return strings.Join(notes, "\n")
 }
 
 // ListCustomPrompts returns stored custom prompt names for /system-prompt
@@ -2539,6 +2634,19 @@ func (h *appHooks) ExportATIF(outPath string) (string, error) {
 	return outPath, nil
 }
 
+// refreshStatusDetail recomputes the footer's system-prompt line from the live
+// runner and effective settings so mode switches and prompt reloads never leave
+// a stale persona label on screen.
+func (a *App) refreshStatusDetail() {
+	if a == nil {
+		return
+	}
+	detail := systemPromptStatusDetail(a.runner, a.effectiveSettings())
+	a.statusMu.Lock()
+	a.status.Detail = detail
+	a.statusMu.Unlock()
+}
+
 // systemPromptStatusDetail returns the human-readable system-prompt preset label
 // for the footer (e.g. "Programmer (low context)").
 func systemPromptStatusDetail(runner *Runner, settings *config.Settings) string {
@@ -2546,6 +2654,10 @@ func systemPromptStatusDetail(runner *Runner, settings *config.Settings) string 
 	return "System Prompt: " + label
 }
 
+// resolveSystemPromptLabel matches Runner.rebuildBasePrompt's tier order:
+// active custom prompt (which yields to model/provider personality overrides)
+// -> per-model override -> per-provider override -> sagittarius.systemPrompt ->
+// built-in default (Programmer).
 func resolveSystemPromptLabel(runner *Runner, settings *config.Settings) string {
 	if settings == nil {
 		return "Programmer"
@@ -2554,21 +2666,11 @@ func resolveSystemPromptLabel(runner *Runner, settings *config.Settings) string 
 	model := ""
 	if runner != nil {
 		model = runner.Model()
-	}
-	if runner != nil {
 		if name := runner.ActiveCustomPrompt(); name != "" {
 			return customPromptLabel(name)
 		}
-	}
-	if presetID := config.ProjectSystemPromptPresetID(settings); presetID != "" {
-		if p, ok := config.LookupPreset(presetID); ok {
-			return p.Label
-		}
-	}
-	if presetID := provider.CurrentSystemPromptPreset(settings, providerID); presetID != "" {
-		if p, ok := config.LookupPreset(presetID); ok {
-			return p.Label
-		}
+	} else if name := config.ResolveCustomPrompt(settings, providerID, model); name != "" {
+		return customPromptLabel(name)
 	}
 	personality := config.ResolvePersonality(settings, providerID, model)
 	variant := config.ResolveVariant(settings, providerID, model)

@@ -695,10 +695,7 @@ func newCLIApp(runner *agent.Runner, docs *config.Documents, runtime *agent.Runt
 			providerLabel = config.ProviderDisplayID(endpoint.ProviderID)
 		}
 	}
-	runtimeProviderID := ""
-	if activeID != "" && activeID != config.NormalizeProviderID(baseProviderID) {
-		runtimeProviderID = activeID
-	}
+	runtimeProviderID := startupRuntimeProviderID(docs, activeID, baseProviderID)
 	cfg := agent.AppConfig{
 		Runner:            runner,
 		Runtime:           runtime,
@@ -896,7 +893,7 @@ func runInteractive(screenReader bool, debug bool, opts runnerOptions) int {
 	defer func() { _ = runtime.Close() }()
 	defer func() { _ = runner.Close() }()
 
-	needsOnboarding := agent.NeedsProviderSetup(ctx, docs.Merged())
+	needsOnboarding := startupNeedsOnboarding(ctx, docs, runner)
 
 	providerLabel := "Setup required"
 	runtimeProviderID := ""
@@ -904,9 +901,7 @@ func runInteractive(screenReader bool, debug bool, opts runnerOptions) int {
 		activeID := config.NormalizeProviderID(runner.ActiveProviderID())
 		if activeID != "" {
 			providerLabel = config.ProviderDisplayID(activeID)
-			if activeID != config.NormalizeProviderID(baseProviderID) {
-				runtimeProviderID = activeID
-			}
+			runtimeProviderID = startupRuntimeProviderID(docs, activeID, baseProviderID)
 		} else {
 			endpoint, endpointErr := provider.ResolveEndpointConfig(docs.Merged())
 			if endpointErr != nil {
@@ -1066,10 +1061,7 @@ func runGoogleChatOnly(debug bool, opts runnerOptions) int {
 
 	activeID := config.NormalizeProviderID(runner.ActiveProviderID())
 	providerLabel := config.ProviderDisplayID(activeID)
-	runtimeProviderID := ""
-	if activeID != "" && activeID != config.NormalizeProviderID(baseProviderID) {
-		runtimeProviderID = activeID
-	}
+	runtimeProviderID := startupRuntimeProviderID(docs, activeID, baseProviderID)
 	if providerLabel == "" {
 		endpoint, endpointErr := provider.ResolveEndpointConfig(docs.Merged())
 		if endpointErr != nil {
@@ -1148,13 +1140,13 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 	}
 
 	// Clean up any stale (provider, model) pins (e.g. from older unqualified configs)
-	// on startup. This ensures the UI doesn't show invalid "gemini - qwen"
-	// states when the user launches.
+	// on startup. Project pins are validated against docs.Merged() so pins to
+	// global custom providers or global curated activeModels are preserved.
 	if provider.PruneModelOverrides(docs.Global) {
 		_ = docs.Save(config.ScopeGlobal)
 	}
 	if docs.Project != nil {
-		if provider.PruneModelOverrides(docs.Project) {
+		if provider.PruneModelOverridesAgainst(docs.Project, docs.Merged()) {
 			_ = docs.Save(config.ScopeProject)
 		}
 	}
@@ -1162,29 +1154,39 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 	// settings is the merged view (project wins); dialogs still mutate docs.Global.
 	settings := docs.Merged()
 
-	needsSetup := interactive && agent.NeedsProviderSetup(ctx, settings)
-
-	// Resolve the initial mode early — before endpoint/generator — so that a
-	// provider-qualified mode override drives the endpoint and generator build
-	// from the start. This fixes the startup-routing gap where headless and
-	// fresh interactive launches would use the wrong backend when a mode with
-	// a provider override was selected.
+	// Resolve the initial mode and any CLI --model / mode-provider override
+	// before checking NeedsProviderSetup, so `-m <provider>/<model>` targeting
+	// a configured provider skips onboarding even when persisted providers.active
+	// has no API key (or is unset).
 	initialMode := modes.DefaultFromSettings(settings)
 	if opts.modeOverride != nil {
 		initialMode = *opts.modeOverride
 	}
 	baseProviderID := config.NormalizeProviderID(settings.ActiveProvider())
 	effectiveSettings := settings
-	if !needsSetup {
-		if modeProvider, _ := modes.ResolveModeOverride(initialMode, settings.Sagittarius); modeProvider != "" {
-			modeProvider = config.NormalizeProviderID(modeProvider)
-			if modeProvider != baseProviderID {
-				// Apply on a shallow copy so docs.Global / docs.Merged() are
-				// never mutated in place by a mode's temporary provider.
-				effectiveSettings = provider.WithActiveProvider(settings, modeProvider)
+	cliModel := ""
+	if modelOverride != "" {
+		// An explicit --model / -m pins the startup model and takes
+		// precedence over a mode's provider override so the model is never
+		// sent to a different provider's endpoint.
+		cliProv, resolvedCLIModel := resolveCLIModelOverride(settings, baseProviderID, modelOverride)
+		cliModel = resolvedCLIModel
+		if cliProv != "" && cliProv != baseProviderID {
+			effectiveSettings = provider.WithActiveProvider(settings, cliProv)
+			if baseProviderID == "" {
+				baseProviderID = cliProv
 			}
 		}
+	} else if modeProvider, _ := modes.ResolveModeOverride(initialMode, settings.Sagittarius); modeProvider != "" {
+		modeProvider = config.NormalizeProviderID(modeProvider)
+		if modeProvider != baseProviderID {
+			// Apply on a shallow copy so docs.Global / docs.Merged() are
+			// never mutated in place by a mode's temporary provider.
+			effectiveSettings = provider.WithActiveProvider(settings, modeProvider)
+		}
 	}
+
+	needsSetup := interactive && agent.NeedsProviderSetup(ctx, effectiveSettings)
 
 	var endpoint provider.EndpointConfig
 	var endpointErr error
@@ -1195,13 +1197,14 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		}
 	}
 
-	model := agent.PlaceholderModel()
+	providerDefaultModel := agent.PlaceholderModel()
 	if !needsSetup {
-		model = endpoint.Model
+		providerDefaultModel = endpoint.Model
 	}
-	modelPinned := modelOverride != ""
-	if modelOverride != "" {
-		model = modelOverride
+	model := providerDefaultModel
+	modelPinned := !needsSetup && cliModel != ""
+	if modelPinned {
+		model = cliModel
 	}
 
 	gen, genErr := provider.NewContentGenerator(ctx, effectiveSettings)
@@ -1290,7 +1293,14 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		initialConstraints = result.Record.Constraints
 		initialReadOnly = result.Record.ReadOnly
 		initialScratchpad = result.Record.Scratchpad
-		mgr, mgrErr := session.NewManagerForResume(projectRoot, sessID, result)
+		effectivePreset := ""
+		if effectiveSettings != nil {
+			effectivePreset = config.EffectiveSystemPromptID(effectiveSettings, effectiveSettings.ActiveProvider(), model)
+		}
+		mgr, mgrErr := session.NewManagerForResumeWithConfig(projectRoot, sessID, result, session.RecorderConfig{
+			AgentVersion:  version.String(),
+			PersonaPreset: effectivePreset,
+		})
 		if mgrErr != nil {
 			slog.Warn("session recording disabled: cannot open recorder for resumed session", "err", mgrErr)
 		} else {
@@ -1303,8 +1313,8 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 			slog.Warn("session recording disabled: cannot resolve chats dir", "err", cdErr)
 		} else {
 			preset := ""
-			if settings != nil {
-				preset = config.ProjectSystemPromptPresetID(settings)
+			if effectiveSettings != nil {
+				preset = config.EffectiveSystemPromptID(effectiveSettings, effectiveSettings.ActiveProvider(), model)
 			}
 			sessRecorder = session.NewRecorderWithConfig(chatsDir, sessID, hash, "main", session.RecorderConfig{
 				AgentVersion:  version.String(),
@@ -1383,6 +1393,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 		Settings:             effectiveSettings,
 		InitialMode:          initialMode,
 		ModelPinned:          modelPinned,
+		ProviderDefaultModel: providerDefaultModel,
 		ProjectBoundary:      boundary,
 		Snapshotter:          snapMgr,
 		AllowFix:             allowFix,
@@ -1410,6 +1421,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 	// Build the context manager after the runner so its summarizer reads the
 	// runner's live (mode-resolved) model rather than the startup default.
 	runner.SetContextManager(agent.NewContextManager(effectiveSettings, gen,
+		runner.Model,
 		runner.CompressionModel,
 		runner.ActiveProviderID,
 		func() string { return runner.InteractionMode().String() },
@@ -1432,6 +1444,88 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 	}, nil)
 
 	return runner, docs, runtime, sessID, baseProviderID, nil
+}
+
+// startupNeedsOnboarding checks whether interactive onboarding is required
+// against the runner's effective startup provider (accounting for CLI
+// `--model <provider>/<model>` and mode-provider overrides) rather than raw
+// docs.Merged().
+func startupNeedsOnboarding(ctx context.Context, docs *config.Documents, runner *agent.Runner) bool {
+	var effective *config.Settings
+	if docs != nil {
+		effective = docs.Merged()
+	}
+	if runner != nil {
+		if activeID := config.NormalizeProviderID(runner.ActiveProviderID()); activeID != "" {
+			effective = provider.WithActiveProvider(effective, activeID)
+		}
+	}
+	return agent.NeedsProviderSetup(ctx, effective)
+}
+
+// startupRuntimeProviderID returns activeID when the live startup provider
+// differs from either baseProviderID or the persisted active provider in docs,
+// so App.effectiveSettings() keeps routing to the CLI/mode-selected provider.
+func startupRuntimeProviderID(docs *config.Documents, activeID, baseProviderID string) string {
+	activeID = config.NormalizeProviderID(activeID)
+	if activeID == "" {
+		return ""
+	}
+	persistedActive := ""
+	if docs != nil && docs.Merged() != nil {
+		persistedActive = config.NormalizeProviderID(docs.Merged().ActiveProvider())
+	}
+	if activeID != config.NormalizeProviderID(baseProviderID) || activeID != persistedActive {
+		return activeID
+	}
+	return ""
+}
+
+// resolveCLIModelOverride parses a CLI --model / -m value into a canonical
+// provider id and model name. It supports `<provider>/<model>` qualification
+// (e.g. `anthropic/claude-opus-5-5` or `gemini/gemini-4-carbon`) while keeping
+// slash-bearing model ids on the active provider (e.g. OpenRouter's
+// `anthropic/claude-opus-5.5`) intact when they match the active provider.
+func resolveCLIModelOverride(settings *config.Settings, baseProviderID, raw string) (providerID, model string) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return baseProviderID, ""
+	}
+	prefix, rest, hasSlash := strings.Cut(raw, "/")
+	if !hasSlash || prefix == "" || rest == "" {
+		return baseProviderID, raw
+	}
+
+	pairs := provider.AllActiveModels(settings)
+	baseNorm := config.NormalizeProviderID(baseProviderID)
+	// First, if the full slash-bearing string is already an active model on the
+	// current provider (typical for OpenRouter), do not split it.
+	for _, p := range pairs {
+		if config.NormalizeProviderID(p.ProviderID) == baseNorm && p.Model == raw {
+			return baseNorm, raw
+		}
+	}
+	// Next, match `<provider>/<model>` against any curated active pair.
+	for _, p := range pairs {
+		if (p.DisplayID == prefix || p.ProviderID == prefix) && p.Model == rest {
+			return config.NormalizeProviderID(p.ProviderID), p.Model
+		}
+	}
+	// Finally, if the prefix names a configured provider (built-in or custom)
+	// and the active provider is not an OpenRouter-style slash aggregator,
+	// route to that provider.
+	if baseNorm != "openrouter" {
+		if _, ok := config.LookupBuiltInProvider(prefix); ok {
+			return config.NormalizeProviderID(prefix), rest
+		}
+		normPrefix := config.NormalizeProviderID(prefix)
+		if settings != nil && settings.Providers != nil {
+			if _, ok := settings.Providers.Custom[normPrefix]; ok {
+				return normPrefix, rest
+			}
+		}
+	}
+	return baseNorm, raw
 }
 
 // resolveBoundaryAndSnapshots reads the boundary + snapshot policy from the

@@ -39,14 +39,13 @@ const (
 // routing); a nil generator disables compression while masking and ejection
 // still run.
 //
-// modelFn supplies the model id at summarization time rather than capturing it
-// once, so compression tracks the live model: passing Runner.CompressionModel
-// keeps the summarizer aligned with user turns across mode switches and honors a
-// sagittarius.compression.model override (AD-015 active-model rule, AD-022).
-// The context window is resolved from modelFn on every read for the same
-// reason: a model change that does not rebuild this manager (a same-provider
-// mode override), or one applied after the rebuild (a cross-provider mode
-// override), would otherwise leave the previous model's window in force.
+// liveModelFn supplies the live main-turn model id for context-window,
+// reserved-output, tokenizer-scale, and reasoning-prune resolution so a
+// mid-session mode override or a separate sagittarius.compression.model
+// override never budgets main turns against the wrong model.
+//
+// compressModelFn supplies the model id for summarization calls (pass
+// Runner.CompressionModel); when nil it falls back to liveModelFn.
 //
 // recordFn, when non-nil, is called after each compression with the provider id,
 // model id, mode, token counts, and optional cost so the runner can track
@@ -54,7 +53,8 @@ const (
 func NewContextManager(
 	settings *config.Settings,
 	gen provider.ContentGenerator,
-	modelFn func() string,
+	liveModelFn func() string,
+	compressModelFn func() string,
 	provFn func() string,
 	modeFn func() string,
 	sessionID string,
@@ -62,27 +62,45 @@ func NewContextManager(
 	onWillCompressFn func(ctx context.Context, trigger string),
 ) *contextmgmt.Manager {
 	liveModel := ""
-	if modelFn != nil {
-		liveModel = modelFn()
+	if liveModelFn != nil {
+		liveModel = liveModelFn()
 	}
 	cm := provider.ResolveContextManagement(settings, liveModel)
 	if !cm.Enabled {
 		return nil
 	}
 
+	sumModelFn := compressModelFn
+	if sumModelFn == nil {
+		sumModelFn = liveModelFn
+	}
 	var summarize contextmgmt.Summarizer
 	if gen != nil {
-		summarize = newProviderSummarizer(gen, modelFn, provFn, modeFn, recordFn)
+		summarize = newProviderSummarizer(gen, sumModelFn, provFn, modeFn, recordFn)
+	}
+
+	resolveReserved := func(c provider.ContextManagementConfig) int {
+		if c.ReservedResponseTokens > 0 {
+			return c.ReservedResponseTokens
+		}
+		return reservedResponseTokens
 	}
 
 	return contextmgmt.NewManager(contextmgmt.ManagerConfig{
 		Enabled:      true,
 		ContextLimit: cm.ContextLimit,
 		ContextLimitFn: func() int {
-			if modelFn == nil {
+			if liveModelFn == nil {
 				return 0
 			}
-			return provider.ResolveContextManagement(settings, modelFn()).ContextLimit
+			return provider.ResolveContextManagement(settings, liveModelFn()).ContextLimit
+		},
+		DefaultEstimateScale: cm.EstimateScale,
+		DefaultEstimateScaleFn: func() float64 {
+			if liveModelFn == nil {
+				return 0
+			}
+			return provider.ResolveContextManagement(settings, liveModelFn()).EstimateScale
 		},
 		SessionID:                 sessionID,
 		OnWillCompress:            onWillCompressFn,
@@ -92,8 +110,8 @@ func NewContextManager(
 		MaskingProtectLatestTurn:  cm.MaskingProtectLatestTurn,
 		ReasoningPruneFn: func() bool {
 			m := ""
-			if modelFn != nil {
-				m = modelFn()
+			if liveModelFn != nil {
+				m = liveModelFn()
 			}
 			p := ""
 			if provFn != nil {
@@ -115,11 +133,17 @@ func NewContextManager(
 		// (summarizes old turns to text). Do not re-enable without a
 		// mimicry-resistant representation (e.g. converting ejected calls to a
 		// plain text note rather than a write_file call the model imitates).
-		EjectionEnabled:             false,
-		EjectionMinAgeTurns:         ejectionMinAgeTurns,
-		EjectionMinTokensPerCall:    ejectionMinTokensPerCall,
-		BudgetEnabled:               true,
-		ReservedResponseTokens:      reservedResponseTokens,
+		EjectionEnabled:          false,
+		EjectionMinAgeTurns:      ejectionMinAgeTurns,
+		EjectionMinTokensPerCall: ejectionMinTokensPerCall,
+		BudgetEnabled:            true,
+		ReservedResponseTokens:   resolveReserved(cm),
+		ReservedResponseTokensFn: func() int {
+			if liveModelFn == nil {
+				return 0
+			}
+			return resolveReserved(provider.ResolveContextManagement(settings, liveModelFn()))
+		},
 		ProactiveCompressAt:         proactiveCompressAt,
 		AdaptiveEnabled:             cm.Adaptive,
 		CompressionThreshold:        cm.CompressionThreshold,

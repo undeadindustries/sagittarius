@@ -78,6 +78,78 @@ func TestAttachToFileRejectsEmptyTarget(t *testing.T) {
 	}
 }
 
+func TestNewManagerForResumePreservesRecorderMetadata(t *testing.T) {
+	t.Setenv("SAGITTARIUS_HOME", t.TempDir())
+	projectRoot := t.TempDir()
+	chatsDir, err := session.ChatsDir(projectRoot)
+	if err != nil {
+		t.Fatalf("ChatsDir: %v", err)
+	}
+
+	rec := session.NewRecorderWithConfig(chatsDir, "sess-meta", session.ProjectHash(projectRoot), "main", session.RecorderConfig{
+		AgentVersion:  "v0.29.5",
+		PersonaPreset: "sysadmin",
+	})
+	rec.RecordUserMessage("hello")
+
+	sel := session.NewSelector(chatsDir, "")
+	res, err := sel.ResolveSession("sess-meta")
+	if err != nil {
+		t.Fatalf("ResolveSession: %v", err)
+	}
+
+	mgr, err := session.NewManagerForResumeWithConfig(projectRoot, "sess-meta", res, session.RecorderConfig{
+		AgentVersion:  "v0.29.6",
+		PersonaPreset: "programmer",
+	})
+	if err != nil {
+		t.Fatalf("NewManagerForResumeWithConfig: %v", err)
+	}
+	got := mgr.Recorder()
+	if got.Kind() != "main" {
+		t.Errorf("Kind = %q, want main", got.Kind())
+	}
+	if got.AgentVersion() != "v0.29.5" {
+		t.Errorf("AgentVersion = %q, want v0.29.5 from record", got.AgentVersion())
+	}
+	if got.PersonaPreset() != "sysadmin" {
+		t.Errorf("PersonaPreset = %q, want sysadmin from record", got.PersonaPreset())
+	}
+
+	// Fallback when an older session file lacked AgentVersion/PersonaPreset.
+	res.Record.AgentVersion = ""
+	res.Record.PersonaPreset = ""
+	res.Record.Kind = ""
+	mgrFallback, err := session.NewManagerForResumeWithConfig(projectRoot, "sess-meta", res, session.RecorderConfig{
+		AgentVersion:  "v0.29.6",
+		PersonaPreset: "programmer",
+	})
+	if err != nil {
+		t.Fatalf("NewManagerForResumeWithConfig(fallback): %v", err)
+	}
+	fb := mgrFallback.Recorder()
+	if fb.Kind() != "main" || fb.AgentVersion() != "v0.29.6" || fb.PersonaPreset() != "programmer" {
+		t.Errorf("fallback metadata = (%q, %q, %q), want (main, v0.29.6, programmer)",
+			fb.Kind(), fb.AgentVersion(), fb.PersonaPreset())
+	}
+
+	fb.SetPersonaPreset("custom-reviewer")
+	if fb.PersonaPreset() != "custom-reviewer" {
+		t.Errorf("SetPersonaPreset = %q, want custom-reviewer", fb.PersonaPreset())
+	}
+
+	// Rotate writes AgentVersion and PersonaPreset into the new session file header.
+	fb.Rotate()
+	rotatedRec, err := session.LoadSession(fb.FilePath())
+	if err != nil {
+		t.Fatalf("LoadSession(rotated): %v", err)
+	}
+	if rotatedRec.AgentVersion != "v0.29.6" || rotatedRec.PersonaPreset != "custom-reviewer" {
+		t.Errorf("rotated header metadata = (%q, %q), want (v0.29.6, custom-reviewer)",
+			rotatedRec.AgentVersion, rotatedRec.PersonaPreset)
+	}
+}
+
 // countHeaders counts metadata header lines (the only lines carrying a
 // top-level sessionId key) in a session file.
 func countHeaders(t *testing.T, path string) int {

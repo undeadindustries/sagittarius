@@ -94,7 +94,7 @@ so the project file can never leak into the global one.
 | Subagent routing (`/subagents`) | **Project** | |
 | MCP server definitions (`/mcp`) | **Project** | Servers can be global or project; pick the scope in the form |
 | MCP tool toggles (`/tools`) | Server's file | Saved in whichever file defines the server; project servers show `[project]` |
-| System prompt preset (`/system-prompt`) | **Project** | Always writes project |
+| System prompt preset (`/system-prompt`) | **Project** | Press Tab in the picker (or pass `--global`) to save globally; `r` or `/system-prompt clear` clears a scope |
 | Provider preferences (`/providers`) | **Global** | Active models, default model, temperature, system prompt, and the other per-provider settings can be saved to either file |
 | Per-model settings (`/models`) | **Global** | Either file |
 | `/settings` rows | **Global** | Either file |

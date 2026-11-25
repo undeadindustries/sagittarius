@@ -1,11 +1,25 @@
 package provider
 
-import "github.com/undeadindustries/sagittarius/internal/config"
+import (
+	"strings"
+
+	"github.com/undeadindustries/sagittarius/internal/config"
+)
 
 // DefaultLocalContextLimit is the assumed context window (in tokens) for an
 // openai-chat provider that does not declare one. It mirrors the fork's
 // getLocalContextLimit fallback.
 const DefaultLocalContextLimit = 32_768
+
+const (
+	// anthropicDenseTokenizerScale is the cold-start multiplier applied to
+	// chars/4 estimates for Anthropic models using the Opus 4.7+/5.x tokenizer
+	// (~2.5 chars/token vs 4 chars/token) before live usage calibrates it.
+	anthropicDenseTokenizerScale = 1.5
+	// maxReservedResponseDivisor caps ReservedResponseTokens at 1/4 of
+	// ContextLimit so a small manual window is never starved by max_tokens.
+	maxReservedResponseDivisor = 4
+)
 
 // ContextManagementConfig holds the resolved context-management knobs
 // for the active provider. Zero-valued fraction/threshold fields mean "use the
@@ -23,6 +37,15 @@ type ContextManagementConfig struct {
 
 	// ContextLimit is the model context window in tokens.
 	ContextLimit int
+	// ReservedResponseTokens is the output-token reservation subtracted from
+	// the message budget (0 means use the caller's default). Anthropic sets
+	// this from the model's max_tokens because Anthropic counts input +
+	// max_tokens against the context window.
+	ReservedResponseTokens int
+	// EstimateScale is the cold-start multiplier applied to chars/4 token
+	// estimates before provider-reported Usage.InputTokens calibrates the
+	// ratio (1.0 for standard ~4 chars/token models, 1.5 for Opus 4.7+/5.x).
+	EstimateScale float64
 
 	// CompressionThreshold is the user-configured base trigger fraction (0 if unset).
 	CompressionThreshold float64
@@ -51,6 +74,7 @@ type ContextManagementConfig struct {
 func ResolveContextManagement(settings *config.Settings, liveModel string) ContextManagementConfig {
 	cm := ContextManagementConfig{
 		ContextLimit:             DefaultLocalContextLimit,
+		EstimateScale:            1.0,
 		MaskingEnabled:           true,
 		MaskingProtectLatestTurn: true,
 	}
@@ -78,6 +102,12 @@ func ResolveContextManagement(settings *config.Settings, liveModel string) Conte
 		fallbackLimit = DefaultLocalContextLimit
 	}
 	cm.ContextLimit = resolveContextLimit(settings, providerID, modelForLookup, fallbackLimit)
+	if endpoint.WireFormat == config.WireFormatAnthropic {
+		cm.ReservedResponseTokens = resolveAnthropicReservedResponseTokens(settings, providerID, modelForLookup, cm.ContextLimit)
+		if isAnthropicDenseTokenizerModel(modelForLookup) {
+			cm.EstimateScale = anthropicDenseTokenizerScale
+		}
+	}
 	applyInstanceContextKnobs(&cm, providerInstance(settings, providerID))
 	if !cm.CompressionThresholdUserSet {
 		if endpoint.WireFormat == config.WireFormatGemini {
@@ -151,4 +181,40 @@ func applyInstanceContextKnobs(cm *ContextManagementConfig, inst *config.Provide
 	if inst.ToolOutputMaskingProtectLatestTurn != nil {
 		cm.MaskingProtectLatestTurn = *inst.ToolOutputMaskingProtectLatestTurn
 	}
+}
+
+func resolveAnthropicReservedResponseTokens(settings *config.Settings, providerID, model string, contextLimit int) int {
+	maxOut := anthropicDefaultMaxTokens
+	if inst := providerInstance(settings, providerID); inst != nil && model != "" {
+		if mc, ok := config.LookupModelConfig(inst, model); ok && mc.MaxOutputTokens != nil && *mc.MaxOutputTokens > 0 {
+			maxOut = *mc.MaxOutputTokens
+		}
+	}
+	if contextLimit > 0 {
+		if capTokens := contextLimit / maxReservedResponseDivisor; capTokens > 0 && maxOut > capTokens {
+			maxOut = capTokens
+		}
+	}
+	return maxOut
+}
+
+func isAnthropicDenseTokenizerModel(model string) bool {
+	m := strings.ToLower(strings.TrimSpace(model))
+	if i := strings.LastIndex(m, "/"); i >= 0 {
+		m = m[i+1:]
+	}
+	for _, prefix := range []string{
+		"claude-opus-5",
+		"claude-sonnet-5",
+		"claude-haiku-5",
+		"claude-fable-5",
+		"claude-mythos-5",
+		"claude-opus-4-7",
+		"claude-opus-4-8",
+	} {
+		if strings.HasPrefix(m, prefix) {
+			return true
+		}
+	}
+	return false
 }
