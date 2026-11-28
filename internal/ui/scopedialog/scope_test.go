@@ -19,6 +19,56 @@ func TestNewScopeSelector_DefaultGlobal(t *testing.T) {
 	}
 }
 
+func TestNewScopeSelectorFor(t *testing.T) {
+	tests := []struct {
+		name             string
+		defaultScope     config.SettingScope
+		projectAvailable bool
+		wantScope        config.SettingScope
+		wantDisabled     bool
+	}{
+		{"project default with project tier", config.ScopeProject, true, config.ScopeProject, false},
+		{"project default without project tier", config.ScopeProject, false, config.ScopeGlobal, true},
+		{"global default with project tier", config.ScopeGlobal, true, config.ScopeGlobal, false},
+		{"global default without project tier", config.ScopeGlobal, false, config.ScopeGlobal, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := NewScopeSelectorFor(tt.defaultScope, tt.projectAvailable)
+			if s.Scope != tt.wantScope || s.EffectiveScope() != tt.wantScope {
+				t.Fatalf("scope = (%v, effective=%v), want %v", s.Scope, s.EffectiveScope(), tt.wantScope)
+			}
+			if s.Disabled != tt.wantDisabled {
+				t.Fatalf("Disabled = %v, want %v", s.Disabled, tt.wantDisabled)
+			}
+		})
+	}
+}
+
+func TestScopeSelector_WithScopeAndEffectiveScope(t *testing.T) {
+	disabled := NewScopeSelectorFor(config.ScopeProject, false)
+	afterReset := disabled.WithScope(config.ScopeProject)
+	if afterReset.Scope != config.ScopeGlobal || afterReset.EffectiveScope() != config.ScopeGlobal {
+		t.Fatalf("disabled WithScope(ScopeProject) = (%v, effective=%v), want ScopeGlobal", afterReset.Scope, afterReset.EffectiveScope())
+	}
+
+	// Even if a caller mutates Disabled directly on a ScopeProject selector,
+	// EffectiveScope and Toggle coerce back to ScopeGlobal.
+	manual := ScopeSelector{Scope: config.ScopeProject, Disabled: true}
+	if got := manual.EffectiveScope(); got != config.ScopeGlobal {
+		t.Fatalf("manual disabled EffectiveScope() = %v, want ScopeGlobal", got)
+	}
+	toggled, cmd := manual.Toggle()
+	if toggled.Scope != config.ScopeGlobal || cmd != nil {
+		t.Fatalf("manual disabled Toggle() = (%v, cmd=%v), want (ScopeGlobal, nil)", toggled.Scope, cmd)
+	}
+
+	enabled := NewScopeSelectorFor(config.ScopeGlobal, true).WithScope(config.ScopeProject)
+	if enabled.Scope != config.ScopeProject || enabled.EffectiveScope() != config.ScopeProject {
+		t.Fatalf("enabled WithScope(ScopeProject) = (%v, effective=%v), want ScopeProject", enabled.Scope, enabled.EffectiveScope())
+	}
+}
+
 func TestScopeSelector_HandleKey(t *testing.T) {
 	tab := tea.KeyMsg{Type: tea.KeyTab}
 	other := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")}

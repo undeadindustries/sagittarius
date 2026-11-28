@@ -1145,7 +1145,7 @@ func buildRunner(ctx context.Context, opts runnerOptions) (*agent.Runner, *confi
 	if provider.PruneModelOverrides(docs.Global) {
 		_ = docs.Save(config.ScopeGlobal)
 	}
-	if docs.Project != nil {
+	if docs.ProjectAvailable() && docs.Project != nil {
 		if provider.PruneModelOverridesAgainst(docs.Project, docs.Merged()) {
 			_ = docs.Save(config.ScopeProject)
 		}

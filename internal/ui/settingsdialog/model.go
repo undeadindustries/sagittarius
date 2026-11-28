@@ -57,17 +57,13 @@ type secretStatusMsg struct {
 // command probes secret rows off the Update goroutine; it is nil when the
 // curated list has none.
 func New(ctx context.Context, deps Deps) (Model, tea.Cmd) {
-	sel := scopedialog.NewScopeSelector(config.ScopeGlobal)
-	if !deps.ProjectAvailable() {
-		sel.Disabled = true
-	}
 	m := Model{
 		deps:     deps,
 		ctx:      ctx,
 		th:       theme.Default(),
-		scopeSel: sel,
+		scopeSel: scopedialog.NewScopeSelectorFor(config.ScopeGlobal, deps.ProjectAvailable()),
 	}
-	m.entries = deps.ListSettings(m.scopeSel.Scope)
+	m.entries = deps.ListSettings(m.scopeSel.EffectiveScope())
 	return m, m.loadSecretStatuses()
 }
 
@@ -145,7 +141,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, nil
 	}
 	if _, ok := msg.(scopedialog.ScopeChangedMsg); ok {
-		m.entries = m.deps.ListSettings(m.scopeSel.Scope)
+		m.entries = m.deps.ListSettings(m.scopeSel.EffectiveScope())
 		m.restoreSecretStatuses()
 		return m, nil
 	}
@@ -297,7 +293,7 @@ func (m Model) commitEdit() (Model, tea.Cmd) {
 }
 
 func (m Model) saveValue(key, value string) (Model, tea.Cmd) {
-	scope := m.scopeSel.Scope
+	scope := m.scopeSel.EffectiveScope()
 	if err := m.deps.SetValue(m.ctx, scope, key, value); err != nil {
 		m.errMsg = err.Error()
 		return m, nil
@@ -321,7 +317,7 @@ func (m Model) clearCurrent() (Model, tea.Cmd) {
 	if !ok {
 		return m, nil
 	}
-	scope := m.scopeSel.Scope
+	scope := m.scopeSel.EffectiveScope()
 	if err := m.deps.ClearValue(m.ctx, scope, e.Key); err != nil {
 		m.errMsg = err.Error()
 		return m, nil

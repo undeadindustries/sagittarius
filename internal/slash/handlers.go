@@ -236,15 +236,15 @@ func systemPromptArgComplete(deps Deps, argPrefix string) []string {
 }
 
 // parseSystemPromptArgs parses `/system-prompt [<name>|clear] [--global|--project|global|project]`.
-// Default scope is Project (falling back to Global in home directory).
-func parseSystemPromptArgs(raw string) (presetID string, clearSelection bool, scope config.SettingScope, err error) {
+// Default scope is Project (falling back to Global in home directory when
+// scopeSet is false).
+func parseSystemPromptArgs(raw string) (presetID string, clearSelection bool, scope config.SettingScope, scopeSet bool, err error) {
 	scope = config.ScopeProject
 	fields := strings.Fields(strings.TrimSpace(raw))
 	if len(fields) == 0 {
-		return "", false, scope, nil
+		return "", false, scope, false, nil
 	}
 	var positional []string
-	scopeSet := false
 	for _, tok := range fields {
 		switch strings.ToLower(tok) {
 		case "--global", "-g":
@@ -260,31 +260,35 @@ func parseSystemPromptArgs(raw string) (presetID string, clearSelection bool, sc
 	if len(positional) == 2 && !scopeSet {
 		parsed, sErr := parseScope(positional[1])
 		if sErr != nil {
-			return "", false, scope, sErr
+			return "", false, scope, false, sErr
 		}
 		scope = parsed
+		scopeSet = true
 		positional = positional[:1]
 	} else if len(positional) > 1 {
-		return "", false, scope, fmt.Errorf("/system-prompt: unexpected arguments %q (usage: /system-prompt [<preset|custom|clear>] [--global|--project])", strings.Join(positional, " "))
+		return "", false, scope, scopeSet, fmt.Errorf("/system-prompt: unexpected arguments %q (usage: /system-prompt [<preset|custom|clear>] [--global|--project])", strings.Join(positional, " "))
 	}
 	if len(positional) == 0 {
-		return "", false, scope, nil
+		return "", false, scope, scopeSet, nil
 	}
 	if strings.EqualFold(positional[0], "clear") || strings.EqualFold(positional[0], "reset") {
-		return "", true, scope, nil
+		return "", true, scope, scopeSet, nil
 	}
-	return positional[0], false, scope, nil
+	return positional[0], false, scope, scopeSet, nil
 }
 
 // handleSystemPrompt opens the picker when no selection argument is given, or
 // applies/clears a preset id or custom prompt name directly for headless use.
 func handleSystemPrompt(ctx *Context) Result {
-	presetID, clearSel, scope, err := parseSystemPromptArgs(ctx.Args)
+	presetID, clearSel, scope, scopeSet, err := parseSystemPromptArgs(ctx.Args)
 	if err != nil {
 		return ErrorResult(err)
 	}
 	if presetID == "" && !clearSel {
 		return DialogResult(DialogSystemPrompt)
+	}
+	if scopeSet && scope == config.ScopeProject && ctx.Deps.Documents != nil && !ctx.Deps.Documents.ProjectAvailable() {
+		return ErrorResult(fmt.Errorf("/system-prompt --project: this session has no project settings file; start Sagittarius inside a project folder: %w", config.ErrNoProjectScope))
 	}
 	msg, err := ctx.Deps.Hooks.ApplySystemPromptPreset(ctx.Ctx, presetID, scope)
 	if err != nil {
@@ -340,13 +344,9 @@ func handleModesOverride(ctx *Context) Result {
 	}
 	modeName := strings.ToLower(parts[0])
 	pair := parts[1]
-	scope := config.ScopeProject
-	if len(parts) >= 3 {
-		var err error
-		scope, err = parseScope(parts[2])
-		if err != nil {
-			return InfoResult(err.Error())
-		}
+	scope, err := trailingScope(parts[2:], ctx.Deps.Documents)
+	if err != nil {
+		return InfoResult(err.Error())
 	}
 	slash := strings.SplitN(pair, "/", 2)
 	if len(slash) != 2 || slash[0] == "" || slash[1] == "" {
@@ -370,13 +370,9 @@ func handleModesClear(ctx *Context) Result {
 		return DialogResult(DialogModes)
 	}
 	modeName := strings.ToLower(parts[0])
-	scope := config.ScopeProject
-	if len(parts) >= 2 {
-		var err error
-		scope, err = parseScope(parts[1])
-		if err != nil {
-			return InfoResult(err.Error())
-		}
+	scope, err := trailingScope(parts[1:], ctx.Deps.Documents)
+	if err != nil {
+		return InfoResult(err.Error())
 	}
 	if err := ctx.Deps.Hooks.SetModeOverride(ctx.Ctx, modeName, "", "", scope); err != nil {
 		return ErrorResult(err)
@@ -395,11 +391,22 @@ func parseScope(s string) (config.SettingScope, error) {
 	}
 }
 
-// trailingScope parses an optional trailing scope argument (default project).
-// It rejects more than one trailing token so a typo cannot silently pass.
-func trailingScope(parts []string) (config.SettingScope, error) {
+// defaultProjectScope returns ScopeProject when the session has (or may have)
+// a distinct project settings tier, and falls back to ScopeGlobal when
+// Documents reports no project tier (such as the home directory).
+func defaultProjectScope(docs *config.Documents) config.SettingScope {
+	if docs != nil && !docs.ProjectAvailable() {
+		return config.ScopeGlobal
+	}
+	return config.ScopeProject
+}
+
+// trailingScope parses an optional trailing scope argument, defaulting to
+// project scope when available and global scope otherwise. It rejects more than
+// one trailing token so a typo cannot silently pass.
+func trailingScope(parts []string, docs *config.Documents) (config.SettingScope, error) {
 	if len(parts) == 0 {
-		return config.ScopeProject, nil
+		return defaultProjectScope(docs), nil
 	}
 	if len(parts) > 1 {
 		return config.ScopeProject, fmt.Errorf("unexpected arguments %q (expected [global|project])", strings.Join(parts, " "))

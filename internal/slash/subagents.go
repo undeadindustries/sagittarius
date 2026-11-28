@@ -65,7 +65,7 @@ func handleSubagentsSet(ctx *Context) Result {
 	}
 	slot := strings.ToLower(parts[0])
 	pair := parts[1]
-	scope, err := trailingScope(parts[2:])
+	scope, err := trailingScope(parts[2:], ctx.Deps.Documents)
 	if err != nil {
 		return InfoResult(err.Error())
 	}
@@ -91,7 +91,7 @@ func handleSubagentsClear(ctx *Context) Result {
 		return DialogResult(DialogSubagents)
 	}
 	slot := strings.ToLower(parts[0])
-	scope, err := trailingScope(parts[1:])
+	scope, err := trailingScope(parts[1:], ctx.Deps.Documents)
 	if err != nil {
 		return InfoResult(err.Error())
 	}
@@ -109,7 +109,7 @@ func handleSubagentsReset(ctx *Context) Result {
 		return InfoResult("Subagent routing unavailable.")
 	}
 	parts := strings.Fields(strings.TrimSpace(ctx.Args))
-	scope, err := trailingScope(parts)
+	scope, err := trailingScope(parts, ctx.Deps.Documents)
 	if err != nil {
 		return InfoResult(err.Error())
 	}

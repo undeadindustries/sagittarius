@@ -104,17 +104,13 @@ type reloadResultMsg struct {
 
 // New constructs the MCP server wizard.
 func New(ctx context.Context, deps Deps) Model {
-	sel := scopedialog.NewScopeSelector(config.ScopeProject)
-	if !deps.ProjectAvailable() {
-		sel.Disabled = true
-	}
 	m := Model{
 		deps:     deps,
 		ctx:      ctx,
 		th:       theme.Default(),
 		screen:   screenList,
 		spin:     newDialogSpinner(theme.Default()),
-		scopeSel: sel,
+		scopeSel: scopedialog.NewScopeSelectorFor(config.ScopeProject, deps.ProjectAvailable()),
 	}
 	m.servers = deps.ListServers()
 	return m
@@ -221,8 +217,8 @@ func (m *Model) startAdd() {
 	m.fieldCursor = 0
 	m.errMsg = ""
 	m.info = ""
-	// Default new servers to project scope.
-	m.scopeSel.Scope = config.ScopeProject
+	// Default new servers to project scope when a project tier is available.
+	m.scopeSel = m.scopeSel.WithScope(config.ScopeProject)
 	m.rebuildFields()
 	m.screen = screenForm
 }
@@ -251,7 +247,7 @@ func (m Model) startEdit() (Model, tea.Cmd) {
 	m.errMsg = ""
 	m.info = ""
 	// Pre-select the scope the server is currently stored in.
-	m.scopeSel.Scope = srv.Scope
+	m.scopeSel = m.scopeSel.WithScope(srv.Scope)
 	m.rebuildFields()
 	m.screen = screenForm
 	return m, nil
@@ -393,7 +389,7 @@ func (m Model) save() (Model, tea.Cmd) {
 	m.saving = true
 	m.errMsg = ""
 	form := m.form
-	scope := m.scopeSel.Scope
+	scope := m.scopeSel.EffectiveScope()
 	return m, tea.Batch(
 		m.spin.Tick,
 		saveServerCmd(m.ctx, m.deps, m.originalName, form, m.adding, scope),

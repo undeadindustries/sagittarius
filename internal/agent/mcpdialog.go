@@ -194,18 +194,33 @@ func (d *mcpDialogDeps) SaveServer(ctx context.Context, originalName string, for
 	}
 
 	renamed := originalName != "" && originalName != name
-	target := docs.TargetSettings(scope)
+	if err := d.app.persistScope(scope, func(target *config.Settings) error {
+		if renamed {
+			_ = target.RemoveMCPServer(originalName)
+		}
+		return target.SetMCPServer(name, cfg)
+	}); err != nil {
+		return err
+	}
 	if renamed {
-		_ = target.RemoveMCPServer(originalName)
-		// If the original was in a different scope, clean it up there too.
-		other := docs.TargetSettings(1 - scope)
-		_ = other.RemoveMCPServer(originalName)
-	}
-	if err := target.SetMCPServer(name, cfg); err != nil {
-		return err
-	}
-	if err := docs.Save(scope); err != nil {
-		return err
+		// If the original server lived in the other scope, remove it there too
+		// without allocating an absent project document.
+		otherScope := config.ScopeGlobal
+		if scope == config.ScopeGlobal {
+			otherScope = config.ScopeProject
+		}
+		if otherDoc := d.app.scopeDocument(otherScope); otherDoc != nil &&
+			(otherScope == config.ScopeGlobal || docs.ProjectAvailable()) {
+			if existing, err := otherDoc.MCPServers(); err == nil {
+				if _, ok := existing[originalName]; ok {
+					if err := d.app.persistScope(otherScope, func(s *config.Settings) error {
+						return s.RemoveMCPServer(originalName)
+					}); err != nil {
+						return err
+					}
+				}
+			}
+		}
 	}
 	if err := d.persistMCPBearer(ctx, originalName, name, form.Bearer, renamed); err != nil {
 		return err
@@ -288,8 +303,7 @@ func (d *mcpDialogDeps) persistMCPHeaderSecrets(
 }
 
 func (d *mcpDialogDeps) RemoveServer(ctx context.Context, name string) error {
-	docs := d.docs()
-	if docs == nil {
+	if d.app == nil || d.docs() == nil {
 		return fmt.Errorf("settings not loaded")
 	}
 	if oldCfg, ok := d.findServerConfig(name); ok {
@@ -298,11 +312,9 @@ func (d *mcpDialogDeps) RemoveServer(ctx context.Context, name string) error {
 		}
 	}
 	scope := d.serverScope(name)
-	target := docs.TargetSettings(scope)
-	if err := target.RemoveMCPServer(name); err != nil {
-		return err
-	}
-	if err := docs.Save(scope); err != nil {
+	if err := d.app.persistScope(scope, func(target *config.Settings) error {
+		return target.RemoveMCPServer(name)
+	}); err != nil {
 		return err
 	}
 	_ = credentials.DeleteMCPServerBearer(ctx, name)
@@ -314,20 +326,20 @@ func (d *mcpDialogDeps) RemoveServer(ctx context.Context, name string) error {
 }
 
 func (d *mcpDialogDeps) SetDisabled(ctx context.Context, name string, disabled bool) error {
-	docs := d.docs()
-	if docs == nil {
+	if d.app == nil || d.docs() == nil {
 		return fmt.Errorf("settings not loaded")
 	}
 	scope := d.serverScope(name)
-	target := docs.TargetSettings(scope)
-	if err := target.SetMCPServerDisabled(name, disabled); err != nil {
+	if err := d.app.persistScope(scope, func(target *config.Settings) error {
+		return target.SetMCPServerDisabled(name, disabled)
+	}); err != nil {
 		return err
 	}
-	if err := docs.Save(scope); err != nil {
+	if d.app.deps.Hooks != nil {
+		_, err := d.app.deps.Hooks.ReloadMCP(ctx)
 		return err
 	}
-	_, err := d.app.deps.Hooks.ReloadMCP(ctx)
-	return err
+	return nil
 }
 
 func (d *mcpDialogDeps) Reload(ctx context.Context) (string, error) {

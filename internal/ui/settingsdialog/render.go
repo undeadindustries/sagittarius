@@ -57,7 +57,7 @@ func (m Model) renderEntry(e SettingEntry, selected bool) string {
 		star = "* "
 	}
 	label := e.Label
-	val, suffix := settingDisplay(e, m.scopeSel.Scope)
+	val, suffix := settingDisplay(e, m.scopeSel.EffectiveScope())
 	if suffix != "" {
 		val += dim.Render(suffix)
 	}

@@ -147,17 +147,11 @@ func New(ctx context.Context, deps Deps) (Model, tea.Cmd) {
 	for i, p := range presets {
 		opts[i] = presetOption{id: p.ID, label: p.Label}
 	}
-	defaultScope := config.ScopeProject
-	if !deps.ProjectAvailable() {
-		defaultScope = config.ScopeGlobal
-	}
-	sel := scopedialog.NewScopeSelector(defaultScope)
-	sel.Disabled = !deps.ProjectAvailable()
 	m := Model{
 		deps:      deps,
 		ctx:       ctx,
 		th:        theme.Default(),
-		scopeSel:  sel,
+		scopeSel:  scopedialog.NewScopeSelectorFor(config.ScopeProject, deps.ProjectAvailable()),
 		presets:   opts,
 		currentID: deps.CurrentPresetID(),
 		spin:      spinner.New(spinner.WithSpinner(spinner.MiniDot)),
@@ -555,7 +549,7 @@ func (m Model) runOp(info string, op func(context.Context, Deps) (string, error)
 }
 
 func (m Model) apply(o pickOption) (Model, tea.Cmd) {
-	ctx, deps, scope := m.ctx, m.deps, m.scopeSel.Scope
+	ctx, deps, scope := m.ctx, m.deps, m.scopeSel.EffectiveScope()
 	m.busy = true
 	m.errMsg = ""
 	m.info = fmt.Sprintf("Applying %s…", o.label)
@@ -569,7 +563,7 @@ func (m Model) apply(o pickOption) (Model, tea.Cmd) {
 }
 
 func (m Model) clearSelection() (Model, tea.Cmd) {
-	ctx, deps, scope := m.ctx, m.deps, m.scopeSel.Scope
+	ctx, deps, scope := m.ctx, m.deps, m.scopeSel.EffectiveScope()
 	m.busy = true
 	m.errMsg = ""
 	m.info = fmt.Sprintf("Clearing %s system prompt…", scope)

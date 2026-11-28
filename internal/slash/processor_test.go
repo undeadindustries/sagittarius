@@ -3,6 +3,7 @@ package slash_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -59,6 +60,10 @@ type mockHooks struct {
 	customPrompts            []string
 	appliedSystemPrompt      string
 	appliedSystemPromptScope config.SettingScope
+	lastModeScope            config.SettingScope
+	lastSubagentScope        config.SettingScope
+	lastResetSubagentScope   config.SettingScope
+	noProjectScope           bool
 	// constraints backs AddConstraint()/ListConstraints()/ClearConstraints()
 	// with a stateful in-memory slice, so /constraints command tests can
 	// assert real add/list/clear behavior.
@@ -224,15 +229,27 @@ func (m *mockHooks) ListSessions() ([]session.SessionInfo, error) { return nil, 
 
 func (m *mockHooks) ClearHistory() error { return nil }
 
-func (m *mockHooks) SetModeOverride(_ context.Context, _, _, _ string, _ config.SettingScope) error {
+func (m *mockHooks) SetModeOverride(_ context.Context, _, _, _ string, scope config.SettingScope) error {
+	if m.noProjectScope && scope == config.ScopeProject {
+		return config.ErrNoProjectScope
+	}
+	m.lastModeScope = scope
 	return nil
 }
 
-func (m *mockHooks) SetSubagentOverride(_ context.Context, _, _, _ string, _ config.SettingScope) error {
+func (m *mockHooks) SetSubagentOverride(_ context.Context, _, _, _ string, scope config.SettingScope) error {
+	if m.noProjectScope && scope == config.ScopeProject {
+		return config.ErrNoProjectScope
+	}
+	m.lastSubagentScope = scope
 	return nil
 }
 
-func (m *mockHooks) ResetSubagentOverrides(_ context.Context, _ config.SettingScope) (string, error) {
+func (m *mockHooks) ResetSubagentOverrides(_ context.Context, scope config.SettingScope) (string, error) {
+	if m.noProjectScope && scope == config.ScopeProject {
+		return "", config.ErrNoProjectScope
+	}
+	m.lastResetSubagentScope = scope
 	return "reset", nil
 }
 
@@ -1415,5 +1432,112 @@ func TestSkillsCommandsWhenDisabled(t *testing.T) {
 		if !strings.Contains(combined, "Skills are turned off") || !strings.Contains(combined, "sagittarius.skillsEnabled") {
 			t.Fatalf("%s: got %q, want disabled message", cmd, combined)
 		}
+	}
+}
+
+func TestSlashCommandsInHomeDirectoryFallbackOrReject(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("SAGITTARIUS_HOME", home)
+	docs, err := config.LoadDocuments(home)
+	if err != nil {
+		t.Fatalf("LoadDocuments(home): %v", err)
+	}
+	if docs.ProjectAvailable() {
+		t.Fatal("ProjectAvailable() = true in home directory, want false")
+	}
+
+	p := slash.NewProcessor()
+
+	fallbackCases := []struct {
+		name      string
+		cmd       string
+		checkMock func(t *testing.T, h *mockHooks)
+	}{
+		{
+			name: "modes override omitted scope falls back to global",
+			cmd:  "/modes override plan gemini/gemini-4-carbon",
+			checkMock: func(t *testing.T, h *mockHooks) {
+				t.Helper()
+				if h.lastModeScope != config.ScopeGlobal {
+					t.Fatalf("lastModeScope = %v, want ScopeGlobal", h.lastModeScope)
+				}
+			},
+		},
+		{
+			name: "modes clear omitted scope falls back to global",
+			cmd:  "/modes clear plan",
+			checkMock: func(t *testing.T, h *mockHooks) {
+				t.Helper()
+				if h.lastModeScope != config.ScopeGlobal {
+					t.Fatalf("lastModeScope = %v, want ScopeGlobal", h.lastModeScope)
+				}
+			},
+		},
+		{
+			name: "subagents set omitted scope falls back to global",
+			cmd:  "/subagents set coding gemini/gemini-4-carbon",
+			checkMock: func(t *testing.T, h *mockHooks) {
+				t.Helper()
+				if h.lastSubagentScope != config.ScopeGlobal {
+					t.Fatalf("lastSubagentScope = %v, want ScopeGlobal", h.lastSubagentScope)
+				}
+			},
+		},
+		{
+			name: "subagents clear omitted scope falls back to global",
+			cmd:  "/subagents clear coding",
+			checkMock: func(t *testing.T, h *mockHooks) {
+				t.Helper()
+				if h.lastSubagentScope != config.ScopeGlobal {
+					t.Fatalf("lastSubagentScope = %v, want ScopeGlobal", h.lastSubagentScope)
+				}
+			},
+		},
+		{
+			name: "subagents reset omitted scope falls back to global",
+			cmd:  "/subagents reset",
+			checkMock: func(t *testing.T, h *mockHooks) {
+				t.Helper()
+				if h.lastResetSubagentScope != config.ScopeGlobal {
+					t.Fatalf("lastResetSubagentScope = %v, want ScopeGlobal", h.lastResetSubagentScope)
+				}
+			},
+		},
+	}
+
+	for _, tc := range fallbackCases {
+		t.Run(tc.name, func(t *testing.T) {
+			deps, _, hooks := testDeps(t, docs.Global)
+			deps.Documents = docs
+			hooks.noProjectScope = true
+			res := p.Process(context.Background(), tc.cmd, deps)
+			if !res.Handled || res.Err != nil {
+				t.Fatalf("%q: got %+v, want success", tc.cmd, res)
+			}
+			tc.checkMock(t, hooks)
+		})
+	}
+
+	explicitProjectCmds := []string{
+		"/modes override plan gemini/gemini-4-carbon project",
+		"/modes clear plan project",
+		"/subagents set coding gemini/gemini-4-carbon project",
+		"/subagents clear coding project",
+		"/subagents reset project",
+		"/system-prompt programmer --project",
+		"/system-prompt programmer project",
+		"/system-prompt clear --project",
+	}
+
+	for _, cmd := range explicitProjectCmds {
+		t.Run("explicit project rejected: "+cmd, func(t *testing.T) {
+			deps, _, hooks := testDeps(t, docs.Global)
+			deps.Documents = docs
+			hooks.noProjectScope = true
+			res := p.Process(context.Background(), cmd, deps)
+			if !res.Handled || !errors.Is(res.Err, config.ErrNoProjectScope) {
+				t.Fatalf("%q: err = %v, want ErrNoProjectScope", cmd, res.Err)
+			}
+		})
 	}
 }

@@ -52,15 +52,11 @@ type applyResultMsg struct {
 
 // New constructs the global model picker.
 func New(ctx context.Context, deps Deps) Model {
-	sel := scopedialog.NewScopeSelector(config.ScopeProject)
-	if !deps.ProjectAvailable() {
-		sel.Disabled = true
-	}
 	m := Model{
 		deps:     deps,
 		ctx:      ctx,
 		th:       theme.Default(),
-		scopeSel: sel,
+		scopeSel: scopedialog.NewScopeSelectorFor(config.ScopeProject, deps.ProjectAvailable()),
 		spin:     newDialogSpinner(),
 	}
 	m.entries = deps.AllActiveModels()
@@ -173,7 +169,7 @@ func (m Model) selectCurrent() (Model, tea.Cmd) {
 		return m, nil
 	}
 	e := m.entries[m.cursor]
-	scope := m.scopeSel.Scope
+	scope := m.scopeSel.EffectiveScope()
 	ctx := m.ctx
 	deps := m.deps
 	m.applying = true

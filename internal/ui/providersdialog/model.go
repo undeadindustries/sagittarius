@@ -227,15 +227,14 @@ func New(ctx context.Context, deps Deps) Model {
 		add:       addState{wire: config.WireFormatOpenAIChat, fieldIdx: addFieldName},
 		providers: deps.ListProviders(),
 		spin:      newDialogSpinner(),
-		scopeSel:  scopedialog.NewScopeSelector(config.ScopeGlobal),
+		scopeSel:  scopedialog.NewScopeSelectorFor(config.ScopeGlobal, deps.ProjectAvailable()),
 	}
-	m.scopeSel.Disabled = !deps.ProjectAvailable()
 	m.syncInputWidth()
 	return m
 }
 
 // scope is where preference writes go.
-func (m Model) scope() config.SettingScope { return m.scopeSel.Scope }
+func (m Model) scope() config.SettingScope { return m.scopeSel.EffectiveScope() }
 
 // scopeScreen reports whether the current screen shows the scope line and
 // takes the toggle key. Text-entry and add screens do not: Tab belongs to

@@ -60,12 +60,47 @@ func NewScopeSelector(defaultScope config.SettingScope) ScopeSelector {
 	}
 }
 
+// NewScopeSelectorFor constructs a ScopeSelector for a session whose project
+// tier may be absent (for example, launched from the home directory). When
+// projectAvailable is false, the selector is disabled and forced onto
+// ScopeGlobal so callers can never submit ScopeProject while the toggle is
+// hidden.
+func NewScopeSelectorFor(defaultScope config.SettingScope, projectAvailable bool) ScopeSelector {
+	if !projectAvailable {
+		s := NewScopeSelector(config.ScopeGlobal)
+		s.Disabled = true
+		return s
+	}
+	return NewScopeSelector(defaultScope)
+}
+
+// WithScope sets the active scope while preserving the invariant that a
+// disabled selector stays on ScopeGlobal. Use this instead of assigning Scope
+// directly when resetting a form.
+func (s ScopeSelector) WithScope(scope config.SettingScope) ScopeSelector {
+	if s.Disabled {
+		s.Scope = config.ScopeGlobal
+		return s
+	}
+	s.Scope = scope
+	return s
+}
+
+// EffectiveScope returns the selected scope, coercing to ScopeGlobal whenever
+// the selector is disabled.
+func (s ScopeSelector) EffectiveScope() config.SettingScope {
+	if s.Disabled {
+		return config.ScopeGlobal
+	}
+	return s.Scope
+}
+
 // Toggle flips between Global and Project and returns a command that emits
 // ScopeChangedMsg so the parent can reload scope-dependent rows. A disabled
-// selector stays on its scope and returns a nil command.
+// selector stays on Global and returns a nil command.
 func (s ScopeSelector) Toggle() (ScopeSelector, tea.Cmd) {
 	if s.Disabled {
-		return s, nil
+		return s.WithScope(config.ScopeGlobal), nil
 	}
 	if s.Scope == config.ScopeProject {
 		s.Scope = config.ScopeGlobal

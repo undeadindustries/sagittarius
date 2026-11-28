@@ -2022,45 +2022,120 @@ func (h *appHooks) SetModeOverride(ctx context.Context, modeName, providerID, mo
 	if h.app == nil {
 		return fmt.Errorf("app not available")
 	}
-	docs := h.app.docs
-	if docs == nil {
-		return fmt.Errorf("settings not loaded")
-	}
-	if err := config.SetModeOverride(docs.TargetSettings(scope), modeName, providerID, model); err != nil {
-		return err
-	}
-	return docs.Save(scope)
+	return h.app.setModeOverride(ctx, modeName, providerID, model, scope)
 }
 
 func (h *appHooks) SetSubagentOverride(_ context.Context, slot, providerID, model string, scope config.SettingScope) error {
 	if h.app == nil {
 		return fmt.Errorf("app not available")
 	}
-	docs := h.app.docs
-	if docs == nil {
-		return fmt.Errorf("settings not loaded")
-	}
-	if !config.ValidSubagentSlot(slot) {
-		return fmt.Errorf("unknown subagent slot %q (expected default, research, coding, reviewer, utility)", slot)
-	}
-	if err := config.SetSubagentOverride(docs.TargetSettings(scope), slot, providerID, model); err != nil {
-		return err
-	}
-	return docs.Save(scope)
+	return h.app.setSubagentOverride(slot, providerID, model, scope)
 }
 
 func (h *appHooks) ResetSubagentOverrides(_ context.Context, scope config.SettingScope) (string, error) {
 	if h.app == nil {
 		return "", fmt.Errorf("app not available")
 	}
-	docs := h.app.docs
-	if docs == nil {
+	return h.app.resetSubagentOverrides(scope)
+}
+
+func (a *App) setModeOverride(ctx context.Context, modeName, providerID, model string, scope config.SettingScope) error {
+	if a.docs == nil {
+		return fmt.Errorf("settings not loaded")
+	}
+	if model == "" {
+		return a.clearModeOverride(ctx, modeName, scope)
+	}
+	if err := a.persistScope(scope, func(s *config.Settings) error {
+		return config.SetModeOverride(s, modeName, providerID, model)
+	}); err != nil {
+		return err
+	}
+	a.maybeRebuildActiveMode(ctx, modeName)
+	return nil
+}
+
+func (a *App) clearModeOverride(ctx context.Context, modeName string, scope config.SettingScope) error {
+	if a.docs == nil {
+		return fmt.Errorf("settings not loaded")
+	}
+	if scope == config.ScopeProject && !a.docs.ProjectAvailable() {
+		return fmt.Errorf("save project settings: %w", config.ErrNoProjectScope)
+	}
+	if err := config.SetModeOverride(&config.Settings{}, modeName, "", ""); err != nil {
+		return err
+	}
+	if a.scopeDocument(scope) != nil {
+		if err := a.persistScope(scope, func(s *config.Settings) error {
+			config.ClearModeOverride(s, modeName)
+			return nil
+		}); err != nil {
+			return err
+		}
+	}
+	a.maybeRebuildActiveMode(ctx, modeName)
+	return nil
+}
+
+// maybeRebuildActiveMode triggers a runner rebuild if the user just edited the
+// override for the mode they are currently in. This ensures the main screen
+// reflects the change immediately without requiring them to switch modes.
+func (a *App) maybeRebuildActiveMode(ctx context.Context, modifiedModeName string) {
+	if a.runner == nil || a.deps.Hooks == nil {
+		return
+	}
+	currentMode := a.runner.InteractionMode()
+	if strings.EqualFold(currentMode.String(), modifiedModeName) {
+		_, _ = a.deps.Hooks.SetInteractionMode(ctx, currentMode)
+	}
+}
+
+func (a *App) setSubagentOverride(slot, providerID, model string, scope config.SettingScope) error {
+	if a.docs == nil {
+		return fmt.Errorf("settings not loaded")
+	}
+	if !config.ValidSubagentSlot(slot) {
+		return fmt.Errorf("unknown subagent slot %q (expected default, research, coding, reviewer, utility)", slot)
+	}
+	if model == "" {
+		if scope == config.ScopeProject && !a.docs.ProjectAvailable() {
+			return fmt.Errorf("save project settings: %w", config.ErrNoProjectScope)
+		}
+		if a.scopeDocument(scope) == nil {
+			return nil
+		}
+		return a.persistScope(scope, func(s *config.Settings) error {
+			config.ClearSubagentOverride(s, slot)
+			return nil
+		})
+	}
+	return a.persistScope(scope, func(s *config.Settings) error {
+		return config.SetSubagentOverride(s, slot, providerID, model)
+	})
+}
+
+func (a *App) resetSubagentOverrides(scope config.SettingScope) (string, error) {
+	if a.docs == nil {
 		return "", fmt.Errorf("settings not loaded")
 	}
-	if !config.ResetSubagentOverrides(docs.TargetSettings(scope)) {
+	if scope == config.ScopeProject && !a.docs.ProjectAvailable() {
+		return "", fmt.Errorf("save project settings: %w", config.ErrNoProjectScope)
+	}
+	doc := a.scopeDocument(scope)
+	hasPins := false
+	for _, slot := range config.SubagentSlots {
+		if _, model := subagentSlotValues(doc, slot); model != "" {
+			hasPins = true
+			break
+		}
+	}
+	if !hasPins {
 		return fmt.Sprintf("No subagent routing pins in %s settings.", scope), nil
 	}
-	if err := docs.Save(scope); err != nil {
+	if err := a.persistScope(scope, func(s *config.Settings) error {
+		config.ResetSubagentOverrides(s)
+		return nil
+	}); err != nil {
 		return "", err
 	}
 	return fmt.Sprintf("Subagent routing reset in %s settings (all slots use defaults).", scope), nil
@@ -2330,28 +2405,32 @@ func (h *appHooks) ApplySystemPromptPreset(ctx context.Context, presetID string,
 		}
 	}
 
-	s := h.app.docs.TargetSettings(targetScope)
-	if clearing {
-		if s.Sagittarius != nil && s.Sagittarius.SystemPrompt != nil {
-			if len(s.Sagittarius.SystemPrompt.Extra) > 0 {
-				s.Sagittarius.SystemPrompt = &config.SagittariusSystemPromptConfig{
-					Extra: s.Sagittarius.SystemPrompt.Extra,
+	if !clearing || h.app.scopeDocument(targetScope) != nil {
+		if err := h.app.persistScope(targetScope, func(s *config.Settings) error {
+			if clearing {
+				if s.Sagittarius != nil && s.Sagittarius.SystemPrompt != nil {
+					if len(s.Sagittarius.SystemPrompt.Extra) > 0 {
+						s.Sagittarius.SystemPrompt = &config.SagittariusSystemPromptConfig{
+							Extra: s.Sagittarius.SystemPrompt.Extra,
+						}
+					} else {
+						s.Sagittarius.SystemPrompt = nil
+					}
 				}
-			} else {
-				s.Sagittarius.SystemPrompt = nil
+				return nil
 			}
+			if s.Sagittarius == nil {
+				s.Sagittarius = &config.SagittariusSettings{}
+			}
+			sel := selection
+			if prev := s.Sagittarius.SystemPrompt; prev != nil {
+				sel.Extra = prev.Extra
+			}
+			s.Sagittarius.SystemPrompt = &sel
+			return nil
+		}); err != nil {
+			return "", err
 		}
-	} else {
-		if s.Sagittarius == nil {
-			s.Sagittarius = &config.SagittariusSettings{}
-		}
-		if prev := s.Sagittarius.SystemPrompt; prev != nil {
-			selection.Extra = prev.Extra
-		}
-		s.Sagittarius.SystemPrompt = &selection
-	}
-	if err := h.app.docs.Save(targetScope); err != nil {
-		return "", err
 	}
 
 	if err := h.app.reloadAfterSelectionChange(ctx); err != nil {

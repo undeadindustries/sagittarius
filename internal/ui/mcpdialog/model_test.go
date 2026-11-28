@@ -11,11 +11,13 @@ import (
 )
 
 type fakeDeps struct {
-	servers []ServerEntry
-	forms   map[string]ServerForm
-	saved   []ServerForm
-	removed []string
-	reloads int
+	project     bool
+	servers     []ServerEntry
+	forms       map[string]ServerForm
+	saved       []ServerForm
+	savedScopes []config.SettingScope
+	removed     []string
+	reloads     int
 }
 
 func (f *fakeDeps) ListServers() []ServerEntry { return f.servers }
@@ -25,12 +27,13 @@ func (f *fakeDeps) GetServer(name string) (ServerForm, bool) {
 	return form, ok
 }
 
-func (f *fakeDeps) SaveServer(_ context.Context, _ string, form ServerForm, _ config.SettingScope) error {
+func (f *fakeDeps) SaveServer(_ context.Context, _ string, form ServerForm, scope config.SettingScope) error {
 	f.saved = append(f.saved, form)
+	f.savedScopes = append(f.savedScopes, scope)
 	return nil
 }
 
-func (f *fakeDeps) ProjectAvailable() bool { return true }
+func (f *fakeDeps) ProjectAvailable() bool { return f.project }
 
 func (f *fakeDeps) RemoveServer(_ context.Context, name string) error {
 	f.removed = append(f.removed, name)
@@ -49,6 +52,7 @@ func keyRunes(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes
 
 func newFake() *fakeDeps {
 	return &fakeDeps{
+		project: true,
 		servers: []ServerEntry{
 			{Name: "demo", Transport: TransportStdio, Editable: true, Source: "settings"},
 			{Name: "ext", Transport: TransportHTTP, Editable: false, Source: "extension"},
@@ -222,6 +226,48 @@ func TestSaveShowsSpinnerWhileAsync(t *testing.T) {
 	}
 	if m.info != "Server new added." {
 		t.Fatalf("info = %q", m.info)
+	}
+}
+
+func TestAddAndEditForceGlobalScopeWhenProjectUnavailable(t *testing.T) {
+	deps := newFake()
+	deps.project = false
+	deps.servers[0].Scope = config.ScopeProject
+
+	m := New(context.Background(), deps).SetSize(80, 24)
+	if m.scopeSel.EffectiveScope() != config.ScopeGlobal || !m.scopeSel.Disabled {
+		t.Fatalf("initial scopeSel = %+v, want disabled ScopeGlobal", m.scopeSel)
+	}
+
+	// Opening the Add form must keep ScopeGlobal instead of resetting to ScopeProject.
+	m, _ = m.Update(keyRunes("a"))
+	if strings.Contains(m.View(), "Save to:") {
+		t.Fatalf("add form should hide scope selector when project unavailable")
+	}
+	m.form.Name = "home-srv"
+	m.form.Command = "echo"
+	m.rebuildFields()
+	m.fieldCursor = len(m.fields) - 1 // Save
+
+	var cmd tea.Cmd
+	m, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if batch, ok := cmd().(tea.BatchMsg); ok {
+		for _, sub := range batch {
+			if sub != nil {
+				if res, ok := sub().(saveResultMsg); ok {
+					m, _ = m.Update(res)
+				}
+			}
+		}
+	}
+	if len(deps.savedScopes) != 1 || deps.savedScopes[0] != config.ScopeGlobal {
+		t.Fatalf("savedScopes after add = %v, want [global]", deps.savedScopes)
+	}
+
+	// Editing a server also coerces to ScopeGlobal when project scope is unavailable.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if m.scopeSel.EffectiveScope() != config.ScopeGlobal {
+		t.Fatalf("edit scope = %v, want ScopeGlobal", m.scopeSel.EffectiveScope())
 	}
 }
 

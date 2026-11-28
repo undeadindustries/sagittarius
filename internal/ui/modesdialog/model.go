@@ -80,10 +80,6 @@ func NewWithOptions(ctx context.Context, deps Deps, opts Options) Model {
 	if noun == "" {
 		noun = "mode"
 	}
-	sel := scopedialog.NewScopeSelector(config.ScopeProject)
-	if !deps.ProjectAvailable() {
-		sel.Disabled = true
-	}
 	m := Model{
 		deps:     deps,
 		ctx:      ctx,
@@ -91,7 +87,7 @@ func NewWithOptions(ctx context.Context, deps Deps, opts Options) Model {
 		title:    title,
 		itemNoun: noun,
 		screen:   screenModes,
-		scopeSel: sel,
+		scopeSel: scopedialog.NewScopeSelectorFor(config.ScopeProject, deps.ProjectAvailable()),
 		spin:     newDialogSpinner(),
 	}
 	m.modes = deps.ListModes()
@@ -250,7 +246,7 @@ func (m Model) applyOverride() (Model, tea.Cmd) {
 	if e.IsClear {
 		return m.clearCurrentOverride()
 	}
-	scope := m.scopeSel.Scope
+	scope := m.scopeSel.EffectiveScope()
 	mode := m.targetMode
 	noun := m.itemNoun
 	ctx := m.ctx
@@ -276,7 +272,7 @@ func (m Model) clearCurrentOverride() (Model, tea.Cmd) {
 		return m, nil
 	}
 	mode := m.modes[m.modeCursor].Mode
-	scope := m.scopeSel.Scope
+	scope := m.scopeSel.EffectiveScope()
 	noun := m.itemNoun
 	ctx := m.ctx
 	deps := m.deps
@@ -322,14 +318,14 @@ func (m Model) resetAllOverrides() (Model, tea.Cmd) {
 		m.errMsg = "Reset all is not available here."
 		return m, nil
 	}
+	scope := m.scopeSel.EffectiveScope()
 	if !m.pendingReset {
 		m.pendingReset = true
 		m.errMsg = ""
-		m.info = "Press R again to clear every " + m.itemNoun + " override in " + m.scopeSel.Scope.String() + " settings."
+		m.info = "Press R again to clear every " + m.itemNoun + " override in " + scope.String() + " settings."
 		return m, nil
 	}
 	m.pendingReset = false
-	scope := m.scopeSel.Scope
 	ctx := m.ctx
 	m.applying = true
 	m.errMsg = ""

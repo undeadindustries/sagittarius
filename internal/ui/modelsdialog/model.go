@@ -109,9 +109,8 @@ func New(ctx context.Context, deps Deps) Model {
 		th:       theme.Default(),
 		input:    ti,
 		screen:   screenList,
-		scopeSel: scopedialog.NewScopeSelector(config.ScopeGlobal),
+		scopeSel: scopedialog.NewScopeSelectorFor(config.ScopeGlobal, deps.ProjectAvailable()),
 	}
-	m.scopeSel.Disabled = !deps.ProjectAvailable()
 	m.entries = deps.ListAllActiveModels()
 	if len(m.entries) == 0 {
 		m.errMsg = "No active models. Open /providers and activate some first."
@@ -289,9 +288,10 @@ func (m Model) selectPickOption() (Model, tea.Cmd) {
 		return m, nil
 	}
 	opt := m.pickOptions[m.cursor]
+	scope := m.scopeSel.EffectiveScope()
 	switch opt.value {
 	case pickInheritValue:
-		if err := m.deps.ClearModelSetting(m.ctx, m.targetProvider, m.targetModel, m.pickKey, m.scopeSel.Scope); err != nil {
+		if err := m.deps.ClearModelSetting(m.ctx, m.targetProvider, m.targetModel, m.pickKey, scope); err != nil {
 			m.errMsg = err.Error()
 			return m, nil
 		}
@@ -304,7 +304,7 @@ func (m Model) selectPickOption() (Model, tea.Cmd) {
 	case pickCustomValue:
 		return m.openEditField(settingItem{label: "reasoningEffort (unverified)", key: "reasoningEffort"})
 	default:
-		if err := m.deps.SetModelSetting(m.ctx, m.targetProvider, m.targetModel, m.pickKey, opt.value, m.scopeSel.Scope); err != nil {
+		if err := m.deps.SetModelSetting(m.ctx, m.targetProvider, m.targetModel, m.pickKey, opt.value, scope); err != nil {
 			m.errMsg = err.Error()
 			return m, nil
 		}
@@ -344,7 +344,7 @@ func (m Model) handleEditFieldKey(key tea.KeyMsg) (Model, tea.Cmd) {
 
 func (m Model) commitEditField() (Model, tea.Cmd) {
 	value := m.input.Value()
-	if err := m.deps.SetModelSetting(m.ctx, m.targetProvider, m.targetModel, m.editKey, value, m.scopeSel.Scope); err != nil {
+	if err := m.deps.SetModelSetting(m.ctx, m.targetProvider, m.targetModel, m.editKey, value, m.scopeSel.EffectiveScope()); err != nil {
 		m.errMsg = err.Error()
 		return m, nil
 	}
@@ -365,7 +365,7 @@ func (m Model) clearCurrentSetting() (Model, tea.Cmd) {
 	if item.key == "back" {
 		return m, nil
 	}
-	if err := m.deps.ClearModelSetting(m.ctx, m.targetProvider, m.targetModel, item.key, m.scopeSel.Scope); err != nil {
+	if err := m.deps.ClearModelSetting(m.ctx, m.targetProvider, m.targetModel, item.key, m.scopeSel.EffectiveScope()); err != nil {
 		m.errMsg = err.Error()
 		return m, nil
 	}
@@ -381,7 +381,7 @@ func (m *Model) reloadValues() {
 	if m.targetProvider == "" {
 		return
 	}
-	scope := m.scopeSel.Scope
+	scope := m.scopeSel.EffectiveScope()
 	m.settingValues = m.deps.GetModelSettings(m.targetProvider, m.targetModel, scope)
 	m.inheritedValues = nil
 	if scope == config.ScopeProject {

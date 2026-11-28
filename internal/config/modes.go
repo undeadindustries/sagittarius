@@ -41,6 +41,9 @@ func SetModeOverride(s *Settings, modeName, providerID, model string) error {
 	if s == nil {
 		return fmt.Errorf("set mode override: nil settings")
 	}
+	if modeSlot(&SagittariusModes{}, modeName) == nil {
+		return fmt.Errorf("unknown mode %q (expected agent, plan, ask, debug)", modeName)
+	}
 	if model == "" {
 		ClearModeOverride(s, modeName)
 		return nil
@@ -52,9 +55,6 @@ func SetModeOverride(s *Settings, modeName, providerID, model string) error {
 		s.Sagittarius.Modes = &SagittariusModes{}
 	}
 	slot := modeSlot(s.Sagittarius.Modes, modeName)
-	if slot == nil {
-		return fmt.Errorf("unknown mode %q (expected agent, plan, ask, debug)", modeName)
-	}
 	mc := &SagittariusModeConfig{
 		Provider: NormalizeProviderID(providerID),
 		Model:    model,

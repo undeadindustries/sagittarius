@@ -197,10 +197,14 @@ func (d *Documents) MutateProject(fn func(project, global *Settings) error) erro
 	if d.workDir == "" {
 		return fmt.Errorf("save project settings: %w", ErrNoProjectScope)
 	}
-	if d.Project == nil {
+	wasNil := d.Project == nil
+	if wasNil {
 		d.Project = &Settings{Raw: map[string]json.RawMessage{}}
 	}
 	if err := fn(d.Project, d.Global); err != nil {
+		if wasNil {
+			d.Project = nil
+		}
 		return err
 	}
 	return d.saveLocked(ScopeProject)

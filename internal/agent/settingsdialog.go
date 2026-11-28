@@ -80,9 +80,12 @@ func listSettings(docs *config.Documents, scope config.SettingScope) []settingsd
 	if docs == nil {
 		return nil
 	}
-	scopeSettings := docs.TargetSettings(scope)
 	global := docs.Global
 	project := docs.Project
+	scopeSettings := global
+	if scope == config.ScopeProject {
+		scopeSettings = project
+	}
 
 	row := func(e settingsdialog.SettingEntry, scopePresent, globalPresent, projectPresent string) settingsdialog.SettingEntry {
 		e.DefinedHere = docs.IsDefined(scope, e.Key)
@@ -492,19 +495,18 @@ func (d *settingsDialogDeps) SetValue(ctx context.Context, scope config.SettingS
 	if key == braveAPIKeySetting {
 		return credentials.SetBraveAPIKey(ctx, value)
 	}
-	docs := d.docs()
-	if docs == nil {
+	if d.app == nil || d.docs() == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	target := docs.TargetSettings(scope)
-	if err := applySettingValue(target, key, value); err != nil {
-		return err
-	}
-	if err := docs.Save(scope); err != nil {
+	if err := d.app.persistScope(scope, func(target *config.Settings) error {
+		return applySettingValue(target, key, value)
+	}); err != nil {
 		return err
 	}
 	// Rebuild so UI changes (theme, showThinking) take effect immediately.
-	_, _, _ = d.app.deps.Hooks.RebuildRunner(ctx)
+	if d.app.deps.Hooks != nil {
+		_, _, _ = d.app.deps.Hooks.RebuildRunner(ctx)
+	}
 	return nil
 }
 
@@ -514,18 +516,17 @@ func (d *settingsDialogDeps) ClearValue(ctx context.Context, scope config.Settin
 	if key == braveAPIKeySetting {
 		return credentials.DeleteBraveAPIKey(ctx)
 	}
-	docs := d.docs()
-	if docs == nil {
+	if d.app == nil || d.docs() == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	target := docs.TargetSettings(scope)
-	if err := clearSettingValue(target, key); err != nil {
+	if err := d.app.persistScope(scope, func(target *config.Settings) error {
+		return clearSettingValue(target, key)
+	}); err != nil {
 		return err
 	}
-	if err := docs.Save(scope); err != nil {
-		return err
+	if d.app.deps.Hooks != nil {
+		_, _, _ = d.app.deps.Hooks.RebuildRunner(ctx)
 	}
-	_, _, _ = d.app.deps.Hooks.RebuildRunner(ctx)
 	return nil
 }
 

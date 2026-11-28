@@ -580,7 +580,7 @@ func (d *providerDialogDeps) SetActiveModels(ctx context.Context, id string, mod
 // became stale after a global curation change, custom-provider removal, or
 // cleared project curation, validating against the merged catalog.
 func (d *providerDialogDeps) pruneProjectPins() {
-	if d.app == nil || d.app.docs == nil || d.app.docs.Project == nil {
+	if d.app == nil || d.app.docs == nil || !d.app.docs.ProjectAvailable() || d.app.docs.Project == nil {
 		return
 	}
 	if provider.PruneModelOverridesAgainst(d.app.docs.Project, d.app.docs.Merged()) {
@@ -990,48 +990,17 @@ func (d *modesDialogDeps) AllActiveModels() []modesdialog.ModelEntry {
 }
 
 func (d *modesDialogDeps) SetModeOverride(ctx context.Context, modeName, providerID, model string, scope config.SettingScope) error {
-	docs := d.app.docs
-	if docs == nil {
+	if d.app == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	if err := config.SetModeOverride(docs.TargetSettings(scope), modeName, providerID, model); err != nil {
-		return err
-	}
-	if err := docs.Save(scope); err != nil {
-		return err
-	}
-	d.maybeRebuildActiveMode(ctx, modeName)
-	return nil
+	return d.app.setModeOverride(ctx, modeName, providerID, model, scope)
 }
 
 func (d *modesDialogDeps) ClearModeOverride(ctx context.Context, modeName string, scope config.SettingScope) error {
-	docs := d.app.docs
-	if docs == nil {
+	if d.app == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	config.ClearModeOverride(docs.TargetSettings(scope), modeName)
-	if err := docs.Save(scope); err != nil {
-		return err
-	}
-	d.maybeRebuildActiveMode(ctx, modeName)
-	return nil
-}
-
-// maybeRebuildActiveMode triggers a runner rebuild if the user just edited the
-// override for the mode they are currently in. This ensures the main screen
-// reflects the change immediately without requiring them to switch modes.
-func (d *modesDialogDeps) maybeRebuildActiveMode(ctx context.Context, modifiedModeName string) {
-	if d.app.runner == nil {
-		return
-	}
-	currentMode := d.app.runner.InteractionMode()
-	if strings.EqualFold(currentMode.String(), modifiedModeName) {
-		// Calling SetInteractionMode again correctly re-resolves the mode's
-		// provider override, switches the app's ActiveProvider if necessary,
-		// triggers a RebuildRunner to rebuild the generator, and updates the
-		// app's status bar all at once.
-		_, _ = d.app.deps.Hooks.SetInteractionMode(ctx, currentMode)
-	}
+	return d.app.clearModeOverride(ctx, modeName, scope)
 }
 
 // SubagentsDialogDeps returns the side-effect adapter the /subagents routing
@@ -1120,42 +1089,26 @@ func (d *subagentsDialogDeps) AllActiveModels() []modesdialog.ModelEntry {
 }
 
 func (d *subagentsDialogDeps) SetModeOverride(_ context.Context, slot, providerID, model string, scope config.SettingScope) error {
-	docs := d.app.docs
-	if docs == nil {
+	if d.app == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	if !config.ValidSubagentSlot(slot) {
-		return fmt.Errorf("unknown subagent slot %q (expected default, research, coding, reviewer, utility)", slot)
-	}
-	if err := config.SetSubagentOverride(docs.TargetSettings(scope), slot, providerID, model); err != nil {
-		return err
-	}
-	return docs.Save(scope)
+	return d.app.setSubagentOverride(slot, providerID, model, scope)
 }
 
 func (d *subagentsDialogDeps) ClearModeOverride(_ context.Context, slot string, scope config.SettingScope) error {
-	docs := d.app.docs
-	if docs == nil {
+	if d.app == nil {
 		return fmt.Errorf("settings not loaded")
 	}
-	config.ClearSubagentOverride(docs.TargetSettings(scope), slot)
-	return docs.Save(scope)
+	return d.app.setSubagentOverride(slot, "", "", scope)
 }
 
 // ResetAllOverrides clears every routing pin in scope, preserving enablement
 // switches. It satisfies modesdialog.Resetter, which arms the dialog's R key.
 func (d *subagentsDialogDeps) ResetAllOverrides(_ context.Context, scope config.SettingScope) (string, error) {
-	docs := d.app.docs
-	if docs == nil {
+	if d.app == nil {
 		return "", fmt.Errorf("settings not loaded")
 	}
-	if !config.ResetSubagentOverrides(docs.TargetSettings(scope)) {
-		return fmt.Sprintf("No subagent routing pins in %s settings.", scope), nil
-	}
-	if err := docs.Save(scope); err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("Subagent routing reset in %s settings (all slots use defaults).", scope), nil
+	return d.app.resetSubagentOverrides(scope)
 }
 
 // Header summarizes enablement switches so the routing dialog shows which
